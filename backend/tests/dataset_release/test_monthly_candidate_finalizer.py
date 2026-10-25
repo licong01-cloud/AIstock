@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,6 +120,9 @@ class _Shared:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("SH000001\t2026-09-30\t2026-09-30\n", encoding="utf-8")
             pool_paths[name] = path
+        (pool_root / "benchmark.txt").write_text(
+            "000300.SH\t2018-08-01\t2026-09-30\n", encoding="utf-8"
+        )
 
         def pin(path: Path) -> dict[str, object]:
             return {
@@ -258,6 +263,124 @@ def test_finalizer_seals_all_release_files_and_manifest_identity(tmp_path: Path)
         ),
         context=_context(tmp_path),
     )
+
+
+@pytest.mark.parametrize('drift', [False, True])
+def test_finalizer_pins_quality_report_and_evidence_without_rewriting_data(tmp_path, drift):
+    from backend.tests.dataset_release.test_monthly_source_quality import acceptance
+    from backend.services.dataset_release.monthly_source_quality import (
+        accepted_parity_warning, source_quality_report, validate_source_quality_acceptance,
+    )
+    staging, _cas, stage_refs, source_ref, validation = _setup(tmp_path)
+    context = _context(tmp_path)
+    value = acceptance(tmp_path)
+    value['operation_id'] = context.operation_id
+    value = validate_source_quality_acceptance(value, operation_id=context.operation_id,
+        predecessor_manifest_sha256='a' * 64, target_cutoff=date(2026, 9, 30))
+    warning = accepted_parity_warning(value, symbol='688799.SH', trade_date=date(2026, 9, 14),
+        mismatches={'open': {'daily': 10.0, 'minute': 11.0}})
+    context = replace(context, plan={**context.plan, 'monthly_source_quality_inputs': value,
+        'predecessor': {'dataset_manifest_sha256': 'a' * 64}})
+    compiled = _compiled(tmp_path, source_ref)
+    reference = value['evidence_refs'][0]
+    (compiled.source_bundle_path.parent / 'source-quality-evidence-0.json').write_bytes(
+        Path(reference['path']).read_bytes())
+    report = {**source_quality_report(value, [warning]), 'frozen_evidence_refs': [
+        {**reference, 'path': 'source-quality-evidence-0.json'}]}
+    if drift:
+        report['quality_warning_count'] = 0
+    compiled.source_bundle_path.write_bytes(canonical_json_bytes({'source_quality_report': report}) + b'\n')
+    compiled = replace(compiled, source_bundle_sha256=hashlib.sha256(compiled.source_bundle_path.read_bytes()).hexdigest())
+    finalizer = UnifiedMonthlyCandidateFinalizer(_Shared())
+    if drift:
+        with pytest.raises(MonthlyCandidateFinalizerError, match='counts or semantics differ'):
+            finalizer.execute(context=context, staging_root=staging, compiled=compiled,
+                validation_result=validation, stage_refs=stage_refs)
+        assert not (staging / 'qe_dataset_manifest.json').exists()
+        return
+    result = finalizer.execute(context=context, staging_root=staging, compiled=compiled,
+        validation_result=validation, stage_refs=stage_refs)
+    manifest = json.loads(result.manifest_path.read_bytes())
+    pin = manifest['source_quality']
+    assert pin['quality_status'] == 'ACCEPTED_WITH_WARNINGS'
+    assert pin['quality_warning_count'] == 1
+    report_path = staging / pin['path']
+    assert pin['sha256'] == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    assert any(row['path'] == pin['path'] for row in manifest['components'].values())
+    frozen = json.loads(report_path.read_bytes())
+    assert frozen['missing_data_waived'] is False
+    proof = staging / frozen['frozen_evidence_refs'][0]['path']
+    assert proof.read_bytes() == Path(reference['path']).read_bytes()
+
+
+def test_native_finalizer_uses_actual_writer_digest_and_hashes_hardlinks_once(tmp_path, monkeypatch):
+    import backend.services.dataset_release.monthly_candidate_finalizer as module
+    staging, _cas, stage_refs, source_ref, validation = _setup(tmp_path)
+    physical = staging / "factor_bundle/factor.h5"
+    signature = physical.stat()
+    writer_sha = hashlib.sha256(physical.read_bytes()).hexdigest()
+    validation.update({"validation_scope": "month_delta", "source_bundle_sha256": _compiled(tmp_path, source_ref).source_bundle_sha256,
+        "verified_output_files": {"factor_bundle/factor.h5": {"sha256": writer_sha, "size": signature.st_size,
+            "signature": [signature.st_dev, signature.st_ino, signature.st_size, signature.st_mtime_ns]}}})
+    os.link(physical, staging / "factor_bundle/factor-alias.h5")
+    calls = []
+    original = module._sha256
+    def digest(path):
+        assert not os.path.samefile(path, physical), "actual writer digest was discarded"
+        calls.append(path)
+        return original(path)
+    monkeypatch.setattr(module, "_sha256", digest)
+    result = UnifiedMonthlyCandidateFinalizer(_Shared()).execute(context=_context(tmp_path), staging_root=staging,
+        compiled=_compiled(tmp_path, source_ref), validation_result=validation, stage_refs=stage_refs)
+    manifest = json.loads(result.manifest_path.read_bytes())
+    assert manifest["components"]["factor_bundle__factor.h5"]["sha256"] == writer_sha
+    assert manifest["components"]["factor_bundle__factor-alias.h5"]["sha256"] == writer_sha
+    assert not (staging / "reports/monthly_incremental_baseline_authority.json").exists()
+    assert sum(os.path.samefile(path, staging / "index_context/index_daily.h5") for path in calls) == 1
+
+
+def test_native_finalizer_rejects_stale_writer_pin_without_manifest(tmp_path):
+    staging, _cas, stage_refs, source_ref, validation = _setup(tmp_path)
+    compiled = _compiled(tmp_path, source_ref)
+    path = staging / "factor_bundle/factor.h5"
+    signature = path.stat()
+    validation.update({"validation_scope": "month_delta", "source_bundle_sha256": compiled.source_bundle_sha256,
+        "verified_output_files": {"factor_bundle/factor.h5": {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "size": signature.st_size, "signature": [signature.st_dev, signature.st_ino, signature.st_size, signature.st_mtime_ns]}}})
+    path.write_bytes(b"changed")
+    with pytest.raises(MonthlyCandidateFinalizerError, match="writer"):
+        UnifiedMonthlyCandidateFinalizer(_Shared()).execute(context=_context(tmp_path), staging_root=staging,
+            compiled=compiled, validation_result=validation, stage_refs=stage_refs)
+    assert not (staging / "qe_dataset_manifest.json").exists()
+
+
+def test_native_finalizer_rejects_writer_drift_during_inventory_hashing(tmp_path, monkeypatch):
+    import backend.services.dataset_release.monthly_candidate_finalizer as module
+    staging, _cas, stage_refs, source_ref, validation = _setup(tmp_path)
+    compiled = _compiled(tmp_path, source_ref)
+    path = staging / "factor_bundle/factor.h5"
+    signature = path.stat()
+    validation.update({"validation_scope": "month_delta", "source_bundle_sha256": compiled.source_bundle_sha256,
+        "verified_output_files": {"factor_bundle/factor.h5": {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "size": signature.st_size, "signature": [signature.st_dev, signature.st_ino, signature.st_size, signature.st_mtime_ns]}}})
+    enumerated = False
+    snapshot = UnifiedMonthlyCandidateFinalizer._snapshot_release_files
+    original = module._sha256
+    def inventory(root):
+        nonlocal enumerated
+        files = snapshot(root)
+        enumerated = True
+        return files
+    def digest(other):
+        if enumerated:
+            path.write_bytes(b"changed while sealing")
+        return original(other)
+    monkeypatch.setattr(UnifiedMonthlyCandidateFinalizer, "_snapshot_release_files", staticmethod(inventory))
+    monkeypatch.setattr(module, "_sha256", digest)
+    with pytest.raises(MonthlyCandidateFinalizerError, match="writer output changed"):
+        UnifiedMonthlyCandidateFinalizer(_Shared()).execute(context=_context(tmp_path), staging_root=staging,
+            compiled=compiled, validation_result=validation, stage_refs=stage_refs)
+    assert not (staging / "qe_dataset_manifest.json").exists()
 
 
 def test_finalizer_rejects_missing_supervised_resource_evidence(tmp_path: Path) -> None:

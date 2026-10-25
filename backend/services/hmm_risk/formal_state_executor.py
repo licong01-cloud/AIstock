@@ -843,6 +843,9 @@ def effect_repeat(request: Mapping[str, Any]) -> dict[str, Any]:
         "projection_set_sha256": canonical_sha256(
             {c: m["projection"]["receipt_sha256"] for c, m in frozen["models"].items()}
         ),
+        "projection_sha256_by_sector": {c: m["projection"]["receipt_sha256"] for c, m in frozen["models"].items()},
+        "model_entry_sha256_by_sector": {c: canonical_sha256(m) for c, m in frozen["models"].items()},
+        "inactive_dimension_observation_receipts": sealed["inactive_dimension_observation_receipts"],
         "semantic_mapping_sha256": canonical_sha256(
             {c: [m["mapping"], m["utility_means"]] for c, m in frozen["models"].items()}
         ),

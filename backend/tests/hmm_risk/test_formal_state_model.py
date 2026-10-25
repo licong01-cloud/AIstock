@@ -209,6 +209,30 @@ def test_d1_no_dynamic_projection_for_other_sector_or_level():
     np.testing.assert_array_equal(identity_values, subject.preprocess_apply(full, parameters))
 
 
+def test_d1_future_finite_inactive_values_never_activate_or_mutate_frozen_model():
+    raw, parameters = _projection_fixture()
+    expected, projection = subject.project_training(
+        raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
+    )
+    identities = canonical_sha256([parameters, projection])
+    future = raw[:3].copy()
+    future[:, 19] = [1e-300, -0.03452899677713199, 100.0]
+    before = future.tobytes()
+    np.testing.assert_array_equal(subject.project_validation(future, parameters, projection), expected[:3])
+    assert future.tobytes() == before and canonical_sha256([parameters, projection]) == identities
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_d1_inactive_inference_nonfinite_still_fails(bad):
+    raw, parameters = _projection_fixture()
+    _, projection = subject.project_training(
+        raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
+    )
+    raw[0, 19] = bad
+    with pytest.raises(subject.FormalStateError, match="full validation features"):
+        subject.project_validation(raw, parameters, projection)
+
+
 @pytest.mark.parametrize("drift", ["mask", "algorithm", "preprocess", "validation", "full_features"])
 def test_d1_rehashed_drift_does_not_authorize_projection(drift):
     raw, parameters = _projection_fixture()
@@ -223,7 +247,7 @@ def test_d1_rehashed_drift_does_not_authorize_projection(drift):
     elif drift == "preprocess":
         parameters = {**parameters, "center": [v + 0.1 for v in parameters["center"]]}
     elif drift == "validation":
-        raw[0, 19] = 1e-300
+        raw[0, 19] = float("nan")
     else:
         raw = raw[:, :19]
     projection = subject.receipt({k: v for k, v in projection.items() if k != "receipt_sha256"})

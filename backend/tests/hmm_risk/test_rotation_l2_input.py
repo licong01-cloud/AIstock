@@ -53,6 +53,7 @@ def test_expected_population_does_not_fill_pit_interval_gaps():
         membership,
         id_to_code={133: "801783.SI"},
         provider_spans={"000004.SZ": ((days[0], days[1]), (days[3], days[4]))},
+        provider_catalog={"000004.SZ": ((days[0], days[-1]),)},
         source_days=days,
         suspended={(days[4], "000004.SZ")},
     )
@@ -84,6 +85,10 @@ def test_expected_population_is_pit_and_excludes_only_full_day_suspend() -> None
             "000001.SZ": ((date(2024, 7, 1), date(2024, 7, 3)),),
             "000002.SZ": ((date(2024, 7, 1), date(2024, 7, 3)),),
         },
+        provider_catalog={
+            "000001.SZ": ((date(2024, 7, 1), date(2024, 7, 3)),),
+            "000002.SZ": ((date(2024, 7, 1), date(2024, 7, 3)),),
+        },
         source_days=(date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)),
         suspended={(date(2024, 7, 2), "000001.SZ")},
     )
@@ -103,7 +108,53 @@ def test_unknown_provider_instrument_fails_closed() -> None:
             membership,
             id_to_code={1: "801011.SI"},
             provider_spans={},
+            provider_catalog={},
             source_days=(date(2024, 7, 1),),
+            suspended=set(),
+        )
+
+
+@pytest.mark.parametrize("span_days", [(1, 3), (-10, -5), (5, 10)])
+def test_known_membership_outside_pit_eligibility_is_not_a_missing_source(span_days):
+    from datetime import timedelta
+
+    first = date(2025, 3, 26)
+    days = tuple(first + timedelta(days=offset) for offset in range(3))
+    lower, upper = (first + timedelta(days=offset) for offset in span_days)
+    membership = pd.DataFrame(
+        [
+            {"instrument": "000001.SZ", "start_date": days[0], "end_date": days[-1], "l2_code_id": 133},
+            {"instrument": "000627.SZ", "start_date": lower, "end_date": upper, "l2_code_id": 133},
+        ]
+    )
+    expected, counts = _expand_expected(
+        membership,
+        id_to_code={133: "801783.SI"},
+        provider_spans={"000001.SZ": ((days[0], days[0]), (days[2], days[2]))},
+        provider_catalog={"000001.SZ": ((days[0], days[-1]),), "000627.SZ": ((lower, upper),)},
+        source_days=days,
+        suspended=set(),
+    )
+    assert expected["instrument"].tolist() == ["000001.SZ"] * 2
+    assert expected["trade_date"].tolist() == [days[0], days[2]]
+    assert counts == {(day, "801783.SI"): 1 for day in (days[0], days[2])}
+    assert len(membership) == 2  # Full membership is retained; eligibility is an intersection.
+
+
+def test_selected_instrument_missing_from_provider_catalog_still_fails_closed():
+    day = date(2025, 3, 26)
+    membership = pd.DataFrame(
+        [
+            {"instrument": "000001.SZ", "start_date": day, "end_date": day, "l2_code_id": 133},
+        ]
+    )
+    with pytest.raises(RotationL2Error, match="absent from PIT provider universe"):
+        _expand_expected(
+            membership,
+            id_to_code={133: "801783.SI"},
+            provider_spans={"000001.SZ": ((day, day),)},
+            provider_catalog={},
+            source_days=(day,),
             suspended=set(),
         )
 
@@ -161,6 +212,7 @@ def test_exact_provider_absence_stays_in_denominator_at_ninety_percent_boundary(
         catalog=["801011.SI"],
         source_days=[day],
         provider_path=provider_path,
+        provider_catalog_path=provider_path,
         suspend_path=tmp_path / "suspend.parquet",
         moneyflow_path=tmp_path / "moneyflow.h5",
         qlib_root=tmp_path,
@@ -174,6 +226,62 @@ def test_exact_provider_absence_stays_in_denominator_at_ninety_percent_boundary(
     assert rows[0]["coverage"] == 0.9
     assert rows[0]["eligible"] is True
     assert amount_set_sha256 == "a" * 64
+
+
+def test_known_ineligible_membership_does_not_enter_aggregate_or_coverage(tmp_path, monkeypatch):
+    day, membership, provider_path, security, absence = _aggregate_inputs(tmp_path, monkeypatch, authorize_missing=True)
+    membership.loc[len(membership)] = ["000627.SZ", day, day, 1]
+    catalog_path = tmp_path / "provider_catalog.txt"
+    catalog_path.write_text(provider_path.read_text(encoding="utf-8") + f"000627.SZ\t{day}\t{day}\n", encoding="utf-8")
+
+    def resolve(instrument, _day, _dataset):
+        assert instrument != "000627.SZ"  # No fallback to the provider catalog for eligibility.
+        return SimpleNamespace(source_ts_code=instrument)
+
+    security.resolve = resolve
+    rows, _ = _daily_aggregates(
+        root=tmp_path,
+        manifest={},
+        membership=membership,
+        id_to_code={1: "801011.SI"},
+        quote_entries={"801011.SI": ((day, day),)},
+        catalog=["801011.SI"],
+        source_days=[day],
+        provider_path=provider_path,
+        provider_catalog_path=catalog_path,
+        suspend_path=tmp_path / "suspend.parquet",
+        moneyflow_path=tmp_path / "moneyflow.h5",
+        qlib_root=tmp_path,
+        calendar=[day],
+        security_identity=security,
+        provider_absence=absence,
+    )
+    assert rows[0]["expected_contributors"] == 10
+    assert rows[0]["valid_contributors"] == 9
+    assert rows[0]["coverage"] == 0.9
+    assert len(membership) == 11
+
+
+def test_missing_explicit_provider_catalog_has_no_fallback(tmp_path, monkeypatch):
+    day, membership, provider_path, security, absence = _aggregate_inputs(tmp_path, monkeypatch, authorize_missing=True)
+    with pytest.raises(RotationL2Error, match="provider instrument spans are invalid"):
+        _daily_aggregates(
+            root=tmp_path,
+            manifest={},
+            membership=membership,
+            id_to_code={1: "801011.SI"},
+            quote_entries={"801011.SI": ((day, day),)},
+            catalog=["801011.SI"],
+            source_days=[day],
+            provider_path=provider_path,
+            provider_catalog_path=tmp_path / "missing_catalog.txt",
+            suspend_path=tmp_path / "suspend.parquet",
+            moneyflow_path=tmp_path / "moneyflow.h5",
+            qlib_root=tmp_path,
+            calendar=[day],
+            security_identity=security,
+            provider_absence=absence,
+        )
 
 
 def test_unknown_moneyflow_gap_fails_closed(tmp_path, monkeypatch) -> None:
@@ -191,6 +299,7 @@ def test_unknown_moneyflow_gap_fails_closed(tmp_path, monkeypatch) -> None:
             catalog=["801011.SI"],
             source_days=[day],
             provider_path=provider_path,
+            provider_catalog_path=provider_path,
             suspend_path=tmp_path / "suspend.parquet",
             moneyflow_path=tmp_path / "moneyflow.h5",
             qlib_root=tmp_path,
@@ -226,6 +335,7 @@ def test_observed_zero_amount_is_not_misclassified_as_provider_absence(tmp_path,
         catalog=["801011.SI"],
         source_days=[day],
         provider_path=provider_path,
+        provider_catalog_path=provider_path,
         suspend_path=tmp_path / "suspend.parquet",
         moneyflow_path=tmp_path / "moneyflow.h5",
         qlib_root=tmp_path,
@@ -319,6 +429,7 @@ def test_daily_aggregates_applies_existing_full_day_suspension_contract(
             catalog=["801011.SI"],
             source_days=[day],
             provider_path=provider_path,
+            provider_catalog_path=provider_path,
             suspend_path=tmp_path / "suspend.parquet",
             moneyflow_path=tmp_path / "moneyflow.h5",
             qlib_root=tmp_path,

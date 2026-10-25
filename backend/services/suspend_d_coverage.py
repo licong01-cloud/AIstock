@@ -16,6 +16,8 @@ from typing import Any, Mapping, Sequence
 
 import psycopg2.extras as pgx
 
+from backend.data_service.suspension_day_authority import load_authority, project_suspension_days
+
 
 SCHEMA_VERSION = "local_data_suspend_d_coverage_audit_v1"
 DEFAULT_STATEMENT_TIMEOUT_MS = 300_000
@@ -177,17 +179,10 @@ daily AS (
 ),
 suspension AS (
     SELECT ts_code, trade_date,
-           BOOL_OR(
-               suspend_type='S'
-               AND NULLIF(BTRIM(COALESCE(suspend_timing, '')), '') IS NULL
-           ) AS has_full_day_suspend,
-           BOOL_OR(
-               suspend_type='S'
-               AND NULLIF(BTRIM(COALESCE(suspend_timing, '')), '') IS NOT NULL
-           ) AS has_intraday_suspend
-      FROM market.suspend_d
-     WHERE trade_date BETWEEN %(start_date)s AND %(end_date)s
-     GROUP BY ts_code, trade_date
+           state='FULL_DAY_SUSPENDED' AS has_full_day_suspend,
+           state='INTRADAY_SUSPENDED' AS has_intraday_suspend
+      FROM jsonb_to_recordset(%(suspension_states)s::jsonb)
+           AS r(ts_code text, trade_date date, state text)
 ),
 missing_days AS (
     SELECT e.*,
@@ -218,11 +213,10 @@ SELECT ts_code, MIN(cal_date) AS start_date, MAX(cal_date) AS end_date,
 
 _FULL_DAY_SUSPEND_PRICE_CONFLICT_SQL = """
 WITH full_day_suspend AS (
-    SELECT DISTINCT ts_code, trade_date
-      FROM market.suspend_d
-     WHERE trade_date BETWEEN %(start_date)s AND %(end_date)s
-       AND suspend_type='S'
-       AND NULLIF(BTRIM(COALESCE(suspend_timing, '')), '') IS NULL
+    SELECT ts_code, trade_date
+      FROM jsonb_to_recordset(%(suspension_states)s::jsonb)
+           AS r(ts_code text, trade_date date, state text)
+     WHERE state='FULL_DAY_SUSPENDED'
 ),
 positive_daily AS (
     SELECT ts_code, trade_date
@@ -238,8 +232,23 @@ SELECT s.ts_code, s.trade_date
 """
 
 
+def _coverage_params(conn: Any, window: CoverageWindow) -> dict[str, Any]:
+    with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+        cur.execute("SELECT ts_code,trade_date,suspend_type,suspend_timing FROM market.suspend_d "
+                    "WHERE trade_date BETWEEN %s AND %s ORDER BY ts_code,trade_date,suspend_type",
+                    (window.start_date, window.end_date))
+        raw = [dict(row) for row in cur.fetchall()]
+    authority = load_authority()
+    dates = {row["trade_date"] for row in authority["entries"]
+             if window.start_date.isoformat() <= row["trade_date"] <= window.end_date.isoformat()}
+    states = project_suspension_days(raw, authority=authority,
+                                    required_dates=(_as_date(day, field="authority_day") for day in dates))
+    return {"start_date": window.start_date, "end_date": window.end_date,
+            "suspension_states": pgx.Json(states)}
+
+
 def _fetch_missing_runs(conn: Any, window: CoverageWindow) -> list[dict[str, Any]]:
-    params = {"start_date": window.start_date, "end_date": window.end_date}
+    params = _coverage_params(conn, window)
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
         cur.execute(_MISSING_RUNS_SQL, params)
         rows = [dict(row) for row in cur.fetchall()]
@@ -295,7 +304,7 @@ def _fetch_missing_runs(conn: Any, window: CoverageWindow) -> list[dict[str, Any
 def _fetch_full_day_suspend_price_conflicts(
     conn: Any, window: CoverageWindow
 ) -> list[dict[str, Any]]:
-    params = {"start_date": window.start_date, "end_date": window.end_date}
+    params = _coverage_params(conn, window)
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
         cur.execute(_FULL_DAY_SUSPEND_PRICE_CONFLICT_SQL, params)
         return [dict(row) for row in cur.fetchall()]
@@ -373,7 +382,8 @@ def build_coverage_receipt(
         },
         "semantics": {
             "universe": "listed_a_share_shsz_by_stock_basic_pit_boundaries",
-            "full_day_suspend": "suspend_type=S and suspend_timing is null_or_blank",
+            "full_day_suspend": "unambiguous_provider_S_without_timing_or_pinned_official_disclosure",
+            "suspension_day_authority": load_authority(),
             "intraday_suspend_is_full_day_authority": False,
             "missing_market_data_implies_suspension": False,
             "minute_cross_check_scope": (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 import logging
 from typing import Any, Callable, Literal, NoReturn
@@ -40,6 +40,8 @@ from backend.services.advisory_model_first.entry_price_daily_service import Advi
 from backend.services.advisory_model_first.economic_entry_daily_service import (
     AdvisoryEconomicEntryDailyServiceV1, build_environment_economic_entry_daily_service_v1,
 )
+from backend.services.advisory_model_first.economic_sector_daily_service_v1 import AdvisorySectorDailyServiceV1
+from backend.services.advisory_model_first.generic_daily_price_api_service_v1 import GenericDailyPriceAPIServiceV1
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
@@ -253,6 +255,10 @@ def get_advisory_entry_price_service() -> AdvisoryEntryPriceDailyService:
     return AdvisoryEntryPriceDailyService()
 
 
+def get_advisory_generic_daily_price_service() -> GenericDailyPriceAPIServiceV1:
+    return GenericDailyPriceAPIServiceV1()
+
+
 def get_advisory_economic_entry_service() -> AdvisoryEconomicEntryDailyServiceV1:
     return build_environment_economic_entry_daily_service_v1()
 
@@ -284,6 +290,41 @@ def _raise_http(exc: TradingCoreError) -> None:
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+@router.get("/trading-days/defaults")
+def get_advisory_trading_day_defaults(
+    lookback_trading_days: int = Query(default=10, ge=1, le=250),
+    as_of_date: date | None = None,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    """Daily UI calendar choices, not a claim that market data is ready."""
+    try:
+        calendar = service.calendar_provider
+        status = calendar.status(as_of_date=as_of_date)
+        as_of = date.fromisoformat(status["as_of_date"])
+        start = as_of - timedelta(days=max(lookback_trading_days * 3, 31))
+        days = calendar.list_trading_days(start, as_of)[-lookback_trading_days:]
+        if not days:
+            raise DataUnavailableError(
+                "advisory daily defaults require authoritative trading calendar dates",
+                context={"as_of_date": as_of.isoformat()},
+            )
+    except TradingCoreError as exc:
+        _raise_http(exc)
+    return {
+        "ok": True,
+        "calendar_only": True,
+        "as_of_date": as_of.isoformat(),
+        "trading_day_status": status,
+        "lookback_trading_days": lookback_trading_days,
+        "latest_trading_day": days[-1].isoformat(),
+        "next_trading_day": status.get("next_trading_day"),
+        "trading_days": [day.isoformat() for day in days],
+        "replay_start_date": days[0].isoformat(),
+        "replay_end_date": days[-1].isoformat(),
+        "available_trading_day_count": len(days),
+    }
 
 
 def _raise_historical_research_http(exc: TradingCoreError) -> None:
@@ -1040,6 +1081,68 @@ def _raise_economic_entry_http(exc):
         "error_type": type(exc).__name__}) from exc
 
 
+def get_advisory_sector_daily_service() -> AdvisorySectorDailyServiceV1:
+    return AdvisorySectorDailyServiceV1()
+
+
+class GenericDailyPriceListQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_trade_date: date | None = None
+    list_version_id: str | None = Field(None, min_length=1, max_length=128)
+
+
+class GenericDailyPriceBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requests: list[GenericDailyPriceListQuery] = Field(min_length=1, max_length=20)
+
+
+def _raise_generic_daily_price_http(exc):
+    reason = getattr(exc, "reason_code", "ADVISORY_GENERIC_DAILY_QUERY_FAILED")
+    state = ("INVALID_CONFIGURATION" if reason == "ADVISORY_GENERIC_DAILY_INVALID_CONFIGURATION" else
+        "ORIGINAL_LIST_NOT_READY" if reason == "ADVISORY_GENERIC_ORIGINAL_LIST_NOT_READY" else "COMPUTATION_ERROR")
+    unavailable = reason.endswith("UNAVAILABLE") or reason.endswith("QUERY_FAILED") or state == "ORIGINAL_LIST_NOT_READY"
+    raise HTTPException(status_code=503 if unavailable else 409,
+        detail=dict(status=state, reason_code=reason, error_type=type(exc).__name__, economic_confirmation=False,
+                    deployable=False)) from exc
+
+
+@router.get("/programs/{program_id}/generic-entry-price")
+def generic_daily_entry_price(program_id: str, target_trade_date: date | None = Query(None),
+    list_version_id: str | None = Query(None, min_length=1, max_length=128),
+    service: GenericDailyPriceAPIServiceV1 = Depends(get_advisory_generic_daily_price_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_price(program_id=program_id, target_date=target_trade_date,
+                                               list_version_id=list_version_id)}
+    except Exception as exc:
+        _raise_generic_daily_price_http(exc)
+
+
+@router.post("/programs/{program_id}/generic-entry-price/batch")
+def generic_daily_entry_price_batch(program_id: str, request: GenericDailyPriceBatchRequest,
+    service: GenericDailyPriceAPIServiceV1 = Depends(get_advisory_generic_daily_price_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_batch(program_id=program_id,
+            requests=[query.model_dump() for query in request.requests])}
+    except Exception as exc:
+        _raise_generic_daily_price_http(exc)
+
+
+@router.get("/programs/{program_id}/sector-entry-price")
+def sector_entry_price(program_id: str, target_trade_date: date | None = Query(None),
+    list_version_id: str | None = Query(None, max_length=128),
+    service: AdvisorySectorDailyServiceV1 = Depends(get_advisory_sector_daily_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_day(program_id=program_id, target_date=target_trade_date, list_version_id=list_version_id)}
+    except Exception as exc:
+        reason = getattr(exc, "reason_code", "ADVISORY_SECTOR_DAILY_INPUT_UNAVAILABLE")
+        state = {"ADVISORY_SECTOR_FROZEN_LIST_NOT_READY": "FROZEN_LIST_NOT_READY",
+                 "ADVISORY_SECTOR_MODEL_INPUT_INCOMPATIBLE": "MODEL_INPUT_INCOMPATIBLE"}.get(reason, "INPUT_UNAVAILABLE")
+        import psycopg2
+        unavailable = isinstance(exc, psycopg2.OperationalError) or reason.endswith("QUERY_FAILED")
+        raise HTTPException(status_code=503 if unavailable else 409, detail={"status": state,
+            "reason_code": reason, "error_type": type(exc).__name__, "deployable": False}) from exc
+
+
 @router.get("/programs/{program_id}/entry-value/status")
 def economic_entry_status(program_id: str, target_trade_date: date | None = Query(None),
     service: AdvisoryEconomicEntryDailyServiceV1 = Depends(get_advisory_economic_entry_service)) -> dict[str, Any]:
@@ -1088,13 +1191,30 @@ def list_version_detail(
 
 
 @router.get("/programs/{program_id}/returns")
-def returns(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def returns(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service),
+    buy_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+    sell_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+) -> dict[str, Any]:
     try:
-        return {
-            "ok": True,
-            "returns": service.return_history(program_id),
-            "metrics": service.program_metrics(program_id),
-        }
+        return {"ok": True, **service.return_snapshot(program_id, buy_cost_bps=buy_cost_bps, sell_cost_bps=sell_cost_bps)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/performance-comparison")
+def performance_comparison(
+    start_date: date, end_date: date, program_ids: list[str] | None = Query(default=None),
+    buy_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+    sell_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+    benchmark_instrument: str = Query(default="000300.SH", min_length=1, max_length=32),
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "comparison": service.performance_comparison(
+            start_date=start_date, end_date=end_date, program_ids=program_ids,
+            buy_cost_bps=buy_cost_bps, sell_cost_bps=sell_cost_bps, benchmark_instrument=benchmark_instrument,
+        )}
     except TradingCoreError as exc:
         _raise_http(exc)
 
