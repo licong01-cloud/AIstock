@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 import hashlib
 
@@ -133,6 +134,42 @@ def test_executor_publishes_one_candidate_from_sealed_source(
     assert result.component_artifacts == (target / "component.bin",)
     assert result.input_artifacts == (compiled.source_bundle_path,)
     assert result.workload.computed_rows == 3
+
+
+def test_executor_publishes_retained_attempt_without_reexporting(tmp_path, monkeypatch):
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResume
+
+    release_root = tmp_path / "releases"
+    release_root.mkdir()
+    target = release_root / "september"
+    original = _context(target)
+    staging = release_root / ".staging" / f".september.{original.operation_id}.attempt-1.building"
+    staging.parent.mkdir()
+    compiled = _compiled(tmp_path)
+    previous = _Runner().execute(context=original, staging_root=staging, compiled=compiled)
+    component = staging / "component.bin"
+    before = component.stat()
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    journal = MonthlyBuildResume(context=original, compiled=compiled, release_root=release_root,
+        staging_root=staging, cas=cas)
+    journal.save("prepare", cas.put_json({"status": "PASS"}), roots=(".",))
+    class ExistingRunner:
+        def execute(self, *, context, staging_root, compiled):
+            assert context.attempt == 2
+            assert staging_root == staging
+            return previous
+    monkeypatch.setattr(executor_module, "compile_initial_monthly_build", lambda **kwargs: compiled)
+    executor = SealedMonthlyBuildExecutor(profile=SimpleNamespace(), cas=cas,
+        artifact_roots=(compiled.source_bundle_path.parent,), controller_release_root=release_root,
+        runner=ExistingRunner())
+    result = executor.execute(replace(original, attempt=2),
+        component_actions={name: "COMPONENT_REBUILD" for name in COMPONENTS})
+    assert result.manifest_path == target / "qe_dataset_manifest.json"
+    assert (target / "component.bin").read_bytes() == b"component"
+    assert (target / "component.bin").stat().st_mtime_ns == before.st_mtime_ns
+    assert not staging.exists()
 
 
 def test_executor_rejects_existing_candidate(

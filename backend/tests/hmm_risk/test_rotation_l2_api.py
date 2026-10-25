@@ -11,7 +11,12 @@ from backend.services.hmm_risk.rotation_l2_prediction import REASON_NOT_FOUND, R
 
 class _Repository:
     def overview(self, *, run_id: str):
-        return {"run_id": run_id, "sector_count": 131, "available_count": 119}
+        return {
+            "run_id": run_id,
+            "sector_count": 131,
+            "available_count": 119,
+            "available_trade_dates": ["2026-01-02", "2026-01-05"],
+        }
 
     def read_date(self, trade_date: date, *, run_id: str):
         if trade_date == date(2026, 1, 1):
@@ -38,6 +43,7 @@ def test_l2_routes_require_explicit_run_and_return_full_catalog() -> None:
     assert missing_run.status_code == 422
     assert overview.status_code == 200
     assert overview.json()["data"]["sector_count"] == 131
+    assert overview.json()["data"]["available_trade_dates"] == ["2026-01-02", "2026-01-05"]
     assert detail.status_code == 200
     assert len(detail.json()["data"]["rows"]) == 131
 

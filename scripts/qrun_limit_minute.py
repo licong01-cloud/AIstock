@@ -1642,7 +1642,11 @@ def _is_minute_nested_backtest(config: dict) -> bool:
     executor = port_config.get("executor") or {}
     backtest = port_config.get("backtest") or {}
     exchange_kwargs = backtest.get("exchange_kwargs") or {}
-    return executor.get("class") == "NestedExecutor" and str(exchange_kwargs.get("freq")) == "1min"
+    nested = executor.get("class") == "NestedExecutor" or (
+        executor.get("class") == "BoundedTerminalNestedExecutor"
+        and executor.get("module_path") == "qe_terminal_interval_executor"
+    )
+    return nested and str(exchange_kwargs.get("freq")) == "1min"
 
 
 def _read_instrument_spans(path: Path) -> dict[str, list[tuple[pd.Timestamp, pd.Timestamp]]]:

@@ -3,7 +3,6 @@ package protocol
 import (
 	"errors"
 	"fmt"
-	"time"
 )
 
 type MinuteResp struct {
@@ -38,33 +37,41 @@ func (this *minute) Frame(code string) (*Frame, error) {
 }
 
 func (this *minute) Decode(bs []byte) (*MinuteResp, error) {
+	return decodeMinuteFacts(bs, 4)
+}
 
-	if len(bs) < 6 {
-		return nil, errors.New("数据长度不足")
+// Intraday wire uses a four-byte header, historical wire uses six bytes.
+func decodeMinuteFacts(bs []byte, header int) (*MinuteResp, error) {
+	if len(bs) < header {
+		return nil, errors.New("truncated minute header")
 	}
-
-	resp := &MinuteResp{
-		Count: Uint16(bs[:2]),
+	r := &MinuteResp{Count: Uint16(bs[:2])}
+	bs = bs[header:]
+	if r.Count > 240 {
+		return nil, errors.New("minute count exceeds trading session")
 	}
-	//2-6字节是啥?
-	bs = bs[6:]
-	price := Price(0)
-
-	t := time.Date(0, 0, 0, 9, 0, 0, 0, time.Local)
-	for i := uint16(0); i < resp.Count; i++ {
-		bs, price = GetPrice(bs)
-		bs, _ = CutInt(bs) //这个是什么
-		var number int
-		bs, number = CutInt(bs)
-		if i == 120 {
-			t = t.Add(time.Hour * 2)
+	var last Price
+	for i := 0; i < int(r.Count); i++ {
+		values := [3]Price{}
+		for j := range values {
+			var err error
+			bs, values[j], err = GetPriceChecked(bs)
+			if err != nil {
+				return nil, fmt.Errorf("minute %d field %d: %w", i, j, err)
+			}
 		}
-		resp.List = append(resp.List, PriceNumber{
-			Time:   t.Add(time.Minute * time.Duration(i)).Format("15:04"),
-			Price:  price,
-			Number: number,
-		})
+		last += values[0]
+		if last <= 0 || values[2] < 0 {
+			return nil, errors.New("invalid minute price/volume")
+		}
+		minutes := 9*60 + 30 + i + 1
+		if i >= 120 {
+			minutes += 90
+		}
+		r.List = append(r.List, PriceNumber{Time: fmt.Sprintf("%02d:%02d", minutes/60, minutes%60), Price: last * 10, Number: int(values[2])})
 	}
-
-	return resp, nil
+	if len(bs) != 0 {
+		return nil, errors.New("unexpected trailing minute bytes")
+	}
+	return r, nil
 }

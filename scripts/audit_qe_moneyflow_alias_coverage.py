@@ -4,14 +4,15 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from datetime import date
 import hashlib
 import json
-import math
 from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -26,8 +27,6 @@ from backend.data_service.security_source_identity import (  # noqa: E402
 )
 from backend.data_service.moneyflow_contract import (  # noqa: E402
     MONEYFLOW_FIELD_MAP,
-    TUSHARE_MONEYFLOW_AMOUNT_COLUMNS,
-    TUSHARE_MONEYFLOW_VOLUME_COLUMNS,
     normalize_tushare_moneyflow_units,
 )
 from backend.db.pg_pool import get_conn  # noqa: E402
@@ -81,197 +80,146 @@ def _provider_absence_keys(path: Path) -> tuple[set[tuple[str, str, str, date]],
     }
 
 
-def _load_authoritative_source_facts(identity, *, audit_start: date, audit_end: date) -> pd.DataFrame:
-    columns = [*TUSHARE_MONEYFLOW_VOLUME_COLUMNS, *TUSHARE_MONEYFLOW_AMOUNT_COLUMNS]
-    frames: list[pd.DataFrame] = []
-    with get_conn() as conn:
+def _load_authoritative_source_facts(identity, *, audit_start, audit_end, connection=None):
+    """One read-only snapshot, including canonical dates after an alias ends."""
+    symbols = sorted({r.canonical_ts_code for r in identity.rows if r.source_dataset == MONEYFLOW_DATASET})
+    codes = identity.query_source_codes(symbols, audit_start, audit_end, MONEYFLOW_DATASET)
+    with nullcontext(connection) if connection is not None else get_conn() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SET TRANSACTION READ ONLY")
-        for alias in identity.rows:
-            if alias.source_dataset != MONEYFLOW_DATASET:
-                continue
-            start = max(audit_start, alias.effective_start)
-            end = min(audit_end, alias.effective_end)
-            if start > end:
-                continue
-            sql = f"""
-                SELECT trade_date, ts_code, {', '.join(columns)}
-                FROM market.moneyflow_ts
-                WHERE ts_code = %s
-                  AND trade_date >= %s AND trade_date <= %s
-                ORDER BY trade_date, ts_code
-            """
-            frames.append(
-                pd.read_sql(
-                    sql,
-                    conn,
-                    params=[
-                        alias.source_ts_code,
-                        start.isoformat(),
-                        end.isoformat(),
-                    ],
-                )
+            cursor.execute(
+                f"SELECT trade_date,ts_code,{','.join(MONEYFLOW_FIELD_MAP)} "
+                "FROM market.moneyflow_ts WHERE ts_code=ANY(%s) AND trade_date BETWEEN %s AND %s "
+                "ORDER BY trade_date,ts_code", (codes, audit_start, audit_end),
             )
-    source = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    if source.empty:
-        return source
-    canonical_codes = sorted({row.canonical_ts_code for row in identity.rows if row.source_dataset == MONEYFLOW_DATASET})
-    source = identity.annotate_source_rows(
-        source,
-        canonical_codes=canonical_codes,
-        source_dataset=MONEYFLOW_DATASET,
-    )
-    return normalize_tushare_moneyflow_units(source, copy=False).rename(columns=MONEYFLOW_FIELD_MAP)
+            frame = pd.DataFrame(cursor.fetchall(), columns=["trade_date", "ts_code", *MONEYFLOW_FIELD_MAP])
+    frame = identity.annotate_source_rows(frame, canonical_codes=symbols, source_dataset=MONEYFLOW_DATASET)
+    return normalize_tushare_moneyflow_units(frame).rename(columns=MONEYFLOW_FIELD_MAP)
 
 
-def audit(
-    *,
-    candidate_root: Path,
-    identity_manifest_path: Path,
-    provider_absence_path: Path,
-    audit_start: date,
-    audit_end: date,
-) -> dict[str, Any]:
-    root = candidate_root.resolve(strict=True)
-    daily_path = root / "components" / "factor_h5_static_candidate_v2" / "daily_pv.h5"
-    moneyflow_path = root / "components" / "factor_h5_static_candidate_v2" / "moneyflow.h5"
-    for path in (daily_path, moneyflow_path, identity_manifest_path, provider_absence_path):
+def classify_sessions(*, identity, symbol, sessions, price_dates, suspension_dates,
+                      source, frozen, absence_keys):
+    columns = list(MONEYFLOW_FIELD_MAP.values())
+
+    def index(frame):
+        values = {}
+        for _, row in frame.iterrows():
+            key = (str(row["ts_code"]), pd.Timestamp(row["trade_date"]).date())
+            if key in values:
+                raise ValueError(f"duplicate source/frozen key: {key}")
+            values[key] = row[columns].to_numpy(dtype=float)
+        return values
+
+    src, target = index(source), index(frozen)
+    results = []
+    for observed in sorted(set(sessions)):
+        resolution = identity.resolve(symbol, observed, MONEYFLOW_DATASET)
+        key = (resolution.source_ts_code, observed)
+        original, value = src.get(key), target.get(key)
+        absent = (symbol, MONEYFLOW_DATASET, key[0], observed) in absence_keys
+        if absent and (original is not None or value is not None):
+            raise ValueError(f"provider absence contradicts observed fact: {key}")
+        other_frozen_identity = any(code != key[0] and day == observed for code, day in target)
+        if other_frozen_identity:
+            kind = "SOURCE_IDENTITY_CONFLICT"
+        elif original is not None and not np.isfinite(original).all():
+            kind = "NONFINITE_SOURCE"
+        elif value is not None and not np.isfinite(value).all():
+            kind = "NONFINITE_FROZEN"
+        elif original is not None and value is not None:
+            kind = "MATCHED" if np.allclose(original, value, rtol=1e-6, atol=1e-3) else "VALUE_MISMATCH"
+        elif original is not None:
+            kind = "EXPORT_MISSING"
+        elif value is not None:
+            kind = "SOURCE_UNVERIFIED"
+        elif observed in suspension_dates and observed not in price_dates:
+            kind = "SUSPENDED"
+        elif absent:
+            kind = "PROVIDER_ABSENCE"
+        else:
+            kind = "SOURCE_AND_FROZEN_MISSING"
+        results.append({"canonical_ts_code": symbol, "trade_date": observed.isoformat(),
+                        "source_dataset": MONEYFLOW_DATASET, "effective_source_code": key[0],
+                        "classification": kind, "identity_row_sha256": resolution.row_hash})
+    return results
+
+
+def audit(*, candidate_root, identity_manifest_path, provider_absence_path,
+          audit_start, audit_end, source_facts=None):
+    root = Path(candidate_root).resolve(strict=True)
+    factor = root / "components/factor_h5_static_candidate_v2"
+    paths = {"daily_pv": factor / "daily_pv.h5", "moneyflow": factor / "moneyflow.h5",
+             "calendar": root / "components/daily_bin_candidate/calendars/day.txt",
+             "pit_pool": root / "stock_pools/stock_universe.txt",
+             "suspend": root / "components/suspend_d_daily_candidate_v2/suspend_d.parquet"}
+    for path in [*paths.values(), identity_manifest_path, provider_absence_path]:
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"audit input must be a regular file: {path}")
-
     identity = load_security_source_identity_manifest(identity_manifest_path)
     absence_keys, absence_evidence = _provider_absence_keys(provider_absence_path)
     if audit_start > audit_end:
         raise ValueError("audit window is invalid")
-    source_facts = _load_authoritative_source_facts(identity, audit_start=audit_start, audit_end=audit_end)
-    expected: set[tuple[str, date, str, str]] = set()
-    resolved: set[tuple[str, date, str, str]] = set()
-    authorized_absence: set[tuple[str, date, str, str]] = set()
-    nonfinite: list[dict[str, str]] = []
-    mismatched: list[dict[str, str]] = []
-    factor_columns = list(MONEYFLOW_FIELD_MAP.values())
-
-    for alias in identity.rows:
-        if alias.source_dataset != MONEYFLOW_DATASET:
-            continue
-        if alias.effective_start is None or alias.effective_end is None:
-            raise ValueError("explicit alias interval is incomplete")
-        moneyflow = _load_symbol(moneyflow_path, alias.source_ts_code, factor_columns)
-        moneyflow_by_date = {
-            pd.Timestamp(index[0]).date(): row
-            for index, row in moneyflow.iterrows()
-            if alias.effective_start <= pd.Timestamp(index[0]).date() <= alias.effective_end
-        }
-        alias_facts = source_facts[
-            (source_facts["_canonical_ts_code"] == alias.canonical_ts_code)
-            & (source_facts["ts_code"] == alias.source_ts_code)
-            & (pd.to_datetime(source_facts["trade_date"]).dt.date >= max(alias.effective_start, audit_start))
-            & (pd.to_datetime(source_facts["trade_date"]).dt.date <= min(alias.effective_end, audit_end))
-        ]
-        fact_by_date = {pd.Timestamp(row["trade_date"]).date(): row for _, row in alias_facts.iterrows()}
-        alias_absence_dates = {
-            item[3]
-            for item in absence_keys
-            if item[0] == alias.canonical_ts_code
-            and item[1] == alias.source_dataset
-            and item[2] == alias.source_ts_code
-            and max(alias.effective_start, audit_start) <= item[3] <= min(alias.effective_end, audit_end)
-        }
-        for trade_date in sorted(set(fact_by_date) | alias_absence_dates):
-            key = (alias.canonical_ts_code, trade_date, alias.source_dataset, alias.source_ts_code)
-            expected.add(key)
-            source_row = fact_by_date.get(trade_date)
-            frozen_row = moneyflow_by_date.get(trade_date)
-            if source_row is not None and frozen_row is not None:
-                source_values = pd.to_numeric(source_row[factor_columns], errors="coerce")
-                frozen_values = pd.to_numeric(frozen_row[factor_columns], errors="coerce")
-                if not pd.notna(frozen_values["mf_net_amt"]) or not math.isfinite(
-                    float(frozen_values["mf_net_amt"])
-                ):
-                    nonfinite.append(
-                        {"canonical_ts_code": alias.canonical_ts_code, "trade_date": trade_date.isoformat()}
-                    )
-                elif not all(
-                    (pd.isna(source_values[column]) and pd.isna(frozen_values[column]))
-                    or (
-                        pd.notna(source_values[column])
-                        and pd.notna(frozen_values[column])
-                        and math.isclose(
-                            float(source_values[column]),
-                            float(frozen_values[column]),
-                            rel_tol=1e-6,
-                            abs_tol=1e-3,
-                        )
-                    )
-                    for column in factor_columns
-                ):
-                    mismatched.append(
-                        {"canonical_ts_code": alias.canonical_ts_code, "trade_date": trade_date.isoformat()}
-                    )
-                else:
-                    resolved.add(key)
-            elif source_row is not None:
-                continue
-            elif frozen_row is not None:
-                mismatched.append(
-                    {"canonical_ts_code": alias.canonical_ts_code, "trade_date": trade_date.isoformat()}
-                )
-            elif (alias.canonical_ts_code, alias.source_dataset, alias.source_ts_code, trade_date) in absence_keys:
-                authorized_absence.add(key)
-
-    unknown = sorted(expected - resolved - authorized_absence)
-    ordered_expected = [
-        {
-            "canonical_ts_code": item[0],
-            "trade_date": item[1].isoformat(),
-            "source_dataset": item[2],
-            "effective_source_code": item[3],
-        }
-        for item in sorted(expected)
-    ]
-    receipt = {
-        "schema_version": SCHEMA_VERSION,
-        "status": "PASS" if not unknown and not nonfinite and not mismatched else "BLOCKED",
-        "candidate_root": str(root),
-        "source_dataset": MONEYFLOW_DATASET,
-        "audit_start": audit_start.isoformat(),
-        "audit_end": audit_end.isoformat(),
-        "identity_authority": identity.evidence(),
-        "provider_absence_authority": absence_evidence,
-        "daily_pv_sha256": _sha256(daily_path),
-        "moneyflow_sha256": _sha256(moneyflow_path),
-        "alias_count": sum(1 for row in identity.rows if row.source_dataset == MONEYFLOW_DATASET),
-        "expected": len(expected),
-        "resolved": len(resolved),
-        "provider_absence": len(authorized_absence),
-        "unknown": len(unknown),
-        "nonfinite": len(nonfinite),
-        "mismatched": len(mismatched),
-        "expected_key_sha256": hashlib.sha256(canonical_json_bytes(ordered_expected)).hexdigest(),
-        "unknown_sample": [
-            {
-                "canonical_ts_code": item[0],
-                "trade_date": item[1].isoformat(),
-                "source_dataset": item[2],
-                "effective_source_code": item[3],
-            }
-            for item in unknown[:20]
-        ],
-        "nonfinite_sample": nonfinite[:20],
-        "mismatched_sample": mismatched[:20],
-        "source_fact_count": int(len(source_facts)),
-        "source_fact_sha256": hashlib.sha256(canonical_json_bytes(
-            source_facts.sort_values(["trade_date", "ts_code"])
-            .assign(trade_date=lambda value: value["trade_date"].astype(str))
-            .astype(object)
-            .where(pd.notna(source_facts.sort_values(["trade_date", "ts_code"])), None)
-            .to_dict("records")
-        )).hexdigest(),
-        "database_read": True,
-        "database_write": False,
-    }
+    calendar = [date.fromisoformat(line.strip()) for line in paths["calendar"].read_text().splitlines()]
+    if calendar != sorted(set(calendar)) or audit_start < min(calendar) or audit_end > max(calendar):
+        raise ValueError("frozen calendar does not uniquely cover requested window")
+    spans = {}
+    for line in paths["pit_pool"].read_text().splitlines():
+        code, start, end = line.split()
+        if date.fromisoformat(start) > date.fromisoformat(end):
+            raise ValueError("PIT span is inverted")
+        spans.setdefault(code, []).append((date.fromisoformat(start), date.fromisoformat(end)))
+    suspension = pd.read_parquet(paths["suspend"])
+    if source_facts is None:
+        source_facts = _load_authoritative_source_facts(identity, audit_start=audit_start, audit_end=audit_end)
+    results = []
+    for symbol in sorted({r.canonical_ts_code for r in identity.rows if r.source_dataset == MONEYFLOW_DATASET}):
+        sessions = [d for d in calendar if audit_start <= d <= audit_end
+                    and any(start <= d <= end for start, end in spans.get(symbol, []))]
+        prices = _load_symbol(paths["daily_pv"], symbol, ["close"])
+        if prices.index.has_duplicates:
+            raise ValueError("duplicate frozen price index")
+        price_dates = {pd.Timestamp(i[0]).date() for i, row in prices.iterrows()
+                       if pd.notna(row["close"]) and np.isfinite(row["close"]) and row["close"] > 0}
+        suspended = suspension[(suspension["ts_code"] == symbol) & (suspension["suspend_type"] == "S")
+                               & suspension["suspend_timing"].isna()]
+        suspension_dates = set(pd.to_datetime(suspended["trade_date"]).dt.date)
+        codes = identity.query_source_codes([symbol], audit_start, audit_end, MONEYFLOW_DATASET)
+        frozen = pd.concat([_load_symbol(paths["moneyflow"], c, list(MONEYFLOW_FIELD_MAP.values()))
+                            for c in codes]).reset_index().rename(columns={"datetime": "trade_date", "instrument": "ts_code"})
+        source = source_facts[source_facts["_canonical_ts_code"] == symbol]
+        results.extend(classify_sessions(identity=identity, symbol=symbol, sessions=sessions,
+                       price_dates=price_dates, suspension_dates=suspension_dates,
+                       source=source, frozen=frozen, absence_keys=absence_keys))
+    counts = {kind: sum(r["classification"] == kind for r in results)
+              for kind in sorted({r["classification"] for r in results})}
+    good = {"MATCHED", "SUSPENDED", "PROVIDER_ABSENCE"}
+    unknown = [r for r in results if r["classification"] not in good]
+    expected_keys = [{k: row[k] for k in ("canonical_ts_code", "trade_date", "source_dataset", "effective_source_code")}
+                     for row in results if row["classification"] != "SUSPENDED"]
+    receipt = {"schema_version": SCHEMA_VERSION, "status": "BLOCKED" if unknown else "PASS",
+               "candidate_root": str(root), "audit_start": audit_start.isoformat(), "audit_end": audit_end.isoformat(),
+               "source_dataset": MONEYFLOW_DATASET, "identity_authority": identity.evidence(),
+               "provider_absence_authority": absence_evidence,
+               "input_sha256": {key: _sha256(path) for key, path in paths.items()},
+               "moneyflow_sha256": _sha256(paths["moneyflow"]),
+               "daily_pv_sha256": _sha256(paths["daily_pv"]),
+               "alias_count": sum(r.source_dataset == MONEYFLOW_DATASET for r in identity.rows),
+               "symbol_count": len({r["canonical_ts_code"] for r in results}),
+               "session_count": len(results), "expected": len(results) - counts.get("SUSPENDED", 0),
+               "resolved": counts.get("MATCHED", 0), "suspended": counts.get("SUSPENDED", 0),
+               "provider_absence": counts.get("PROVIDER_ABSENCE", 0), "unknown": len(unknown),
+               "nonfinite": counts.get("NONFINITE_SOURCE", 0) + counts.get("NONFINITE_FROZEN", 0),
+               "mismatched": counts.get("VALUE_MISMATCH", 0),
+               "classifications": counts, "unknown_rows": unknown,
+               "source_fact_count": len(source_facts), "database_read": True, "database_write": False,
+               "expected_key_sha256": hashlib.sha256(canonical_json_bytes(expected_keys)).hexdigest()}
+    for label, start, end in [("train", date(2022, 1, 1), date(2024, 6, 30)),
+                              ("validation", date(2024, 7, 1), date(2025, 3, 31))]:
+        selected = [r for r in results if max(start, audit_start).isoformat() <= r["trade_date"] <= min(end, audit_end).isoformat()]
+        receipt[label] = {"sessions": len(selected), "resolved": sum(r["classification"] == "MATCHED" for r in selected),
+                          "suspended": sum(r["classification"] == "SUSPENDED" for r in selected),
+                          "unknown": sum(r["classification"] not in good for r in selected)}
     return receipt
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()

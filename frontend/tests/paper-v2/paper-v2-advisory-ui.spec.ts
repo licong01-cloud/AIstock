@@ -1,6 +1,184 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AdvisoryEntryPrice } from "../../src/lib/api/advisory";
 
+for (const [state, text] of [
+  ["ACCEPTABLE_PRICE_SET", "9.95～9.96 CNY"],
+  ["NO_ACCEPTABLE_PRICE", "未知节点不能判为不适合"],
+  ["UNKNOWN_INPUT_OR_SUPPORT", "不能判为不推荐"],
+  ["NOT_CONFIGURED", "不代表没有可盈利股票"],
+  ["IDENTITY_CONFLICT", "M1原名单、价格字段或角色不一致"],
+] as const) {
+  test(`M1 sector entry original-list presentation distinguishes ${state}`, async ({ page }) => {
+    await mockShellApis(page);
+    const accepted = state === "ACCEPTABLE_PRICE_SET";
+    const sector: JsonObject = state === "NOT_CONFIGURED" ? {} : {
+      status: "COMPUTED", decision_date: "2026-06-04", target_date: "2026-06-05", model_sha256: "a".repeat(64),
+      bundle_sha256: "b".repeat(64), config_sha256: "c".repeat(64), projection_sha256: "d".repeat(64),
+      source_review_policy_sha256: "e".repeat(64), model_parent_policy_identity: "f".repeat(64), model_value_policy_identity: "a".repeat(64),
+      candidate_receipt: { program_id: state === "IDENTITY_CONFLICT" ? "foreign" : PROGRAM_ID, binding_version_id: "unit-binding",
+        list_version_id: "unit-list", review_run_id: "unit-review", selection_run_id: "unit-run", decision_date: "2026-06-04",
+        target_date: "2026-06-05", candidate_scope: "ORIGINAL_PUBLISHED_TOP20", native_receipt_created: false,
+        candidate_count: 1, original_list_item_count: 2, candidate_roster_sha256: "b".repeat(64),
+        source_policy_state: "DECLARED_ORIGINAL", source_review_policy_sha256: "e".repeat(64), source_evidence: "UI_PRESENTATION_ONLY",
+        universe_selection: { mode: "stock_universe", pool_ids: [] } },
+      candidates: [{ instrument: "000001.SZ", selection_effective_rank: 1, status: state === "IDENTITY_CONFLICT" ? "UNKNOWN_INPUT_OR_SUPPORT" : state,
+        legal_node_count: 8, unknown_node_count: state === "UNKNOWN_INPUT_OR_SUPPORT" || state === "IDENTITY_CONFLICT" ? 8 : 2,
+        intervals: accepted ? [{ low_cny: 9.95, high_cny: 9.96, tick_cny: .01, node_count: 2, expected_net_bps_min: 20,
+          expected_net_bps_max: 30, downside_q90_bps_max: 200 }, { low_cny: 9.98, high_cny: 9.99, tick_cny: .01, node_count: 2,
+          expected_net_bps_min: 18, expected_net_bps_max: 28, downside_q90_bps_max: 220 }] : [] }],
+      unmodeled_items: [{ instrument: "600001.SH", rank: 21, action: "WATCH", reason_code: "OUTSIDE_MODEL_TOP20_SCOPE" }],
+    };
+    const { calls } = await mockAdvisoryApis(page, { sectorEntryDaily: sector });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-sector-entry-price");
+    await expect(card).toContainText(text);
+    await expect(card).toContainText("不保证成交或盈利");
+    if (accepted) {
+      await expect(card).toContainText("9.98～9.99 CNY");
+      await expect(card).toContainText("模型范围外/非买入候选 1 项");
+    }
+    expect(calls.filter((call) => call.includes("/sector-entry-price")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
+test("M1 sector entry original-list presentation discards late previous-list response", async ({ page }) => {
+  await mockShellApis(page);
+  const oldList = publishedListVersion("2026-06-10", "2026-06-09");
+  const nextList = publishedListVersion("2026-06-09", "2026-06-08");
+  await mockAdvisoryApis(page, { initialListVersions: [oldList, nextList] });
+  let releaseOld!: () => void;
+  let observedOld!: () => void;
+  const release = new Promise<void>((resolve) => { releaseOld = resolve; });
+  const observed = new Promise<void>((resolve) => { observedOld = resolve; });
+  await page.route("**/api/v1/advisory/programs/*/sector-entry-price*", async (route) => {
+    const url = new URL(route.request().url());
+    const id = url.searchParams.get("list_version_id");
+    const result: JsonObject = { ok: true, schema_version: "economic_sector_daily_service_v1", model_family: "M1_SECTOR_PRICE_VALUE_V1",
+      program_id: PROGRAM_ID, requested_target_date: url.searchParams.get("target_trade_date"), requested_list_version_id: id,
+      decision_use: "NAVIGATION_ONLY", deployable: false, economic_effectiveness: "NOT_CONFIRMED", fit_count: 0,
+      database_written: false, outcomes_read: false, package_qualification_rechecked: false,
+      status: "NOT_CONFIGURED", candidates: [], unmodeled_items: [] };
+    if (id === oldList.list_version_id) { observedOld(); await release; }
+    if (id === nextList.list_version_id) Object.assign(result, {
+      status: "NO_CANDIDATES", decision_date: "2026-06-08", target_date: "2026-06-09",
+      source_review_policy_sha256: null, model_sha256: "a".repeat(64), bundle_sha256: "b".repeat(64),
+      config_sha256: "c".repeat(64), projection_sha256: "d".repeat(64), model_parent_policy_identity: "e".repeat(64),
+      model_value_policy_identity: "f".repeat(64), candidate_receipt: { program_id: PROGRAM_ID, list_version_id: id,
+        binding_version_id: "unit-binding", selection_run_id: "unit-run", review_run_id: "unit-review",
+        candidate_scope: "ORIGINAL_PUBLISHED_TOP20", native_receipt_created: false, decision_date: "2026-06-08",
+        target_date: "2026-06-09", candidate_count: 0, original_list_item_count: 0,
+        candidate_roster_sha256: "a".repeat(64), source_review_policy_sha256: null },
+    });
+    return json(route, result);
+  });
+  try {
+    await page.goto("/paper-v2/advisory");
+    await observed;
+    await page.getByTestId(`advisory-view-list-version-${nextList.list_version_id}`).click();
+    const card = page.getByTestId("advisory-sector-entry-price");
+    await expect(card).toContainText("NO_CANDIDATES");
+    const lateResponse = page.waitForResponse((response) => response.url().includes("/sector-entry-price")
+      && new URL(response.url()).searchParams.get("list_version_id") === oldList.list_version_id);
+    releaseOld();
+    await lateResponse;
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(card).toContainText("NO_CANDIDATES");
+    await expect(card).not.toContainText("NOT_CONFIGURED");
+    await expect(card.getByRole("alert")).toHaveCount(0);
+  } finally { releaseOld(); }
+});
+
+for (const [state, text] of [
+  ["NO_ACCEPTABLE_PRICE", "已知条件下无合适价格"],
+  ["PARTIAL_UNKNOWN", "仍有未知条件"],
+  ["UNAVAILABLE", "不能视为不推荐"],
+] as const) {
+  test(`economic entry read-only research distinguishes ${state} without legacy ranking`, async ({ page }) => {
+    const bundle = "adveserve_" + "a".repeat(24);
+    await mockShellApis(page);
+    const { calls } = await mockAdvisoryApis(page, {
+      modelShadowByProgramId: { [PROGRAM_ID]: { status: "MODEL_UNAVAILABLE", candidates: [], shortlist_count: 0,
+        candidate_count: 0, baselines: {}, hmm_unavailable: [], reason_code: "UNIT_LEGACY_UNAVAILABLE", price_range: null } },
+      economicEntryResearch: { status: "RESEARCH_NAVIGATION", program_id: PROGRAM_ID, bundle_id: bundle,
+        target_date: "2025-01-29", decision_date: "2025-01-28", evidence_state: "RESEARCH_NAVIGATION", decision_use: "NAVIGATION_ONLY", deployable: false,
+        advice: [{ schema_version: "economic_entry_daily_projection_v1", role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY",
+          decision_use: "NAVIGATION_ONLY", deployable: false, evidence_state: "RESEARCH_NAVIGATION", role_binding_sha256: null, recommendation_status: state,
+          availability: state === "NO_ACCEPTABLE_PRICE" ? "COMPLETE" : state === "UNAVAILABLE" ? "UNAVAILABLE" : "PARTIAL",
+          reason_code: null, prediction_input: { program_id: PROGRAM_ID, instrument: "000001.SZ", decision_date: "2025-01-28",
+            binding_version_id: "unit-only-binding", run_id: null, list_id: null, restored_cohort_sha256: "e".repeat(64), selection_rank: 1,
+            captured_at: "2026-10-02T00:00:00Z",
+            target_date: "2025-01-29", source_evidence: "RECOVERED_LIMITED", evidence_level: "HISTORICAL_REPLAY", evidence_limitations: ["unit-only presentation fixture"] },
+          acceptable_price_intervals: [], node_status_counts: {
+            REJECTED: state === "UNAVAILABLE" ? 0 : 1, OUT_OF_SUPPORT: state === "NO_ACCEPTABLE_PRICE" ? 0 : state === "UNAVAILABLE" ? 2 : 1 },
+          query_node_count: state === "NO_ACCEPTABLE_PRICE" ? 1 : 2,
+          risk_budget: { maximum_loss_bps: 800, reference_use: "FIXED_RESEARCH_STOP_REFERENCE" }, model_bundle_sha256: "b".repeat(64),
+          original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }] },
+    });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-economic-entry-value");
+    await expect(card.getByTestId("economic-entry-role-status")).toContainText("NOT_CONFIGURED");
+    await card.locator("summary").filter({ hasText: "只读查看" }).click();
+    await page.getByLabel("经济价格研究bundle").fill(bundle);
+    await page.getByLabel("经济价格研究目标日").fill("2025-01-29");
+    await card.getByRole("button", { name: "读取探索产物" }).click();
+    await expect(card.getByTestId("economic-entry-research-result")).toContainText(text);
+    await expect(card).toContainText("不用于实盘");
+    expect(calls.filter((call) => call.includes("/entry-value/")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
+for (const state of ["PUBLISHED", "STALE", "IDENTITY_CONFLICT"] as const) {
+  test(`economic entry qualified presentation distinguishes ${state}`, async ({ page }) => {
+    // Presentation-only fixture, never real confirmation or activation evidence.
+    await mockShellApis(page);
+    const roleSha = "a".repeat(64);
+    const status = state === "IDENTITY_CONFLICT" ? "PUBLISHED" : state;
+    const economicStatus: JsonObject = {
+      status, evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: status === "PUBLISHED", decision_use: "ADVISORY_ONLY",
+      automatic_capture_enabled: true, qualification_gaps: [], role_binding_sha256: roleSha, pointer_sha256: "b".repeat(64),
+      bundle_id: "advecserve_" + "c".repeat(24), binding_version_id: "unit-only-binding", original_batch_sha256: "d".repeat(64),
+      reason_code: status === "STALE" ? "D_ADVICE_EXPIRED_AT_T_OPEN" : null,
+      advice: [{ schema_version: "economic_entry_daily_projection_v1", role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY",
+        evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: true, decision_use: "ADVISORY_ONLY", role_binding_sha256: state === "IDENTITY_CONFLICT" ? "f".repeat(64) : roleSha,
+        recommendation_status: "ACCEPTABLE_PRICE_SET", availability: "PARTIAL", reason_code: null,
+        prediction_input: { program_id: PROGRAM_ID, binding_version_id: "unit-only-binding", run_id: "unit-only-run", list_id: "unit-only-list",
+          instrument: "000001.SZ", selection_rank: 1, restored_cohort_sha256: null, decision_date: "2026-06-08", target_date: "2026-06-09",
+          captured_at: "2026-06-08T17:00:00+08:00", source_evidence: "NATIVE_COMPLETE", evidence_level: "PROSPECTIVE_INPUT", evidence_limitations: ["unit-only presentation fixture"] },
+        acceptable_price_intervals: [{ minimum_cny: 9.95, maximum_cny: 9.97, grid_step_cny: .01, node_count: 3,
+          expected_net_return_min_bps: 30, expected_net_return_max_bps: 45, entry_net_max_loss_q90_max_bps: 200 }],
+        node_status_counts: { ACCEPTABLE: 3, OUT_OF_SUPPORT: 1 }, query_node_count: 4,
+        risk_budget: { maximum_loss_bps: 800, reference_use: "EXPLICIT_BUSINESS_CONFIGURATION", configuration_sha256: "e".repeat(64) },
+        model_bundle_sha256: "b".repeat(64), original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }],
+    };
+    const { calls } = await mockAdvisoryApis(page, { economicEntryStatus: economicStatus });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-economic-entry-value");
+    if (state === "IDENTITY_CONFLICT") {
+      await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
+      await expect(card).not.toContainText("9.95");
+      const validRow: JsonObject = { ...(economicStatus.advice as JsonObject[])[0], role_binding_sha256: roleSha };
+      const interval = (validRow.acceptable_price_intervals as JsonObject[])[0];
+      // Reuse the same presentation fixture: contradictory economics/counts and empty
+      // PUBLISHED must fail closed, without adding another fixture or research trial.
+      for (const advice of [
+        [],
+        [{ ...validRow, acceptable_price_intervals: [{ ...interval, expected_net_return_min_bps: -1 }] }],
+        [{ ...validRow, node_status_counts: { ACCEPTABLE: 3, INVENTED_STATE: 1 } }],
+      ]) {
+        economicStatus.advice = advice;
+        await page.reload();
+        await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
+        await expect(card).not.toContainText("9.95");
+      }
+    } else {
+      await expect(card.getByTestId("economic-entry-role-status")).toContainText(state);
+      await expect(card).toContainText("9.95～9.97 CNY");
+      if (state === "STALE") await expect(card).toContainText("不能作为当前买入建议");
+    }
+    expect(calls.filter((call) => call.includes("/entry-value/")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
 type JsonObject = Record<string, unknown>;
 
 const PROGRAM_ID = "adv_codex_smoke_20260604";
@@ -530,6 +708,62 @@ const returns = activePool.map((row, index) => ({
   is_win: row.return_bps > 0,
 }));
 
+test("Advisory return history bounds rendered rows without dropping records or issuing requests", async ({ page }) => {
+  await mockShellApis(page);
+  const history = Array.from({ length: 164 }, (_, index) => ({
+    ...returns[index % returns.length], episode_id: `history-${index}`, stock_name: `历史样本${index}`,
+  }));
+  const { calls } = await mockAdvisoryApis(page, { returnsByProgramId: { [PROGRAM_ID]: history } });
+  await page.goto("/paper-v2/advisory");
+  const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Episode 收益与胜率证据", exact: true }) });
+  const rows = section.locator("tbody tr");
+  await expect(rows).toHaveCount(25);
+  await expect(section).toContainText("共 164 条");
+  const returnCalls = calls.filter((call) => call.endsWith("/returns")).length;
+  for (let offset = 0; offset < history.length; offset += 25) {
+    await expect(rows).toHaveCount(Math.min(25, history.length - offset));
+    for (let i = 0; i < Math.min(25, history.length - offset); i++) {
+      await expect(rows.nth(i).locator("td strong").first()).toHaveText(`历史样本${offset + i}`);
+    }
+    if (offset + 25 < history.length) await section.getByRole("button", { name: "下一页", exact: true }).click();
+  }
+  await expect(section.getByRole("button", { name: "下一页", exact: true })).toBeDisabled();
+  await section.getByRole("button", { name: "上一页", exact: true }).click();
+  await expect(rows.first()).toContainText("历史样本125");
+  await section.getByRole("button", { name: "首页", exact: true }).click();
+  await expect(rows.first()).toContainText("历史样本0");
+  await expect(section.getByRole("button", { name: "上一页", exact: true })).toBeDisabled();
+  expect(calls.filter((call) => call.endsWith("/returns"))).toHaveLength(returnCalls);
+  expect(calls.filter((call) => !call.startsWith("GET "))).toEqual([]);
+});
+
+test("Advisory return history resets across task and shorter refresh without stale rows", async ({ page }) => {
+  await mockShellApis(page);
+  const other = { ...program, program_id: "advp_returns_other", program_name: "另一收益任务" };
+  const history = Array.from({ length: 51 }, (_, index) => ({ ...returns[0], episode_id: `history-${index}`, stock_name: `旧样本${index}` }));
+  const byProgram: Record<string, JsonObject[]> = { [PROGRAM_ID]: history, [String(other.program_id)]: [] };
+  await mockAdvisoryApis(page, { extraPrograms: [other], returnsByProgramId: byProgram });
+  await page.goto("/paper-v2/advisory");
+  const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Episode 收益与胜率证据", exact: true }) });
+  await expect(section).toContainText("共 51 条");
+  await section.getByRole("button", { name: "末页", exact: true }).click();
+  await expect(section.locator("tbody tr")).toHaveCount(1);
+  await expect(section).toContainText("旧样本50");
+  await page.getByRole("button", { name: "另一收益任务", exact: true }).click();
+  await expect(section).toContainText("暂无 episode 收益");
+  await expect(section).not.toContainText("旧样本");
+  await page.getByRole("button", { name: String(program.program_name), exact: true }).click();
+  await expect(section.locator("tbody tr")).toHaveCount(25);
+  await expect(section).toContainText("第 1 / 3 页");
+  await section.getByRole("button", { name: "末页", exact: true }).click();
+  byProgram[PROGRAM_ID] = [{ ...returns[0], episode_id: "fresh", stock_name: "刷新样本" }];
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(section).toContainText("刷新样本");
+  await expect(section.locator("tbody tr")).toHaveCount(1);
+  await expect(section).toContainText("第 1 / 1 页，共 1 条");
+  await expect(section.getByRole("button", { name: "下一页", exact: true })).toBeDisabled();
+});
+
 function json(route: Route, data: unknown, status = 200) {
   return route.fulfill({
     status,
@@ -546,7 +780,7 @@ async function mockShellApis(page: Page, tradingDefaults: JsonObject = {}) {
     const path = new URL(route.request().url()).pathname;
     return json(route, path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] });
   });
-  await page.route("**/api/v1/paper-v2/trading-days/defaults**", async (route) => json(route, {
+  await page.route("**/api/v1/advisory/trading-days/defaults**", async (route) => json(route, {
     as_of_date: "2026-06-08",
     trading_day_status: {
       is_trading_day: true,
@@ -616,12 +850,16 @@ async function mockAdvisoryApis(page: Page, options: {
   listVersionsByProgramId?: Record<string, JsonObject[]>;
   bindingsByProgramId?: Record<string, JsonObject[]>;
   modelShadowByProgramId?: Record<string, JsonObject>;
+  economicEntryResearch?: JsonObject;
+  economicEntryStatus?: JsonObject;
+  sectorEntryDaily?: JsonObject;
   forwardRunsByProgramId?: Record<string, JsonObject[]>;
   forwardDetailsById?: Record<string, JsonObject>;
   forwardModelMetricsByProgramId?: Record<string, JsonObject>;
   forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
+  returnsByProgramId?: Record<string, JsonObject[]>;
   deliveryPreflight?: JsonObject | ((body: JsonObject) => JsonObject);
 } = {}) {
   const calls: string[] = [];
@@ -706,6 +944,8 @@ async function mockAdvisoryApis(page: Page, options: {
     const path = url.pathname;
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
+
+    if (path.endsWith("/api/v1/advisory/trading-days/defaults")) return route.fallback();
 
     if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
       return json(route, {
@@ -832,6 +1072,33 @@ async function mockAdvisoryApis(page: Page, options: {
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/active`) && method === "GET") {
       const binding = (bindingsByProgramId[currentRouteProgramId] || []).find((item) => item.activation_status === "ACTIVE") || { ...activeBinding, program_id: currentRouteProgramId };
       return json(route, { ok: true, binding });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/sector-entry-price`) && method === "GET") {
+      const configured = options.sectorEntryDaily || {};
+      const receipt = configured.candidate_receipt as JsonObject | undefined;
+      return json(route, { ok: true, schema_version: "economic_sector_daily_service_v1", model_family: "M1_SECTOR_PRICE_VALUE_V1",
+        program_id: currentRouteProgramId, requested_target_date: url.searchParams.get("target_trade_date"),
+        requested_list_version_id: url.searchParams.get("list_version_id"), decision_use: "NAVIGATION_ONLY", deployable: false,
+        economic_effectiveness: "NOT_CONFIRMED", database_written: false, outcomes_read: false, package_qualification_rechecked: false,
+        fit_count: 0, status: "NOT_CONFIGURED", candidates: [], unmodeled_items: [], ...configured,
+        ...(receipt ? { candidate_receipt: { ...receipt, list_version_id: url.searchParams.get("list_version_id") || "unit-list" } } : {}) });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/entry-value/status`) && method === "GET") {
+      const target = url.searchParams.get("target_trade_date");
+      if (options.economicEntryStatus) {
+        const advice = (options.economicEntryStatus.advice as JsonObject[] || []).map((row) => ({ ...row,
+          prediction_input: { ...(row.prediction_input as JsonObject), target_date: target || "2026-06-09" } }));
+        return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: currentRouteProgramId,
+          role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", target_date: target, resolved_target_date: target || "2026-06-09",
+          research_namespace_configured: true, ...options.economicEntryStatus, advice });
+      }
+      return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: currentRouteProgramId,
+        role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", status: "NOT_CONFIGURED", target_date: url.searchParams.get("target_trade_date"),
+        evidence_state: "UNCONFIRMED", deployable: false, advice: [], reason_code: "NO_QUALIFIED_ENTRY_VALUE_ROLE_BOUND",
+        qualification_gaps: ["independent_economic_confirmation"], automatic_capture_enabled: false, research_namespace_configured: true });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/entry-value/research`) && method === "GET") {
+      return json(route, { ok: true, ...options.economicEntryResearch });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/model-shadow`) && method === "GET") {
       const configured = options.modelShadowByProgramId?.[currentRouteProgramId];
@@ -981,7 +1248,7 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/returns`) && method === "GET") {
       await wait(options.detailDelayMs);
-      return json(route, { ok: true, returns: currentRouteProgramId === PROGRAM_ID ? returns : [], metrics: { win_rate: 0.64 } });
+      return json(route, { ok: true, returns: options.returnsByProgramId?.[currentRouteProgramId] ?? (currentRouteProgramId === PROGRAM_ID ? returns : []), metrics: { win_rate: 0.64 } });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/enable`) && method === "POST") {
       programStatus = "ENABLED";
@@ -1113,6 +1380,48 @@ async function mockAdvisoryApis(page: Page, options: {
 async function activeSymbols(page: Page) {
   const texts = await page.getByTestId("advisory-active-cell-symbol").allTextContents();
   return texts.map((text) => text.match(/\d{6}\.(?:SZ|SH|BJ)/)?.[0] ?? text.trim());
+}
+
+for (const calendarState of ["unavailable", "slow"] as const) {
+  test(`Advisory calendar ${calendarState} preserves stored recommendations and blocks date-dependent writes`, async ({ page }) => {
+    await mockShellApis(page);
+    const { calls } = await mockAdvisoryApis(page);
+    const retiredRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/paper-v2/trading-days/defaults")) retiredRequests.push(request.url());
+    });
+    let releaseCalendar = () => {};
+    let failCalendar = calendarState === "unavailable";
+    const calendarGate = new Promise<void>((resolve) => { releaseCalendar = resolve; });
+    await page.route("**/api/v1/advisory/trading-days/defaults**", async (route) => {
+      if (failCalendar) return json(route, { detail: { message: "official calendar unavailable" } }, 503);
+      if (calendarState === "slow") await calendarGate;
+      return route.fallback();
+    });
+    try {
+      await page.goto("/paper-v2/advisory");
+      await expect(page.getByText("codex_smoke_20260604").first()).toBeVisible();
+      await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
+      await expect(page.getByTestId("advisory-active-cell-symbol").first()).toBeVisible();
+      await expect(page.getByTestId("advisory-selected-preview")).toBeDisabled();
+      await expect(page.getByTestId("advisory-selected-run")).toBeDisabled();
+      await expect(page.getByTestId("advisory-selected-catchup")).toBeDisabled();
+      expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
+      expect(retiredRequests).toEqual([]);
+      if (calendarState === "unavailable") {
+        await expect(page.getByTestId("advisory-calendar-error")).toContainText("official calendar unavailable");
+        failCalendar = false;
+        await page.getByRole("button", { name: "刷新", exact: true }).click();
+        await expect(page.getByTestId("advisory-calendar-error")).toHaveCount(0);
+        await expect(page.getByTestId("advisory-review-target-select")).toBeEnabled();
+      } else {
+        releaseCalendar();
+        await expect(page.getByTestId("advisory-review-target-select")).toBeEnabled();
+      }
+    } finally {
+      releaseCalendar();
+    }
+  });
 }
 
 test("Advisory page renders task shell before slow leaderboard and detail endpoints complete", async ({ page }) => {
@@ -1263,7 +1572,10 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);
   await expect(page.getByText(`第 1 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
-  await page.getByRole("button", { name: "下一页" }).click();
+  const reviewSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "只追加决策记录", exact: true }),
+  });
+  await reviewSection.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(15);
   await expect(page.getByText(`第 2 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
   await page.getByTestId("advisory-review-page-size").selectOption("50");
@@ -2204,12 +2516,15 @@ test("Advisory page exposes initial list generation when a new program has no li
   });
 
   await mockShellApis(page);
+  await mockAdvisoryApis(page, { extraPrograms: [enabledProgram()] });
   await page.route("**/api/v1/advisory/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
+
+    if (path.endsWith("/api/v1/advisory/trading-days/defaults")) return route.fallback();
 
     if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
       return json(route, {
@@ -2256,6 +2571,19 @@ test("Advisory page exposes initial list generation when a new program has no li
     }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/bindings`) && method === "GET") {
       return json(route, { ok: true, bindings: [newBinding] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/sector-entry-price`) && method === "GET") {
+      return json(route, { ok: true, schema_version: "economic_sector_daily_service_v1", model_family: "M1_SECTOR_PRICE_VALUE_V1",
+        program_id: newProgramId, requested_target_date: url.searchParams.get("target_trade_date"),
+        requested_list_version_id: url.searchParams.get("list_version_id"), decision_use: "NAVIGATION_ONLY", deployable: false,
+        economic_effectiveness: "NOT_CONFIRMED", database_written: false, outcomes_read: false, package_qualification_rechecked: false,
+        fit_count: 0, status: "NOT_CONFIGURED", candidates: [], unmodeled_items: [] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/entry-value/status`) && method === "GET") {
+      return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: newProgramId,
+        role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", status: "NOT_CONFIGURED", target_date: url.searchParams.get("target_trade_date"),
+        evidence_state: "UNCONFIRMED", deployable: false, advice: [], reason_code: "NO_QUALIFIED_ENTRY_VALUE_ROLE_BOUND",
+        qualification_gaps: ["independent_economic_confirmation"], automatic_capture_enabled: false, research_namespace_configured: true });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/list-versions`) && method === "GET") {
       return json(route, { ok: true, list_versions: currentListVersions });
@@ -2361,7 +2689,7 @@ test("Advisory page exposes initial list generation when a new program has no li
       detailByVersion = { [String(published.list_version_id)]: { list_version: published, items: publishedItems } };
       return json(route, initialPayload(false, initialTargetDate));
     }
-    return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
+    return route.fallback();
   });
 
   await page.goto("/paper-v2/advisory");

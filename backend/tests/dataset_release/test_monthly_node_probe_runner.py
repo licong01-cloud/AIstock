@@ -5,6 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import os
+import sys
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -31,6 +34,114 @@ from backend.services.dataset_release.monthly_unified import REQUIRED_CONSUMERS
 
 
 MANIFEST = "a" * 64
+
+
+def test_node_probe_imports_in_fresh_process_without_python311_utc():
+    root = Path(__file__).resolve().parents[3]
+    program = (
+        "import datetime; "
+        "delattr(datetime, 'UTC') if hasattr(datetime, 'UTC') else None; "
+        "from backend.services.dataset_release import monthly_node_probe, monthly_immutable_deploy; "
+        "from backend.services.dataset_release import monthly_unified, monthly_worker; "
+        "assert monthly_unified.UTC is datetime.timezone.utc; "
+        "assert monthly_worker.UTC is datetime.timezone.utc; print('PY310_IMPORT_PASS')"
+    )
+    result = subprocess.run([sys.executable, "-B", "-c", program], cwd=root,
+                            capture_output=True, timeout=30, check=True)
+    assert result.stdout.strip() == b"PY310_IMPORT_PASS"
+
+
+def test_hmm_node_role_uses_shared_quote_facts_not_stock_classification():
+    from backend.services.dataset_release.monthly_node_probe_runner import _path_role
+
+    assert _path_role("components/sector_context_candidate_v1/sector_quote_facts.h5", "hmm_file_only") == "sector_data_h5"
+    assert _path_role("components/factor_h5_static_candidate_v2/sector_data.h5", "hmm_file_only") is None
+
+
+def test_monthly_git_identity_detaches_from_supervisor_console_and_stdin(monkeypatch, tmp_path):
+    from backend.services.dataset_release.monthly_node_tools import MonthlyNodeTools, _bundle
+
+    def execute(command, **options):
+        assert options.get("creationflags", 0) == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        assert options.get("stdin") == subprocess.DEVNULL
+        assert options["stdout"] == options["stderr"] == subprocess.PIPE
+        assert options["timeout"] > 0
+        if command[-1] == "HEAD":
+            return subprocess.CompletedProcess(command, 0, b"a" * 40 + b"\n", b"")
+        raise LookupError("archive launch reached")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    tools = MonthlyNodeTools("user@node", "/projects/legacy", "/env/bin/python", tmp_path)
+    assert tools.source_commit == "a" * 40
+    with pytest.raises(LookupError, match="archive launch reached"):
+        _bundle(tmp_path, tools.source_commit)
+
+
+@pytest.mark.parametrize("launcher", ["probe", "deploy"])
+def test_monthly_node_commands_do_not_create_a_console(monkeypatch, launcher):
+    from backend.services.dataset_release.monthly_immutable_deploy import _run_command
+    from backend.services.dataset_release.monthly_node_probe_runner import _run_subprocess
+
+    def execute(command, **options):
+        assert options.get("creationflags", 0) == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        assert options["input"] == b"frozen request"
+        assert options["stdout"] == options["stderr"] == subprocess.PIPE
+        assert options["timeout"] == 7 and options["shell"] is False
+        return subprocess.CompletedProcess(command, 1, b"", b"real failure")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    run = _run_subprocess if launcher == "probe" else _run_command
+    result = run(("fixed-node-tool",), payload=b"frozen request", timeout_seconds=7)
+    assert result.returncode == 1 and result.stderr == b"real failure"
+
+
+@pytest.mark.parametrize("kind", ["local", "wsl"])
+def test_monthly_derive_preserves_payload_and_errors_without_console(monkeypatch, tmp_path, kind):
+    from backend.services.dataset_release.monthly_hmm_derive import (
+        LocalPythonHMMCoefficientProcess, MonthlyHMMDeriveError, WSLPythonHMMCoefficientProcess,
+    )
+
+    def execute(command, **options):
+        assert options["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        assert options["input"] == b'{"frozen":true}'
+        assert options["timeout"] == 7
+        return subprocess.CompletedProcess(command, 1, b"", b"actual producer error")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    process = SimpleNamespace(python_executable=sys.executable, script_path=tmp_path / "producer.py",
+                              project_root=tmp_path, timeout_seconds=7, wsl_executable="wsl.exe",
+                              distribution="Ubuntu", execution_path=lambda path: str(path))
+    run = LocalPythonHMMCoefficientProcess.run if kind == "local" else WSLPythonHMMCoefficientProcess.run
+    with pytest.raises(MonthlyHMMDeriveError, match="actual producer error"):
+        run(process, {"frozen": True})
+
+
+def test_monthly_stream_deploy_does_not_create_console(monkeypatch):
+    import io
+    from backend.services.dataset_release.monthly_immutable_deploy import _stream_command
+
+    def launch(command, **options):
+        assert options["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        assert options["shell"] is False and options["stdin"] == subprocess.PIPE
+        options["stderr"].write(b"actual transport error")
+        return SimpleNamespace(stdin=io.BytesIO(), wait=lambda **kwargs: 1)
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    result = _stream_command(("fixed-node-tool",), request=b"request", files=(), timeout_seconds=7)
+    assert result.returncode == 1 and result.stderr == b"actual transport error"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows hidden console regression")
+def test_monthly_git_identity_exits_in_real_headless_fresh_process():
+    root = Path(__file__).resolve().parents[3]
+    program = (
+        "import pathlib,sys; from backend.services.dataset_release.monthly_node_tools import MonthlyNodeTools; "
+        "print(MonthlyNodeTools('user@node','/projects/legacy','/env/bin/python',pathlib.Path(sys.argv[1])).source_commit)"
+    )
+    result = subprocess.run([sys.executable, "-c", program, str(root)], cwd=root,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=15, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    assert len(result.stdout.strip()) == 40 and result.stderr == b""
 
 
 def _json(path: Path, value: Mapping[str, Any]) -> Path:

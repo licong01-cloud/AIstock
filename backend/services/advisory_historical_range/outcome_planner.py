@@ -196,6 +196,13 @@ class HistoricalRangeOutcomePlanner:
                     if scan_after is None
                     or (seed.range_run_id, seed.subject_type.value, seed.subject_id)
                     > scan_after
+                    # The initial cursor subject may still have unconsumed
+                    # projection/horizon items; only later seed pages exclude it.
+                    or (
+                        not seed_pages
+                        and (seed.range_run_id, seed.subject_type.value, seed.subject_id)
+                        == scan_after
+                    )
                 )
                 seed_pages.extend(fresh)
                 if len(page) < seed_limit or not fresh:
@@ -216,6 +223,7 @@ class HistoricalRangeOutcomePlanner:
             )
             all_seeds_loaded = len(seeds) < seed_limit
         items: list[HistoricalRangeOutcomeWorkItemV1] = []
+        scanned_through = after_key
         for seed in seeds:
             if seed.label_as_of_trade_date != request.label_as_of_trade_date:
                 raise ValueError("subject seed label-as-of differs from refresh request")
@@ -294,6 +302,9 @@ class HistoricalRangeOutcomePlanner:
                         outcome_contract_version=self._outcome_contract_version,
                         revision_reason=HistoricalRangeOutcomeRevisionReason.INITIAL,
                     )
+                    key = _item_key(logical_hint)
+                    if scanned_through is None or key > scanned_through:
+                        scanned_through = key
                     if (
                         request.requested_outcome_logical_ids
                         and str(logical_hint.outcome_logical_id)
@@ -380,8 +391,15 @@ class HistoricalRangeOutcomePlanner:
         selected = tuple(items[:limit])
         exhausted = all_seeds_loaded and len(items) <= limit
         next_cursor = None
-        if not exhausted and selected:
-            next_cursor = {"key": list(_item_key(selected[-1]))}
+        if not exhausted:
+            # Advance through all scanned keys only when every selected item
+            # fits. Reused/terminal items still constitute scan progress, even
+            # on an empty page. If work was truncated, retain the last emitted
+            # key so the next slice cannot skip any unprocessed item.
+            continuation = _item_key(selected[-1]) if len(items) > limit else scanned_through
+            if continuation is None or (after_key is not None and continuation <= after_key):
+                raise ValueError("outcome subject page did not advance stable key")
+            next_cursor = {"key": list(continuation)}
         return HistoricalRangeOutcomeSliceV1(
             items=selected,
             next_cursor=next_cursor,

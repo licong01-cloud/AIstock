@@ -1,0 +1,363 @@
+{
+  "actual": "No supported READY correction path; old predecessor CAS also predates current v18 profile.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_build_executor.py",
+    "backend/services/dataset_release/monthly_minute_repair.py",
+    "backend/services/dataset_release/monthly_ready_correction.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_worker.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2024-monthly-ready-candidate-cannot-accept-bounded-corrections-without-discar.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2024",
+  "closed_at": "2026-10-21T14:51:15.194035Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T08:17:43.240233Z",
+  "description": "No supported READY correction path; old predecessor CAS also predates current v18 profile.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-9ef44408a5e2",
+      "timestamp": "2026-10-20T08:17:43.240214Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/monthly-202609-closure-20261020/september-pit-quote-readback-r2.json"
+  ],
+  "expected": "Existing monthly backend can prepare one corrected immutable successor with exact bounded repair inputs and retained completed exports; old candidate and active remain unchanged; normal local/node/consumer validation produces new readiness.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_executor.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_ready_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2024-monthly-ready-candidate-cannot-accept-bounded-corrections-without-discar.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_executor.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_ready_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2024-monthly-ready-candidate-cannot-accept-bounded-corrections-without-discar.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_mature_build_runner.py",
+        "backend/routers/monthly_dataset_releases.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_mature_build_runner.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/routers/monthly_dataset_releases.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_unified_v2.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_mature_build_runner.py",
+        "backend/routers/monthly_dataset_releases.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T08:17:43.240233Z",
+  "fix_branch": null,
+  "fix_commit": "ae093415df809e8b3d6845fef08df195189b1daf",
+  "fixed_at": "2026-10-21T07:32:52Z",
+  "github_issue_number": 6459,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6459",
+  "last_seen_at": "2026-10-20T08:17:43.240233Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6531",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "AIstock Python fresh-process direct regressions: 106 passed; only the existing route-count assertion required updating for the new authenticated route.",
+      "Native writer test builds actual BIN bytes, seeds the completed export into a copy-on-write successor and fails if prepare/daily/minute/finalize export runs again. Source seal preservation, interrupted copy/metadata commit, bounded minute extension and CAS/rollback are covered.",
+      "Three review passes: checkpoint retirement crash recovery; exact completed-minute lineage and atomic seed journal; current activation predecessor separated from immutable physical build predecessor. No database, active-profile or process writes.",
+      "AIstock Python imported monthly_ready_correction from the task worktree; SHA256 d64627111d19450c8329b4a6695c3f19b716f8128ffbd9fb64da5fc4e8152409. Native BIN reuse and CAS/rollback tests passed in fresh processes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2024\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2024",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "ae093415df809e8b3d6845fef08df195189b1daf",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-21T14:50:40.440307Z",
+      "mode": "read_only",
+      "observed_identity": "ecc976f230ba30604cc364838c34ca2096041ead",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "46cade6e8b256f8154b7854421648e537d90d7af91cb63679f0f07d585ab705b",
+      "receipt_sha256": "bb1b7b336fbcc8f9896a996e3dda88f429502f81cb733a2ecc781623340a9497",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "72b8d65fc9dad57f8914a50797ee32109fb7453a2e1da3b108cb37c8eb92b104",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2024",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cb6c974f770dba45",
+    "recorded_at": "2026-10-21T07:33:38.020860Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6c4835fe14c27691099ad1d703a8352e1f1acec4",
+    "source_merge_commit": "ae093415df809e8b3d6845fef08df195189b1daf",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6531",
+    "validation_evidence": [
+      "validation-receipt: id=772ed2baa99564cf commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=7a139f0f661df085 commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -k correction` result=`passed`",
+      "validation-receipt: id=8c91f0300a81008b commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
+      "validation-receipt: id=ded006d3b21c378d commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "acf18ed92829410f29979df7fb772d94134f010fb53031d4a9b8da385483bde8"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly READY candidate cannot accept bounded corrections without discarding completed exports",
+  "trigger_condition": {
+    "fingerprint": "9ef44408a5e24c53ee16bc99",
+    "source_event_id": "FE-20261020-9ef44408a5e2"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=772ed2baa99564cf commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=7a139f0f661df085 commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -k correction` result=`passed`",
+    "validation-receipt: id=8c91f0300a81008b commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
+    "validation-receipt: id=ded006d3b21c378d commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify BUG-2024 worker-scheduler -> passed; loaded runtime ecc976f2 contains source; existing native BIN reuse correction regression passed; operation not mutated"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

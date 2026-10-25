@@ -96,9 +96,10 @@ class StPitRiskDecisionProvider:
 
     source_name = "market.stock_universe_pit_spans"
 
-    def __init__(self, conn_factory: Any | None = None, *, require_ready_state: bool = True) -> None:
+    def __init__(self, conn_factory: Any | None = None, *, require_ready_state: bool = True, span_loader=None) -> None:
         self._conn_factory = conn_factory or get_conn
         self._require_ready_state = bool(require_ready_state)
+        self._span_loader = span_loader
 
     def evaluate(
         self,
@@ -121,35 +122,39 @@ class StPitRiskDecisionProvider:
             universe_key = authority_lease.universe_key
         else:
             universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
-        if authority_lease is None and profile.strict_data_ready and self._require_ready_state:
+        if self._span_loader is None and authority_lease is None and profile.strict_data_ready and self._require_ready_state:
             self._require_ready_pit_state(universe_key=universe_key, trade_date=trade_date)
-        try:
-            with self._conn_factory() as conn:
-                with conn.cursor() as cur:
-                    sql = """
-                        SELECT ts_code, eligible_start, eligible_end, entry_reason,
-                               exit_reason, rule_version, metadata
-                          FROM market.stock_universe_pit_spans
-                         WHERE universe_key = %s
-                           AND ts_code = ANY(%s)
-                           AND eligible_start <= %s
-                           AND eligible_end >= %s
-                    """
-                    params: tuple[Any, ...] = (universe_key, normalized, trade_date, trade_date)
-                    if authority_lease is not None:
-                        sql += " AND rule_version = %s"
-                        params = (*params, authority_lease.rule_version)
-                    cur.execute(sql, params)
-                    rows = cur.fetchall()
-        except Exception as exc:
-            raise DataUnavailableError(
-                "ST PIT risk policy lookup failed",
-                context={
-                    "trade_date": trade_date.isoformat(),
-                    "symbol_count": len(normalized),
-                    "universe_key": universe_key,
-                },
-            ) from exc
+        if self._span_loader is not None:
+            rows = self._span_loader(normalized, trade_date, universe_key,
+                                     rule_version=authority_lease.rule_version if authority_lease else None)
+        else:
+            try:
+                with self._conn_factory() as conn:
+                    with conn.cursor() as cur:
+                        sql = """
+                            SELECT ts_code, eligible_start, eligible_end, entry_reason,
+                                   exit_reason, rule_version, metadata
+                              FROM market.stock_universe_pit_spans
+                             WHERE universe_key = %s
+                               AND ts_code = ANY(%s)
+                               AND eligible_start <= %s
+                               AND eligible_end >= %s
+                        """
+                        params: tuple[Any, ...] = (universe_key, normalized, trade_date, trade_date)
+                        if authority_lease is not None:
+                            sql += " AND rule_version = %s"
+                            params = (*params, authority_lease.rule_version)
+                        cur.execute(sql, params)
+                        rows = cur.fetchall()
+            except Exception as exc:
+                raise DataUnavailableError(
+                    "ST PIT risk policy lookup failed",
+                    context={
+                        "trade_date": trade_date.isoformat(),
+                        "symbol_count": len(normalized),
+                        "universe_key": universe_key,
+                    },
+                ) from exc
         eligible = {str(row[0]) for row in rows}
         span_context = {
             str(row[0]): {

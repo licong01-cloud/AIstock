@@ -35,7 +35,6 @@ from backend.services.strategy_package.runtime import (
     TargetPositionEngine,
     _candidate_selection_artifact_runtime_hashes,
     _candidate_selection_artifact_runtime_hashes_v2,
-    apply_runtime_variant_to_manifest,
 )
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
@@ -332,7 +331,6 @@ class PaperTradingDayRunner:
             runtime_config=config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
         )
-        effective_manifest = apply_runtime_variant_to_manifest(manifest, config)
         execution_algo_config = dict(execution_policy_json.get("algo_config") or {})
         config["validated_execution_policy"] = execution_policy_context
         config["qe_backtest_runtime_contract"] = runtime_contract
@@ -527,7 +525,7 @@ class PaperTradingDayRunner:
                     snapshot=snapshot,
                     total_equity=total_equity,
                     top_k=top_k,
-                    manifest=effective_manifest,
+                    manifest=manifest,
                     current_positions=current_positions,
                     current_prices=config.get("current_prices") or {},
                 )

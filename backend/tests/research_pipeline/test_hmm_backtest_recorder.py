@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -12,7 +11,12 @@ from backend.services.research_pipeline.hmm_backtest_recorder import (
     HMMBacktestRecorder,
     stable_json_hash,
 )
-from backend.services.research_pipeline.models import BackfillRunRecord, BacktestRecord, StageAttemptRecord, StagePlanRecord
+from backend.services.research_pipeline.models import (
+    BackfillRunRecord,
+    BacktestRecord,
+    StageAttemptRecord,
+    StagePlanRecord,
+)
 
 
 class FakeRecorderRepository:
@@ -63,7 +67,9 @@ class FakeRecorderRepository:
         return row
 
     def next_attempt_no(self, experiment_id: str, stage_name: str) -> int:
-        attempts = [row for row in self.attempts if row["experiment_id"] == experiment_id and row["stage_name"] == stage_name]
+        attempts = [
+            row for row in self.attempts if row["experiment_id"] == experiment_id and row["stage_name"] == stage_name
+        ]
         return max([row["attempt_no"] for row in attempts], default=0) + 1
 
     def create_stage_attempt(self, record: StageAttemptRecord) -> dict[str, Any]:
@@ -143,6 +149,14 @@ def _historical_file(tmp_path: Path) -> Path:
     path = tmp_path / "hmm_history.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize("parser_name", ["as_dict", "as_list"])
+def test_corrupt_record_json_is_explicit_not_an_empty_success(parser_name) -> None:
+    from backend.services.research_pipeline import hmm_backtest_recorder
+
+    with pytest.raises(ValueError, match="hmm_research_record_invalid_json"):
+        getattr(hmm_backtest_recorder, parser_name)("{broken-json")
 
 
 def test_stable_signature_and_record_key_are_deterministic() -> None:
@@ -240,14 +254,21 @@ def test_preview_and_execute_are_idempotent(tmp_path: Path) -> None:
     assert len(repo.records) == 2
 
 
-def test_backfill_feature_flags_are_closed_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    recorder = HMMBacktestRecorder(FakeRecorderRepository())
+def test_backfill_preview_uses_request_not_environment_and_write_remains_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = FakeRecorderRepository()
+    recorder = HMMBacktestRecorder(repo)
     source_file = _historical_file(tmp_path)
     monkeypatch.delenv("RESEARCH_PIPELINE_HMM_BACKFILL_ENABLED", raising=False)
 
-    with pytest.raises(ValueError, match="HMM backfill preview disabled"):
-        recorder.create_backfill_preview("rp_exp_1", {"source_scope": {"source_file": str(source_file)}})
-
+    payload = {"source_scope": {"source_file": str(source_file)}}
+    preview = recorder.create_backfill_preview("rp_exp_1", payload)
+    assert preview["counts"]["candidate_count"] == 3
+    assert len(repo.records) == 0
+    monkeypatch.setenv("RESEARCH_PIPELINE_HMM_BACKFILL_WRITE_ENABLED", "true")
+    with pytest.raises(ValueError, match="explicit confirmation"):
+        recorder.execute_backfill("rp_exp_1", {**payload, "dry_run": False})
 
 
 def test_execute_can_use_preview_id_source_scope_and_records_audit_artifacts(tmp_path: Path) -> None:

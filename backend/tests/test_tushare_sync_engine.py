@@ -34,6 +34,11 @@ class _NoopTargetRepository:
         return {"attempt_id": "test-attempt"}
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sync_target_repository(monkeypatch):
+    monkeypatch.setattr(sync_engine, "DataSyncTargetRepository", _NoopTargetRepository)
+
+
 class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
@@ -49,6 +54,13 @@ class _FakeCursor:
 
     def fetchone(self):
         return self._conn.fetchone_value
+
+    @property
+    def description(self):
+        return []
+
+    def fetchall(self):
+        return []
 
 
 class _FakeConn:
@@ -94,6 +106,28 @@ class _PeriodCursor(_FakeCursor):
 class _PeriodConn(_FakeConn):
     def cursor(self):
         return _PeriodCursor(self)
+
+
+@pytest.mark.parametrize("symbol,day,expected", [
+    ("603616.SH", dt.date(2026, 1, 22), "ok"),
+    ("000001.SZ", dt.date(2026, 9, 1), "low_coverage"),
+])
+def test_suspend_sync_preserves_mixed_events_and_records_authority(monkeypatch, symbol, day, expected):
+    engine, conn = TushareSyncEngine(), _FakeConn()
+    rows = [dict(ts_code=symbol, trade_date=day.strftime("%Y%m%d"), suspend_type=kind,
+                 suspend_timing=None) for kind in ("S", "R")]
+    writes, audits = [], []
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_args: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, batch: writes.append(batch) or len(batch))
+    monkeypatch.setattr(engine, "_update_progress", lambda *_args: None)
+    monkeypatch.setattr(engine._refresh_audit, "record_success", lambda **kwargs: audits.append(kwargs))
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _seconds: None)
+    engine._sync_by_date(conn, SUSPEND_D, day, day, uuid.uuid4())
+    assert writes == [rows] and [row["suspend_type"] for row in rows] == ["S", "R"]
+    assert audits[0]["quality_status"] == expected
+    evidence = audits[0]["metadata"]["suspension_day_authority"]
+    assert evidence["raw_events_modified"] is False
+    assert evidence["unresolved_count"] == int(expected == "low_coverage")
 
 
 def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(monkeypatch):
@@ -428,6 +462,21 @@ def test_provider_contract_rejects_nullable_identity_columns_outside_primary_key
         )
 
 
+@pytest.mark.parametrize("wrong_row", [0, 10, 14])
+def test_by_date_validates_request_date_beyond_first_ten_rows(wrong_row) -> None:
+    rows = [{"ts_code": f"{index:06d}.SZ", "trade_date": "20261009", "suspend_type": "S"}
+            for index in range(15)]
+    rows[wrong_row]["trade_date"] = "20260930"
+    with pytest.raises(RuntimeError, match="provider_contract_error returned date outside request"):
+        TushareSyncEngine()._validate_rows_for_date(SUSPEND_D, rows, dt.date(2026, 10, 9))
+
+
+def test_by_date_accepts_full_same_date_batch() -> None:
+    rows = [{"ts_code": f"{index:06d}.SZ", "trade_date": "20261009", "suspend_type": "S"}
+            for index in range(15)]
+    TushareSyncEngine()._validate_rows_for_date(SUSPEND_D, rows, dt.date(2026, 10, 9))
+
+
 def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monkeypatch):
     calls = []
 
@@ -469,15 +518,24 @@ def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monk
     assert audit_rows[1][12] == "empty_valid"
 
 
-def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
+def test_stock_st_events_success_hook_preserves_published_state_and_ensures(monkeypatch):
     calls = []
 
     class _FakePitService:
-        def mark_dirty(self, **kwargs):
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only is True
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": True}
+
+        def mark_canonical_dirty(self, **kwargs):
             calls.append(("mark_dirty", kwargs))
             return {"dirty": True}
 
-        def ensure_st_pit_universe(self, **kwargs):
+        def ensure_canonical_pit_universe(self, **kwargs):
             calls.append(("ensure", kwargs))
             return {"status": "ready", "rebuilt": False}
 
@@ -486,20 +544,28 @@ def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
     result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st_events")
 
     assert result["ok"] is True
-    assert calls[0][0] == "mark_dirty"
-    assert calls[0][1]["source_dataset"] == "stock_st_events"
-    assert calls[1] == ("ensure", {"strict": False, "refresh_policy": "source_fingerprint"})
+    assert calls == [("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})]
+    assert result["published_state_preserved_during_build"] is True
 
 
 def test_stock_basic_success_hook_also_ensures(monkeypatch):
     calls = []
 
     class _FakePitService:
-        def mark_dirty(self, **kwargs):
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only is True
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": True}
+
+        def mark_canonical_dirty(self, **kwargs):
             calls.append(("mark_dirty", kwargs))
             return {"dirty": True}
 
-        def ensure_st_pit_universe(self, **kwargs):
+        def ensure_canonical_pit_universe(self, **kwargs):
             calls.append(("ensure", kwargs))
             return {"status": "ready", "rebuilt": True}
 
@@ -508,9 +574,49 @@ def test_stock_basic_success_hook_also_ensures(monkeypatch):
     result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_basic")
 
     assert result["ok"] is True
-    assert calls[0][0] == "mark_dirty"
-    assert calls[0][1]["source_dataset"] == "stock_basic"
-    assert calls[1] == ("ensure", {"strict": False, "refresh_policy": "source_fingerprint"})
+    assert calls == [("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})]
+
+
+@pytest.mark.parametrize("status", ["failed", "stale", "building"])
+def test_pit_hook_never_reports_nonready_derived_state_as_success(monkeypatch, status):
+    class Service:
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only is True
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": True}
+
+        def mark_canonical_dirty(self, **kwargs):
+            return {"dirty": True}
+
+        def ensure_canonical_pit_universe(self, **kwargs):
+            return {"status": status, "error": "derived update incomplete"}
+
+    monkeypatch.setattr(pit_service, "StockUniversePitService", Service)
+    result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st")
+    assert result["ok"] is False
+    assert result["ensure"]["status"] == status
+
+
+def test_repeated_source_success_does_not_dirty_or_rebuild_current_canonical_pit(monkeypatch):
+    class Service:
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": False, "coverage_satisfied": True}
+
+        def mark_canonical_dirty(self, **kwargs):
+            raise AssertionError("unchanged facts must not trigger a rebuild")
+
+    monkeypatch.setattr(pit_service, "StockUniversePitService", Service)
+    assert TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st")["ok"] is True
 
 
 class _RowsCursor(_FakeCursor):
@@ -608,7 +714,7 @@ def test_sync_by_date_skips_non_trading_days_for_stk_limit_and_margin_detail(mon
             engine,
             "_fetch_from_tushare",
             lambda spec, params: fetched.append((spec.name, params)) or [
-                {"trade_date": "20260525", "ts_code": "000001.SZ"}
+                {"trade_date": "20260525", "ts_code": "000001.SZ", "pre_close": 10.0}
             ],
         )
         monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, rows: len(rows))
@@ -617,7 +723,7 @@ def test_sync_by_date_skips_non_trading_days_for_stk_limit_and_margin_detail(mon
 
         result = engine._sync_by_date(
             conn,
-            DATASET_REGISTRY[dataset],
+            replace(DATASET_REGISTRY[dataset], min_expected_rows=None),
             dt.date(2026, 5, 23),
             dt.date(2026, 5, 25),
             uuid.uuid4(),
@@ -941,8 +1047,8 @@ def _member_row(ts_code, l2_code="801767.SI", in_date="19960628", out_date=None)
         "l1_name": "能源",
         "l2_code": l2_code,
         "l2_name": "数字媒体",
-        "l3_code": "",
-        "l3_name": "",
+        "l3_code": "851767.SI",
+        "l3_name": "测试三级行业",
         "ts_code": ts_code,
         "name": "测试股",
         "in_date": in_date,
@@ -954,12 +1060,53 @@ def _member_row(ts_code, l2_code="801767.SI", in_date="19960628", out_date=None)
 def _stub_execute_values(monkeypatch):
     def _record(cur, sql, values, *args, **kwargs):
         cur._conn.executed.append((sql, None))
+        return [] if kwargs.get("fetch") else None
 
     monkeypatch.setattr(sync_engine.pgx, "execute_values", _record)
 
 
-def test_sw_index_member_spec_enables_replace_by_code():
-    assert SW_INDEX_MEMBER.replace_by_code is True
+@pytest.mark.parametrize("changed", [[], [(dt.date(2026, 7, 1),)]])
+def test_sector_source_upsert_marks_only_returned_changes_in_same_transaction(monkeypatch, changed):
+    import backend.services.sector_data_repair as repair
+
+    conn = _FakeConn()
+    marked = []
+
+    def upsert(cur, sql, values, **kwargs):
+        assert conn.autocommit is False
+        assert "IS DISTINCT FROM" in sql and "RETURNING trade_date" in sql
+        assert kwargs == {"fetch": True}
+        return changed
+
+    def mark(actual, dates, dependency):
+        assert actual is conn and conn.autocommit is False and conn.commits == 0
+        marked.append((dates, dependency))
+
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", upsert)
+    monkeypatch.setattr(repair, "mark_revision_dates", mark)
+    assert TushareSyncEngine()._upsert_plain_batch(conn, SW_DAILY, [{"ts_code": "801012.SI", "trade_date": "20260701"}]) == 1
+    assert marked == [([item[0] for item in changed], "sw_daily")]
+    assert conn.commits == 1 and conn.autocommit is True
+
+
+def test_sector_source_marker_failure_rolls_back_owned_source_write(monkeypatch):
+    import backend.services.sector_data_repair as repair
+
+    conn = _FakeConn()
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *args, **kwargs: [(dt.date(2026, 7, 1),)])
+
+    def fail(*args):
+        raise RuntimeError("invalidation storage failed")
+
+    monkeypatch.setattr(repair, "mark_revision_dates", fail)
+    with pytest.raises(RuntimeError, match="invalidation storage"):
+        TushareSyncEngine()._upsert_plain_batch(conn, SW_DAILY, [{"ts_code": "801012.SI", "trade_date": "20260701"}])
+    assert conn.commits == 0 and conn.rollbacks == 1 and conn.autocommit is True
+
+
+def test_sw_index_member_spec_preserves_history_and_paginates():
+    assert SW_INDEX_MEMBER.replace_by_code is False
+    assert SW_INDEX_MEMBER.fetch_params["limit"] == 2000
     assert SW_DAILY.replace_by_code is False
 
 
@@ -978,14 +1125,15 @@ def test_replace_code_batch_deletes_then_inserts_in_single_transaction(monkeypat
     _stub_execute_values(monkeypatch)
     rows = [_member_row("000406.SZ"), _member_row("000817.SZ", in_date="19980528")]
 
-    inserted = engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", rows)
+    spec = replace(SW_INDEX_MEMBER, name="example_member", target_table="market.example_member", replace_by_code=True)
+    inserted = engine._replace_code_batch(conn, spec, "801767.SI", rows)
 
     assert inserted == 2
     assert conn.executed[0] == (
-        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
+        "DELETE FROM market.example_member WHERE l2_code = %s",
         ("801767.SI",),
     )
-    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO market.example_member" in sql for sql, _ in conn.executed)
     assert conn.commits == 1
     assert conn.rollbacks == 0
     assert conn.autocommit is True
@@ -1001,7 +1149,8 @@ def test_replace_code_batch_rolls_back_when_insert_fails(monkeypatch):
     monkeypatch.setattr(engine, "_upsert_batch", _boom)
 
     with pytest.raises(RuntimeError, match="insert failed"):
-        engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", [_member_row("000406.SZ")])
+        spec = replace(SW_INDEX_MEMBER, name="example_member", target_table="market.example_member", replace_by_code=True)
+        engine._replace_code_batch(conn, spec, "801767.SI", [_member_row("000406.SZ")])
 
     assert conn.commits == 0
     assert conn.rollbacks == 1
@@ -1011,7 +1160,10 @@ def test_replace_code_batch_rolls_back_when_insert_fails(monkeypatch):
 def _patch_by_code_loop(engine, monkeypatch, conn, codes, payload):
     monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
     monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: codes)
-    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: payload)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: (
+        [r for r in payload if r.get("is_new") == params["is_new"]]
+        if spec.name == "sw_index_member" else payload
+    ))
     monkeypatch.setattr(engine, "_log", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_record_by_code_audit", lambda *args, **kwargs: None)
@@ -1019,7 +1171,7 @@ def _patch_by_code_loop(engine, monkeypatch, conn, codes, payload):
     _stub_execute_values(monkeypatch)
 
 
-def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch):
+def test_by_code_batched_preserves_history_without_delete(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
     _patch_by_code_loop(
@@ -1031,11 +1183,9 @@ def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch
     assert result.success_batches == 1
     assert result.failed_batches == 0
     assert result.inserted_rows == 1
-    assert (
-        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
-        ("801767.SI",),
-    ) in conn.executed
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
     assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO market.sw_industry_source_fact_v1" in sql for sql, _ in conn.executed)
 
 
 def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
@@ -1050,10 +1200,21 @@ def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
     assert result.failed_batches == 1
     assert result.inserted_rows == 0
     assert any(
-        "SELECT COUNT(*) FROM market.sw_index_member WHERE l2_code = %s" in sql
+        "SELECT EXISTS(SELECT 1 FROM market.sw_index_member WHERE l2_code = %s)" in sql
         for sql, _ in conn.executed
     )
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_by_code_existence_probe_does_not_count_history(exists):
+    conn = _FakeConn()
+    conn.fetchone_value = (exists,)
+    assert TushareSyncEngine()._has_code_rows(conn, SW_DAILY, "801012.SI") is exists
+    assert conn.executed == [(
+        "SELECT EXISTS(SELECT 1 FROM market.sw_daily WHERE ts_code = %s)",
+        ("801012.SI",),
+    )]
 
 
 def test_by_code_batched_accepts_empty_payload_when_local_empty(monkeypatch):
@@ -1067,6 +1228,7 @@ def test_by_code_batched_accepts_empty_payload_when_local_empty(monkeypatch):
     assert result.failed_batches == 0
     assert result.inserted_rows == 0
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert sum("SELECT EXISTS(" in sql for sql, _ in conn.executed) == 1
 
 
 def test_by_code_batched_keeps_upsert_when_replace_by_code_disabled(monkeypatch):
@@ -1083,6 +1245,49 @@ def test_by_code_batched_keeps_upsert_when_replace_by_code_disabled(monkeypatch)
     assert result.failed_batches == 0
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
     assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_sw_replacement_is_rejected_even_if_spec_is_misconfigured():
+    with pytest.raises(RuntimeError, match="destructive replacement"):
+        TushareSyncEngine()._replace_code_batch(_FakeConn(), SW_INDEX_MEMBER, "801767.SI", [])
+
+
+def test_sw_refresh_explicitly_requests_current_and_historical_members(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
+    requests = []
+    def fetch(spec, params):
+        requests.append(params)
+        return [_member_row("000406.SZ")] if params["is_new"] == "Y" else []
+    monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+    assert result.ok
+    assert [r["is_new"] for r in requests] == ["Y", "N"]
+    assert conn.commits == 1
+
+
+def test_sw_provider_ignoring_history_flag_cannot_change_local_facts(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: [_member_row("000406.SZ")])
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+    assert not result.ok and result.inserted_rows == 0
+    assert not any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_sw_failed_source_append_rolls_back_before_projection_write(monkeypatch):
+    import backend.services.sw_industry_history_store as history
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    def boom(*args):
+        raise RuntimeError("source append failed")
+    monkeypatch.setattr(history, "append_source_facts", boom)
+    with pytest.raises(RuntimeError, match="source append failed"):
+        engine._upsert_batch(conn, SW_INDEX_MEMBER, [_member_row("000406.SZ")])
+    assert conn.rollbacks == 1 and conn.commits == 0 and conn.autocommit
+    assert not any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1340,208 @@ def test_query_tushare_dataapi_returns_rows_and_genuine_empty(monkeypatch):
     assert sync_engine._query_tushare_dataapi("sw_daily", {}, "ts_code,close", token="t") == []
 
 
+@pytest.mark.parametrize("missing", ["dv_ratio", "dv_ttm", "turnover_rate_f"])
+def test_daily_basic_rejects_missing_requested_field_before_null_normalization(monkeypatch, missing):
+    requested = ["ts_code", "trade_date", "dv_ratio", "dv_ttm", "turnover_rate_f"]
+    columns = [column for column in requested if column != missing]
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [[None] * len(columns)]}},
+    ))
+    with pytest.raises(sync_engine.TushareHttpError, match="daily_basic response schema"):
+        sync_engine._query_tushare_dataapi("daily_basic", {}, ",".join(requested), token="t")
+
+
+@pytest.mark.parametrize("columns,item", [
+    (["ts_code", "dv_ratio"], ["000001.SZ"]),
+    (["ts_code", "dv_ratio"], ["000001.SZ", 1.0, 2.0]),
+    (["ts_code", "dv_ratio", "dv_ratio"], ["000001.SZ", 1.0, 2.0]),
+    (["ts_code", None, "dv_ratio"], ["000001.SZ", 1.0, 2.0]),
+])
+def test_daily_basic_rejects_malformed_field_schema_and_row_width(monkeypatch, columns, item):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [item]}},
+    ))
+    with pytest.raises(sync_engine.TushareHttpError, match="daily_basic response schema"):
+        sync_engine._query_tushare_dataapi("daily_basic", {}, "ts_code,dv_ratio", token="t")
+
+
+def test_daily_basic_preserves_explicit_null_extra_fields_and_reordered_schema(monkeypatch):
+    columns = ["dv_ttm", "ts_code", "dv_ratio", "extra"]
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [[None, "000001.SZ", None, 3.0]]}},
+    ))
+    assert sync_engine._query_tushare_dataapi("daily_basic", {}, "ts_code,dv_ratio,dv_ttm", token="t") == [
+        {"dv_ttm": None, "ts_code": "000001.SZ", "dv_ratio": None, "extra": 3.0},
+    ]
+
+
+def test_daily_basic_schema_failure_retries_and_never_returns_fabricated_null(monkeypatch):
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sync_engine, "get_limiter", lambda *_: SimpleNamespace(acquire=lambda: None))
+    calls = []
+    def response(*args):
+        calls.append(args)
+        return _FakeHttpResponse(200, {"code": 0, "data": {
+            "fields": ["ts_code", "trade_date"], "items": [["000001.SZ", "20260930"]],
+        }})
+    monkeypatch.setattr(sync_engine, "_http_post", response)
+    with pytest.raises(RuntimeError, match="failed after 3 retries"):
+        TushareSyncEngine()._fetch_from_tushare(DATASET_REGISTRY["daily_basic"], {"trade_date": "20260930"})
+    assert len(calls) == 3
+
+
+def test_stk_limit_rejects_omitted_pre_close_before_normalization(monkeypatch):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": ["ts_code", "trade_date", "up_limit", "down_limit"],
+                                  "items": [["000001.SZ", "20260901", 11, 9]]}},
+    ))
+    with pytest.raises(sync_engine.TushareHttpError, match="stk_limit response schema"):
+        sync_engine._query_tushare_dataapi("stk_limit", {}, "ts_code,trade_date,pre_close,up_limit,down_limit", token="t")
+
+
+@pytest.mark.parametrize("value", [None, "NaN", float("inf"), 0, -1, True])
+def test_stk_limit_entire_pre_close_unpublished_is_retryable(value):
+    receipt, quality = sync_engine._stk_limit_publication_quality([
+        {"pre_close": value, "up_limit": 11, "down_limit": 9},
+    ])
+    assert quality == {"quality_status": "low_coverage", "failure_category": "required_source_field_unpublished"}
+    assert receipt["pre_close_positive_count"] == 0
+    assert receipt["scope"] == "fetched_batch_only"
+
+
+def test_stk_limit_keeps_individual_provider_nulls_without_percent_gate():
+    rows = [{"pre_close": None, "up_limit": None, "down_limit": None}] * 99
+    rows += [{"pre_close": "10.01", "up_limit": 11, "down_limit": 9}]
+    receipt, quality = sync_engine._stk_limit_publication_quality(rows)
+    assert receipt["row_count"] == 100
+    assert receipt["pre_close_positive_count"] == 1
+    assert quality == {"quality_status": "ok"}
+    assert rows[0]["pre_close"] is None
+
+
+def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    calls = []
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append((sql, values)))
+    TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [
+        {"ts_code": "001205.SZ", "trade_date": "20260508", "pre_close": None, "up_limit": 16.83, "down_limit": 13.77},
+    ])
+    assert "pre_close=COALESCE(EXCLUDED.pre_close, stk_limit.pre_close)" in calls[0][0]
+    assert "up_limit=COALESCE(EXCLUDED.up_limit, stk_limit.up_limit)" in calls[0][0]
+    assert calls[0][1][0][2:] == (None, 16.83, 13.77)
+
+
+def test_stk_limit_preserves_provider_zero_lower_bound_without_fabricating_price(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT, stk_limit_prices_valid
+    calls = []
+    row = {"ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": 14.21,
+           "up_limit": 99999.99, "down_limit": 0.0}
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append(values))
+    assert TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [row]) == 1
+    assert calls[0][0][-1] == 0.0
+    assert not stk_limit_prices_valid(row)  # consumer execution contract is unchanged.
+
+
+@pytest.mark.parametrize("reference,upper,lower", [(10, 9, 0), (10, 11, -1), (10, 11, 12)])
+def test_stk_limit_invalid_relations_cannot_overwrite_finite_facts(monkeypatch, reference, upper, lower):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *_: pytest.fail("invalid relation reached SQL"))
+    with pytest.raises(ValueError, match="invalid provider price relation"):
+        TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [{
+            "ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": reference,
+            "up_limit": upper, "down_limit": lower}])
+
+
+def test_stk_limit_readback_distinguishes_provider_zero_boundary_from_missing_price(monkeypatch):
+    class Cursor(_FakeCursor):
+        def fetchall(self):
+            return [("920196.BJ", 14.21, 99999.99, 0)]
+    conn = _FakeConn()
+    monkeypatch.setattr(conn, "cursor", lambda: Cursor(conn))
+    receipt, quality = TushareSyncEngine()._stk_limit_readback_quality(conn, dt.date(2026, 10, 16))
+    assert quality == {"quality_status": "ok"}
+    assert receipt["source_zero_lower_bound_count"] == 1
+    assert receipt["invalid_count"] == 0
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "NaN", True, 0, -1])
+def test_stk_limit_rejects_invalid_source_price_before_writing(monkeypatch, value):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *_: pytest.fail("invalid price reached SQL"))
+    with pytest.raises(ValueError, match="stk_limit.pre_close"):
+        TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [
+            {"ts_code": "001205.SZ", "trade_date": "20260508", "pre_close": value, "up_limit": 16.83, "down_limit": 13.77},
+        ])
+
+
+def test_stk_limit_readback_detects_one_missing_traded_key_without_percentage(monkeypatch):
+    class Cursor(_FakeCursor):
+        def fetchall(self):
+            return [("001205.SZ", None, 16.83, 13.77), ("000001.SZ", 10, 11, 9)]
+    conn = _FakeConn()
+    monkeypatch.setattr(conn, "cursor", lambda: Cursor(conn))
+    receipt, quality = TushareSyncEngine()._stk_limit_readback_quality(conn, dt.date(2026, 5, 8))
+    assert receipt["required_traded_equity_count"] == 2
+    assert receipt["invalid_count"] == 1
+    assert receipt["invalid_sample"] == ["001205.SZ"]
+    assert quality == {"quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}
+    assert conn.executed[0][1] == (dt.date(2026, 5, 8),)
+    assert "LEFT JOIN market.stk_limit" in conn.executed[0][0]
+
+
+def test_stk_limit_rechecks_a_bounded_tail_and_pending_dates():
+    assert sync_engine.LATE_PUBLICATION_TAIL_DAYS["stk_limit"] == 5
+
+
+def test_stk_limit_partial_traded_readback_cannot_mark_sync_success(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = engine._refresh_audit = _CapturingAudit()
+    day = dt.date(2026, 5, 8)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: [
+        {"ts_code": "000001.SZ", "trade_date": "20260508", "pre_close": 10, "up_limit": 11, "down_limit": 9}])
+    monkeypatch.setattr(engine, "_upsert_batch", lambda *_: 1)
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_update_progress", lambda *_: None)
+    monkeypatch.setattr(engine, "_stk_limit_readback_quality", lambda *_: (
+        {"required_traded_equity_count": 2, "invalid_count": 1},
+        {"quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}))
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    result = engine._sync_by_date(_FakeConn(), STK_LIMIT, day, day, uuid.uuid4())
+    assert result.success_batches == 0 and result.failed_batches == 1
+    assert audit.success_calls[0]["failure_category"] == "traded_equity_limit_fact_incomplete"
+    assert audit.success_calls[0]["metadata"]["traded_equity_readback"]["invalid_count"] == 1
+
+
+@pytest.mark.parametrize("pre_close,expected", [(15.30, True), (None, False), (float("nan"), False), (float("inf"), False), (20, False)])
+def test_shared_stk_limit_price_contract(pre_close, expected):
+    from backend.services.tushare_dataset_specs import stk_limit_prices_valid
+    assert stk_limit_prices_valid({"pre_close": pre_close, "up_limit": 16.83, "down_limit": 13.77}) is expected
+
+
+@pytest.mark.parametrize("pre_close,min_expected,expected_failure", [
+    (None, None, "required_source_field_unpublished"),
+    (10, 2, "low_coverage"),
+])
+def test_stk_limit_sync_records_unpublished_field_as_low_coverage(monkeypatch, pre_close, min_expected, expected_failure):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = engine._refresh_audit = _CapturingAudit()
+    rows = [{"ts_code": "000001.SZ", "trade_date": "20260901", "pre_close": pre_close, "up_limit": 11, "down_limit": 9}]
+    day = dt.date(2026, 9, 1)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda *_: 1)
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_update_progress", lambda *args: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    engine._sync_by_date(_FakeConn(), replace(STK_LIMIT, min_expected_rows=min_expected), day, day, uuid.uuid4())
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "low_coverage"
+    assert call["failure_category"] == expected_failure
+    assert call["metadata"]["publication_quality"]["schema_version"] == "stk_limit_publication_quality_v1"
+
+
 def test_fetch_from_tushare_retries_after_http_error_then_succeeds(monkeypatch):
     engine = TushareSyncEngine()
     monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
@@ -1176,7 +1583,7 @@ def test_by_code_batched_warns_on_empty_upsert_with_local_history(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
     conn.fetchone_value = (124,)  # sw_daily has local history for this code
-    spec = replace(SW_INDEX_MEMBER, replace_by_code=False)
+    spec = SW_DAILY
     logs = []
     monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
     monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: ["801217.SI"])
@@ -1208,7 +1615,7 @@ class _CapturingAudit:
         self.failure_calls.append(kwargs)
 
 
-def _run_by_date_with_rows(monkeypatch, spec, count):
+def _run_by_date_with_rows(monkeypatch, spec, count, *, written_count=None):
     engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
     conn = _FakeConn()
     audit = _CapturingAudit()
@@ -1217,15 +1624,18 @@ def _run_by_date_with_rows(monkeypatch, spec, count):
     required = (set(spec.primary_keys) | {spec.date_column}) - set(spec.nullable_identity_columns)
 
     def _row(i):
-        return {
+        row = {
             col: ("20260821" if col == spec.date_column else f"{col}-{i}")
             for col in required
-    }
+        }
+        if spec.name == "suspend_d":
+            row.update(suspend_type="S", suspend_timing=None)
+        return row
 
     rows = [_row(i) for i in range(count)]
 
     monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
-    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched))
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched) if written_count is None else written_count)
     monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
     monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
 
@@ -1238,7 +1648,8 @@ def test_min_expected_rows_marks_partial_day_low_coverage_by_date(monkeypatch):
 
     result, audit = _run_by_date_with_rows(monkeypatch, spec, 100)
 
-    assert result.failed_batches == 0
+    assert result.failed_batches == 1
+    assert not result.ok
     assert len(audit.success_calls) == 1
     call = audit.success_calls[0]
     assert call["quality_status"] == "low_coverage"
@@ -1270,6 +1681,25 @@ def test_without_min_expected_rows_partial_day_stays_ok(monkeypatch):
     call = audit.success_calls[0]
     assert call["quality_status"] == "ok"
     assert "expected_rows" not in call
+
+
+@pytest.mark.parametrize("written_count", [3, 2, 4])
+def test_margin_success_freezes_provider_response_denominator(monkeypatch, written_count):
+    from backend.services.tushare_dataset_specs import MARGIN_DETAIL
+    spec = replace(MARGIN_DETAIL, min_expected_rows=2)
+    monkeypatch.setattr(TushareSyncEngine, "_iter_sync_dates", lambda *args: [dt.date(2026, 8, 21)])
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 3, written_count=written_count)
+    assert result.failed_batches == (0 if written_count == 3 else 1)
+    call = audit.success_calls[0]
+    assert call["expected_rows"] == 3
+    assert call["coverage_ratio"] == pytest.approx(written_count / 3)
+    proof = call["metadata"]["provider_publication"]
+    assert proof["source"] == "tushare_response"
+    assert proof["row_count"] == 3
+    assert len(proof["source_rows_sha256"]) == 64
+    assert call["quality_status"] == ("ok" if written_count == 3 else "low_coverage")
+    if written_count != 3:
+        assert call["failure_category"] == "provider_persistence_count_differs"
 
 
 def test_min_expected_rows_does_not_change_zero_row_semantics(monkeypatch):
@@ -1337,7 +1767,9 @@ def test_chip_and_margin_specs_carry_min_expected_rows():
     assert SW_DAILY.min_expected_rows == 100
 
 
-def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch):
+@pytest.mark.parametrize("finite_count", [0, 94, 95, 100])
+@pytest.mark.parametrize("missing_field", ["turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv"])
+def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch, finite_count, missing_field):
     from backend.services.tushare_dataset_specs import DAILY_BASIC
 
     trade_date = dt.date(2026, 9, 8)
@@ -1352,9 +1784,9 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
             col: ("20260908" if col == "trade_date" else f"{col}-{index}")
             for col in DAILY_BASIC.columns
         }
-        # 5 rows with a null turnover_rate_f — ratio 95/100 == required ratio.
-        # Set the sentinel AFTER the comprehension so it is not overwritten.
-        row["turnover_rate_f"] = 1.5 if index >= 5 else None
+        row.update(turnover_rate=1.0, turnover_rate_f=1.0, volume_ratio=1.0, total_mv=1.0, circ_mv=1.0)
+        row[missing_field] = 1.5 if index < finite_count else None
+        row["dv_ratio"] = row["dv_ttm"] = None  # Legitimately nullable, not mandatory.
         rows.append(row)
 
     monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
@@ -1362,19 +1794,25 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
     monkeypatch.setattr(engine, "_iter_sync_dates", lambda _conn, _spec, start, end: [trade_date])
     monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
     monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    attempts = []
+    monkeypatch.setattr(engine, "_record_sync_attempt", lambda _target, status, **_kwargs: attempts.append(status))
 
     result = engine._sync_by_date(conn, DAILY_BASIC, trade_date, trade_date, uuid.uuid4())
 
-    assert result.failed_batches == 0
+    complete = finite_count >= 95
+    assert result.failed_batches == (0 if complete else 1)
+    assert attempts == ["reconciled" if complete else "retry"]
     assert len(audit.success_calls) == 1
     call = audit.success_calls[0]
-    assert call["quality_status"] == "ok"
+    assert call["quality_status"] == ("ok" if complete else "low_coverage")
     coverage = call["metadata"]["required_field_coverage"]
     assert coverage["schema_version"] == "daily_basic_required_field_coverage_v1"
     assert coverage["field"] == "turnover_rate_f"
     assert coverage["row_count"] == 100
-    assert coverage["finite_count"] == 95
-    assert coverage["ratio"] == pytest.approx(0.95)
+    legacy_count = finite_count if missing_field == "turnover_rate_f" else 100
+    assert coverage["finite_count"] == legacy_count
+    assert coverage["ratio"] == pytest.approx(legacy_count / 100)
+    assert coverage["required_fields_ratio"] == pytest.approx(finite_count / 100)
     assert coverage["required_ratio"] == 0.95
 
 
@@ -1386,3 +1824,20 @@ def test_daily_basic_coverage_receipt_treats_nan_string_as_non_finite():
     receipt = sync_engine._daily_basic_required_field_coverage_receipt(rows)
     assert receipt["finite_count"] == 9
     assert receipt["ratio"] == pytest.approx(0.9)
+
+
+def test_daily_basic_field_observation_includes_nullable_fields_without_new_thresholds():
+    rows = [
+        {"turnover_rate_f": 1.0, "dv_ratio": None, "dv_ttm": float("nan"), "close": 10.0},
+        {"turnover_rate_f": 2.0, "dv_ratio": 3.0, "dv_ttm": 0.0, "close": 11.0},
+    ]
+    receipt = sync_engine._daily_basic_required_field_coverage_receipt(rows)
+    fields = receipt["source_field_observation"]["fields"]
+    assert len(fields) == 16
+    assert fields["dv_ratio"] == {"finite_count": 1, "non_finite_count": 1}
+    assert fields["dv_ttm"] == {"finite_count": 1, "non_finite_count": 1}
+    assert fields["close"] == {"finite_count": 2, "non_finite_count": 0}
+    assert receipt["source_field_observation"]["scope"] == "fetched_batch_only"
+    assert receipt["source_field_observation"]["threshold_enforced"] is False
+    assert receipt["ratio"] == 1.0
+    assert receipt["required_ratio"] == 0.95

@@ -1,0 +1,319 @@
+{
+  "actual": "原生父收尾及大产物LRU淘汰重复全量canonicalize；真实30MB产物重复4次约41秒，结束状态发布耗时数分钟。",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/outcome_file_inputs.py",
+    "backend/services/advisory_historical_range/composition.py",
+    "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+    "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+    "tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1969",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-18T04:37:42.595285Z",
+  "description": "原生父收尾及大产物LRU淘汰重复全量canonicalize；真实30MB产物重复4次约41秒，结束状态发布耗时数分钟。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261018-77d76d6cd240",
+      "timestamp": "2026-10-18T04:37:42.595285Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/outcomes-next-20261018/read_only_audit_v1.json"
+  ],
+  "expected": "有界操作级大对象缓存及轻量验证头可在淘汰后复用完整校验结论；重读字节SHA不符或身份/文件漂移继续失败；父操作使用同等只读验证缓存；所有金融产物保持不变。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/outcome_file_inputs.py",
+        "backend/services/advisory_historical_range/composition.py",
+        "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+        "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/outcome_file_inputs.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/composition.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/outcome_file_inputs.py",
+        "backend/services/advisory_historical_range/composition.py",
+        "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+        "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ]
+  },
+  "first_seen_at": "2026-10-18T04:37:42.595285Z",
+  "fix_branch": null,
+  "fix_commit": "0c8f804aeb92ae4b075d244ccf1b8538f7ef5116",
+  "fixed_at": "2026-10-18T05:09:55Z",
+  "github_issue_number": 6292,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6292",
+  "last_seen_at": "2026-10-18T04:37:42.595285Z",
+  "module": "advisory.historical_range",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6300",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_outcome_optimization.py::test_evicted_artifact_reuses_full_verification_and_preserves_mutable_load backend/tests/advisory_historical_range/test_outcome_optimization.py::test_parent_finalization_has_operation_local_verified_read_cache -q",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_0e93d579a57c0d4393e711f350b87b1f/operations?limit=50",
+    "fresh_process_evidence": [
+      "Fresh Python process: two core regressions RED then GREEN; eight new adversarial/parent-cache scenarios passed; one final related matrix 57 passed. No service restart, financial evaluation, publish, DDL/DML or production task execution.",
+      "X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json -> READ_ONLY_NATIVE_CHAIN_PASS: real TCN final SUMMARY operation ahrop_ede34d946b8873c24638cdf909be8c3f, exact persisted attempt and result native validation; attempt 161.663s, result 0.818s; 20 large candidate artifacts each fully validated once. Two source file SHA256 values unchanged throughout. SELECT-only rollback for persisted attempt; validation repository forbids database access. No financial evaluator, artifact publish, mutation or runtime activation.",
+      "Same fresh-process smoke forces eviction of a 30,094,473-byte real candidate artifact: cold full validation 3.537s, three byte-SHA-verified reloads 2.887s; full payload and typed header equal native load. Cache and header weights remain within declared bounds. This is a read-only sample/closure measurement, not whole-run performance or return evidence.",
+      "X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json -> READ_ONLY_NATIVE_CHAIN_PASS; exact TCN persisted attempt/result closure; no publish, evaluator, service control or DB writes; final two source fingerprints stable.",
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B X:/AIstock_temp/ADVISORY/outcomes-next-20261018/verify_bug1969_native_chain.py -> READ_ONLY_NATIVE_CHAIN_PASS; report X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json; native persisted receipt closure, source fingerprints stable, SELECT-only rollback, no financial evaluation or publish.",
+      "python -B X:/AIstock_temp/ADVISORY/outcomes-next-20261018/verify_bug1969_native_chain.py -> READ_ONLY_NATIVE_CHAIN_PASS; report X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json; source fingerprints stable, SELECT-only rollback, no financial evaluation or publish",
+      "python -B X:/AIstock_temp/ADVISORY/outcomes-next-20261018/verify_bug1969_native_chain.py -> READ_ONLY_NATIVE_CHAIN_PASS; X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json; stable exact source hashes, native receipt closure, SELECT-only rollback, no financial evaluation or publish"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1969",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b5f6cc2b1aae3669",
+    "recorded_at": "2026-10-18T05:10:36.320663Z",
+    "runtime_contract_digest": "cd3702cfe885a0cf1925b562b0084ef7d30a963aaa9865af885c492abbcee7f0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6f74d22973cbc961529a2a5b36a1fafa11d63adb",
+    "source_merge_commit": "0c8f804aeb92ae4b075d244ccf1b8538f7ef5116",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6300",
+    "validation_evidence": [
+      "validation-receipt: id=744d6d0c6a926fe2 commit=6f74d22973cbc961529a2a5b36a1fafa11d63adb kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_historical_range/outcome_file_inputs.py backend/services/advisory_historical_range/composition.py backend/tests/advisory_historical_range/test_outcome_optimization.py docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json` result=`passed; 0 findings, 0 blocking; targeted related matrix 57 passed, direct workflow-targeted 2 passed, DESIGN-COMPLIANCE-001 passed`"
+    ],
+    "validation_evidence_digest": "2a74b51c9006f6b2d0d194ef58f0000390bdf5e6a2d3d2c0d736b7e77262e569"
+  },
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "advisory.historical_range"
+  ],
+  "title": "Advisory outcome finalization revalidates evicted large artifacts and leaves parent uncached",
+  "trigger_condition": {
+    "fingerprint": "77d76d6cd240e001c14c27d2",
+    "source_event_id": "FE-20261018-77d76d6cd240"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=744d6d0c6a926fe2 commit=6f74d22973cbc961529a2a5b36a1fafa11d63adb kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_historical_range/outcome_file_inputs.py backend/services/advisory_historical_range/composition.py backend/tests/advisory_historical_range/test_outcome_optimization.py docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json` result=`passed; 0 findings, 0 blocking; targeted related matrix 57 passed, direct workflow-targeted 2 passed, DESIGN-COMPLIANCE-001 passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.historical_range",
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.historical_range",
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 import json
+import os
 from pathlib import Path
+import pytest
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -204,10 +206,90 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 10
+    assert len(routes) == 21
+    assert any(route.path.endswith("/factor-repairs") for route in routes)
+    assert any(route.path.endswith("/quote-repairs") for route in routes)
+    assert any(route.path.endswith("/index-repairs") for route in routes)
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
+
+
+@pytest.mark.parametrize("command", ["industry-history", "industry-quotes/refresh"])
+def test_history_binding_route_is_authenticated_and_cannot_accept_sql_or_activation(tmp_path, command):
+    client, _, app = _client(tmp_path)
+    calls = []
+    class Service:
+        def bind_industry_history(self, operation_id, *, principal, refresh_quotes=False):
+            calls.append((operation_id, principal, refresh_quotes))
+            return {"status": "BOUND", "projection_sha256": "a" * 64}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
+    operation_id = "dmr_" + "a" * 32
+    path = f"/api/v1/qlib/monthly-releases/{operation_id}/{command}"
+    for body in ({"sql": "UPDATE forbidden"}, {"activation_authorized": True}):
+        assert client.post(path, json=body).status_code == 422
+    assert calls == []
+    response = client.post(path, json={})
+    assert response.status_code == 200 and response.json()["data"]["status"] == "BOUND"
+    assert calls == [(operation_id, "dataset-operator:test", command.endswith("refresh"))]
+
+
+@pytest.mark.parametrize("kind", ["prev_close", "suspension", "minute"])
+def test_prev_close_binding_is_preparation_only_and_forwards_exact_inputs(tmp_path, kind):
+    client, _, app = _client(tmp_path)
+    calls = []
+    class Service:
+        def bind_prev_close_repairs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"status": "BOUND"}
+        def bind_suspension_authority(self, operation_id, *, principal):
+            calls.append((operation_id, {}, principal))
+            return {"status": "BOUND"}
+        def bind_minute_repairs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"status": "BOUND"}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
+    operation = "dmr_" + "a" * 32
+    body = {"schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"plan_sha256": "a" * 64}}
+    endpoint = {"prev_close": "prev-close-repairs", "suspension": "suspension-authority", "minute": "minute-repairs"}[kind]
+    if kind == "suspension":
+        body = {}
+    assert client.post(f"/api/v1/qlib/monthly-releases/{operation}/{endpoint}", json={**body, "activate": True}).status_code == 422
+    assert calls == []
+    assert client.post(f"/api/v1/qlib/monthly-releases/{operation}/{endpoint}", json=body).status_code == 200
+    assert calls == [(operation, body.get("inputs", {}), "dataset-operator:test")]
+
+
+def test_repair_binding_route_only_passes_authenticated_preparation_command(tmp_path):
+    client, _, app = _client(tmp_path)
+    calls = []
+    class Service:
+        def bind_repair_inputs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"publication_allowed": False}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
+    operation_id = "dmr_" + "a" * 32
+    response = client.post(f"/api/v1/qlib/monthly-releases/{operation_id}/repair-inputs", json={
+        "schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"field": "pinned"}})
+    assert response.status_code == 200
+    assert calls == [(operation_id, {"field": "pinned"}, "dataset-operator:test")]
+    assert response.json()["data"]["publication_allowed"] is False
+
+
+def test_source_quality_binding_route_preserves_operator_identity(tmp_path):
+    client, _, app = _client(tmp_path)
+    calls = []
+    class Service:
+        def bind_source_quality_inputs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"publication_allowed": False}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
+    operation_id = "dmr_" + "a" * 32
+    response = client.post(f"/api/v1/qlib/monthly-releases/{operation_id}/source-quality-inputs", json={
+        "schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"field": "exact-observation"}})
+    assert response.status_code == 200
+    assert calls == [(operation_id, {"field": "exact-observation"}, "dataset-operator:test")]
+    assert response.json()["data"]["publication_allowed"] is False
 
 
 def test_adopt_and_authorize_existing_successor_are_durable_and_separate(
@@ -354,3 +436,32 @@ def test_receipt_index_requires_an_existing_operation_and_is_bounded(tmp_path: P
     response = client.get(f"/api/v1/qlib/monthly-releases/{operation_id}/receipts")
     assert response.status_code == 400
     assert response.json()["detail"]["error_code"] == "MONTHLY_RELEASE_ERROR"
+
+
+def test_large_receipt_index_streams_metadata_without_loading_payload(tmp_path, monkeypatch):
+    path = tmp_path / "build.json"
+    payload = b"x" * (33 * 1024 * 1024)
+    path.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    def no_whole_file_read(_path):
+        raise AssertionError("receipt index must not load entire inventory")
+    monkeypatch.setattr(Path, "read_bytes", no_whole_file_read)
+    assert api._receipt_index(tmp_path) == [{"name": "build.json", "size": len(payload), "sha256": expected}]
+
+
+def test_receipt_index_rejects_file_changed_during_streaming(tmp_path, monkeypatch):
+    path = tmp_path / "build.json"
+    path.write_bytes(b"original")
+    fstat = os.fstat
+    calls = []
+    def changed(fd):
+        result = fstat(fd)
+        calls.append(fd)
+        if len(calls) == 2:
+            fields = list(result)
+            fields[6] += 1
+            return os.stat_result(fields)
+        return result
+    monkeypatch.setattr(os, "fstat", changed)
+    with pytest.raises(api.MonthlyReleaseError, match="changed"):
+        api._receipt_index(tmp_path)

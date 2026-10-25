@@ -6,11 +6,23 @@ Keeping those facts does not admit a security to the executable population.
 from __future__ import annotations
 
 from datetime import date
+import re
 from typing import Iterable
 
 import pandas as pd
 
 SOURCE_HISTORY_CONTRACT = "unique_selected_security_source_window_facts_v1"
+
+_A_SHARE = re.compile(r'(?:[03][0-9]{5}\.SZ|6[0-9]{5}\.SH)')
+
+
+def is_a_share(code: str) -> bool:
+    return _A_SHARE.fullmatch(str(code).strip().upper()) is not None
+
+
+def fact_codes(codes) -> tuple[str, ...]:
+    """Actual SH/SZ A-share identities, independent of ST/status/IPO age."""
+    return tuple(sorted({str(code).strip().upper() for code in codes if is_a_share(code)}))
 
 
 def filter_source_fact_history(

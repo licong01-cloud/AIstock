@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,6 +17,158 @@ DEFAULT_WORKFLOW = "nightly.yml"
 SCHEMA_VERSION = "aistock_runner_health_v1"
 GITHUB_API = "https://api.github.com"
 MAX_QUEUED_RUNS_TO_INSPECT = 5
+# Wall-clock schedule in UTC+8; repository_dispatch retains automatic admission.
+SCHEDULED_WORKFLOWS = {
+    "code-intelligence-refresh.yml": ("aistock_code_intelligence", 2, 30, 45),
+    "nightly.yml": ("aistock_nightly", 3, 7, 180),
+    "codeql.yml": ("aistock_codeql", 4, 27, 75),
+}
+
+
+def _dispatch_api(path: str, payload: dict | None = None) -> Any:
+    """Use existing gh authentication/transport; never print credential/error bodies."""
+    args = ["gh", "api", path]
+    if payload is not None:
+        args += ["--method", "POST", "--input", "-"]
+    # Same command-scoped REST route as the canonical workflow; no global proxy edits.
+    env = os.environ.copy()
+    bypass = [entry.strip() for key in ("NO_PROXY", "no_proxy")
+              for entry in env.get(key, "").split(",") if entry.strip()]
+    if "api.github.com" not in {entry.lower() for entry in bypass}:
+        bypass.append("api.github.com")
+    env["NO_PROXY"] = env["no_proxy"] = ",".join(bypass)
+    # gh emits UTF-8, not the Windows console code page. Decode on this thread so
+    # invalid bytes become a catchable error rather than a reader-thread crash.
+    result = subprocess.run(args, input=json.dumps(payload).encode("utf-8") if payload is not None else None,
+                            capture_output=True, timeout=30, check=False, env=env)
+    if result.returncode:
+        raise RuntimeError(f"GitHub scheduled-dispatch request failed (exit {result.returncode})")
+    output = result.stdout.decode("utf-8")
+    data = json.loads(output) if output.strip() else {}
+    if not isinstance(data, dict):
+        raise ValueError("GitHub scheduled-dispatch response must be an object")
+    return data
+
+
+def _save_cycle(path: Path, receipt: dict) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+@contextlib.contextmanager
+def _dispatch_lock(root: Path):
+    """OS lock is released on exit/crash; no stale lock pruning or process control."""
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "dispatch.lock").open("a+b") as stream:
+        if stream.tell() == 0:
+            stream.write(b"0")
+            stream.flush()
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def dispatch_scheduled_cycle(*, state_root: Path, apply: bool = False,
+                             now: datetime | None = None, request=None) -> dict:
+    """One bounded tick. Dispatch is not validation; ambiguous POST is never replayed."""
+    observed = now if now is not None else datetime.now(timezone.utc)
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        raise ValueError("scheduler clock must include a timezone")
+    local = observed.astimezone(timezone(timedelta(hours=8)))
+    cycle = local.date().isoformat()
+    request = request or _dispatch_api
+    report = {"schema_version": "aistock_scheduled_dispatch_v1",
+              "cycle_date": cycle, "observed_at": local.isoformat(),
+              "validation_status": "not_executed", "workflows": [], "blocking": []}
+    if not apply:
+        report["workflows"] = [{"workflow": name, "trigger": f"{hour:02}:{minute:02}",
+                                "budget_minutes": budget}
+                               for name, (_, hour, minute, budget) in SCHEDULED_WORKFLOWS.items()]
+        return report  # No files, auth lookup, network, or execution.
+    with _dispatch_lock(state_root):
+        for name, (event, hour, minute, budget) in SCHEDULED_WORKFLOWS.items():
+            due = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if local < due:
+                continue
+            path = state_root / f"{cycle}-{name}.json"
+            receipt = {
+                "workflow": name, "cycle_date": cycle, "status": "pending",
+                "validation_status": "not_executed",
+            }
+            phase = "receipt"
+            try:
+                loaded = _read_json(path) if path.exists() else receipt
+                if not isinstance(loaded, dict) or loaded.get("workflow") != name or loaded.get("cycle_date") != cycle:
+                    raise ValueError("scheduled receipt identity mismatch")
+                if loaded.get("status") not in {"pending", "submitted", "uncertain", "run_observed", "missed_window"}:
+                    raise ValueError("unrecognized scheduled receipt state")
+                receipt = loaded
+                if receipt.get("run_status") == "completed":
+                    if receipt.get("conclusion") != "success":
+                        report["blocking"].append(f"{name}: observed run failed; validation is not certified")
+                    report["workflows"].append(receipt)
+                    continue
+                phase = "query"
+                title = f"AIstock schedule {name} {cycle}"
+                runs = request(f"repos/{DEFAULT_REPO}/actions/workflows/{name}/runs"
+                               f"?event=repository_dispatch&branch=main&per_page=20")["workflow_runs"]
+                if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+                    raise ValueError("GitHub workflow runs must be a list of objects")
+                matches = [run for run in runs if run.get("display_title") == title
+                           and run.get("event") == "repository_dispatch" and run.get("head_branch") == "main"]
+                if len(matches) > 1:
+                    raise ValueError("duplicate automatic cycle runs require reconciliation")
+                if matches:
+                    run = matches[0]
+                    head = str(run.get("head_sha", ""))
+                    if (not str(run.get("id", "")).isdecimal() or len(head) != 40
+                            or any(c not in "0123456789abcdef" for c in head)
+                            or run.get("status") not in {"queued", "in_progress", "completed", "waiting", "pending", "requested"}):
+                        raise ValueError("automatic run identity/status invalid")
+                    receipt.update(status="run_observed", run_id=matches[0]["id"],
+                                   source_head=head, run_status=run["status"], conclusion=run.get("conclusion"))
+                    if run["status"] == "completed" and run.get("conclusion") != "success":
+                        report["blocking"].append(f"{name}: observed run failed; validation is not certified")
+                    elif local > due.replace(hour=7, minute=0) - timedelta(minutes=budget) and run["status"] != "in_progress":
+                        report["blocking"].append(f"{name}: execution window missed; inspect run {run['id']}")
+                elif receipt["status"] in {"submitted", "uncertain", "run_observed"}:
+                    # Never replay a request which may already have reached GitHub.
+                    report["blocking"].append(f"{name}: dispatch not yet observed; no POST replay")
+                elif local > due.replace(hour=7, minute=0) - timedelta(minutes=budget):
+                    receipt["status"] = "missed_window"
+                    report["blocking"].append(f"{name}: overnight budget unavailable; not executed")
+                else:
+                    receipt.update(status="uncertain", attempted_at=local.isoformat())
+                    _save_cycle(path, receipt)  # Durable intent BEFORE the only side effect.
+                    phase = "dispatch"
+                    request(f"repos/{DEFAULT_REPO}/dispatches",
+                            {"event_type": event, "client_payload": {"cycle_date": cycle}})
+                    receipt["status"] = "submitted"
+                receipt.pop("error_type", None)
+                receipt.pop("error_phase", None)
+            except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+                receipt["error_type"] = type(exc).__name__
+                receipt["error_phase"] = phase
+                report["blocking"].append(f"{name}: {phase}: {type(exc).__name__}; see last-tick.json")
+            # Never overwrite an unreadable/mismatched receipt or lose its POST intent.
+            if phase != "receipt":
+                _save_cycle(path, receipt)
+            report["workflows"].append(receipt)
+        _save_cycle(state_root / "last-tick.json", report)
+    return report
 
 
 def _utc_now() -> str:
@@ -161,6 +314,7 @@ def _stale_queued_runs(runs: list[dict[str, Any]], *, stale_minutes: int, now: d
                     "head_branch": run.get("head_branch") or run.get("headBranch"),
                     "head_sha": run.get("head_sha") or run.get("headSha"),
                     "event": run.get("event"),
+                    "display_title": run.get("display_title"),
                 }
             )
     return stale
@@ -218,14 +372,14 @@ def cancel_stale_scheduled_runs(
         run_id = run.get("run_id")
         if not run_id or int(run_id) == int(current_run_id):
             continue
-        if run.get("event") != "schedule" or run.get("head_branch") != expected_head_branch:
+        if not _automatic_run(run, workflow) or run.get("head_branch") != expected_head_branch:
             receipt["skipped"].append({"run_id": run_id, "reason": "identity_mismatch"})
             continue
         try:
             exact = _github_get(f"/repos/{repo}/actions/runs/{run_id}", token=token)
             if (
                 str(exact.get("status") or "").lower() != "queued"
-                or exact.get("event") != "schedule"
+                or not _automatic_run(exact, workflow)
                 or exact.get("head_branch") != expected_head_branch
             ):
                 receipt["skipped"].append({"run_id": run_id, "reason": "state_changed"})
@@ -247,6 +401,22 @@ def cancel_stale_scheduled_runs(
         receipt["workflow_gate"] = "blocked"
     receipt["action"] = "cancelled_stale_runs" if receipt["cancelled_run_ids"] else "noop"
     return receipt
+
+
+def _automatic_run(run: Mapping[str, Any], workflow: str) -> bool:
+    if run.get("event") == "schedule":
+        return True
+    if run.get("event") != "repository_dispatch" or workflow not in SCHEDULED_WORKFLOWS:
+        return False
+    title = str(run.get("display_title", ""))
+    prefix = f"AIstock schedule {workflow} "
+    if not title.startswith(prefix):
+        return False
+    try:
+        cycle = datetime.strptime(title[len(prefix):], "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return False
+    return title == prefix + cycle
 
 
 def _queued_job_summaries(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -524,9 +694,95 @@ def _write_outputs(report: dict[str, Any], *, output_json: str | None, output_md
         path.write_text(render_markdown(report), encoding="utf-8")
 
 
+def scheduled_admission(
+    *, event: str, budget_minutes: int, source_head: str, run_id: str,
+    now: datetime | None = None, cycle_date: str | None = None,
+) -> dict[str, Any]:
+    """Local admission only: never query GitHub, cancel work, or certify validation.
+
+    Scheduled host work must fit entirely inside 00:00-07:00 UTC+8. Recheck
+    after acquiring a runner because queue latency can invalidate preflight.
+    An explicitly dispatched operation retains its existing authorization.
+    """
+    if event not in {"schedule", "workflow_dispatch", "repository_dispatch"}:
+        raise ValueError("unsupported background admission event")
+    if not 0 < budget_minutes <= 420:
+        raise ValueError("background budget must be between 1 and 420 minutes")
+    if len(source_head) != 40 or any(c not in "0123456789abcdef" for c in source_head):
+        raise ValueError("background source_head must be an exact lowercase commit SHA")
+    if not run_id.isdecimal():
+        raise ValueError("background run_id must be numeric")
+    observed = now if now is not None else datetime.now(timezone.utc)
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        raise ValueError("background observation must include a timezone")
+    local = observed.astimezone(timezone(timedelta(hours=8)))
+    if event == "repository_dispatch" and cycle_date != local.date().isoformat():
+        raise ValueError("automatic dispatch cycle is missing, stale or future")
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=7)
+    remaining = max(0.0, (end - local).total_seconds())
+    manual = event == "workflow_dispatch"
+    admitted = manual or remaining >= budget_minutes * 60
+    reason = ("explicit_dispatch" if manual else "fits_overnight_window" if admitted
+              else "outside_overnight_window" if local >= end else "insufficient_window_budget")
+    return {
+        "schema_version": "scheduled_background_admission_v1",
+        "admitted": admitted,
+        "status": "admitted" if admitted else "deferred",
+        "reason": reason,
+        "event": event,
+        "cycle_date": cycle_date,
+        "source_head": source_head,
+        "run_id": run_id,
+        "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
+        "job": os.environ.get("GITHUB_JOB", ""),
+        "observed_at": observed.astimezone(timezone.utc).isoformat(),
+        "local_observed_at": local.isoformat(),
+        "window_end": end.isoformat(),
+        "next_scheduled_window": (start + timedelta(days=1)).isoformat(),
+        "budget_minutes": budget_minutes,
+        "remaining_window_seconds": remaining,
+        "validation_status": "not_executed",
+        "advances_validation_watermark": False,
+        "recovery": "next scheduled run retains prior validation receipts; explicit dispatch remains available",
+    }
+
+
+def _emit_admission(receipt: dict[str, Any], output_json: str | None) -> None:
+    if output_json:
+        path = Path(output_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    if os.environ.get("GITHUB_OUTPUT"):
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
+            stream.write(f"background_admitted={str(receipt['admitted']).lower()}\n")
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"\nBackground admission: **{receipt['status']}** ({receipt['reason']}); "
+                f"validation=not_executed, watermark unchanged.\n"
+                f"Source `{receipt['source_head']}`, budget {receipt['budget_minutes']} min, "
+                f"next window `{receipt['next_scheduled_window']}`.\n"
+            )
+    print(json.dumps(receipt, indent=2))
+    if not receipt["admitted"]:
+        print("::notice::Scheduled background work deferred to protect daytime PR capacity; not validated.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check AIstock GitHub Actions self-hosted runner readiness.")
     sub = parser.add_subparsers(dest="command", required=True)
+    admission = sub.add_parser("scheduled-admission", help="Local overnight budget check; no GitHub access.")
+    admission.add_argument("--event", default=os.environ.get("GITHUB_EVENT_NAME", ""))
+    admission.add_argument("--budget-minutes", type=int, required=True)
+    admission.add_argument("--source-head", default=os.environ.get("GITHUB_SHA", ""))
+    admission.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
+    admission.add_argument("--output-json")
+    dispatch = sub.add_parser("dispatch-scheduled", help="Bounded local wall-clock tick; no business work.")
+    dispatch.add_argument("--state-root", type=Path, required=True)
+    dispatch.add_argument("--apply", action="store_true", help="Authorize only existing automatic workflows.")
+    dispatch.add_argument("--gh-config-dir", type=Path, help="Existing credential location, never copied or printed.")
+    dispatch.add_argument("--check-access", action="store_true", help="Read-only workflow access check, no dispatch.")
     doctor = sub.add_parser("doctor", help="Check runner availability for a workflow.")
     doctor.add_argument("--repo", default=DEFAULT_REPO)
     doctor.add_argument("--workflow", default=DEFAULT_WORKFLOW)
@@ -564,6 +820,44 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "scheduled-admission":
+        try:
+            cycle_date = None
+            if args.event == "repository_dispatch":
+                event_payload = _read_json(os.environ["GITHUB_EVENT_PATH"])
+                if event_payload.get("action") not in {item[0] for item in SCHEDULED_WORKFLOWS.values()}:
+                    raise ValueError("unregistered automatic dispatch type")
+                cycle_date = event_payload.get("client_payload", {}).get("cycle_date")
+            receipt = scheduled_admission(
+                event=args.event, budget_minutes=args.budget_minutes,
+                source_head=args.source_head, run_id=args.run_id, cycle_date=cycle_date,
+            )
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            print(f"::error::Invalid background admission context: {exc}", file=sys.stderr)
+            return 2
+        _emit_admission(receipt, args.output_json)
+        return 0  # Admission completed; not a validation PASS receipt.
+    if args.command == "dispatch-scheduled":
+        try:
+            if args.gh_config_dir:
+                if not (args.gh_config_dir / "hosts.yml").is_file():
+                    raise ValueError("authenticated gh config location is unavailable")
+                os.environ["GH_CONFIG_DIR"] = str(args.gh_config_dir.resolve())
+            if args.check_access:
+                if args.apply:
+                    raise ValueError("access check cannot be combined with dispatch apply")
+                for name in SCHEDULED_WORKFLOWS:
+                    workflow = _dispatch_api(f"repos/{DEFAULT_REPO}/actions/workflows/{name}")
+                    if workflow.get("state") != "active" or workflow.get("path") != f".github/workflows/{name}":
+                        raise ValueError("scheduled workflow missing, inactive, or mismatched")
+                print("scheduled workflow access: PASS (read-only; no dispatch/validation)")
+                return 0
+            receipt = dispatch_scheduled_cycle(state_root=args.state_root, apply=args.apply)
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(f"Scheduler failed closed: {type(exc).__name__}", file=sys.stderr)
+            return 2
+        print(json.dumps(receipt, indent=2))
+        return 2 if receipt["blocking"] else 0
     token, token_source = resolve_github_token()
     if args.command == "cancel-stale-queued":
         receipt = cancel_stale_scheduled_runs(

@@ -371,8 +371,22 @@ def _missing_row_evidence(row: Mapping[str, Any], fields: Sequence[str]) -> dict
         if isinstance(provider_absence, Mapping):
             evidence["moneyflow_provider_absence"] = dict(provider_absence)
     if "prev_circ_mv_cny" in fields:
-        evidence["circ_mv_source_date"] = row.get("circ_mv_source_date")
+        source_date = row.get("circ_mv_source_date")
+        evidence["circ_mv_source_date"] = source_date.isoformat() if isinstance(source_date, date) else source_date
         evidence["circ_mv_staleness_trading_days"] = row.get("circ_mv_staleness_trading_days")
+        # Keep the reader's authoritative cause, including latest-invalid facts.
+        # Legacy callers need not provide lineage; absence must not invent a status.
+        for key in (
+            "circ_mv_fact_status",
+            "circ_mv_reason_code",
+            "circ_mv_history_start",
+            "circ_mv_pit_eligible_start",
+            "circ_mv_crossed_pit_entry_boundary",
+            "circ_mv_lookback_contract_version",
+        ):
+            if key in row:
+                value = row[key]
+                evidence[key] = value.isoformat() if isinstance(value, date) else value
     return evidence
 
 
@@ -895,16 +909,24 @@ def build_l1_feature_panel(
     direct_sector_level: str = "L1",
     cross_section_min_coverage: float | None = None,
     use_moneyflow_amount_denominator: bool = False,
+    canonical_sector_codes: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Recompute the approved 7/20 features from L1 raw aggregates."""
 
-    if not aggregates:
+    if not aggregates and canonical_sector_codes is None:
         raise StateModelSetError("cannot build features without L1 aggregates")
     rows = [item.__dict__ for item in aggregates]
-    panel = pd.DataFrame(rows)
+    panel = pd.DataFrame(rows) if rows else pd.DataFrame(columns=list(FeatureDomainDailyAggregate.__dataclass_fields__))
     panel["trade_date"] = pd.to_datetime(panel["trade_date"])
     panel = panel.set_index(["trade_date", "l1_code"]).sort_index()
     codes = tuple(sorted(panel.index.get_level_values("l1_code").unique()))
+    if canonical_sector_codes is not None:
+        declared = tuple(canonical_sector_codes)
+        if declared != tuple(sorted(set(declared))) or not set(codes) <= set(declared):
+            raise StateModelSetError(
+                "explicit frozen feature catalog is duplicated/unordered or excludes source sectors"
+            )
+        codes = declared
     if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
         raise StateModelSetError("direct sector feature panel requires L1/31 or L2/131")
     if len(codes) != expected_sector_count:
@@ -1346,13 +1368,60 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
         ):
             frozen_authority = authority["authority"]
             if (
-                frozen_authority.get("schema_version") != "hmm_risk_pit_mapping_manifest_v2"
+                frozen_authority.get("schema_version")
+                not in {"hmm_risk_pit_mapping_manifest_v2", "hmm_risk_pit_mapping_manifest_v3"}
                 or not _c010_valid_sha256(frozen_authority.get("classification_authority_receipt_hash"))
                 or not _c010_valid_sha256(frozen_authority.get("index_membership_authority_receipt_hash"))
                 or not str(frozen_authority.get("active_classification_basis") or "").strip()
                 or not isinstance(frozen_authority.get("non_as_known_taxonomy"), bool)
             ):
                 raise StateModelSetError("C-010 partition frozen industry PIT authority schema is invalid")
+            if frozen_authority["schema_version"] == "hmm_risk_pit_mapping_manifest_v3":
+                v3_hash_fields = {
+                    "source_classification_authority_receipt_hash",
+                    "classification_authority_receipt_hash",
+                    "index_membership_authority_receipt_hash",
+                    "classification_candidate_hash",
+                    "index_membership_candidate_hash",
+                    "candidate_bundle_hash",
+                    "candidate_preflight_canonical_hash",
+                    "research_basis_contract_sha256",
+                    "l1_code_projection_sha256",
+                    "l2_code_projection_sha256",
+                    "constituent_manifest_hash",
+                }
+                v3_fields = v3_hash_fields | {
+                    "schema_version",
+                    "universe_key",
+                    "source_window_start",
+                    "source_window_end",
+                    "canonical_l1_count",
+                    "canonical_l2_count",
+                    "stable_backcast_candidate_sha256",
+                    "active_classification_basis",
+                    "non_as_known_taxonomy",
+                }
+                backcast = frozen_authority.get("stable_backcast_candidate_sha256")
+                basis = frozen_authority.get("active_classification_basis")
+                if (
+                    set(frozen_authority) != v3_fields
+                    or any(not _c010_valid_sha256(frozen_authority.get(key)) for key in v3_hash_fields)
+                    or frozen_authority.get("canonical_l1_count") != 31
+                    or frozen_authority.get("canonical_l2_count") != 131
+                    or not str(frozen_authority.get("universe_key") or "").strip()
+                    or (backcast is not None and not _c010_valid_sha256(backcast))
+                    or basis not in {"as_published_pit", "stable_taxonomy_backcast"}
+                    or frozen_authority.get("non_as_known_taxonomy") is not (basis == "stable_taxonomy_backcast")
+                    or ((backcast is not None) != (basis == "stable_taxonomy_backcast"))
+                ):
+                    raise StateModelSetError("C-010 partition v3 industry PIT authority identity is invalid")
+                try:
+                    start = date.fromisoformat(frozen_authority["source_window_start"])
+                    end = date.fromisoformat(frozen_authority["source_window_end"])
+                except (TypeError, ValueError) as exc:
+                    raise StateModelSetError("C-010 partition v3 industry PIT source window is invalid") from exc
+                if not start <= train_start <= train_end <= end:
+                    raise StateModelSetError("C-010 partition v3 industry PIT source window is incomplete")
     entries = value.get("entries")
     if not isinstance(entries, list):
         raise StateModelSetError("C-010 provider-absence partition entries are missing")
@@ -2335,6 +2404,7 @@ def build_c010_feature_domain_panel(
     expected_sector_count: int = 31,
     direct_sector_level: str = "L1",
     diagnostic_only: bool = False,
+    canonical_sector_codes: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
     """Build the approved C-010 formula-v2 panel and immutable per-feature receipts."""
 
@@ -2344,6 +2414,7 @@ def build_c010_feature_domain_panel(
         csi300_returns=csi300_returns,
         expected_sector_count=expected_sector_count,
         direct_sector_level=direct_sector_level,
+        canonical_sector_codes=canonical_sector_codes,
     )
     required_domain_columns = {
         "moneyflow_amount",

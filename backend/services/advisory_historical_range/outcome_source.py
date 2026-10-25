@@ -98,15 +98,13 @@ class HistoricalRangeOutcomeSourceRevisionBundleV1(BaseModel):
     tradability_source: SourceMemberBinding
 
 
-class PostgresHistoricalRangeOutcomeSourceProvider:
-    """Queries only historical market relations through an injected connection factory."""
+class HistoricalRangeOutcomeSourceProvider:
+    """One path/binding implementation for DB and frozen-file observations."""
 
-    def __init__(self, *, conn_factory: Callable[[], Any]) -> None:
-        if conn_factory is None:
-            raise ValueError("conn_factory is required; database settings cannot be guessed")
-        self._conn_factory = conn_factory
+    def __init__(self) -> None:
         self._active_operation_hash: str | None = None
         self._operation_row_cache: dict[tuple[str, date, date], tuple[dict[str, Any], ...]] = {}
+        self._source_revision_context: dict[str, Any] = {}
 
     def begin_operation(self, request_hash: str) -> None:
         """Scope historical row reuse to one exact refresh request."""
@@ -138,7 +136,10 @@ class PostgresHistoricalRangeOutcomeSourceProvider:
                     context={"symbol": request.symbol, "source_role": role},
                 )
 
-        missing_adjustment_dates = tuple(row["trade_date"] for row in rows if not row.get("adjustment_present"))
+        missing_adjustment_dates = tuple(
+            row["trade_date"] for row in rows
+            if not row.get("adjustment_present") and not row.get("suspended")
+        )
         missing_limit_dates = tuple(
             row["trade_date"] for row in rows if not row.get("suspended") and not row.get("limit_present")
         )
@@ -226,6 +227,8 @@ class PostgresHistoricalRangeOutcomeSourceProvider:
             "end_trade_date": end_trade_date,
             "label_as_of_trade_date": label_as_of_ts.date(),
         }
+        if self._source_revision_context:
+            partition["file_source"] = self._source_revision_context
         parameter_hash = canonical_json_sha256(partition)
         cutoff_hash = canonical_json_sha256({"predicate": "trade_date <= label_as_of_trade_date", "version": "r4_v1"})
         hashes = _source_partition_hashes(rows)
@@ -234,34 +237,42 @@ class PostgresHistoricalRangeOutcomeSourceProvider:
             ("ADJUSTMENT_PATH", "market.adj_factor"),
             ("TRADABILITY_PATH", "market.suspend_d+market.stk_limit"),
         )
+        template = "advisory_hr_r4"
+        if self._source_revision_context:
+            template = "advisory_hr_file_batch_v1"
+            role_specs = (
+                ("PRICE_PATH", "frozen_dataset.daily_pv.raw_li"),
+                ("ADJUSTMENT_PATH", "frozen_dataset.daily_pv.qfq_factor"),
+                ("TRADABILITY_PATH", "frozen_dataset.suspend_d+daily_limits"),
+            )
         role_row_counts = {
             "PRICE_PATH": len(rows),
-            "ADJUSTMENT_PATH": sum(1 for row in rows if row.get("adjustment_present")),
+            "ADJUSTMENT_PATH": sum(1 for row in rows if row.get("adjustment_present") or row.get("suspended")),
             "TRADABILITY_PATH": sum(1 for row in rows if row.get("suspended") or row.get("limit_present")),
         }
         members: list[SourceRevisionMemberInput] = []
         for role, dataset in role_specs:
             query_hash = canonical_json_sha256(
-                {"query_template_id": "advisory_hr_r4_symbol_path", "role": role, "version": "1"}
+                {"query_template_id": f"{template}_symbol_path", "role": role, "version": "1"}
             )
             members.append(
                 SourceRevisionMemberInput(
                     source_role=role,
                     dataset_name=dataset,
-                    query_template_id=f"advisory_hr_r4_{role.lower()}",
+                    query_template_id=f"{template}_{role.lower()}",
                     query_template_version="1",
                     query_template_hash=query_hash,
                     bound_parameter_hash=parameter_hash,
                     enforced_cutoff_predicate_hash=cutoff_hash,
                     partition_key=partition,
                     revision_kind=SourceRevisionKind.PARTITION_CONTENT_HASH,
-                    revision_id=f"ahr-r4-{role.lower()}-{hashes[role][:32]}",
+                    revision_id=f"{'ahr-r4' if not self._source_revision_context else template}-{role.lower()}-{hashes[role][:32]}",
                     availability_requirement=AvailabilityRequirement.LABEL_AS_OF,
                     business_min_date=start_trade_date,
                     business_max_date=end_trade_date,
                     available_at_min=label_as_of_ts,
                     available_at_max=label_as_of_ts,
-                    schema_fingerprint=f"advisory_hr_r4_{role.lower()}_v1",
+                    schema_fingerprint=f"{template}_{role.lower()}_v1",
                     row_count=role_row_counts[role],
                     partition_content_hash=hashes[role],
                     quality_status=("PASS" if rows and role_row_counts[role] == len(rows) else "PENDING"),
@@ -319,6 +330,22 @@ class PostgresHistoricalRangeOutcomeSourceProvider:
             )
             self._operation_row_cache[key] = rows
         return tuple(row for row in rows if row["trade_date"] <= end_trade_date)
+
+    def _load_symbol_rows(self, *, symbol: str, start_trade_date: date, end_trade_date: date) -> tuple[dict[str, Any], ...]:
+        raise NotImplementedError
+
+    def _trading_dates(self, start: date, end: date) -> tuple[date, ...]:
+        raise NotImplementedError
+
+
+class PostgresHistoricalRangeOutcomeSourceProvider(HistoricalRangeOutcomeSourceProvider):
+    """Legacy DB adapter; file consumption never calls this adapter's SQL."""
+
+    def __init__(self, *, conn_factory: Callable[[], Any]) -> None:
+        super().__init__()
+        if conn_factory is None:
+            raise ValueError("conn_factory is required; database settings cannot be guessed")
+        self._conn_factory = conn_factory
 
     def _load_symbol_rows(
         self,

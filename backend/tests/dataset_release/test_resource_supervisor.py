@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.profile import ResourcePolicy
 from backend.services.dataset_release.resource_budget import GIB, HostMemorySnapshot
+from backend.services.dataset_release.resource_budget import ResourceTelemetryUnavailable
 from backend.services.dataset_release.resource_gate import DiskSpaceSnapshot, ResourceGate
 from backend.services.dataset_release.resource_supervisor import (
     ResourceSupervisor,
@@ -292,6 +294,123 @@ def test_wsl_readback_failure_aborts_only_task_job(tmp_path: Path, dataset_profi
             service_factory=FailedWslService,
         )
     assert FakeJob.instances[0].close_requirements == [False]
+
+
+def _telemetry_payload(*, skew_seconds: float = 0.0, counter: int = 1) -> dict:
+    return {
+        "schema_version": "dataset_release_wsl_resource_telemetry_v1",
+        "attempt_id": "attempt-telemetry",
+        "fence": 6,
+        "observed_utc": (datetime.now(timezone.utc) + timedelta(seconds=skew_seconds)).isoformat(),
+        "counter": counter,
+        "control_group": "/user.slice/fixture.service",
+        "wrapper_pid": 123,
+        "memory_current_bytes": 100,
+        "memory_peak_bytes": 200,
+        "memory_high_bytes": 0,
+        "memory_max_bytes": 0,
+        "swap_current_bytes": 0,
+        "swap_max_bytes": 0,
+        "wsl_mem_available_bytes": 10 * GIB,
+        "memory_oom_group": 0,
+        "memory_events": {"oom": 0},
+    }
+
+
+def _telemetry_supervisor(tmp_path, dataset_profile, clock):
+    ControlStore.initialize(tmp_path)
+    supervisor = ResourceSupervisor(
+        attempt_id="attempt-telemetry", fence=6, control_root=tmp_path,
+        policy=dataset_profile.resource_policy, hybrid_wsl=True,
+        resource_gate=_gate(dataset_profile), job_factory=FakeJob,
+        monotonic=lambda: clock[0],
+    )
+    supervisor._wsl_telemetry_path = tmp_path / "telemetry.json"
+    supervisor._wsl_expected_control_group = "/user.slice/fixture.service"
+    return supervisor
+
+
+@pytest.mark.parametrize("skew_seconds", [-3600.0, -6.5, 3600.0])
+def test_owned_wsl_telemetry_uses_local_progress_not_guest_utc(tmp_path, dataset_profile, skew_seconds):
+    clock = [100.0]
+    supervisor = _telemetry_supervisor(tmp_path, dataset_profile, clock)
+    try:
+        payload = _telemetry_payload(skew_seconds=skew_seconds)
+        supervisor._wsl_telemetry_path.write_text(json.dumps(payload), encoding="utf-8")
+        assert supervisor._owned_runtime_snapshot(True).wsl.counter == 1
+        clock[0] += 1.0
+        payload["counter"] = 2
+        supervisor._wsl_telemetry_path.write_text(json.dumps(payload), encoding="utf-8")
+        assert supervisor._owned_runtime_snapshot(True).wsl.counter == 2
+    finally:
+        supervisor.close()
+
+
+@pytest.mark.parametrize("failure", ["stalled", "rollback", "local_clock_rollback"])
+def test_owned_wsl_telemetry_rejects_nonprogress(tmp_path, dataset_profile, failure):
+    clock = [100.0]
+    supervisor = _telemetry_supervisor(tmp_path, dataset_profile, clock)
+    try:
+        payload = _telemetry_payload(counter=2)
+        supervisor._wsl_telemetry_path.write_text(json.dumps(payload), encoding="utf-8")
+        supervisor._owned_runtime_snapshot(True)
+        if failure == "stalled":
+            clock[0] += max(5.0, dataset_profile.resource_policy.enforcement_sample_seconds * 5)
+        elif failure == "rollback":
+            payload["counter"] = 1
+        else:
+            clock[0] -= 1.0
+        supervisor._wsl_telemetry_path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ResourceTelemetryUnavailable):
+            supervisor._owned_runtime_snapshot(True)
+    finally:
+        supervisor.close()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("attempt_id", "other-attempt"), ("fence", 7),
+    ("control_group", "/other.service"), ("memory_max_bytes", 1024),
+    ("observed_utc", "invalid"), ("counter", 0), ("fence", "invalid"),
+])
+def test_owned_wsl_telemetry_preserves_identity_and_schema_checks(tmp_path, dataset_profile, field, value):
+    supervisor = _telemetry_supervisor(tmp_path, dataset_profile, [100.0])
+    try:
+        payload = _telemetry_payload()
+        payload[field] = value
+        supervisor._wsl_telemetry_path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ResourceTelemetryUnavailable):
+            supervisor._owned_runtime_snapshot(True)
+    finally:
+        supervisor.close()
+
+
+def test_new_wsl_execution_resets_previous_telemetry_progress(tmp_path, dataset_profile, monkeypatch):
+    supervisor = _telemetry_supervisor(tmp_path, dataset_profile, [100.0])
+    supervisor._wsl_telemetry_counter = 999
+    supervisor._wsl_telemetry_progress_at = 90.0
+
+    def check_reset(*_args, **_kwargs):
+        assert supervisor._wsl_telemetry_counter == -1
+        assert supervisor._wsl_telemetry_progress_at is None
+        assert not supervisor._wsl_telemetry_path.exists()
+        raise ResourceSupervisorError("reset checked without launching")
+
+    monkeypatch.setattr(supervisor, "_launch_wsl", check_reset)
+    try:
+        with pytest.raises(ResourceSupervisorError, match="reset checked"):
+            supervisor.run_supervised(
+                ["/usr/bin/true"], execution_id="second-wsl-helper", cwd=tmp_path,
+                runtime="wsl", wsl=WslSupervisedOptions(
+                    distro="Ubuntu", guardian_python="/usr/bin/python3",
+                    guardian_script_wsl="/repo/wsl_resource_guardian.py",
+                    heartbeat_path_wsl="/mnt/x/control/heartbeat.json",
+                    runner_python_wsl="/usr/bin/python3",
+                    runner_script_wsl="/repo/subprocess_runner.py",
+                    task_cwd_wsl="/repo", execution_root_wsl="/mnt/x/control/second",
+                ),
+            )
+    finally:
+        supervisor.close()
 
 
 def test_existing_attempt_fence_guardian_state_cannot_be_clobbered(tmp_path: Path, dataset_profile) -> None:

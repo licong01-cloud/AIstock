@@ -1,0 +1,261 @@
+{
+  "actual": "12:46 cutoff-bound journal returns ingestion job 078970e1-2547-4e98-a4be-64e2378f0d96 and callback dsa_d5757d931b744f0989fba57b0c714811 for empty 2026-10-08 update.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_repair_journal.py",
+    "backend/tests/dataset_release/test_monthly_repair_journal.py",
+    "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1725",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-04T04:48:30.559422Z",
+  "description": "12:46 cutoff-bound journal returns ingestion job 078970e1-2547-4e98-a4be-64e2378f0d96 and callback dsa_d5757d931b744f0989fba57b0c714811 for empty 2026-10-08 update.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261004-56bfb5ca3c88",
+      "timestamp": "2026-10-04T04:48:30.559403Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Recognize only exact registered suspend schedule and date-strategy pairs with independently closed zero-row by-date evidence strictly after source cutoff; retain unknown, historical, positive, failed and unbounded rejection.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_repair_journal.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_repair_journal.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_repair_journal.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_repair_journal.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ]
+  },
+  "first_seen_at": "2026-10-04T04:48:30.559422Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5439,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5439",
+  "last_seen_at": "2026-10-04T04:48:30.559422Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh process loaded tracked journal from task worktree. Existing DEV SELECT-only production SQL CTE13 passed. Production READ ONLY actual journal global8 bounded0 at cutoff2026-09-30 with closed future empty suspend schedule evidence; current worker has old runtime and source seal remains pending. No database/profile/candidate/process writes. Runtime restart user-owned.",
+      "Windows fresh process loaded task tracked journal. Production READ ONLY actual journal global8/bounded0 at cutoff2026-09-30; same-job empty_valid future scope verified. Existing DEV SELECT-only SQL13 passed. Current deployed worker still old runtime and actual SOURCE seal pending; no DB/profile/candidate/process writes."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Monthly source overlap rejects registered midday future empty suspend schedule",
+  "trigger_condition": {
+    "fingerprint": "56bfb5ca3c88f4341dde847c",
+    "source_event_id": "FE-20261004-56bfb5ca3c88"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

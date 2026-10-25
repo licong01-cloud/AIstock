@@ -1,0 +1,269 @@
+{
+  "actual": "comparison._daily_rank_ic ranks each side before selecting finite pairs, biasing candidate_raw_rank_ic and candidate_to_declared_baseline_similarity under asymmetric missingness. Reproducer repeated x=[1,2,3,NaN], y=[1,4,2,3] gives 0.3273268354 instead of joint-mask Spearman 0.5. Core paired delta and independent metrics remain unchanged. Fix only common finite eligibility ranking and compact regression tests; no DB or production operations.",
+  "allowed_write_scope": [
+    "backend/services/factor_research/comparison.py",
+    "backend/tests/factor_research/test_comparison.py",
+    "tests/aistock_validation/bugs/20261006_BUG-1755-factor-research-auxiliary-rankic-ranks-before-common-finite-mask.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1755",
+  "closed_at": "2026-10-06T13:08:52Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-06T12:03:06.939933Z",
+  "description": "comparison._daily_rank_ic ranks each side before selecting finite pairs, biasing candidate_raw_rank_ic and candidate_to_declared_baseline_similarity under asymmetric missingness. Reproducer repeated x=[1,2,3,NaN], y=[1,4,2,3] gives 0.3273268354 instead of joint-mask Spearman 0.5. Core paired delta and independent metrics remain unchanged. Fix only common finite eligibility ranking and compact regression tests; no DB or production operations.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261006-734ac541a90c",
+      "timestamp": "2026-10-06T12:03:06.939916Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Rank both inputs on the same eligible finite pairs; preserve undefined and sample count behavior.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1755-factor-research-auxiliary-rankic-ranks-before-common-finite-mask.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1755-factor-research-auxiliary-rankic-ranks-before-common-finite-mask.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/factor_research/comparison.py",
+        "backend/tests/factor_research/test_comparison.py"
+      ],
+      "impacted_modules": [
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/factor_research/comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/factor_research/comparison.py",
+        "backend/tests/factor_research/test_comparison.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py"
+    ]
+  },
+  "first_seen_at": "2026-10-06T12:03:06.939933Z",
+  "fix_branch": null,
+  "fix_commit": "4dc6cb56d9f040e019c21bf4fbfa1dde3091a3f7",
+  "fixed_at": "2026-10-06T13:08:52Z",
+  "github_issue_number": 5569,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5569",
+  "last_seen_at": "2026-10-06T12:03:06.939933Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5593",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/factor_research/test_comparison.py -q -k daily_ranks",
+  "required_verification": [
+    "l0",
+    "factor_research_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_gap": "Resolved by merged catalog classification for the offline research tool: runtime_impact=none, backend_restart_required=false. Fresh-process targeted tests provide behavior evidence; no HTTP probe substitution.",
+    "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1755",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5209541057947107",
+    "recorded_at": "2026-10-06T13:09:47.494436Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3274966095413d257ebe5929cf4f67c7256dfc2a",
+    "source_merge_commit": "4dc6cb56d9f040e019c21bf4fbfa1dde3091a3f7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5593",
+    "validation_evidence": [
+      "python -m nox -s factor_research_backend l0 -> passed; two reviews complete; runtime none per latest catalog"
+    ],
+    "validation_evidence_digest": "5f375593507e76701837e96b49c1f72ced03d75d30b2e7c842faf0d126d9ad00"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "Factor research auxiliary RankIC ranks before common finite mask",
+  "trigger_condition": {
+    "fingerprint": "734ac541a90cbdae0c63c486",
+    "source_event_id": "FE-20261006-734ac541a90c"
+  },
+  "validation_evidence": [
+    "python -m nox -s factor_research_backend l0 -> passed; two reviews complete; runtime none per latest catalog"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "factor_research"
+      ],
+      "plans": [
+        "factor_research_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "factor_research"
+        ],
+        "plans": [
+          "factor_research_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

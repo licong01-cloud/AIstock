@@ -21,6 +21,7 @@ class StrategyPackageAssetType(str, Enum):
     EXECUTION_CONFIG = "execution_config"
     RISK_POLICY = "risk_policy"
     VALIDATION_REPORT = "validation_report"
+    PROTECTED_LEDGER_EVIDENCE = "protected_asset_ledger_evidence"
     OTHER = "other"
 
 

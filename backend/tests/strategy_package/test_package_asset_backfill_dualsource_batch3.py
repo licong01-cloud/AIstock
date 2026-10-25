@@ -175,6 +175,44 @@ def _manifest(*, task_id: str = "qe_unit_task", loop_id: str = "Loop2", node_id:
     )
 
 
+def test_replay_asset_lookup_uses_original_fit_not_replay(tmp_path: Path) -> None:
+    from backend.services.strategy_package.package_asset_freeze import _manifest_runtime_locators
+
+    manifest = _manifest(task_id="qe_replay", loop_id="Loop4")
+    evidence = dict(manifest.source_evidence)
+    evidence["trained_model_source"] = {
+        "experiment_id": "qe_training_L1", "qe_task_id": "qe_training",
+        "qe_loop_id": "Loop1", "execution_node_id": "node-training", "random_seed": 42,
+    }
+    manifest = manifest.model_copy(update={"source_evidence": evidence})
+    path = tmp_path / "central_params.pkl"
+    path.write_bytes(b"original-trained-weights")
+
+    class OriginalOnlyStore(PointerModelStore):
+        def get_pointer(self, *, experiment_id: str) -> dict[str, Any]:
+            assert experiment_id == "qe_training_L1"
+            return super().get_pointer(experiment_id=experiment_id)
+
+    source = StrategyPackageAssetSource(
+        model_store=OriginalOnlyStore("unit://original-model"), artifact_store=ArtifactStore(path),
+        conn_factory=_conn_factory_raising,
+    )
+    assert source.model_params_bytes(manifest).data == path.read_bytes()
+    locators = _manifest_runtime_locators(manifest)
+    assert len(locators) == 1
+    assert (locators[0].qe_task_id, locators[0].qe_loop_id) == ("qe_training", "Loop1")
+
+    class OriginalWorkspace(FakeWorkspaceClient):
+        async def download_workspace_file_bytes(self, task_id: str, loop_id: str, file_path: str) -> bytes:
+            assert (task_id, loop_id) == ("qe_training", "Loop1")
+            return await super().download_workspace_file_bytes(task_id, loop_id, file_path)
+
+    client = OriginalWorkspace(files={"model.py": b"original model code", "conf.yaml": b"original fitted config"})
+    source._workspace_client_factory = lambda node: client
+    assert source.workspace_file_bytes(manifest, "model.py").data == b"original model code"
+    assert source.conf_yaml_bytes(manifest).data == b"original fitted config"
+
+
 def _conn_factory_raising() -> Any:
     raise RuntimeError("unit DB unavailable")
 

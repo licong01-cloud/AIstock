@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -157,6 +159,39 @@ def test_historical_signal_preparation_accepts_only_evidenced_raw_empty() -> Non
     assert result.prepared_signal.valid_no_candidate is True
     assert result.prepared_signal.alpha_raw_candidates == ()
     assert result.raw.raw_inference_receipt["universe_count"] == 5000
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_advisory_frozen_preparation_consumes_registered_no_overlay_without_generation(tmp_path, empty) -> None:
+    from backend.tests.selection_center.test_hmm_runtime import _registered_no_overlay_runtime
+
+    runtime, profile, payload, path, window = _registered_no_overlay_runtime(
+        tmp_path, trade_date=TRADE_DATE, historical=True,
+    )
+    payload["stock_sector_map"].update({"000001.SZ": "801750.SI", "000002.SZ": "801780.SI"})
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    window["coefficient_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    preflight = runtime.preflight_coefficients(
+        trade_date=TRADE_DATE, profile=profile, package_id="pkg-single", require_frozen_snapshot=True,
+    )
+    metadata = {**preflight, "input_data_max_dates": payload["input_data_max_dates_by_date"][TRADE_DATE.isoformat()]}
+    service, raw = _service(empty=empty)
+    service._hmm_runtime = runtime
+    result = service.prepare_historical(
+        package_id="pkg-single", trade_date=TRADE_DATE,
+        runtime_config={"runtime_profile": {"selection": {"top_k": 5}, "hmm": profile.model_dump(mode="json")},
+                        "phase0a_hmm_metadata": metadata},
+    )
+    signal = result.prepared_signal
+    assert signal.hmm_metadata["no_overlay_sector_codes"] == ["801750.SI"]
+    assert signal.hmm_metadata["coefficient_sha256"] == window["coefficient_sha256"]
+    assert signal.hmm_metadata["admissibility"] == "FORMAL_FROZEN_HISTORICAL"
+    assert all(call["historical_read_only"] for call in raw.calls)
+    if empty:
+        assert signal.valid_no_candidate and not signal.hmm_adjusted_candidates
+    else:
+        assert signal.hmm_adjusted_candidates[0].score == signal.alpha_raw_candidates[0].score == 0.25
+        assert signal.hmm_adjusted_candidates[0].component_scores["hmm"]["reason_code"] == "HMM_L2_QUOTES_UNAVAILABLE"
 
 
 def test_historical_hmm_raw_empty_still_preflights_exact_frozen_artifacts() -> None:

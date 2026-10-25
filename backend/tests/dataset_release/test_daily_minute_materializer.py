@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 from datetime import date
 from pathlib import Path
 
@@ -18,9 +19,23 @@ from backend.services.dataset_release.daily_minute_materializer import (
     SupervisedDumpFailed,
     build_composite_canonical_rows,
     build_selective_override_canonical_rows,
+    _write_ordered_stock_csvs,
 )
 from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS
 from backend.services.dataset_release.pit import freeze_pit_snapshot
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_stock_csv_receipt_dates_match_exact_serialized_boundaries(tmp_path: Path, dataset: str) -> None:
+    receipt = _write_ordered_stock_csvs(
+        _rows(dataset), csv_root=tmp_path, dataset=dataset,
+        cutoff=date(2026, 7, 31), checkpoint=lambda: None,
+    )
+    for item in receipt["files"]:
+        with (tmp_path / f'{item["instrument"]}.csv').open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        assert item["start"] == rows[0]["date"]
+        assert item["end"] == rows[-1]["date"]
 
 
 def _pit(cutoff: date):

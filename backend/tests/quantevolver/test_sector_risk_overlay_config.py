@@ -9,6 +9,7 @@ import types
 
 import pandas as pd
 import pytest
+import yaml
 
 from backend.services.quantevolver.config_composer import (
     QE_MINUTE_RUNTIME_HELPER_FILES,
@@ -185,6 +186,71 @@ def test_composed_yaml_routes_to_qe_overlay_wrapper(tmp_path) -> None:
     assert "module_path: qe_sector_risk_overlay_strategy" in yaml_text
     assert f"sector_risk_overlay_manifest_file: {SECTOR_RISK_OVERLAY_MANIFEST_FILE}" in yaml_text
     assert f"sector_risk_overlay_data_file: {SECTOR_RISK_OVERLAY_DATA_FILE}" in yaml_text
+
+
+@pytest.mark.parametrize("catalog_threads", [None, 8])
+def test_lgbm_num_threads_is_model_only_and_preserves_other_contracts(catalog_threads) -> None:
+    composer = ConfigComposer()
+    model_info = (
+        {"model_type": "LGBM", "model_hyperparameters": {"num_threads": catalog_threads}}
+        if catalog_threads is not None else None
+    )
+    params = {
+        "random_seed": 42,
+        "label_horizon": 20,
+        "stock_pool": "/fixture/pit_stock_pool.txt",
+        "filter_suspended_on_signal": True,
+        "risk_policy_enabled": True,
+    }
+
+    def compose(custom_params):
+        return yaml.safe_load(composer._compose_conf_yaml(
+            factors_info=[], model_info=model_info, strategy_info=STRATEGY_INFO,
+            data_split=DATA_SPLIT, custom_params=custom_params,
+            has_custom_factors=True, has_alpha158=False, disable_alpha158=True,
+            qlib_data_path="/fixture/v15/day", qlib_minute_path="/fixture/v15/1min",
+            backtest_freq="1min", execution_algo="TWAP",
+            execution_algo_params={"unfilled_handler": "TAIL_BOOST", "unfilled_backup_depth": 5},
+            node_id="rdagent-node1",
+        ))
+
+    baseline = compose(params)
+    overrides = {**params, "num_threads": 12}
+    overridden = compose(overrides)
+    assert overridden["task"]["model"]["class"] == "LGBModel"
+    assert overridden["task"]["model"]["kwargs"]["num_threads"] == 12
+    # Whole executable contract is unchanged apart from this explicit model override.
+    overridden["task"]["model"]["kwargs"]["num_threads"] = baseline["task"]["model"]["kwargs"]["num_threads"]
+    assert overridden == baseline
+    assert baseline["task"]["model"]["kwargs"]["num_threads"] == (24 if catalog_threads is None else catalog_threads)
+    assert compose(params) == baseline
+    assert overrides == {**params, "num_threads": 12}
+    if model_info is not None:
+        assert model_info["model_hyperparameters"] == {"num_threads": catalog_threads}
+    with pytest.raises(ValueError, match="unsupported_strategy_param"):
+        compose({**overrides, "unsupported_strategy_param": 1})
+
+
+@pytest.mark.parametrize("strategy_class", ["ScoreWeightedTopkStrategyV2", "CatalogExternalStrategy"])
+def test_num_threads_keeps_existing_non_lgbm_strategy_semantics(strategy_class) -> None:
+    kwargs = dict(
+        factors_info=[], model_info={"model_type": "XGB"},
+        strategy_info={
+            "source_code": f"class {strategy_class}:\n    pass\n",
+            "portfolio_config": {"class": strategy_class, "kwargs": {}},
+        },
+        data_split=DATA_SPLIT, custom_params={"num_threads": 12},
+        has_custom_factors=False, has_alpha158=True,
+        qlib_data_path="/fixture/day", qlib_minute_path="/fixture/1min",
+        backtest_freq="1min", execution_algo="TWAP",
+    )
+    if strategy_class == "ScoreWeightedTopkStrategyV2":
+        with pytest.raises(ValueError, match="num_threads"):
+            ConfigComposer()._compose_conf_yaml(**kwargs)
+    else:
+        conf = yaml.safe_load(ConfigComposer()._compose_conf_yaml(**kwargs))
+        assert conf["port_analysis_config"]["strategy"]["kwargs"]["num_threads"] == 12
+        assert "num_threads" not in conf["task"]["model"]["kwargs"]
 
 
 def test_hmm_adjustment_uses_point_in_time_membership_spans(monkeypatch, tmp_path):

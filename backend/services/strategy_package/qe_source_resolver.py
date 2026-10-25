@@ -521,7 +521,7 @@ class QEExperimentSourceResolver:
         data_split: dict[str, Any],
         backtest_context: dict[str, Any],
     ) -> dict[str, Any]:
-        return {
+        evidence = {
             "schema_version": "strategy_package_source_evidence_v1",
             "source_kind": "qe_experiment",
             "experiment_id": str(record.get("experiment_id") or ""),
@@ -533,6 +533,64 @@ class QEExperimentSourceResolver:
             "data_split": data_split,
             "backtest_context_ref": backtest_context.get("schema_version"),
             "authority": "audit_only_not_runtime_authority",
+        }
+        loop_config = self._load_loop_runtime_config(record)
+        task_id = loop_config.get("model_source_task_id")
+        loop_index = loop_config.get("model_source_loop_index")
+        if not task_id and loop_config.get("prediction_replay") is True:
+            task_id = loop_config.get("prediction_source_task_id")
+            loop_index = loop_config.get("prediction_source_loop_index")
+        if task_id or loop_index is not None:
+            evidence["trained_model_source"] = self._trained_model_source(
+                record, loop_config, task_id=task_id, loop_index=loop_index,
+            )
+        return evidence
+
+    def _trained_model_source(
+        self, record: dict[str, Any], loop_config: dict[str, Any], *, task_id: Any, loop_index: Any,
+    ) -> dict[str, Any]:
+        """Separate replay performance from the exact fit that produced its prediction."""
+        context = {"reason_code": "strategy_package_replay_model_source_mismatch",
+                   "experiment_id": record.get("experiment_id"), "source_task_id": task_id,
+                   "source_loop_index": loop_index}
+        if not isinstance(task_id, str) or not task_id.strip() or isinstance(loop_index, bool):
+            raise StrategyPackageValidationError("replay model source coordinates are incomplete", context=context)
+        try:
+            index = int(loop_index)
+        except (ValueError, TypeError) as exc:
+            raise StrategyPackageValidationError("replay model source loop is invalid", context=context) from exc
+        if index < 1 or str(index) != str(loop_index):
+            raise StrategyPackageValidationError("replay model source loop is invalid", context=context)
+        trained = self._load_evolution_loop(qe_task_id=task_id.strip(), qe_loop_id=f"Loop{index}")
+        trained_config = self._load_loop_runtime_config(trained)
+        replay_flags = parse_json_mapping(loop_config.get("runtime_flags"))
+        trained_flags = parse_json_mapping(trained_config.get("runtime_flags"))
+        mismatches = []
+        if record.get("model_id") != trained.get("model_id"):
+            mismatches.append("model_id")
+        if _parse_jsonish(record.get("factor_names")) != _parse_jsonish(trained.get("factor_names")):
+            mismatches.append("factor_names")
+        expected_seed = replay_flags.get("random_seed")
+        trained_seed = trained_flags.get("random_seed")
+        if expected_seed is not None and trained_seed is not None and expected_seed != trained_seed:
+            mismatches.append("random_seed")
+        expected_split = parse_json_mapping(record.get("data_split"))
+        trained_split = parse_json_mapping(trained.get("data_split"))
+        for field in ("train_start", "train_end", "valid_start", "valid_end"):
+            if field in expected_split and field in trained_split and expected_split[field] != trained_split[field]:
+                mismatches.append(field)
+        if trained.get("experiment_id") == record.get("experiment_id"):
+            mismatches.append("self_reference")
+        if mismatches:
+            raise StrategyPackageValidationError(
+                "replay and original fit identities disagree", context={**context, "mismatched_fields": mismatches},
+            )
+        return {
+            "experiment_id": str(trained["experiment_id"]), "qe_task_id": task_id.strip(),
+            "qe_loop_id": f"Loop{index}", "model_id": trained.get("model_id"),
+            "random_seed": trained_seed, "data_split": trained_split,
+            "prediction_source_sha256": loop_config.get("prediction_source_sha256"),
+            "execution_node_id": trained_config.get("execution_node_id") or trained_config.get("node_id"),
         }
 
     def _build_backtest_context(

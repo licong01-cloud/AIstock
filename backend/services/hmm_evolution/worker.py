@@ -281,51 +281,63 @@ class HMMEvolutionWorker:
         executor = self._executor
         if executor is None:  # pragma: no cover - assert_runnable rejects this.
             raise InvalidSpecError("HMM evolution evaluator is not installed")
-        batch_receipt = self._ensure_batch_receipt(batch)
+        batch_receipt = self._performance_record("batch_create", batch, lambda: self._ensure_batch_receipt(batch))
         compute_started_at = utc_now()
-        eval_receipts: dict[str, dict[str, Any]] = {}
+        eval_receipts: dict[str, dict[str, Any] | None] = {}
         recorders: dict[str, StageRecorder] = {}
         rss_samples: dict[str, list[int]] = {}
         for evaluation in evaluations:
             eval_id = str(evaluation["eval_id"])
-            receipt, _created = self._repository.create_performance_receipt(
-                receipt_level="evaluation",
-                batch_id=str(batch["batch_id"]),
+            created = self._performance_record(
+                "evaluation_create",
+                batch,
+                lambda: self._repository.create_performance_receipt(
+                    receipt_level="evaluation",
+                    batch_id=str(batch["batch_id"]),
+                    eval_id=eval_id,
+                    execution_purpose=str(batch.get("execution_purpose") or ExecutionPurpose.EVALUATION.value),
+                    benchmark_id=(str(batch["benchmark_id"]) if batch.get("benchmark_id") else None),
+                    runtime_identity=capture_runtime_identity(owner_id=self._owner_id, role="evaluation_worker"),
+                    hardware_identity=capture_hardware_identity(),
+                    input_identity={
+                        "logical_evaluation_key": str(evaluation["logical_evaluation_key"]),
+                        "candidate_manifest_hash": str(evaluation["candidate_manifest_hash"]),
+                        "source_manifest_hash": str(evaluation["source_manifest_hash"]),
+                        "evaluation_spec_hash": str(evaluation["evaluation_spec_hash"]),
+                        "evaluator_version": str(evaluation["evaluator_version"]),
+                        "input_hash": str(evaluation["input_hash"]),
+                        "universe_hash": str(evaluation["universe_hash"]),
+                        "run_generation": int(evaluation["run_generation"]),
+                    },
+                ),
                 eval_id=eval_id,
-                execution_purpose=str(
-                    batch.get("execution_purpose") or ExecutionPurpose.EVALUATION.value
-                ),
-                benchmark_id=(
-                    str(batch["benchmark_id"]) if batch.get("benchmark_id") else None
-                ),
-                runtime_identity=capture_runtime_identity(
-                    owner_id=self._owner_id, role="evaluation_worker"
-                ),
-                hardware_identity=capture_hardware_identity(),
-                input_identity={
-                    "logical_evaluation_key": str(evaluation["logical_evaluation_key"]),
-                    "candidate_manifest_hash": str(evaluation["candidate_manifest_hash"]),
-                    "source_manifest_hash": str(evaluation["source_manifest_hash"]),
-                    "evaluation_spec_hash": str(evaluation["evaluation_spec_hash"]),
-                    "evaluator_version": str(evaluation["evaluator_version"]),
-                    "input_hash": str(evaluation["input_hash"]),
-                    "universe_hash": str(evaluation["universe_hash"]),
-                    "run_generation": int(evaluation["run_generation"]),
-                },
             )
+            receipt = created[0] if created is not None else None
             recorder = StageRecorder()
             queue_wait_end = evaluation.get("started_at") or evaluation.get("updated_at")
             if queue_wait_end is not None and evaluation.get("queued_at") is not None:
-                recorder.record(
-                    STAGE_EVALUATION_QUEUE_WAIT,
-                    started_at=evaluation["queued_at"],
-                    completed_at=queue_wait_end,
+                self._performance_record(
+                    "queue_timing",
+                    batch,
+                    lambda: recorder.record(
+                        STAGE_EVALUATION_QUEUE_WAIT,
+                        started_at=evaluation["queued_at"],
+                        completed_at=queue_wait_end,
+                    ),
+                    eval_id=eval_id,
                 )
-                receipt = self._repository.merge_performance_receipt_progress(
-                    receipt_id=str(receipt["receipt_id"]),
-                    expected_row_version=int(receipt["row_version"]),
-                    stage_timings=recorder.stage_payload(),
-                )
+                if receipt is not None:
+                    updated = self._performance_record(
+                        "progress",
+                        batch,
+                        lambda: self._repository.merge_performance_receipt_progress(
+                            receipt_id=str(receipt["receipt_id"]),
+                            expected_row_version=int(receipt["row_version"]),
+                            stage_timings=recorder.stage_payload(),
+                        ),
+                        eval_id=eval_id,
+                    )
+                    receipt = updated
             eval_receipts[eval_id] = receipt
             recorders[eval_id] = recorder
             rss_samples[eval_id] = [current_rss_bytes()]
@@ -370,12 +382,18 @@ class HMMEvolutionWorker:
                         checkpoint=leases.checkpoint(eval_id),
                         defer_batch_recompute=True,
                     )
-                    self._merge_evaluation_receipt_progress(
-                        receipt=eval_receipts[eval_id],
-                        recorder=recorder,
-                        artifact_source_info=prepared.artifact_source_info,
-                        peak_rss=max(samples),
-                    )
+                    if eval_receipts[eval_id] is not None:
+                        self._performance_record(
+                            "progress",
+                            batch,
+                            lambda: self._merge_evaluation_receipt_progress(
+                                receipt=eval_receipts[eval_id],
+                                recorder=recorder,
+                                artifact_source_info=prepared.artifact_source_info,
+                                peak_rss=max(samples),
+                            ),
+                            eval_id=eval_id,
+                        )
                 else:
                     executor.execute_and_finalize(
                         batch=batch_snapshot,
@@ -390,13 +408,19 @@ class HMMEvolutionWorker:
                         compute_started_at=compute_started_at,
                         rss_samples=samples,
                     )
-                    eval_receipts[eval_id] = self._finalize_evaluation_receipt(
-                        receipt=eval_receipts[eval_id],
-                        eval_id=eval_id,
-                        recorder=recorder,
-                        artifact_source_info=prepared.artifact_source_info,
-                        peak_rss=max(samples),
-                    )
+                    if eval_receipts[eval_id] is not None:
+                        eval_receipts[eval_id] = self._performance_record(
+                            "finalize",
+                            batch,
+                            lambda: self._finalize_evaluation_receipt(
+                                receipt=eval_receipts[eval_id],
+                                eval_id=eval_id,
+                                recorder=recorder,
+                                artifact_source_info=prepared.artifact_source_info,
+                                peak_rss=max(samples),
+                            ),
+                            eval_id=eval_id,
+                        )
             except BaseException:
                 self._merge_evaluation_receipt_progress_safely(
                     eval_id=eval_id,
@@ -425,23 +449,42 @@ class HMMEvolutionWorker:
             fencing_token=int(final_batch["fencing_token"]),
             expected_row_version=int(final_batch["row_version"]),
         )
-        self._close_batch_receipt(batch_receipt=batch_receipt, batch=finalized)
+        status = str(finalized.get("status") or "")
+        if status in TERMINAL_BATCH_STATUSES:
+            self._cycle_terminal_batch_id = str(finalized["batch_id"])
+            self._cycle_terminal_failed = status != "completed"
+        if batch_receipt is not None:
+            self._performance_record(
+                "batch_close", batch, lambda: self._close_batch_receipt(batch_receipt=batch_receipt, batch=finalized)
+            )
         if failures:
             raise failures[0]
         return True
+
+    def _performance_record(
+        self, stage: str, batch: Mapping[str, Any], operation: Callable[[], Any], *, eval_id: str | None = None
+    ) -> Any:
+        """Record-only failures cannot change durable evaluation or lease state."""
+        try:
+            return operation()
+        except Exception as exc:
+            logger.error(
+                "hmm_evolution_performance_record_failed batch_id=%s eval_id=%s stage=%s error_type=%s",
+                batch.get("batch_id"),
+                eval_id,
+                stage,
+                type(exc).__name__,
+            )
+            return None  # No receipt exists; never fabricate a successful record.
 
     def _ensure_batch_receipt(self, batch: Mapping[str, Any]) -> dict[str, Any]:
         receipt, _created = self._repository.create_performance_receipt(
             receipt_level="batch",
             batch_id=str(batch["batch_id"]),
             eval_id=None,
-            execution_purpose=str(
-                batch.get("execution_purpose") or ExecutionPurpose.EVALUATION.value
-            ),
+            execution_purpose=str(batch.get("execution_purpose") or ExecutionPurpose.EVALUATION.value),
             benchmark_id=str(batch["benchmark_id"]) if batch.get("benchmark_id") else None,
-            runtime_identity=capture_runtime_identity(
-                owner_id=self._owner_id, role="evaluation_worker"
-            ),
+            runtime_identity=capture_runtime_identity(owner_id=self._owner_id, role="evaluation_worker"),
             hardware_identity=capture_hardware_identity(),
             input_identity={
                 "request_hash": str(batch["request_hash"]),
@@ -468,9 +511,7 @@ class HMMEvolutionWorker:
                 "terminal evaluation is missing durable timestamps",
                 context={"eval_id": eval_id},
             )
-        request_to_terminal_ms = max(
-            0, int(round((completed_at - queued_at).total_seconds() * 1000))
-        )
+        request_to_terminal_ms = max(0, int(round((completed_at - queued_at).total_seconds() * 1000)))
         return self._repository.finalize_performance_receipt(
             receipt_id=str(receipt["receipt_id"]),
             expected_row_version=int(receipt["row_version"]),
@@ -479,9 +520,7 @@ class HMMEvolutionWorker:
             cache_evidence=evidence_payload(evidence),
             cache_state=derive_cache_state(evidence).value,
             peak_rss_bytes=peak_rss,
-            result_hash=(
-                str(terminal["result_hash"]) if terminal.get("result_hash") else None
-            ),
+            result_hash=(str(terminal["result_hash"]) if terminal.get("result_hash") else None),
         )
 
     def _merge_evaluation_receipt_progress(
@@ -506,11 +545,13 @@ class HMMEvolutionWorker:
         self,
         *,
         eval_id: str,
-        receipt: Mapping[str, Any],
+        receipt: Mapping[str, Any] | None,
         recorder: StageRecorder,
         artifact_source_info: Mapping[str, Mapping[str, Any]],
         peak_rss: int,
     ) -> None:
+        if receipt is None:
+            return
         try:
             self._merge_evaluation_receipt_progress(
                 receipt=receipt,
@@ -534,9 +575,6 @@ class HMMEvolutionWorker:
         """Finalize completed batch receipts; failed/timed-out stay partial."""
 
         status = str(batch.get("status") or "")
-        if status in TERMINAL_BATCH_STATUSES:
-            self._cycle_terminal_batch_id = str(batch["batch_id"])
-            self._cycle_terminal_failed = status != "completed"
         if status != "completed":
             return
         completed_at = batch.get("completed_at")
@@ -546,9 +584,7 @@ class HMMEvolutionWorker:
                 "completed batch is missing durable timestamps",
                 context={"batch_id": batch.get("batch_id")},
             )
-        request_to_terminal_ms = max(
-            0, int(round((completed_at - created_at).total_seconds() * 1000))
-        )
+        request_to_terminal_ms = max(0, int(round((completed_at - created_at).total_seconds() * 1000)))
         latest = self._repository.get_performance_receipt(batch_id=str(batch["batch_id"]))
         if latest is None or str(latest.get("receipt_status")) != "partial":
             return
@@ -590,8 +626,7 @@ class HMMEvolutionWorker:
             if not terminalized:
                 raise
             logger.exception(
-                "HMM evolution batch preparation failed unexpectedly and was terminalized "
-                "batch_id=%s owner_id=%s",
+                "HMM evolution batch preparation failed unexpectedly and was terminalized batch_id=%s owner_id=%s",
                 batch["batch_id"],
                 self._owner_id,
             )

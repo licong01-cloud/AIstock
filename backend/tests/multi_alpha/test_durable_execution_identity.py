@@ -3,15 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from backend.services.multi_alpha.combine_backtest import CombineBacktestRequest
 from backend.services.multi_alpha.durable_identity import (
     DurableExecutionIdentityResolver,
     _sha256_tree,
+    validate_execution_identity,
 )
 from backend.services.multi_alpha.durable_models import (
     DurableRunSpec,
+    DurableContractError,
     durable_run_request_payload,
     request_hash_for,
+    sha256_identity,
 )
 from backend.services.multi_alpha.durable_plan import DeterministicChildPlanner
 from backend.services.multi_alpha.panels import PanelLegSpec
@@ -22,6 +27,114 @@ from backend.services.quantevolver.qe_workspace_client import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture
+def provenance_case(tmp_path: Path):
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
+    request = _request(tmp_path)
+    request.backtest_config.pop("conda_environment_lock_sha256")
+    request.backtest_config.pop("executor_code_commit")
+    environment = _environment()
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),  # type: ignore[arg-type]
+        environment_loader=lambda _node_id: environment,
+        dataset_loader=lambda _node_id, _root: _dataset(complete=True),
+        node_info_resolver=lambda _node_id: SimpleNamespace(qlib_data_path="/home/lc999/data/factor_data"),
+        source_root=REPO_ROOT,
+    )
+    return request, environment, resolver
+
+
+@pytest.mark.parametrize("optional_input", ["missing", "empty", "invalid_sha", "invalid_node_sha", "unreadable_lock", "invalid_lock_path"])
+def test_deployment_provenance_is_record_only(provenance_case, tmp_path: Path, optional_input: str) -> None:
+    request, environment, resolver = provenance_case
+    if optional_input == "empty":
+        environment.manifest["declared_runtime_identity"].update(
+            conda_environment_lock_sha256="", executor_code_commit="",
+        )
+    elif optional_input == "invalid_sha":
+        request.backtest_config["conda_environment_lock_sha256"] = "not-a-sha"
+    elif optional_input == "unreadable_lock":
+        request.backtest_config["conda_environment_lock_path"] = str(tmp_path / "missing.lock")
+    elif optional_input == "invalid_node_sha":
+        environment.manifest["declared_runtime_identity"]["conda_environment_lock_sha256"] = "not-a-sha"
+    elif optional_input == "invalid_lock_path":
+        request.backtest_config["conda_environment_lock_path"] = "invalid\x00.lock"
+
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+
+    assert resolution.complete is True
+    assert resolution.identity is not None
+    assert resolution.evidence["missing"] == []
+    runtime = resolution.identity.payload["runtime"]
+    assert runtime["conda_environment_lock_sha256"] == ""
+    assert runtime["executor_code_commit"] == ""
+    assert runtime["execution_environment_manifest_sha256"] == environment.execution_environment_manifest_sha256
+    assert runtime["executor_file_set_sha256"] == environment.manifest["executor_file_set_sha256"]
+    provenance = resolution.evidence["observations"]["runtime_provenance"]
+    assert provenance["record_only"] is True
+    assert provenance["complete"] is False
+    assert set(provenance["missing"]) == {"conda_environment_lock_sha256", "executor_code_commit"}
+    assert bool(provenance["collection_errors"]) == (optional_input not in {"missing", "empty"})
+    assert validate_execution_identity(
+        payload=resolution.identity.payload, identity_hash=resolution.identity.identity_hash,
+    ).identity_hash == resolution.identity.identity_hash
+
+
+def test_node_environment_update_is_recorded_without_manual_pins(provenance_case) -> None:
+    request, environment, resolver = provenance_case
+    request.backtest_config.update(conda_environment_lock_sha256="a" * 64, executor_code_commit="b" * 40)
+    environment.manifest["declared_runtime_identity"].update(
+        conda_environment_lock_sha256="6" * 64, executor_code_commit="7" * 40,
+    )
+    first = resolver.resolve(request=request, node_id="wsl2-5080")
+    environment.manifest["declared_runtime_identity"]["executor_code_commit"] = "8" * 40
+    second = resolver.resolve(request=request, node_id="wsl2-5080")
+
+    assert first.complete and second.complete
+    assert first.identity.payload["runtime"]["conda_environment_lock_sha256"] == "6" * 64
+    assert first.identity.payload["runtime"]["executor_code_commit"] == "7" * 40
+    assert second.identity.payload["runtime"]["executor_code_commit"] == "8" * 40
+    assert first.identity.identity_hash != second.identity.identity_hash
+    assert validate_execution_identity(
+        payload=first.identity.payload, identity_hash=first.identity.identity_hash,
+    ).identity_hash == first.identity.identity_hash
+
+
+@pytest.mark.parametrize("optional_state", ["legacy", "absent", "empty", "null"])
+def test_persisted_identity_preserves_optional_provenance_and_integrity(provenance_case, optional_state: str) -> None:
+    request, _, resolver = provenance_case
+    request.backtest_config.update(conda_environment_lock_sha256="a" * 64, executor_code_commit="b" * 40)
+    identity = resolver.resolve(request=request, node_id="wsl2-5080").identity
+    payload = dict(identity.payload)
+    payload["runtime"] = dict(payload["runtime"])
+    for field in ("conda_environment_lock_sha256", "executor_code_commit"):
+        if optional_state == "absent":
+            payload["runtime"].pop(field)
+        elif optional_state == "empty":
+            payload["runtime"][field] = ""
+        elif optional_state == "null":
+            payload["runtime"][field] = None
+    original_hash = sha256_identity(payload)
+    assert validate_execution_identity(payload=payload, identity_hash=original_hash).payload == payload
+    payload["runtime"]["executor_file_set_sha256"] = "9" * 64
+    with pytest.raises(DurableContractError, match="hash mismatch"):
+        validate_execution_identity(payload=payload, identity_hash=original_hash)
+
+
+@pytest.mark.parametrize("field", ["executor_file_set_sha256", "execution_environment_manifest_sha256"])
+def test_record_only_provenance_does_not_remove_required_content_identity(provenance_case, field: str) -> None:
+    request, environment, resolver = provenance_case
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+    payload = dict(resolution.identity.payload)
+    payload["runtime"] = dict(payload["runtime"])
+    payload["runtime"].pop(field)
+    with pytest.raises(DurableContractError) as caught:
+        validate_execution_identity(payload=payload, identity_hash=sha256_identity(payload))
+    assert caught.value.reason_code == "multi_alpha_execution_identity_incomplete"
+    assert caught.value.context["missing"] == [field]
 
 
 class _ModelStore:
@@ -107,10 +220,14 @@ def _dataset(*, complete: bool) -> QEWorkspaceDatasetIdentity:
     )
 
 
-def test_execution_identity_is_content_addressed_and_child_plan_carries_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize("manual_provenance", [False, True])
+def test_execution_identity_is_content_addressed_and_child_plan_carries_it(tmp_path: Path, manual_provenance: bool) -> None:
     for run_id in ("qe_a_L1", "qe_b_L1"):
         (tmp_path / f"{run_id}.pkl").write_bytes(f"prediction:{run_id}".encode("utf-8"))
     request = _request(tmp_path)
+    if not manual_provenance:
+        request.backtest_config.pop("conda_environment_lock_sha256")
+        request.backtest_config.pop("executor_code_commit")
     resolver = DurableExecutionIdentityResolver(
         model_store=_ModelStore(tmp_path),  # type: ignore[arg-type]
         environment_loader=lambda _node_id: _environment(),
@@ -234,3 +351,114 @@ def test_missing_dataset_manifest_is_visible_evidence_not_a_research_rejection(t
     assert resolution.evidence["reason_code"] == "multi_alpha_execution_identity_incomplete"
     assert "dataset.qe_dataset_manifest.json" in resolution.evidence["missing"]
     assert resolution.evidence["acquisition_suggestions"]
+
+
+@pytest.mark.parametrize(
+    "config,expected_root",
+    [
+        ({"remote_qlib_data_path": "/frozen/r8/components/daily_bin_candidate"}, "/frozen/r8"),
+        ({"remote_qlib_data_path": "/mnt/wsl/releases/r8/components/daily_bin_candidate/"}, "/mnt/wsl/releases/r8"),
+        ({"data_root_uri": "/frozen/r8/", "remote_qlib_data_path": "/frozen/r8/components/daily_bin_candidate"}, "/frozen/r8"),
+        ({"data_root_uri": "/frozen/r8"}, "/frozen/r8"),
+        ({"remote_qlib_data_path": "/legacy/factor_data"}, "/legacy/factor_data"),
+        ({}, "/legacy/factor_data"),
+    ],
+)
+def test_dataset_identity_reads_release_root_not_daily_component(tmp_path, config, expected_root):
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
+    request = _request(tmp_path)
+    request.backtest_config.update(config)
+    # Combining BUG-1697 with BUG-1702 must not restore deployment-pin gates.
+    request.backtest_config.pop("conda_environment_lock_sha256")
+    request.backtest_config.pop("executor_code_commit")
+    before = dict(request.backtest_config)
+    calls = []
+    node_reads = []
+
+    def dataset_loader(node_id, root):
+        calls.append((node_id, root))
+        report = _dataset(complete=True)
+        report.dataset["resolved_data_root_uri"] = expected_root
+        return report
+
+    def node_loader(node_id):
+        node_reads.append(node_id)
+        return SimpleNamespace(qlib_data_path="/legacy/factor_data")
+
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),
+        environment_loader=lambda _: _environment(),
+        dataset_loader=dataset_loader,
+        node_info_resolver=node_loader,
+        source_root=REPO_ROOT,
+    )
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+    assert resolution.complete
+    assert calls == [("wsl2-5080", expected_root)]
+    assert request.backtest_config == before
+    assert node_reads == ([] if config else ["wsl2-5080"])
+    assert resolution.evidence["observations"]["runtime_provenance"]["record_only"] is True
+
+
+@pytest.mark.parametrize("failure", ["configured_root_conflict", "resolved_root_drift", "manifest_drift", "node_drift", "missing_manifest"])
+def test_release_identity_drift_remains_fail_closed(tmp_path, failure):
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
+    request = _request(tmp_path)
+    request.backtest_config.update(
+        remote_qlib_data_path="/frozen/r8/components/daily_bin_candidate",
+        dataset_manifest_sha256="f" * 64,
+    )
+    if failure == "configured_root_conflict":
+        request.backtest_config["data_root_uri"] = "/frozen/r9"
+    calls = []
+
+    def dataset_loader(node_id, root):
+        calls.append((node_id, root))
+        if failure == "missing_manifest":
+            return _dataset(complete=False)
+        report = _dataset(complete=True)
+        report.dataset["resolved_data_root_uri"] = "/frozen/r9" if failure == "resolved_root_drift" else "/frozen/r8"
+        if failure == "manifest_drift":
+            report.dataset["dataset_manifest_sha256"] = "0" * 64
+        if failure == "node_drift":
+            report.dataset["resolved_node_id"] = "other-node"
+        return report
+
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),
+        environment_loader=lambda _: _environment(),
+        dataset_loader=dataset_loader,
+        node_info_resolver=lambda _: SimpleNamespace(qlib_data_path="/old/default"),
+        source_root=REPO_ROOT,
+    )
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+    assert not resolution.complete
+    assert resolution.identity is None
+    assert resolution.evidence["reason_code"] == "multi_alpha_execution_identity_incomplete"
+    if failure == "configured_root_conflict":
+        assert calls == []
+        assert "dataset.resolved_data_root_uri" in resolution.evidence["missing"]
+    else:
+        assert calls == [("wsl2-5080", "/frozen/r8")]
+    if failure == "manifest_drift":
+        assert "dataset.dataset_manifest_sha256" in resolution.evidence["missing"]
+    elif failure == "node_drift":
+        assert "dataset.resolved_node_id" in resolution.evidence["missing"]
+
+
+@pytest.mark.parametrize("path", ["relative/components/daily_bin_candidate", "/frozen/../r8/components/daily_bin_candidate"])
+def test_invalid_component_root_is_not_probed_or_rebound(tmp_path, path):
+    request = _request(tmp_path)
+    request.backtest_config["remote_qlib_data_path"] = path
+    calls = []
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),
+        dataset_loader=lambda *args: calls.append(args),
+    )
+    missing, suggestions, observations = [], [], {}
+    result = resolver._resolve_dataset(request=request, node_id="wsl2-5080", missing=missing,
+                                       suggestions=suggestions, observations=observations)
+    assert result is None and calls == []
+    assert missing == ["dataset.resolved_data_root_uri"]

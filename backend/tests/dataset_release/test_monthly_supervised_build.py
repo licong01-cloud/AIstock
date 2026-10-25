@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import make_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,20 @@ from backend.services.dataset_release.monthly_supervised_build import (
     SupervisedMonthlyQlibWriter,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
+
+
+def test_portable_receipt_accepts_typed_tuple_logs_without_leaking_paths() -> None:
+    segment = {"stream": "stderr", "generation": 1, "size_bytes": 3,
+               "sha256": "a" * 64, "cas_ref": {"sha256": "a" * 64}, "path": "private/log"}
+    receipt_type = make_dataclass("TypedReceipt", ["log_segments", "result_path", "log_root"])
+    result = module._portable_receipt(receipt_type((segment,), "private/result", "private/logs"))
+    assert result == {"log_segments": [{key: value for key, value in segment.items() if key != "path"}]}
+
+
+@pytest.mark.parametrize("segments", [{}, "", None, 0, {"stdout"}])
+def test_portable_receipt_rejects_malformed_even_empty_log_collections(segments) -> None:
+    with pytest.raises(MonthlySupervisedBuildError, match="log receipt"):
+        module._portable_receipt({"log_segments": segments})
 
 
 def _sha(path: Path) -> str:
@@ -93,7 +108,7 @@ def _receipt(execution_id: str, timeout: int) -> dict[str, object]:
 
 class _Supervisor:
     def __init__(self, root: Path, *, semantic: dict[str, object] | None = None) -> None:
-        self.attempt_id = "dmr_" + "1" * 32 + "-attempt-2"
+        self.attempt_id = "dmr_" + "1" * 32 + "-build"
         self.fence = 2
         self.control_root = root
         heartbeat_root = root / "heartbeats"
@@ -202,7 +217,8 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
     scripts = project / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "dataset_release_candidate_consumer_smoke.py").write_text("pass", encoding="utf-8")
-    staging = tmp_path / ".staging" / "candidate.building"
+    context = replace(_context(), plan={**_context().plan, "candidate_root": str(tmp_path / "monthly-candidate")})
+    staging = tmp_path / ".staging" / f".monthly-candidate.{context.operation_id}.attempt-2.building"
     staging.parent.mkdir()
     staging.mkdir()
     control = tmp_path / "control"
@@ -218,7 +234,7 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
     )
 
     result = smoke.execute(
-        context=_context(),
+        context=context,
         staging_root=staging,
         prepare_result={"consumer_smoke_instrument": "000001.SZ"},
         release_digest="c" * 64,
@@ -226,9 +242,31 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
 
     command, kwargs = supervisor.calls[0]
     assert "dataset_release_candidate_consumer_smoke.py" in command[2]
+    assert "--monthly-candidate-name monthly-candidate" in command[2]
     assert kwargs["environment_scope"] == "validation"
     assert result.semantic_receipt == semantic
     assert result.resource_receipt["execution_id"] == "build-consumer-smoke"
+
+    wrong = tmp_path / ".staging" / "unrelated.building"
+    wrong.mkdir()
+    with pytest.raises(MonthlySupervisedBuildError, match="staging identity"):
+        smoke.execute(context=context, staging_root=wrong,
+                      prepare_result={"consumer_smoke_instrument": "000001.SZ"}, release_digest="c" * 64)
+    assert len(supervisor.calls) == 1
+
+    lease = {
+        "schema_version": "aistock_monthly_retained_materialization_lease_v1",
+        "operation_id": context.operation_id, "candidate_name": "monthly-candidate",
+        "execution_attempt": 3, "materialization_attempt": 2,
+        "release_digest": "c" * 64, "data_binding_digest": "d" * 64,
+    }
+    (staging / ".monthly-materialization-lease.json").write_text(json.dumps(lease), encoding="utf-8")
+    supervisor.fence = 3
+    smoke.execute(context=replace(context, attempt=3), staging_root=staging,
+                  prepare_result={"consumer_smoke_instrument": "000001.SZ"}, release_digest="c" * 64)
+    command, _ = supervisor.calls[-1]
+    assert "--monthly-materialization-attempt 2" in command[2]
+    assert "--attempt-fence 3" in command[2]
 
 
 def test_supervised_receipt_fails_closed_on_resource_checkpoint(tmp_path: Path) -> None:

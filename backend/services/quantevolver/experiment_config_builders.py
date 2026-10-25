@@ -124,7 +124,9 @@ def _requests_general_ptnn_ltr(params: dict[str, Any] | None) -> bool:
     if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
         return True
     raw_loss = params.get("loss")
-    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+    return raw_loss is not None and str(raw_loss).strip().lower() in {
+        "approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise",
+    }
 
 
 def _reject_custom_evo_ltr_outside_model_params(
@@ -718,6 +720,13 @@ def build_config_from_custom_evo_loop(
     prediction_source_task_id: str | None = loop_config.get("prediction_source_task_id")
     prediction_source_loop_index: int | None = loop_config.get("prediction_source_loop_index")
     prediction_source_sha256: str | None = loop_config.get("prediction_source_sha256")
+    if loop_config.get("feature_processing") is not None and (
+        backtest_only or prediction_replay or loop_config.get("alpha_mode") == "multi"
+    ):
+        raise ValueError(
+            "custom_evo_loop.feature_processing: input changes require a single-alpha training loop; "
+            "cannot apply new preprocessing to a reused model/prediction or multi-alpha loop"
+        )
     if (backtest_only or prediction_replay) and "source_label_horizon" not in loop_config:
         raise ValueError(
             "custom_evo_loop: model or prediction reuse requires source_label_horizon; "
@@ -782,6 +791,12 @@ def build_config_from_custom_evo_loop(
         extra_params={
             **legacy_custom_params,
             **({"disable_alpha158": True} if disable_alpha158 else {}),
+            **(
+                {"feature_processing": _parse_optional_dict_field(
+                    loop_config["feature_processing"], field_name="custom_evo_loop.feature_processing",
+                )}
+                if loop_config.get("feature_processing") is not None else {}
+            ),
         } or None,
         alpha_mode=alpha_mode,
         multi_alpha_config=multi_alpha_cfg,

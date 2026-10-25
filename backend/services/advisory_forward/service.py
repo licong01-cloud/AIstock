@@ -74,6 +74,7 @@ class AdvisoryForwardService:
         after_close_minute: int | None = None,
         evaluation_market_source: AdvisoryForwardEvaluationMarketSource | Any | None = None,
         entry_price_service: Any | None = None,
+        entry_value_service: Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
@@ -83,6 +84,7 @@ class AdvisoryForwardService:
         self.evaluation_market_source = evaluation_market_source or AdvisoryForwardEvaluationMarketSource()
         from backend.services.advisory_model_first.entry_price_daily_service import AdvisoryEntryPriceDailyService
         self.entry_price_service = entry_price_service or AdvisoryEntryPriceDailyService(now_provider=now_provider)
+        self.entry_value_service = entry_value_service
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
         if after_close_hour is None and after_close_minute is None:
             self.after_close_hour, self.after_close_minute = _after_close_time()
@@ -139,6 +141,7 @@ class AdvisoryForwardService:
                 "publication_due": False,
                 "results": results,
                 "entry_price": self._entry_price_after_baseline(),
+                "entry_value": self._entry_value_after_baseline(),
             }
         decision_date = now.date()
         target_date = self.calendar.next_trading_day(decision_date, inclusive=False)
@@ -174,7 +177,17 @@ class AdvisoryForwardService:
             "publication_due": True,
             "results": results,
             "entry_price": self._entry_price_after_baseline(),
+            "entry_value": self._entry_value_after_baseline(),
         }
+
+    def _entry_value_after_baseline(self) -> dict[str, Any]:
+        try:
+            from backend.services.advisory_model_first.economic_entry_daily_service import build_environment_economic_entry_daily_service_v1
+            service = self.entry_value_service or build_environment_economic_entry_daily_service_v1()
+            return service.run_once()
+        except Exception as exc:
+            return {"status": "FAILED", "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_VALUE_INPUT_UNAVAILABLE"),
+                    "error_type": type(exc).__name__}
 
     def _entry_price_after_baseline(self) -> dict[str, Any]:
         try:

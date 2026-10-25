@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from ..asset_lifecycle import QEValueClass, classify_qe_result
 from ..models import ArchiveJobRecord, ClaimedOutboxEvent
 from ..models import sha256_json
+from ..policy import resolve_archive_policy
 from ..repository import QEArchiveRepository
 from ..multi_alpha_provenance import MultiAlphaProvenanceResolver
 from .contract import ArchiveHandler, ArchiveResult, HandlerStatus, PayloadValidationError
@@ -67,7 +69,7 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
         payload = dict(event.payload or {})
         self.validate_payload(payload)
         run_id = str(payload.get("run_id") or event.source_id or "").strip()
-        report = self.archive_run(run_id)
+        report = self.archive_run(run_id, automatic=True)
         if report.get("skipped_reason"):
             return ArchiveResult(
                 status=HandlerStatus.NOOP,
@@ -82,13 +84,56 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
             stats=report,
         )
 
-    def archive_run(self, run_id: str, *, dry_run: bool = False) -> dict[str, Any]:
+    def archive_run(self, run_id: str, *, dry_run: bool = False, automatic: bool = False) -> dict[str, Any]:
         run_id = str(run_id or "").strip()
         if not run_id:
             return {"run_id": run_id, "dry_run": dry_run, "skipped_reason": "multi_alpha_run_id_missing"}
         source = self._repository.fetch_multi_alpha_combine_run(run_id)
         if not source:
             return {"run_id": run_id, "dry_run": dry_run, "skipped_reason": "multi_alpha_source_run_missing"}
+        # Delivery becoming default must not ingest X/noise or override an
+        # explicit archive policy. Read the persisted source, not event defaults.
+        run = _ensure_mapping(source.get("run"))
+        status, _ = _terminal_status(run)
+        if status not in TERMINAL_MACB_STATUSES:
+            raise ValueError(f"multi-alpha combine run is not terminal: run_id={run_id!r} status={status!r}")
+        config = _ensure_mapping(run.get("backtest_config_json"))
+        policy = resolve_archive_policy(
+            source_system="multi_alpha", source_type="multi_alpha_combine", source_id=run_id,
+            runtime_config=config,
+        )
+        skipped_reason = None
+        if policy.archive_policy == "SKIP" or (automatic and policy.archive_policy != "AUTO"):
+            skipped_reason = f"policy_{policy.archive_policy.lower()}"
+        metrics = {
+            str(index): {key: row.get(key) for key in ("cagr", "sharpe", "max_drawdown", "calmar")}
+            for index, item in enumerate(source.get("scheme_results") or ())
+            if (row := _ensure_mapping(item)) and not row.get("skipped")
+        }
+        selected = {
+            row.get("selected_attempt_id")
+            for item in source.get("children") or ()
+            if (row := _ensure_mapping(item)).get("status") == "succeeded" and row.get("selected_attempt_id")
+        }
+        for item in source.get("attempts") or ():
+            attempt = _ensure_mapping(item)
+            if attempt.get("attempt_id") in selected and attempt.get("status") == "succeeded":
+                metrics[str(attempt["attempt_id"])] = _ensure_mapping(
+                    _ensure_mapping(attempt.get("result_manifest_json")).get("metrics")
+                )
+        decision = classify_qe_result({
+            # Partial terminal parents retain any evaluable child result, but
+            # a partial marker alone is not evidence of an evaluable result.
+            "source_id": run_id, "status": "failed" if status.startswith("partial_") else status, "config": config,
+            "purpose": config.get("purpose"), "metrics": metrics,
+        })
+        # Reuse only the existing X exclusions. Multi-alpha provenance and
+        # recovery identity retain their own build_bundle contract below.
+        if decision.value_class == QEValueClass.X:
+            skipped_reason = decision.reason_code
+        if skipped_reason:
+            return {"run_id": run_id, "dry_run": dry_run, "written": False,
+                    "rows_upserted": 0, "skipped_reason": skipped_reason}
         bundle = self.build_bundle(source)
         stats = dict(bundle.stats)
         stats["dry_run"] = dry_run

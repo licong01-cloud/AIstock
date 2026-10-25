@@ -50,6 +50,48 @@ python scripts/monthly_unified_dataset_release.py rollback --operation-id dmr_<3
 - CONSUMER_VALIDATE 失败：记录具体 consumer、节点、窗口和身份；不得静默退回旧路径。
 - 激活并发冲突：CAS 失败且 active 不变；重新读取后决定是否仍需切换。
 
+### 已封存 SOURCE 的正式停牌依据补充（BUG-1961）
+
+新月更会在 SOURCE 中封存共享停牌公告依据。若旧 operation 已封存 SOURCE、
+BUILD 因未携带后续已审核的公告依据失败，使用同一受鉴权入口显式绑定：
+
+```powershell
+python scripts/monthly_unified_dataset_release.py bind-suspension --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+绑定仅允许空请求，从正式共享 authority 获取依据，不接收调用方填写的停牌结论。
+它固定原 SOURCE receipt、source bundle、前驱和目标截止日，仅补充目标月份内的公告。
+BUILD 从 CAS 读取这份不可变依据，并将绑定及来源 manifest 身份写入停牌组件 metadata，
+由现有组件 receipt/manifest 钉住。原 SOURCE、已完成日线/分钟线/因子输出均保留。
+未绑定时仍按原 SOURCE 判断，不借用当前 checkout；公告冲突、畸形或矛盾的日内事件仍报错。
+绑定不会自动 resume、修改数据库、赋予 READY 或激活权限。
+
+### 4.1 已接受的来源质量差异（BUG-1815）
+
+缺行/必需字段空值与来源差异不是同一种问题。经用户明确接受的有限值日线—分钟线差异，
+可在同一 operation 的 SOURCE 封存前绑定为质量警告；不需要 Tushare 历史分钟权限，也不修改数据。
+
+```powershell
+python scripts/monthly_unified_dataset_release.py bind-quality --operation-id dmr_<32hex> --inputs X:\<本轮精确质量接受文件>.json
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+输入使用 `aistock_monthly_source_quality_acceptance_v1`：绑定 operation、前驱 manifest、
+目标 cutoff、真实证据文件 SHA/size，以及明确的 symbol/date/字段/daily/minute 值。
+只支持 `PROVIDER_VOLUME_PRECISION_VARIANCE`（vol）和 `KNOWN_PROVIDER_PRICE_VARIANCE`（OHLC）。
+前者表示已观察并接受的来源精度差异，不声称已证明上游具体舍入算法。禁止 amount 差异、任意字段或缺失事实豁免。
+
+只对完整、唯一、有限的 240 根分钟线与唯一有效日线应用精确匹配。新键、新字段、值漂移、
+缺分钟、重复、NaN、PIT/停牌冲突仍按原合同处理。绑定 create-exclusive、幂等，不重写既存
+`monthly_repair_inputs`（包括获批的单日 margin_detail 延后），SOURCE 封存后不可更改。
+后续月份不继承这些键；新差异需要独立明确接受，不能把本轮授权变成全市场自动放宽。
+
+SOURCE 的物理完整性仍按真实分母计数；质量状态独立为 `ACCEPTED_WITH_WARNINGS`，
+不能称为“差异已修复”或“质量全部无异常”。候选保存
+`reports/monthly_source_quality.json`、精确接受文件及原证据字节，全部由 manifest 钉住并随三端部署。
+只有已接受警告不再阻断其余数据集发布；真实残余阻断仍报告具体键/字段。
+
 ## 5. 独立状态报告
 
 最终报告必须分别列出：源码/CI、数据库 DDL/DML、source snapshot、candidate 构建、
@@ -119,6 +161,39 @@ python scripts/dataset_release_hmm_authority.py `
 模型 SHA、日期网格、state labels 或动态 config 任一不闭合即失败。后续月更只读取
 `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向的 authority；固定模型未变时无需逐月重建 authority。
 
+HMM producer 源码更新是独立的代码身份变更，即使模型、preset 和数据集未变，也不能沿用旧脚本哈希。
+修改 `scripts/precompute_hmm_coefficients.py` 的交付必须在用户重启前，用当前最终源码与实际已安装
+authority 执行同一个严格 loader 的只读核验；import smoke、单元测试或 CI 绿灯均不替代这一步：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py --verify-only `
+  --authority-path <current-monthly-hmm-authority.json> `
+  --producer-script <final-repo>\scripts\precompute_hmm_coefficients.py
+```
+
+若因已审核的 producer 更新导致哈希不匹配，使用原包的批准模型、config、preset 和历史系数
+创建不可变 successor。显式旧 authority SHA 与已审核新 producer SHA 必须闭合，不得直接替换旧包
+中的哈希、覆盖旧包、自动接受任意源码漂移或重新生成历史系数：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py `
+  --rebind-from-authority <current-monthly-hmm-authority.json> `
+  --expected-previous-authority-sha256 <pinned-current-authority-file-sha> `
+  --producer-script <final-repo>\scripts\precompute_hmm_coefficients.py `
+  --expected-producer-sha256 <reviewed-final-producer-file-sha> `
+  --output-root <new-repo-external-create-exclusive-root> `
+  --authority-id <new-versioned-authority-id>
+```
+
+工具逐项核验原 bootstrap receipt、模型/config 字节和已批准系数身份，不允许覆盖模型、preset、窗口
+或 lag。新包保存 predecessor 和 producer 变更回执；只读 verify 必须再次 PASS，之后按原有部署授权
+把 `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向新包，并运行完整 worker `--preflight`，再交用户重启。
+这只是既有启动校验的前移，不增加人工审批、不执行数据构建或领取任务。
+
+BUG-1887 回归检查属于 HMM CI 的消费边界：必须覆盖旧 authority/新 producer 的明确失败、显式 rebind
+后同一严格 loader 的通过、原包字节不变，以及下一次未经审核的源码漂移再次失败。CI 不读取生产
+`.env` 或生产模型文件；真实部署绑定由上述 file-only preflight 验证，不能把 fixture 通过称为运行态通过。
+
 受控运行方式为：
 
 ```powershell
@@ -155,3 +230,50 @@ release 切换只改变中央 profile，不需要按月修改 QE/HMM/荐股路�
 同一业务键重试只读取既有回执，不重新解析 active profile。相同键改变窗口返回冲突，窗口超过冻结 cutoff、
 binding/hash 漂移或缺少 active profile 均 fail closed。切换 active profile 只影响新的业务键，不改写历史请求、
 研究结果或原 Advisory CAS；入口本身不读取收益、不启动训练/实验，也不执行数据库或运行态动作。
+
+## 8. 普通月更、晚到数据与时效目标
+
+普通月更继续只走既有后端 API / CLI / MCP 的同一个持久 operation，不按模块另建数据集，也不由 Skill 实现第二套生产器。
+Skill 负责选择月份、观察进度、恢复同一 operation、汇报和执行已授权切换。后端负责 SOURCE → BUILD → DERIVE → LOCAL_VALIDATE
+→ DEPLOY → CONSUMER_VALIDATE；每阶段计时、进度和原生错误保存在 operation 内。新的源数据检查限本月，已批准历史修复限精确键；
+沿用已验证历史文件，不重跑全历史行情检查。中断先 resume 原 operation/checkpoint，保留正确的已完成导出，不从零开始。
+
+正常月更的排期目标是月末数据可用后 1–3 天内完成准备和发布；这是需用真实新月份记录验证的运营目标，不是对上游发布时间的保证。
+`margin_detail`、`daily_basic` 等晚到字段仍由既有日度回补任务处理。SOURCE 的一致快照会重新判断暂缓日期：若库中仍无事实，保留已授权
+暂缓；若事实已到库，立即纳入本次严格源检查，不再因旧 `USER_DEFERRED_COLLECTION` 标记忽略。部分到达不能冒充完整。
+已封存快照和已发布文件不会因数据库后来变更而自动改变；这类晚到事实走下面的组件内容修订，不重新导出价格。
+
+### 同月份融资融券内容修订（BUG-2067）
+
+仅在明确授权同月份独立修订后使用，保留旧目录、manifest、任务绑定和旧派生产物。先从现有数据库只读捕获指定日，再构建新文件：
+
+```powershell
+python scripts/dataset_release_margin_detail_correction.py capture `
+  --trade-date <late-date> --env-file <repo>\.env --output <X-drive-new-capture>
+python scripts/dataset_release_margin_detail_correction.py build `
+  --profile <current-active-profile.json> --capture <capture-dir> --output <new-private-components>
+python scripts/dataset_release_margin_detail_correction.py assemble `
+  --profile <current-active-profile.json> --component <private-components> --output <new-same-cutoff-sibling>
+python scripts/dataset_release_margin_detail_correction.py seal `
+  --env-file <repo>\.env --component <private-components> --output <new-candidate-profile.json>
+```
+
+只新增真实原始行、更新该日静态 `md_*` 及相应元数据。原始 NULL 保持 NULL；静态文件保持既有 per-field as-of 合同，
+不新增填充规则。已准入的供应商有符号修订值不能被额外的“必须非负”规则拒绝。发布范围之外的基金/北交所等源行单列统计，
+不借补融资融券扩大既有文件证券范围。复用其他组件的精确 pins；Parquet 物理重写不意味着历史业务字段重新计算。
+
+seal 使用现有固定模型零-fit DERIVE，把派生资产绑定新 manifest；不训练、不改变模型/窗口。然后通过既有不可变部署与节点 registry
+部署，三端 fresh-process 只核验改动日、改动文件及身份。使用各节点实际已安装的 RD-Agent release 和正式月更工具，
+不能误读 legacy 项目目录中的旧模块。后端 `adopt-existing` 复用两项 typed proof：
+`aistock_monthly_late_financing_amendment_v1`、`aistock_monthly_late_financing_readback_v1`。
+只有原前驱已正式激活且精确对应当前 active、三端读回通过，才能登记 READY；不得手写 READY 或覆盖活动 JSON。
+READY 不等于激活；仍由既有精确授权和 CAS 切换。旧任务重试继续使用其保存的旧身份。
+
+### 节点运行态与性能闭环
+
+WSL、node1 的 Results API 默认实际端口为 `9000`，部署可用既有 `AISTOCK_MONTHLY_*_QE_API_BASE_URL` 覆盖。
+节点身份名 `wsl2-5080` 是稳定 ID，不因端口改变而重命名。文件级 fresh-process PASS 与正在运行的 API 读回分别报告；
+首次 registry 环境生效前不能宣称运行态已更新，也不能为重启 API 中断其正在运行的实验。之后新月份通过稳定 registry 识别，不逐月改配置。
+
+每次交付记录六阶段耗时、有效新增/复用/传输字节和剩余阻断。已完成历史修复按发布 pins 继承，只验新增月及明确改动；
+不把额外全历史扫描、性能数字或证据归档变成新业务门禁。不自动删除旧版本；引用清单未闭合时继续保留。

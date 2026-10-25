@@ -1,4 +1,71 @@
 import { expect, test } from "@playwright/test";
+import { loadSection } from "../../src/lib/validation/section-loader";
+
+test("pipeline overview renders independent sources without detail fanout or false green", async ({ page }) => {
+  const requested: string[] = [];
+  const source = (data: unknown) => ({ state: "available", data, source: "mock read-only receipt", collected_at: new Date().toISOString(), age_seconds: 0, stale: false, refreshing: false });
+  const snapshot = {
+    schema_version: "aistock_pipeline_overview_v1", generated_at: new Date().toISOString(), ttl_seconds: 60,
+    sections: {
+      ci: source({ queued: { total: 3, items: [] }, in_progress: { total: 1, items: [] } }),
+      runners: source({ items: [{ id: 1, name: "ordinary-runner", role: "ci", status: "online", busy: true }, { id: 2, name: "security-runner", role: "security", status: "offline", busy: false }] }),
+      nightly: source({ latest_run: { id: 12, status: "completed", conclusion: "failure", updated_at: new Date().toISOString() } }),
+      bugs: { state: "loading", data: null }, prs: { state: "unavailable", data: null, error: "TimeoutError" },
+      worktrees: source({ task_worktrees: 12 }),
+    },
+  };
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.includes("/validation/")) requested.push(path);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "success", data: path.endsWith("/overview/snapshot") ? snapshot : {} }) });
+  });
+  await page.goto("/validation-center");
+  await expect(page.getByRole("heading", { name: "研发流水线全局总览" })).toBeVisible();
+  await expect(page.getByText("ordinary-runner", { exact: true })).toBeVisible();
+  await expect(page.getByText("security-runner", { exact: true })).toBeVisible();
+  const metric = (label: string) => page.locator('.pv2-metric').filter({ has: page.getByText(label, { exact: true }) });
+  await expect(metric("CI 排队工作流").locator('.pv2-metric-value')).toHaveText("3");
+  await expect(metric("待处理 BUG").locator('.pv2-metric-value')).toHaveText("unknown");
+  await expect(metric("最近 Nightly")).not.toHaveClass(/pv2-metric-success/);
+  expect(requested.every((path) => path.endsWith("/overview/snapshot"))).toBeTruthy();
+  await expect(page.getByRole("button", { name: "打开合入门禁卡片" })).toHaveClass(/pv2-phase-tab-gray/);
+  await page.getByRole("button", { name: "打开合入门禁卡片" }).click();
+  await expect.poll(() => requested.some((path) => path.endsWith("/merge-gate/summary"))).toBeTruthy();
+  await expect(page.getByRole("button", { name: "打开合入门禁卡片" })).toHaveClass(/pv2-phase-tab-gray/);
+  await expect(page.getByRole("heading", { name: "分区数据未就绪" })).toBeVisible();
+  await expect(page.getByText("阻塞原因", { exact: true })).toHaveCount(0);
+});
+
+test("pipeline overview marks stale success and failed snapshot reads explicitly", async ({ page }) => {
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const data = path.endsWith("/overview/snapshot") ? {
+      schema_version: "aistock_pipeline_overview_v1", generated_at: new Date().toISOString(), ttl_seconds: 60,
+      sections: { nightly: { state: "available", stale: true, age_seconds: 90, collected_at: "2020-01-01T00:00:00Z", source: "cached", data: { latest_run: { status: "completed", conclusion: "success", updated_at: "2020-01-01T00:00:00Z" } } } },
+    } : {};
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "success", data }) });
+  });
+  await page.goto("/validation-center");
+  const metric = page.locator('.pv2-metric').filter({ has: page.getByText("最近 Nightly", { exact: true }) });
+  await expect(metric.locator('.pv2-metric-value')).toHaveText("success");
+  await expect(metric).not.toHaveClass(/pv2-metric-success/);
+  await expect(page.getByText("stale / 刷新中")).toBeVisible();
+  await page.route("**/api/v1/validation/overview/snapshot", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"snapshot unavailable"}' }));
+  await page.getByRole("button", { name: "重新读取快照" }).click();
+  await expect(page.getByRole('alert').filter({ hasText: "快照读取失败" })).toBeVisible();
+  await expect(metric).not.toHaveClass(/pv2-metric-success/);
+});
+
+test("pipeline section loader commits fast data without waiting and rejects canceled late data", async () => {
+  const controller = new AbortController();
+  const committed: string[] = [];
+  let release!: (value: string) => void;
+  const slow = loadSection(() => new Promise<string>((resolve) => { release = resolve; }), (value) => committed.push(value), (error) => { throw new Error(error); }, controller.signal);
+  await loadSection(async () => 'fast', (value) => committed.push(value), (error) => { throw new Error(error); }, controller.signal);
+  expect(committed).toEqual(['fast']);
+  controller.abort(); release('late'); await slow;
+  expect(committed).toEqual(['fast']);
+});
 
 const passedRunId = "validation_center_20260504_l2_api__abc123";
 const markdownOnlyRunId = "validation_center_20260504_l1_markdown_only__def456";
@@ -647,6 +714,9 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
       return respond({ detail: "Validation Center UI is read-only" }, 405);
     }
 
+    if (path.endsWith("/api/v1/validation/overview/snapshot")) {
+      return respond({ status: "success", data: { schema_version: "aistock_pipeline_overview_v1", generated_at: "2026-10-17T00:00:00Z", ttl_seconds: 60, sections: {} } });
+    }
     if (path.endsWith("/api/v1/validation/health")) {
       return respond({
         status: "success",
@@ -1098,7 +1168,7 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByRole("button", { name: "打开平台健康卡片" })).toBeVisible();
   await expect(page.getByText("展开平台健康概要")).toBeVisible();
   await expect(page.getByRole("button", { name: "打开Nightly / Runner卡片" })).toBeVisible();
-  await expect(page.getByText("Bug Registry", { exact: true })).toBeVisible();
+  await expect(page.getByText("待处理 BUG", { exact: true })).toBeVisible();
 
   const phaseTabs = page.locator(".pv2-phase-tab");
   await expect(phaseTabs).toHaveCount(11);

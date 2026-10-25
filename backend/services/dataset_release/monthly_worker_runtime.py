@@ -18,10 +18,12 @@ from .monthly_production import (
     build_monthly_production_registry,
 )
 from .monthly_registry import OfficialMonthlyProducerRegistry
-from .monthly_runtime import MonthlyRuntimeSettings
+from .monthly_postgres_source import POSTGRES_SOURCE_ADAPTER_VERSION
+from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSettings
 from .monthly_unified import ActionAuthorizationStore
 from .monthly_worker import MonthlyReleaseWorker
 from .monthly_worker_nodes import MonthlyNodeRuntimeSettings
+from .monthly_source_quality import source_gate_quality_contract
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +34,45 @@ class MonthlyWorkerRuntime:
     registry: OfficialMonthlyProducerRegistry
     worker: MonthlyReleaseWorker
 
+    def _source_preparation_contract(self) -> dict[str, Any]:
+        """Read installed wiring only; never claim SOURCE or execute preparation."""
+        adapter = getattr(getattr(self.registry, "source", None), "adapter", None)
+        adapter_id = getattr(adapter, "adapter_id", None)
+        version = getattr(adapter, "adapter_version", None)
+        if adapter_id != "aistock.monthly.postgres_source" or version not in ("5", "6", "7", POSTGRES_SOURCE_ADAPTER_VERSION):
+            raise MonthlyRuntimeConfigurationError("monthly worker SOURCE contract is unsupported")
+        preparation = getattr(adapter, "preparation_executor", None)
+        shared_scope = False
+        if version == "5":
+            if preparation is not None:
+                raise MonthlyRuntimeConfigurationError("SOURCE5 cannot install private preparation")
+            mode = "FULL_SOURCE_ONLY"
+        else:
+            build_adapter = getattr(getattr(self.registry, "build", None), "adapter", None)
+            executor = getattr(build_adapter, "executor", None)
+            runner = getattr(executor, "runner", None)
+            build_scope = getattr(runner, "execution_scope_factory", None)
+            preparation_scope = getattr(preparation, "execution_scope_factory", None)
+            if (
+                not callable(preparation)
+                or not callable(build_scope)
+                or preparation_scope is not build_scope
+            ):
+                raise MonthlyRuntimeConfigurationError(
+                    "SOURCE preparation must share the installed formal BUILD execution scope"
+                )
+            shared_scope = True
+            mode = "INDEPENDENT_UNPUBLISHED_PREPARATION"
+        return {
+            "adapter_id": adapter_id,
+            "adapter_version": version,
+            "mode": mode,
+            "shared_build_execution_scope": shared_scope,
+            "publication_allowed": False,
+        }
+
     def preflight_receipt(self) -> dict[str, Any]:
+        preparation_contract = self._source_preparation_contract()
         return {
             "schema_version": "aistock_monthly_release_worker_preflight_v1",
             "status": "PASS",
@@ -40,6 +80,8 @@ class MonthlyWorkerRuntime:
             "profile_path": str(self.production.profile_path),
             "hmm_authority_path": str(self.production.hmm_authority_path),
             "registry": self.registry.contract(),
+            "source_preparation": preparation_contract,
+            "source_gate_contract": source_gate_quality_contract(),
             "nodes": ["controller", "wsl2-5080", "rdagent-node1"],
             "safety": {
                 "operation_claimed": False,

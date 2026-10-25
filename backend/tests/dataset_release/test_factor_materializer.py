@@ -15,6 +15,7 @@ from backend.services.dataset_release.factor_materializer import (
     FACTOR_H5_SCHEMAS,
     STATIC_DATASET,
     _moneyflow_source_identity_frame,
+    _static_asof_frame,
     FactorBundleMaterializer,
     FactorCheckpointConflict,
     FactorMaterializationSpec,
@@ -36,8 +37,50 @@ def _index(day: str) -> pd.MultiIndex:
     )
 
 
+@pytest.mark.parametrize("with_previous_tail", [False, True])
+def test_daily_basic_static_preserves_provider_null_without_forward_fill(with_previous_tail: bool) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-09-01", "2026-09-02"]), ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    current = pd.DataFrame(
+        {"db_dv_ratio": [2.0, np.nan], "db_dv_ttm": [3.0, np.nan],
+         "db_turnover_rate_f": [1.0, 4.0]}, index=index, dtype=np.float32,
+    )
+    previous = current.iloc[[0]].copy() if with_previous_tail else pd.DataFrame()
+    if with_previous_tail:
+        previous.index = pd.MultiIndex.from_product(
+            [[pd.Timestamp("2026-08-31")], ["000001.SZ"]], names=index.names,
+        )
+    actual, tail = _static_asof_frame("daily_basic", current, index, previous)
+    pd.testing.assert_frame_equal(actual.loc[:, current.columns], current)
+    assert tail.empty
+
+
 def _static_columns() -> tuple[str, ...]:
     return STATIC_ORDERED_COLUMNS
+
+
+@pytest.mark.parametrize("with_previous_tail", [False, True])
+def test_sector_static_uses_exact_date_facts_not_forward_fill(with_previous_tail: bool) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-03"]), ["000663.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    current = pd.DataFrame({
+        "l2_code_id": np.array([0, 40], dtype=np.int16),
+        "sw2_close": np.array([np.nan, 1200], dtype=np.float32),
+        "sw2_mf_net_amt": np.array([123, np.nan], dtype=np.float32),
+    }, index=index[[0, 2]])
+    previous = current.iloc[[0]].copy() if with_previous_tail else pd.DataFrame()
+    if with_previous_tail:
+        previous.index = pd.MultiIndex.from_product(
+            [[pd.Timestamp("2026-08-31")], ["000663.SZ"]], names=index.names,
+        )
+        previous["sw2_close"] = np.float32(2064.19)
+    actual, tail = _static_asof_frame("sector_data", current, index, previous)
+    pd.testing.assert_frame_equal(actual, current)
+    assert tail.empty
 
 
 def _build_spec(source: Path, staging: Path) -> FactorMaterializationSpec:

@@ -1,0 +1,544 @@
+{
+  "prepared_at_cst": "2026-10-18",
+  "method": "readonly API catalog, Prediction Store pointers, parsed final YAML, Parquet footer only and pickle opcode metadata (no model deserialization)",
+  "archive_status": {
+    "qe_20261014_105052_14f2": {
+      "archive_status": "fully_archived",
+      "loop_count": 6,
+      "archived_loop_count": 6,
+      "eligible_loop_count": 6,
+      "pending_loop_count": 0,
+      "recommended_loop_count": 0,
+      "manual_only_loop_count": 0,
+      "not_recommended_loop_count": 0,
+      "run_ids": [
+        "qear_run_33d7bb01772eda87a63e3ce2",
+        "qear_run_371b12c06b4909f048853c21",
+        "qear_run_76fab65dfdfad47b33a2948e",
+        "qear_run_a8450a8baa4a0f93cfb4ade4",
+        "qear_run_be2c9095a8898e02a304be78",
+        "qear_run_c3a59505b2cf0468b71d1aa8"
+      ]
+    },
+    "qe_20261015_100601_fd78": {
+      "archive_status": "fully_archived",
+      "loop_count": 9,
+      "archived_loop_count": 9,
+      "eligible_loop_count": 9,
+      "pending_loop_count": 0,
+      "recommended_loop_count": 0,
+      "manual_only_loop_count": 0,
+      "not_recommended_loop_count": 0,
+      "run_ids": [
+        "qear_run_01b86e71e4b92a9b5a5c7236",
+        "qear_run_1c0e67c59261f4b2671d8368",
+        "qear_run_38fad393426c147142d0e05b",
+        "qear_run_582b210680756fdccf1527ea",
+        "qear_run_6c622063c866b7177aa0997a",
+        "qear_run_6eec42f51a8fc3834cfdfa36",
+        "qear_run_c3196ceca2842b558652beb4",
+        "qear_run_e0992d233c2151e2eacd89ec",
+        "qear_run_eb2c9a663fff539dd3d15b59"
+      ]
+    }
+  },
+  "active_observation": {
+    "mode": "active_profile",
+    "generation": "20261015-v18-unified-quote1",
+    "release_id": "qe_hmm_full_v2_20260831",
+    "cutoff": "2026-08-31",
+    "defaults": {
+      "train_start": "2018-08-01",
+      "train_end": "2022-12-30",
+      "valid_start": "2023-01-03",
+      "valid_end": "2024-06-28",
+      "test_start": "2024-07-01",
+      "test_end": "2026-08-31",
+      "backtest_end": "2026-08-28"
+    },
+    "signal_end": "2026-08-31",
+    "default_universe": {
+      "mode": "stock_universe",
+      "pool_ids": []
+    },
+    "available_nodes": [
+      "rdagent-node1",
+      "wsl2-5080"
+    ],
+    "universes": [
+      {
+        "pool_id": "csi1000",
+        "label": "中证1000",
+        "available_start": "2018-08-01",
+        "available_end": "2026-08-31",
+        "gap_count": 0
+      },
+      {
+        "pool_id": "csi300",
+        "label": "沪深300",
+        "available_start": "2018-08-01",
+        "available_end": "2026-08-31",
+        "gap_count": 0
+      },
+      {
+        "pool_id": "csi500",
+        "label": "中证500",
+        "available_start": "2018-08-01",
+        "available_end": "2026-08-31",
+        "gap_count": 0
+      },
+      {
+        "pool_id": "star100",
+        "label": "科创100",
+        "available_start": "2018-08-01",
+        "available_end": "2026-08-31",
+        "gap_count": 0
+      },
+      {
+        "pool_id": "star50",
+        "label": "科创50",
+        "available_start": "2018-08-01",
+        "available_end": "2026-08-31",
+        "gap_count": 0
+      },
+      {
+        "pool_id": "stock_universe",
+        "label": "全市场股票池",
+        "available_start": "2018-08-01",
+        "available_end": "2026-08-31",
+        "gap_count": 0
+      }
+    ]
+  },
+  "assets": [
+    {
+      "task_id": "qe_20261014_105052_14f2",
+      "loop_index": 1,
+      "recorder": {
+        "schema_version": 1,
+        "recorder_id": "a844b3e25309487db67f7de1ddb579ea",
+        "experiment_name": "workflow",
+        "experiment_id": "860402431792603449",
+        "mode": "full",
+        "runner": "qrun_limit_minute.py",
+        "cwd": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop1",
+        "mlflow_tracking_uri": "file:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop1/mlruns",
+        "target_mlruns_realpath": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop1/mlruns",
+        "written_at": "2026-10-14T04:12:48.403279+00:00"
+      },
+      "catalog_completeness": "complete",
+      "assets": {
+        "dataset": {
+          "relative_path": "mlruns/860402431792603449/a844b3e25309487db67f7de1ddb579ea/artifacts/dataset",
+          "size_bytes": 2665
+        },
+        "params.pkl": {
+          "relative_path": "mlruns/860402431792603449/a844b3e25309487db67f7de1ddb579ea/artifacts/params.pkl",
+          "size_bytes": 857227
+        },
+        "pred.pkl": {
+          "relative_path": "mlruns/860402431792603449/a844b3e25309487db67f7de1ddb579ea/artifacts/pred.pkl",
+          "size_bytes": 31013072
+        },
+        "label.pkl": {
+          "relative_path": "mlruns/860402431792603449/a844b3e25309487db67f7de1ddb579ea/artifacts/label.pkl",
+          "size_bytes": 20701617
+        },
+        "portfolio_analysis/report_normal_1day.pkl": {
+          "relative_path": "mlruns/860402431792603449/a844b3e25309487db67f7de1ddb579ea/artifacts/portfolio_analysis/report_normal_1day.pkl",
+          "size_bytes": 41588
+        }
+      },
+      "panel": {
+        "rows": 7969366,
+        "columns": [
+          "('feature', 'FundamentalEpsIndustryMomentum')",
+          "('feature', 'IndustryMomentumExcessReturnCross')",
+          "('feature', 'Industry_Momentum')",
+          "('feature', 'Large_Cap_Momentum_Bias')",
+          "('feature', 'Price_Deviation_Historical_High')",
+          "('feature', 'RevenueYOY_Momentum')",
+          "('feature', 'cp_winner_rate_momentum')",
+          "('feature', 'elg_flow_high_price_interaction')",
+          "('feature', 'm_drawdown_from_high')",
+          "('feature', 'm_sw2_elg_individual_diverge')",
+          "('feature', 'm_sw2_net_vol_momentum')",
+          "datetime",
+          "instrument"
+        ],
+        "read_method": "HTTP byte ranges, footer only; no matrix loaded"
+      },
+      "fitted_processor_evidence": {
+        "sha256": "5152ae70ebb3dafbb53206fadcbe3eaeaab200abfb6960db5e116ab5f52ab25a",
+        "has_mean_train": true,
+        "has_std_train": true,
+        "purge_dates": [
+          "2022-12-01",
+          "2024-05-29",
+          "2026-07-31"
+        ],
+        "new_inference_tested": false
+      },
+      "pointers": [
+        {
+          "type": "label",
+          "sha256": "82b7c08d17615952d3c0f5e30413165a818abaa4497496c2991be76ae53964df",
+          "size_bytes": 20701617,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L1/label"
+        },
+        {
+          "type": "model_params",
+          "sha256": "013dafdd4c83c0650cc9d9a230d561628f7f707f4cf89ef15d36502bae28b41c",
+          "size_bytes": 857227,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L1/model_params"
+        },
+        {
+          "type": "prediction",
+          "sha256": "6d05be113e3f44a1fc2e353cbc360f6c4222b93f0fb736f0e8ed371e933df7b2",
+          "size_bytes": 31013072,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L1/prediction"
+        }
+      ],
+      "warehouse_run_id": "qear_run_be2c9095a8898e02a304be78"
+    },
+    {
+      "task_id": "qe_20261014_105052_14f2",
+      "loop_index": 3,
+      "recorder": {
+        "schema_version": 1,
+        "recorder_id": "09420bd9cc2b4be381925f5cdcfd888f",
+        "experiment_name": "workflow",
+        "experiment_id": "622359516934461334",
+        "mode": "full",
+        "runner": "qrun_limit_minute.py",
+        "cwd": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop3",
+        "mlflow_tracking_uri": "file:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop3/mlruns",
+        "target_mlruns_realpath": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop3/mlruns",
+        "written_at": "2026-10-14T05:33:52.081886+00:00"
+      },
+      "catalog_completeness": "complete",
+      "assets": {
+        "dataset": {
+          "relative_path": "mlruns/622359516934461334/09420bd9cc2b4be381925f5cdcfd888f/artifacts/dataset",
+          "size_bytes": 2665
+        },
+        "params.pkl": {
+          "relative_path": "mlruns/622359516934461334/09420bd9cc2b4be381925f5cdcfd888f/artifacts/params.pkl",
+          "size_bytes": 885873
+        },
+        "pred.pkl": {
+          "relative_path": "mlruns/622359516934461334/09420bd9cc2b4be381925f5cdcfd888f/artifacts/pred.pkl",
+          "size_bytes": 31013072
+        },
+        "label.pkl": {
+          "relative_path": "mlruns/622359516934461334/09420bd9cc2b4be381925f5cdcfd888f/artifacts/label.pkl",
+          "size_bytes": 20701617
+        },
+        "portfolio_analysis/report_normal_1day.pkl": {
+          "relative_path": "mlruns/622359516934461334/09420bd9cc2b4be381925f5cdcfd888f/artifacts/portfolio_analysis/report_normal_1day.pkl",
+          "size_bytes": 41588
+        }
+      },
+      "panel": {
+        "rows": 7969366,
+        "columns": [
+          "('feature', 'FundamentalEpsIndustryMomentum')",
+          "('feature', 'IndustryMomentumExcessReturnCross')",
+          "('feature', 'Industry_Momentum')",
+          "('feature', 'Large_Cap_Momentum_Bias')",
+          "('feature', 'Price_Deviation_Historical_High')",
+          "('feature', 'RevenueYOY_Momentum')",
+          "('feature', 'cp_winner_rate_momentum')",
+          "('feature', 'elg_flow_high_price_interaction')",
+          "('feature', 'm_drawdown_from_high')",
+          "('feature', 'm_sw2_elg_individual_diverge')",
+          "('feature', 'm_sw2_net_vol_momentum')",
+          "datetime",
+          "instrument"
+        ],
+        "read_method": "HTTP byte ranges, footer only; no matrix loaded"
+      },
+      "fitted_processor_evidence": {
+        "sha256": "5152ae70ebb3dafbb53206fadcbe3eaeaab200abfb6960db5e116ab5f52ab25a",
+        "has_mean_train": true,
+        "has_std_train": true,
+        "purge_dates": [
+          "2022-12-01",
+          "2024-05-29",
+          "2026-07-31"
+        ],
+        "new_inference_tested": false
+      },
+      "pointers": [
+        {
+          "type": "label",
+          "sha256": "82b7c08d17615952d3c0f5e30413165a818abaa4497496c2991be76ae53964df",
+          "size_bytes": 20701617,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L3/label"
+        },
+        {
+          "type": "model_params",
+          "sha256": "0e93e98c8882ca54c656a7bf1d38e4fd2908809172031f308a01505fae435e6e",
+          "size_bytes": 885873,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L3/model_params"
+        },
+        {
+          "type": "prediction",
+          "sha256": "be761bdf764db89cf9b67d4b602b0931bab852cbc2856093af463a5bbd6c5f83",
+          "size_bytes": 31013072,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L3/prediction"
+        }
+      ],
+      "warehouse_run_id": "qear_run_371b12c06b4909f048853c21"
+    },
+    {
+      "task_id": "qe_20261014_105052_14f2",
+      "loop_index": 5,
+      "recorder": {
+        "schema_version": 1,
+        "recorder_id": "3c058e5541f14bf8b99de6bfeb9a186c",
+        "experiment_name": "workflow",
+        "experiment_id": "548571407392660317",
+        "mode": "full",
+        "runner": "qrun_limit_minute.py",
+        "cwd": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop5",
+        "mlflow_tracking_uri": "file:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop5/mlruns",
+        "target_mlruns_realpath": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261014_105052_14f2/Loop5/mlruns",
+        "written_at": "2026-10-14T06:58:18.379481+00:00"
+      },
+      "catalog_completeness": "complete",
+      "assets": {
+        "dataset": {
+          "relative_path": "mlruns/548571407392660317/3c058e5541f14bf8b99de6bfeb9a186c/artifacts/dataset",
+          "size_bytes": 2665
+        },
+        "params.pkl": {
+          "relative_path": "mlruns/548571407392660317/3c058e5541f14bf8b99de6bfeb9a186c/artifacts/params.pkl",
+          "size_bytes": 868623
+        },
+        "pred.pkl": {
+          "relative_path": "mlruns/548571407392660317/3c058e5541f14bf8b99de6bfeb9a186c/artifacts/pred.pkl",
+          "size_bytes": 31013072
+        },
+        "label.pkl": {
+          "relative_path": "mlruns/548571407392660317/3c058e5541f14bf8b99de6bfeb9a186c/artifacts/label.pkl",
+          "size_bytes": 20701617
+        },
+        "portfolio_analysis/report_normal_1day.pkl": {
+          "relative_path": "mlruns/548571407392660317/3c058e5541f14bf8b99de6bfeb9a186c/artifacts/portfolio_analysis/report_normal_1day.pkl",
+          "size_bytes": 41588
+        }
+      },
+      "panel": {
+        "rows": 7969366,
+        "columns": [
+          "('feature', 'FundamentalEpsIndustryMomentum')",
+          "('feature', 'IndustryMomentumExcessReturnCross')",
+          "('feature', 'Industry_Momentum')",
+          "('feature', 'Large_Cap_Momentum_Bias')",
+          "('feature', 'Price_Deviation_Historical_High')",
+          "('feature', 'RevenueYOY_Momentum')",
+          "('feature', 'cp_winner_rate_momentum')",
+          "('feature', 'elg_flow_high_price_interaction')",
+          "('feature', 'm_drawdown_from_high')",
+          "('feature', 'm_sw2_elg_individual_diverge')",
+          "('feature', 'm_sw2_net_vol_momentum')",
+          "datetime",
+          "instrument"
+        ],
+        "read_method": "HTTP byte ranges, footer only; no matrix loaded"
+      },
+      "fitted_processor_evidence": {
+        "sha256": "5152ae70ebb3dafbb53206fadcbe3eaeaab200abfb6960db5e116ab5f52ab25a",
+        "has_mean_train": true,
+        "has_std_train": true,
+        "purge_dates": [
+          "2022-12-01",
+          "2024-05-29",
+          "2026-07-31"
+        ],
+        "new_inference_tested": false
+      },
+      "pointers": [
+        {
+          "type": "label",
+          "sha256": "82b7c08d17615952d3c0f5e30413165a818abaa4497496c2991be76ae53964df",
+          "size_bytes": 20701617,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L5/label"
+        },
+        {
+          "type": "model_params",
+          "sha256": "ec83ca3c1fa964987fbc49ee157f320281fe6cb00e7542f182063cd13792d96b",
+          "size_bytes": 868623,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L5/model_params"
+        },
+        {
+          "type": "prediction",
+          "sha256": "330874ed298627064ffe91e4affeb1586d42e023acec7599885ad9592020c6f3",
+          "size_bytes": 31013072,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261014_105052_14f2_L5/prediction"
+        }
+      ],
+      "warehouse_run_id": "qear_run_a8450a8baa4a0f93cfb4ade4"
+    },
+    {
+      "task_id": "qe_20261015_100601_fd78",
+      "loop_index": 1,
+      "recorder": {
+        "schema_version": 1,
+        "recorder_id": "76aa9fe65b1546388b0819b591a3ecfb",
+        "experiment_name": "workflow",
+        "experiment_id": "316615792075451348",
+        "mode": "pred_backtest",
+        "runner": "qrun_limit_minute.py",
+        "cwd": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop1",
+        "mlflow_tracking_uri": "file:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop1/mlruns",
+        "target_mlruns_realpath": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop1/mlruns",
+        "written_at": "2026-10-15T02:07:30.879570+00:00"
+      },
+      "catalog_completeness": "complete",
+      "assets": {
+        "pred.pkl": {
+          "relative_path": "mlruns/316615792075451348/76aa9fe65b1546388b0819b591a3ecfb/artifacts/pred.pkl",
+          "size_bytes": 31013072
+        },
+        "label.pkl": {
+          "relative_path": "mlruns/316615792075451348/76aa9fe65b1546388b0819b591a3ecfb/artifacts/label.pkl",
+          "size_bytes": 20730752
+        },
+        "portfolio_analysis/report_normal_1day.pkl": {
+          "relative_path": "mlruns/316615792075451348/76aa9fe65b1546388b0819b591a3ecfb/artifacts/portfolio_analysis/report_normal_1day.pkl",
+          "size_bytes": 41588
+        }
+      },
+      "panel": null,
+      "fitted_processor_evidence": null,
+      "pointers": [
+        {
+          "type": "label",
+          "sha256": "5e56abdd6f3dc1d09541bc1fff7461f3587d9ee7e5b64a8631775279711bb819",
+          "size_bytes": 20730752,
+          "rows": 2581509,
+          "uri": "aistock-prediction-store://runs/qe_20261015_100601_fd78_L1/label"
+        },
+        {
+          "type": "prediction",
+          "sha256": "6d05be113e3f44a1fc2e353cbc360f6c4222b93f0fb736f0e8ed371e933df7b2",
+          "size_bytes": 31013072,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261015_100601_fd78_L1/prediction"
+        }
+      ],
+      "warehouse_run_id": "qear_run_1c0e67c59261f4b2671d8368"
+    },
+    {
+      "task_id": "qe_20261015_100601_fd78",
+      "loop_index": 4,
+      "recorder": {
+        "schema_version": 1,
+        "recorder_id": "d96fbbc6eb6d442d8f692c693eac10eb",
+        "experiment_name": "workflow",
+        "experiment_id": "179719255530600272",
+        "mode": "pred_backtest",
+        "runner": "qrun_limit_minute.py",
+        "cwd": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop4",
+        "mlflow_tracking_uri": "file:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop4/mlruns",
+        "target_mlruns_realpath": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop4/mlruns",
+        "written_at": "2026-10-15T02:07:25.096892+00:00"
+      },
+      "catalog_completeness": "complete",
+      "assets": {
+        "pred.pkl": {
+          "relative_path": "mlruns/179719255530600272/d96fbbc6eb6d442d8f692c693eac10eb/artifacts/pred.pkl",
+          "size_bytes": 31013072
+        },
+        "label.pkl": {
+          "relative_path": "mlruns/179719255530600272/d96fbbc6eb6d442d8f692c693eac10eb/artifacts/label.pkl",
+          "size_bytes": 20730752
+        },
+        "portfolio_analysis/report_normal_1day.pkl": {
+          "relative_path": "mlruns/179719255530600272/d96fbbc6eb6d442d8f692c693eac10eb/artifacts/portfolio_analysis/report_normal_1day.pkl",
+          "size_bytes": 41588
+        }
+      },
+      "panel": null,
+      "fitted_processor_evidence": null,
+      "pointers": [
+        {
+          "type": "label",
+          "sha256": "5e56abdd6f3dc1d09541bc1fff7461f3587d9ee7e5b64a8631775279711bb819",
+          "size_bytes": 20730752,
+          "rows": 2581509,
+          "uri": "aistock-prediction-store://runs/qe_20261015_100601_fd78_L4/label"
+        },
+        {
+          "type": "prediction",
+          "sha256": "be761bdf764db89cf9b67d4b602b0931bab852cbc2856093af463a5bbd6c5f83",
+          "size_bytes": 31013072,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261015_100601_fd78_L4/prediction"
+        }
+      ],
+      "warehouse_run_id": "qear_run_01b86e71e4b92a9b5a5c7236"
+    },
+    {
+      "task_id": "qe_20261015_100601_fd78",
+      "loop_index": 7,
+      "recorder": {
+        "schema_version": 1,
+        "recorder_id": "49650666929c4179a86f9242499380c9",
+        "experiment_name": "workflow",
+        "experiment_id": "173213702892709878",
+        "mode": "pred_backtest",
+        "runner": "qrun_limit_minute.py",
+        "cwd": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop7",
+        "mlflow_tracking_uri": "file:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop7/mlruns",
+        "target_mlruns_realpath": "/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20261015_100601_fd78/Loop7/mlruns",
+        "written_at": "2026-10-15T03:35:10.188528+00:00"
+      },
+      "catalog_completeness": "complete",
+      "assets": {
+        "pred.pkl": {
+          "relative_path": "mlruns/173213702892709878/49650666929c4179a86f9242499380c9/artifacts/pred.pkl",
+          "size_bytes": 31013072
+        },
+        "label.pkl": {
+          "relative_path": "mlruns/173213702892709878/49650666929c4179a86f9242499380c9/artifacts/label.pkl",
+          "size_bytes": 20730752
+        },
+        "portfolio_analysis/report_normal_1day.pkl": {
+          "relative_path": "mlruns/173213702892709878/49650666929c4179a86f9242499380c9/artifacts/portfolio_analysis/report_normal_1day.pkl",
+          "size_bytes": 41588
+        }
+      },
+      "panel": null,
+      "fitted_processor_evidence": null,
+      "pointers": [
+        {
+          "type": "label",
+          "sha256": "5e56abdd6f3dc1d09541bc1fff7461f3587d9ee7e5b64a8631775279711bb819",
+          "size_bytes": 20730752,
+          "rows": 2581509,
+          "uri": "aistock-prediction-store://runs/qe_20261015_100601_fd78_L7/label"
+        },
+        {
+          "type": "prediction",
+          "sha256": "330874ed298627064ffe91e4affeb1586d42e023acec7599885ad9592020c6f3",
+          "size_bytes": 31013072,
+          "rows": 2577864,
+          "uri": "aistock-prediction-store://runs/qe_20261015_100601_fd78_L7/prediction"
+        }
+      ],
+      "warehouse_run_id": "qear_run_e0992d233c2151e2eacd89ec"
+    }
+  ],
+  "model_copy_performed": false,
+  "dataset_write_count": 0,
+  "remote_write_count": 0
+}

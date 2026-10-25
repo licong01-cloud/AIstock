@@ -62,7 +62,7 @@ test("renders the 31-sector Risk_L1 UI contract with deterministic CI responses"
     });
   });
 
-  await page.goto("/hmm-risk");
+  await page.goto("/hmm-risk?level=l1");
 
   const risk = page.getByRole("region", { name: "申万一级板块风险预警" });
   await expect(risk).toBeVisible();
@@ -76,7 +76,7 @@ test("renders the 31-sector Risk_L1 UI contract with deterministic CI responses"
 test("renders the real model-bound 31-sector Risk_L1 surface without mocks", async ({ page }) => {
   test.skip(process.env.HMM_RISK_LIVE !== "1", "requires explicit DEV DDL/DML and live backend authorization");
 
-  await page.goto("/hmm-risk");
+  await page.goto("/hmm-risk?level=l1");
   const risk = page.getByRole("region", { name: "申万一级板块风险预警" });
   await expect(risk).toBeVisible();
   await expect(risk.getByRole("region", { name: "31 个申万一级板块风险热力图" })).toBeVisible();

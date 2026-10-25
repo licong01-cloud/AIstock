@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -250,6 +251,55 @@ class ManualFactorService:
                 )
             finally:
                 os.unlink(tmp_path_cleanup)
+
+    def register_candidate(
+        self, factor_name: str, code_text: str, *,
+        description: Optional[str] = None, expression: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Register authorized QE-readable code only; never overwrite or evaluate.
+
+        Availability means consumable code, not strategy acceptance. Existing
+        save/full-pipeline callers retain their original behavior.
+        """
+        if not FACTOR_NAME_PATTERN.fullmatch(factor_name):
+            raise ValueError("Invalid candidate factor name")
+        if not code_text.strip():
+            raise ValueError("Candidate code must not be empty")
+        compile(code_text, f"{factor_name}.py", "exec")  # syntax only; never execute
+        source = "manual"
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor() as cur:
+                # Serialize this entrypoint's same-name retries, including first insert.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (factor_name,))
+                select = """SELECT id, source, code_text, expression, is_available
+                            FROM aistock_factor_catalog WHERE factor_name = %s FOR UPDATE"""
+                cur.execute(select, (factor_name,))
+                rows = cur.fetchall()
+                inserted = False
+                if not rows:
+                    cur.execute("""
+                        INSERT INTO aistock_factor_catalog (
+                            factor_name, source, catalog_version, generated_at_utc,
+                            catalog_source, expression, code_text, description_cn, is_available
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                        ON CONFLICT (factor_name, source) DO NOTHING RETURNING id
+                    """, (factor_name, source, "research_candidate_v1",
+                          datetime.now(timezone.utc).isoformat(), "factor_research",
+                          expression, code_text, description))
+                    inserted = cur.fetchone() is not None
+                    cur.execute(select, (factor_name,))
+                    rows = cur.fetchall()
+                if len(rows) != 1 or rows[0][1:4] != (source, code_text, expression):
+                    raise ValueError("Candidate identity conflict; existing catalog entries not overwritten")
+                catalog_id, _, stored_code, _, available = rows[0]
+        return {
+            "factor_name": factor_name, "source": source, "catalog_id": catalog_id,
+            "source_sha256": hashlib.sha256(stored_code.encode("utf-8")).hexdigest(),
+            "is_available": available is not False,
+            "status": "registered" if inserted else "replayed",
+            "official_metrics_written": False, "classification_written": False,
+            "rating_written": False, "strategy_acceptance": "not_claimed",
+        }
 
     async def save_factor(
         self,

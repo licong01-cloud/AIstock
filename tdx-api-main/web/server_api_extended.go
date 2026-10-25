@@ -147,7 +147,7 @@ func handleGetKlineHistory(w http.ResponseWriter, r *http.Request) {
 			// 限制返回数量
 			if len(resp.List) > int(limit) {
 				resp.List = resp.List[len(resp.List)-int(limit):]
-				resp.Count = limit
+				resp.Count = int(limit)
 			}
 		}
 	case "month":
@@ -158,7 +158,7 @@ func handleGetKlineHistory(w http.ResponseWriter, r *http.Request) {
 			// 限制返回数量
 			if len(resp.List) > int(limit) {
 				resp.List = resp.List[len(resp.List)-int(limit):]
-				resp.Count = limit
+				resp.Count = int(limit)
 			}
 		}
 	case "day":
@@ -169,7 +169,7 @@ func handleGetKlineHistory(w http.ResponseWriter, r *http.Request) {
 		if err == nil && len(resp.List) > int(limit) {
 			// 只返回最近limit条
 			resp.List = resp.List[len(resp.List)-int(limit):]
-			resp.Count = limit
+			resp.Count = int(limit)
 		}
 	}
 
@@ -222,13 +222,13 @@ func handleGetIndex(w http.ResponseWriter, r *http.Request) {
 		resp, err = client.GetIndexWeekAll(code)
 		if resp != nil && len(resp.List) > int(limit) {
 			resp.List = resp.List[:limit]
-			resp.Count = limit
+			resp.Count = int(limit)
 		}
 	case "month":
 		resp, err = client.GetIndexMonthAll(code)
 		if resp != nil && len(resp.List) > int(limit) {
 			resp.List = resp.List[:limit]
-			resp.Count = limit
+			resp.Count = int(limit)
 		}
 	case "day":
 		fallthrough
@@ -715,11 +715,49 @@ func handleGetKlineAllTDX(w http.ResponseWriter, r *http.Request) {
 		klineType = "day"
 	}
 	limit := parsePositiveInt(r.URL.Query().Get("limit"))
+	startParam, endParam := r.URL.Query().Get("start_date"), r.URL.Query().Get("end_date")
+	var start, end time.Time
+	if startParam != "" || endParam != "" {
+		var err error
+		start, err = parseTimeOrDate(startParam)
+		if err != nil {
+			errorResponse(w, "start_date invalid")
+			return
+		}
+		end, err = boundedEnd(endParam, start)
+		if err != nil || end.IsZero() {
+			errorResponse(w, "end_date invalid")
+			return
+		}
+	}
 
-	list, err := fetchStockKlineAllTDX(code, klineType)
+	var list []*protocol.Kline
+	var err error
+	if !start.IsZero() && (klineType == "minute1" || klineType == "day") {
+		typ := uint8(protocol.TypeKlineDay)
+		if klineType == "minute1" {
+			typ = protocol.TypeKlineMinute
+		}
+		var resp *protocol.KlineResp
+		resp, err = client.GetKlineUntil(typ, code, func(k *protocol.Kline) bool { return k.Time.Before(start) })
+		if err == nil {
+			list = resp.List
+		}
+	} else {
+		list, err = fetchStockKlineAllTDX(code, klineType)
+	}
 	if err != nil {
 		errorResponse(w, fmt.Sprintf("获取K线失败: %v", err))
 		return
+	}
+	if !start.IsZero() {
+		filtered := make([]*protocol.Kline, 0, len(list))
+		for _, k := range list {
+			if !k.Time.Before(start) && !k.Time.After(end) {
+				filtered = append(filtered, k)
+			}
+		}
+		list = filtered
 	}
 
 	if limit > 0 && len(list) > limit {
@@ -886,8 +924,10 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "healthy",
-		"time":   fmt.Sprintf("%d", 1730617200),
+		"status":          "healthy",
+		"time":            time.Now().UTC().Format(time.RFC3339),
+		"source_revision": buildRevision,
+		"metadata_ready":  metadataReady.Load(),
 	})
 }
 

@@ -1473,7 +1473,7 @@ def _member_matches_research_program(
     *,
     research_program_id: str,
 ) -> bool:
-    if member.source_role != "hmm_frozen_evidence":
+    if member.source_role not in {"hmm_frozen_evidence", "selection_input_plan"}:
         return True
     parameters = member.bound_parameters or {}
     selector = parameters.get("selector")

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MetricCard from "@/components/trading-console/MetricCard";
 import SectionCard from "@/components/trading-console/SectionCard";
+import IntradayTimingPanel from "./IntradayTimingPanel";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
 
@@ -497,6 +498,8 @@ export default function PositionTimingPage() {
         <MetricCard label="买入方向" value={(actionCounts.OPEN || 0) + (actionCounts.ADD || 0)} hint="OPEN + ADD" tone="success" />
         <MetricCard label="卖出方向" value={(actionCounts.REDUCE || 0) + (actionCounts.EXIT || 0)} hint="REDUCE + EXIT" tone="warning" />
       </div>
+
+      <IntradayTimingPanel apiBase={API_BASE} />
 
       <SectionCard title="盘中到价提醒" eyebrow="one-minute read-only quote polling">
         <p>仅在页面可见且卡片于今日有效时轮询；报价陈旧、未来偏斜或持仓/意图变化都会显式停止弹窗。</p>

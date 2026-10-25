@@ -1,5 +1,69 @@
 import { expect, test } from "@playwright/test";
 
+test("minute advice creates explicit plans, claims once, and shows unavailable input", async ({ page }) => {
+  let plan: Record<string, any> | null = null;
+  let claimed = false;
+  let unavailable = false;
+  let claimCount = 0;
+  let planWrites = 0;
+  let evaluations = 0;
+  const decision = () => ({ decision_id: "d".repeat(64), opportunity_id: "e".repeat(64),
+    as_of: new Date().toISOString(), valid_until: new Date(Date.now() + 90000).toISOString(), data_as_of: new Date().toISOString(),
+    target_fraction_numerator: 1, target_fraction_denominator: 1, target_quantity: null, reason_codes: ["FIRST_OBSERVABLE"] });
+  await page.route("**/api/v1/position-timing/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("/intraday/")) {
+      await route.fulfill({ json: { status: "NO_CARD_SET", items: [], scope_warnings: [], event_counts: {} } });
+      return;
+    }
+    if (url.pathname.includes("/plans/") && route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      expect(body.plan.source_kind).toBe("MANUAL");
+      expect(body.plan.side).toBe("BUY");
+      expect(body.plan.target_quantity).toBeNull();
+      plan = { ...body.plan, plan_id: url.pathname.split("/").pop(), revision: body.expected_revision + 1 };
+      planWrites++;
+      await route.fulfill({ json: { plan } });
+    } else if (url.pathname.endsWith("/evaluations")) {
+      evaluations++;
+      await route.fulfill({ json: { items: [{ plan_id: plan!.plan_id, revision: plan!.revision,
+        status: unavailable ? "UNAVAILABLE" : "OPPORTUNITY", reason_codes: unavailable ? ["MINUTE_STALE"] : ["FIRST_OBSERVABLE"],
+        decision: unavailable ? null : decision(), evaluated_at: new Date().toISOString() }] } });
+    } else if (url.pathname.endsWith("/alerts")) {
+      await route.fulfill({ json: { items: [{ plan, status: unavailable ? "UNAVAILABLE" : "OPPORTUNITY",
+        reason_codes: unavailable ? ["MINUTE_STALE"] : ["FIRST_OBSERVABLE"], decision: unavailable ? null : decision(), already_alerted: claimed }] } });
+    } else if (url.pathname.endsWith("/claim")) {
+      claimCount++; const authorized = !claimed; claimed = true;
+      await route.fulfill({ json: { authorized, already_authorized: !authorized } });
+    } else await route.abort();
+  });
+  await page.goto("/position-timing");
+  const panel = page.getByRole("region", { name: "分钟择时建议" });
+  await panel.getByLabel("分钟计划股票代码").fill("000001.SZ");
+  await panel.getByRole("button", { name: "创建分钟计划" }).click();
+  await expect(panel.getByText(/买入机会/)).toBeVisible();
+  await expect(panel.getByText(/股数未知/)).toBeVisible();
+  await expect(panel.getByText(/尚未确认成交/)).toBeVisible();
+  await panel.getByRole("button", { name: "刷新分钟建议" }).click();
+  await expect(panel.getByRole("button", { name: "刷新分钟建议" })).toBeEnabled();
+  expect(claimCount).toBe(1);
+  unavailable = true;
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const beforeHiddenRefresh = evaluations;
+  await panel.getByRole("button", { name: "刷新分钟建议" }).click();
+  expect(evaluations).toBe(beforeHiddenRefresh);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(panel.getByText("分钟数据陈旧")).toBeVisible();
+  expect(claimCount).toBe(1);
+  expect(planWrites).toBe(1);
+});
+
 const hash = "a".repeat(64);
 
 test("position timing keeps scope explicit and emits only a human reminder", async ({ page }) => {

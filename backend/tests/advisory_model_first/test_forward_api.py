@@ -5,6 +5,59 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.routers import advisory as advisory_router
 
+pytest_plugins = ["backend.tests.advisory_model_first.test_economic_entry_model"]
+
+
+def test_economic_formal_GET_serializes_actual_projection_without_recapturing(tmp_path, study):
+    from backend.tests.advisory_model_first.test_economic_entry_daily_service import _formal_consumer
+    from backend.services.advisory_model_first.entry_price_daily_service import EntryWorkBudget, BoundedEntryReadSession
+    service, loaded, role, pointer, source, observed, _ = _formal_consumer(tmp_path, study)
+    session = BoundedEntryReadSession(EntryWorkBudget())
+    service._capture_formal(role=role, pointer=pointer, loaded=loaded, target=observed["target_date"], budget=session.budget, session=session)
+    app.dependency_overrides[advisory_router.get_advisory_economic_entry_service] = lambda: service
+    def forbidden_legacy():
+        raise AssertionError("economic advice cannot depend on legacy ranking/M4")
+    app.dependency_overrides[advisory_router.get_advisory_model_shadow_service] = forbidden_legacy
+    try:
+        response = TestClient(app).get("/api/v1/advisory/programs/program/entry-value/status",
+            params={"target_trade_date": observed["target_date"].isoformat()})
+        result = response.json()
+        assert response.status_code == 200 and result["status"] == "PUBLISHED" and result["deployable"] is True
+        assert source.calls == 1 and result["advice"][0]["risk_budget"]["configuration_sha256"] == loaded.confirmation_request.business_risk.configuration_sha256
+        assert result["advice"][0]["role_binding_sha256"] == role.role_sha256
+        assert result["advice"][0]["evidence_state"] == "CONFIRMED_ENTRY_VALUE"
+    finally:
+        session.close()
+        app.dependency_overrides.pop(advisory_router.get_advisory_economic_entry_service, None)
+        app.dependency_overrides.pop(advisory_router.get_advisory_model_shadow_service, None)
+
+
+def test_economic_entry_routes_are_read_only_and_do_not_depend_on_legacy_ranking():
+    from backend.services.advisory_model_first.economic_entry_daily_service import AdvisoryEconomicEntryDailyServiceV1
+    calls = []
+    class ReadOnlyResearch(AdvisoryEconomicEntryDailyServiceV1):
+        def read_research(self, **kwargs):
+            calls.append(kwargs)
+            return {"status": "RESEARCH_NAVIGATION", "deployable": False, "advice": []}
+        def run_once(self):
+            raise AssertionError("GET cannot capture")
+    def forbidden_legacy():
+        raise AssertionError("independent economic GET must not resolve ranking/M4")
+    app.dependency_overrides[advisory_router.get_advisory_economic_entry_service] = lambda: ReadOnlyResearch()
+    app.dependency_overrides[advisory_router.get_advisory_model_shadow_service] = forbidden_legacy
+    try:
+        client = TestClient(app)
+        base = "/api/v1/advisory/programs/program/entry-value"
+        status = client.get(f"{base}/status", params={"target_trade_date": "2025-01-29"})
+        assert status.status_code == 200 and status.json()["status"] == "NOT_CONFIGURED" and calls == []
+        research = client.get(f"{base}/research", params={"bundle_id": "adveserve_" + "a" * 24, "target_trade_date": "2025-01-29"})
+        assert research.status_code == 200 and research.json()["deployable"] is False and len(calls) == 1
+        assert client.get(f"{base}/research", params={"bundle_id": "../../foreign", "target_trade_date": "2025-01-29"}).status_code == 422
+        assert len(calls) == 1
+    finally:
+        app.dependency_overrides.pop(advisory_router.get_advisory_economic_entry_service, None)
+        app.dependency_overrides.pop(advisory_router.get_advisory_model_shadow_service, None)
+
 
 def test_entry_v2_is_opt_in_and_available_even_when_ranking_is_unavailable():
     from backend.tests.advisory_model_first.test_entry_price_service import integrated_service

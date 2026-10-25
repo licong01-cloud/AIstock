@@ -18,12 +18,26 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CANDIDATE_SUBPROCESS = Path(__file__).with_name("candidate_subprocess.py")
 
 
+def reuse_path(value):
+    """Resolve an explicitly reviewed value artifact without executing its producer."""
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchError("invalid_request", "values_artifact must be a file path")
+    raw = Path(value).expanduser().absolute()
+    path = raw.resolve()
+    if (raw != path or any(p.is_symlink() for p in (raw, *raw.parents))
+            or not path.is_file() or path.suffix not in {".h5", ".parquet"}):
+        raise ResearchError("input_missing", "Reuse requires a regular, non-redirected H5/Parquet file")
+    if any((parent / ".git").exists() for parent in path.parents):
+        raise ResearchError("invalid_request", "Reuse values must be repository-external")
+    return path
+
+
 def validate_spec(value):
     spec = json_object(value)
     allowed = {"task_id", "record_id", "attempt_id", "expected_revision", "universe_key", "method_version",
                "read_start", "signal_start", "signal_end", "read_end", "cutoff", "instruments",
                "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison",
-               "full_evaluation"}
+               "full_evaluation", "holding_periods"}
     if set(spec) - allowed:
         raise ResearchError("invalid_request", f"Unknown run fields: {sorted(set(spec) - allowed)}")
     for key in ("task_id", "record_id", "attempt_id"):
@@ -34,6 +48,12 @@ def validate_spec(value):
         raise ResearchError("unsupported_authority", "Use the existing canonical v2 read-only source; no PIT bootstrap")
     if not isinstance(spec.get("method_version"), str) or not spec["method_version"]:
         raise ResearchError("invalid_request", "method_version is required")
+    periods = spec.get("holding_periods")
+    if periods is not None:
+        if (not isinstance(periods, list) or not periods
+                or any(type(day) is not int or day not in (1, 5, 10, 20, 40, 60, 120, 240) for day in periods)):
+            raise ResearchError("invalid_request", "holding_periods requires a non-empty list of supported integer days")
+        spec["holding_periods"] = sorted(set(periods))
     try:
         dates = [date.fromisoformat(spec[k]) for k in (
             "read_start", "signal_start", "signal_end", "read_end", "cutoff")]
@@ -66,14 +86,23 @@ def validate_spec(value):
         raise ResearchError("invalid_request", "candidates must be a non-empty list")
     names = []
     for item in candidates:
-        if not isinstance(item, dict) or set(item) != {"factor_name", "script"}:
-            raise ResearchError("invalid_request", "Each candidate requires factor_name and script")
+        if not isinstance(item, dict) or set(item) not in (
+                {"factor_name", "script"}, {"factor_name", "script", "values_artifact", "reuse_basis"}):
+            raise ResearchError("invalid_request", "Candidate requires factor_name/script and optionally values_artifact/reuse_basis together")
         if not isinstance(item["factor_name"], str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,80}", item["factor_name"]):
             raise ResearchError("invalid_request", "Invalid factor name")
         script = Path(item["script"]).expanduser().resolve()
         if not script.is_file():
             raise ResearchError("input_missing", "Candidate script not found")
         item["script"] = str(script)
+        if "values_artifact" in item:
+            if not isinstance(item["reuse_basis"], str) or not item["reuse_basis"].strip():
+                raise ResearchError("invalid_request", "reuse_basis must describe reviewed input/formula compatibility")
+            path = reuse_path(item["values_artifact"])
+            if any(path.is_relative_to(root) for root in (
+                    output, Path(spec["data_dir"]), Path(spec["qlib_bin_path"]))):
+                raise ResearchError("invalid_request", "Reuse values must be outside input data and attempt output")
+            item["values_artifact"] = str(path)
         names.append(item["factor_name"])
     if len(names) != len(set(names)):
         raise ResearchError("invalid_request", "Candidate names must be unique within an attempt")
@@ -83,6 +112,9 @@ def validate_spec(value):
         spec["comparison"] = validate_comparison_spec(
             spec["comparison"], candidate_names=set(names), repo_root=REPO_ROOT,
         )
+        requested = spec.get("holding_periods") or [1, 5, 10, 20]
+        if spec["comparison"]["horizon"] not in {f"{day}d" for day in requested}:
+            raise ResearchError("invalid_comparison", "comparison horizon must be included in run holding_periods")
         comparison_start = min(item["start"] for item in spec["comparison"]["fit_windows"])
         comparison_end = max(item["end"] for item in spec["comparison"]["evaluation_windows"])
         if comparison_start < spec["signal_start"] or comparison_end > spec["signal_end"]:
@@ -172,12 +204,33 @@ def evaluation_context(ctx, spec):
     if selected.empty:
         raise ResearchError("evaluation_empty", "No signal dates available")
     view = dict(ctx)
-    view["label_calendar"] = pd.DatetimeIndex(dates)
+    view["label_calendar"] = pd.DatetimeIndex(ctx.get("label_calendar", dates)).copy()
     for key in ("close_unstacked", "st_pit_eligible_mask"):
         view[key] = ctx[key].loc[selected]
     view["fwd_ret_mats"] = {key: value.loc[selected] for key, value in ctx["fwd_ret_mats"].items()}
     view.update(dates=selected, data_start=str(selected[0].date()), data_end=str(selected[-1].date()))
     return view
+
+
+def prediction_evaluation(metrics, ctx):
+    """Expose the engine's per-horizon evidence, not a holding-path backtest."""
+    calendar = ctx["label_calendar"]
+    return {
+        "scope": "research_prediction_only",
+        "holding_periods": dict(ctx["holding_periods"]),
+        "label_calendar_range": {"start": str(calendar[0].date()), "end": str(calendar[-1].date())},
+        "windows": {
+            name: {key: row[key] for key in ("horizon_metrics", "horizon_support", "common_horizon_support")
+                   if key in row}
+            for name, row in metrics["metrics"].items()
+        },
+        "reports": metrics.get("reports", []),
+        "interpretation": {
+            "sample_policy": "independent_per_horizon_common_support_is_descriptive_only",
+            "legacy_top_metrics": "1d_group_statistics_not_requested_horizon_portfolio_results",
+            "long_horizon_portfolio_returns_and_sharpe": "not_computed",
+        },
+    }
 
 
 def execute(spec, output, *, prepare=None, compute=None):
@@ -204,19 +257,22 @@ def execute(spec, output, *, prepare=None, compute=None):
         folder.mkdir()
         script = folder / "factor.py"
         shutil.copyfile(candidate["script"], script)
-        result_path = folder / "values.h5"
-        command = [sys.executable, str(CANDIDATE_SUBPROCESS), "--script", str(script),
-                   "--data-dir", spec["data_dir"],
-                   "--output", str(result_path), "--start-date", spec["read_start"],
-                   "--end-date", spec["read_end"], "--instruments-file", str(instruments_path)]
-        # Logs belong only to this attempt; no capture of huge subprocess output in RAM.
-        with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
-                folder / "stderr.log").open("x", encoding="utf-8") as stderr:
-            completed = subprocess.run(command, cwd=folder, stdout=stdout, stderr=stderr,
-                                       timeout=spec["timeout_seconds"], check=False)
-        if completed.returncode:
-            raise ResearchError("candidate_execution_failed", "Reviewed script returned non-zero",
-                                returncode=completed.returncode, artifact=str(folder))
+        if "values_artifact" in candidate:
+            result_path = reuse_path(candidate["values_artifact"])
+        else:
+            result_path = folder / "values.h5"
+            command = [sys.executable, str(CANDIDATE_SUBPROCESS), "--script", str(script),
+                       "--data-dir", spec["data_dir"],
+                       "--output", str(result_path), "--start-date", spec["read_start"],
+                       "--end-date", spec["read_end"], "--instruments-file", str(instruments_path)]
+            # Logs belong only to this attempt; no capture of huge subprocess output in RAM.
+            with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
+                    folder / "stderr.log").open("x", encoding="utf-8") as stderr:
+                completed = subprocess.run(command, cwd=folder, stdout=stdout, stderr=stderr,
+                                           timeout=spec["timeout_seconds"], check=False)
+            if completed.returncode:
+                raise ResearchError("candidate_execution_failed", "Reviewed script returned non-zero",
+                                    returncode=completed.returncode, artifact=str(folder))
         frame = load_values(result_path, name)
         import pandas as pd
         dates = frame.index.get_level_values("datetime")
@@ -224,9 +280,12 @@ def execute(spec, output, *, prepare=None, compute=None):
         if not symbols.issubset(spec["instruments"]) or dates.min() < pd.Timestamp(spec["read_start"]) or dates.max() > pd.Timestamp(spec["read_end"]):
             raise ResearchError("candidate_scope_mismatch", "Candidate contains undeclared symbols or dates")
         if ctx is None:
+            period_kwargs = ({"holding_periods": spec["holding_periods"]}
+                             if spec.get("holding_periods") is not None else {})
             ctx = prepare(qlib_bin_path=Path(spec["qlib_bin_path"]), start_date=spec["read_start"],
                           end_date=spec["read_end"], instrument_hint=set(spec["instruments"]),
-                          load_suspend_d=True, load_st_pit_mask=True, universe_key=spec["universe_key"])
+                          load_suspend_d=True, load_st_pit_mask=True, universe_key=spec["universe_key"],
+                          **period_kwargs)
             ctx = evaluation_context(ctx, spec)
         selected = frame.loc[(dates >= pd.Timestamp(spec["signal_start"])) &
                              (dates <= pd.Timestamp(spec["signal_end"]))]
@@ -247,7 +306,8 @@ def execute(spec, output, *, prepare=None, compute=None):
                 compute=compute,
             )
         else:
-            raw_metrics = compute(name, selected, ctx)
+            metric_kwargs = {"include_horizon_metrics": True} if spec.get("holding_periods") is not None else {}
+            raw_metrics = compute(name, selected, ctx, **metric_kwargs)
         metrics, nonfinite_count = _normalize_computed_metrics(raw_metrics)
         result = {"factor_name": name, "scope": "research_candidate", "metrics": metrics,
                   "rows": len(frame), "nan_rows": int(frame[name].isna().sum()),
@@ -258,6 +318,10 @@ def execute(spec, output, *, prepare=None, compute=None):
                       "nonfinite_values_as_null": nonfinite_count,
                       "policy": "ieee_nonfinite_to_json_null_no_zero_fill_or_row_removal",
                   }}
+        if spec.get("holding_periods") is not None:
+            result["prediction_evaluation"] = prediction_evaluation(metrics, ctx)
+        if "values_artifact" in candidate:
+            result.update(values_origin="reused_reviewed_artifact", reuse_basis=candidate["reuse_basis"])
         if spec.get("full_evaluation") is not None:
             finite = selected.loc[selected[name].notna()]
             result["actual_factor_value_range"] = (

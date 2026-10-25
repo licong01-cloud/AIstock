@@ -81,6 +81,27 @@ def test_minute_execution_twap_fills_order() -> None:
     assert len(events) == 3
 
 
+@pytest.mark.parametrize("quantity,volume", [(588, 10000), (401, 200), (250, 200), (601, 201)])
+def test_twap_star_buy_keeps_every_child_and_remainder_executable(quantity: int, volume: int) -> None:
+    algo = TWAPAlgo({"split_count": 3})
+    state = algo.init_order("688498.SH", "BUY", quantity)
+    results = []
+    for _ in range(6):
+        result = algo.compute_step(state, {"close": 1784.66, "volume": volume}, {})
+        if result is not None:
+            results.append(result)
+            assert 200 <= result.quantity <= volume
+            assert state.total_quantity - state.executed_quantity == 0 or state.total_quantity - state.executed_quantity >= 200
+    if quantity == 588:
+        assert [result.quantity for result in results] == [388, 200]
+        assert state.is_complete
+    # An indivisible legal tail larger than bar volume must wait, never oversize.
+    if not state.is_complete:
+        result = algo.compute_step(state, {"close": 1784.66, "volume": quantity}, {})
+        assert result is not None
+        assert state.is_complete
+
+
 def test_twap_residual_completion_reason_does_not_exceed_planned_denominator() -> None:
     algo = TWAPAlgo({"split_count": 3})
     state = algo.init_order("000001.SZ", "BUY", 600)
@@ -613,6 +634,83 @@ def test_incremental_non_twap_algo_keeps_limit_state_fail_fast() -> None:
         )
 
     assert exc_info.value.context["reason_code"] == "LIMIT_UP_BUY_BLOCKED"
+
+
+@pytest.mark.parametrize("mixed_window", [False, True])
+def test_zero_volume_incremental_twap_advances_without_fabricating_fill(mixed_window: bool) -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=200)
+    state = OrderExecutionState(
+        session_id="psess_zero_volume", run_id="prun_zero_volume", order_id=order.order_id,
+        symbol=order.symbol, trade_date=date(2024, 1, 2), algo_code="TWAP",
+        filled_quantity=0, remaining_quantity=200, status=order.status.value,
+    )
+    zero_bar, next_bar = make_bars(2)
+    zero_bar = zero_bar.model_copy(update={"volume": 0, "amount": 0.0})
+    updated_order, updated_state, fills, events = engine.execute_order_incremental(
+        order=order, execution_state=state,
+        new_bars=[zero_bar, next_bar] if mixed_window else [zero_bar],
+        algo_code="TWAP", algo_config={"split_count": 2},
+    )
+    assert events[0].reason == "ZERO_VOLUME"
+    assert events[0].event_type.value == "NO_FILL"
+    assert events[0].metadata["no_fill_context"]["volume"] == 0
+    assert all(fill.bar_time != zero_bar.bar_time for fill in fills)
+    assert updated_state.algo_state["step"] == (2 if mixed_window else 1)
+    if not mixed_window:
+        assert fills == []
+        assert updated_order == order
+        assert updated_state.last_processed_bar_time == zero_bar.bar_time
+        restored = OrderExecutionState.model_validate_json(updated_state.model_dump_json())
+        updated_order, updated_state, fills, events = engine.execute_order_incremental(
+            order=updated_order, execution_state=restored, new_bars=[next_bar],
+            algo_code="TWAP", algo_config={"split_count": 2},
+        )
+    assert updated_order.status == OrderStatus.FILLED
+    assert updated_state.last_processed_bar_time == next_bar.bar_time
+    assert sum(fill.quantity for fill in fills) == 200
+    with pytest.raises(DataUnavailableError, match="strictly after"):
+        engine.execute_order_incremental(
+            order=order, execution_state=updated_state, new_bars=[zero_bar],
+            algo_code="TWAP", algo_config={"split_count": 2},
+        )
+
+
+@pytest.mark.parametrize("bad_update", [
+    {"limit_up": None}, {"high": 12.0}, {"close": float("nan")}, {"limit_up": float("nan")},
+])
+def test_zero_volume_incremental_twap_keeps_bad_market_inputs_fail_closed(bad_update: dict) -> None:
+    order = make_order(quantity=200)
+    state = OrderExecutionState(
+        session_id="psess_zero_invalid", run_id="prun_zero_invalid", order_id=order.order_id,
+        symbol=order.symbol, trade_date=date(2024, 1, 2), algo_code="TWAP",
+        filled_quantity=0, remaining_quantity=200, status=order.status.value,
+    )
+    bar = make_bars(1)[0].model_copy(update={"volume": 0, **bad_update})
+    with pytest.raises(DataUnavailableError):
+        MinuteExecutionEngine().execute_order_incremental(
+            order=order, execution_state=state, new_bars=[bar],
+            algo_code="TWAP", algo_config={"split_count": 2},
+        )
+
+
+def test_closed_day_twap_zero_volume_keeps_missing_executable_data_failure() -> None:
+    with pytest.raises(DataUnavailableError, match="no executable volume"):
+        MinuteExecutionEngine().execute_order(
+            order=make_order(), minute_bars=make_bars(3, volume=0), algo_code="TWAP",
+        )
+
+
+def test_risk_zero_volume_market_data_validation_does_not_grant_execution() -> None:
+    from backend.services.trading_core.risk import RiskEngine
+
+    engine = RiskEngine()
+    order = make_order()
+    bars = make_bars(volume=0)
+    limit = engine.validate_order_market_data(order=order, minute_bars=bars)
+    assert limit.up_limit == 11.0
+    with pytest.raises(RiskRuleError, match="no executable minute bars"):
+        engine.validate_order_execution_context(order=order, minute_bars=bars)
 
 
 def test_incremental_twap_caps_each_step_to_authoritative_minute_volume_and_carries_residual() -> None:

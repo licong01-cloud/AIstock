@@ -2,6 +2,8 @@ package extend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	_ "github.com/glebarez/go-sqlite"
 	"github.com/injoyai/base/chans"
 	"github.com/injoyai/logs"
@@ -112,19 +114,32 @@ func (this *PullKline) Run(ctx context.Context, m *tdx.Manage) error {
 	if len(codes) == 0 {
 		codes = m.Codes.GetStocks()
 	}
+	errCh := make(chan error, len(codes))
 
+enqueue:
 	for _, v := range codes {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			break enqueue
 		default:
 		}
 
 		limit.Add()
 		go func(code string) {
 			defer limit.Done()
+			var err error
+			defer func() {
+				if v := recover(); v != nil {
+					err = fmt.Errorf("pull kline panic: %v", v)
+				}
+				if err != nil {
+					errCh <- err
+				}
+			}()
 
-			_ = os.MkdirAll(this.Config.Dir, 0777)
+			if err = os.MkdirAll(this.Config.Dir, 0777); err != nil {
+				return
+			}
 
 			//连接数据库
 			db, err := xorm.NewEngine("sqlite", filepath.Join(this.Config.Dir, code+".db"))
@@ -143,11 +158,14 @@ func (this *PullKline) Run(ctx context.Context, m *tdx.Manage) error {
 
 				select {
 				case <-ctx.Done():
+					err = ctx.Err()
 					return
 				default:
 				}
 
-				logs.PrintErr(db.Sync2(table))
+				if err = db.Sync2(table); err != nil {
+					return
+				}
 
 				//2. 获取最后一条数据
 				last := new(Kline)
@@ -182,13 +200,24 @@ func (this *PullKline) Run(ctx context.Context, m *tdx.Manage) error {
 					return nil
 				})
 				logs.PrintErr(err)
+				if err != nil {
+					return
+				}
 
 			}
 
 		}(v)
 	}
 	limit.Wait()
-	return nil
+	close(errCh)
+	failures := []error{}
+	for err := range errCh {
+		failures = append(failures, err)
+	}
+	if ctx.Err() != nil {
+		failures = append(failures, ctx.Err())
+	}
+	return errors.Join(failures...)
 }
 
 func (this *PullKline) pull(code string, lastDate int64, f func(code string, f func(k *protocol.Kline) bool) (*protocol.KlineResp, error)) (Klines, error) {

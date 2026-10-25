@@ -1,0 +1,351 @@
+{
+  "actual": "Replay has prediction artifacts but no model_params by design; original trained weights exist.",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/qe_source_resolver.py",
+    "backend/services/strategy_package/package_asset_freeze.py",
+    "backend/tests/strategy_package/test_qe_source_resolver.py",
+    "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py",
+    "tests/aistock_validation/bugs/20261007_BUG-1792-qe-prediction-replay.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1792",
+  "closed_at": "2026-10-08T02:09:09.480077Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-07T19:21:55.761130Z",
+  "description": "Replay has prediction artifacts but no model_params by design; original trained weights exist.",
+  "events": [
+    {
+      "action": "design_compliance_review_two_rounds",
+      "actor": "codex",
+      "note": "完整实现原训练模型/代码/预处理器追溯；保留回放业绩与测试窗口；已知模型/因子顺序/seed/训练窗不匹配显式报错；无重训、无额外审批/环境锁；31项真实资产装配及同一物理权重验证通过。"
+    },
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261007-e4c2a5b65bcb",
+      "timestamp": "2026-10-07T19:21:55.761113Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Replay package resolves original trained model assets while preserving replay performance and exact seed/factor identity.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py",
+      "backend/tests/strategy_package/test_qe_source_resolver.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1792-qe-prediction-replay.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py",
+      "backend/tests/strategy_package/test_qe_source_resolver.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1792-qe-prediction-replay.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/qe_source_resolver.py",
+        "backend/services/strategy_package/package_asset_freeze.py",
+        "backend/tests/strategy_package/test_qe_source_resolver.py",
+        "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/qe_source_resolver.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/package_asset_freeze.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_qe_source_resolver.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/qe_source_resolver.py",
+        "backend/services/strategy_package/package_asset_freeze.py",
+        "backend/tests/strategy_package/test_qe_source_resolver.py",
+        "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/tests/strategy_package/test_qe_source_resolver.py",
+      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/tests/strategy_package/test_qe_source_resolver.py",
+      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py"
+    ]
+  },
+  "first_seen_at": "2026-10-07T19:21:55.761130Z",
+  "fix_branch": null,
+  "fix_commit": "806fa290307e9f7f74de9bfdd968f4f7a8afbbc1",
+  "fixed_at": "2026-10-07T20:22:33Z",
+  "github_issue_number": 5686,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5686",
+  "last_seen_at": "2026-10-07T19:21:55.761130Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5699",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261007_141342_0221?detail=summary",
+    "fresh_process_evidence": [
+      "Final combined source with BUG-1788: read-only real LSTM replay full dry-freeze assembled 31 assets; central CAS to package assets to runtime params os.path.samefile=true; WSL CPU fresh-process model probe passed, input_features=46, fitted_preprocessor_count=2; temporary verification files only, no package registration, training or DB writes",
+      "Isolated Python loaded real replay qe_20261007_141342_0221_L4 metadata and original fit qe_20261006_013449_0c29_L1 seed42; central weight sha=d8a9928ff1ddf84d7a1b8362763eef5d4741e91635ea17e1a204b2befc165022 bytes=698716; original fitted dataset bytes=46115, model.py bytes=932 from WSL Loop1; no training, service control or database writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1792/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1792",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_success",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5def821da2b2f9bf12f92e9a9b16b00492e8646643bf191fe7755d6539d4a9c1",
+      "contract_digest": "2c13fc99404337244b0734f6248f907da439682473ff4efbf3bb3c3ca57a3931",
+      "expected_identity": "806fa290307e9f7f74de9bfdd968f4f7a8afbbc1",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-08T02:09:06.574847Z",
+      "mode": "read_only",
+      "observed_identity": "d14501365257c39b425d40fe397149d387ad546e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ca4e106f3d8e1d15d2a852b97160e397518fc05e0e88c9d090df852346c8538a",
+      "receipt_sha256": "1031293d5154d61b83b3beb68b83a7e494965e3c6781e6df90a5c1d1f4666c56",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c9adb2858a2cee1c3c5459a79c7910f17a33ece96f20038b28890b673d944301",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1792",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "379912be5d726a5c",
+    "recorded_at": "2026-10-07T20:23:08.093690Z",
+    "runtime_contract_digest": "2c13fc99404337244b0734f6248f907da439682473ff4efbf3bb3c3ca57a3931",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7796e7a705be8a5b429477a80103544f21f66aae",
+    "source_merge_commit": "806fa290307e9f7f74de9bfdd968f4f7a8afbbc1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5699",
+    "validation_evidence": [
+      "validation-receipt: id=def4fb1571644ae3 commit=7796e7a705be8a5b429477a80103544f21f66aae kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 5 explicit changed files, blocking=0`",
+      "validation-receipt: id=0f48c19df0a194f1 commit=7796e7a705be8a5b429477a80103544f21f66aae kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_qe_source_resolver.py backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py` result=`passed, 28 related tests; final HEAD direct contracts 6 passed; full real LSTM dry-freeze and CPU fresh probe passed`"
+    ],
+    "validation_evidence_digest": "c6a8b3a13cff272193dd9996a26047f46db96a6363ee0688296636e2a92adfa8"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "QE prediction-replay入包丢失原训练模型与预处理器来源",
+  "trigger_condition": {
+    "fingerprint": "e4c2a5b65bcb5d405af5586c",
+    "source_event_id": "FE-20261007-e4c2a5b65bcb"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=def4fb1571644ae3 commit=7796e7a705be8a5b429477a80103544f21f66aae kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 5 explicit changed files, blocking=0`",
+    "validation-receipt: id=0f48c19df0a194f1 commit=7796e7a705be8a5b429477a80103544f21f66aae kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_qe_source_resolver.py backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py` result=`passed, 28 related tests; final HEAD direct contracts 6 passed; full real LSTM dry-freeze and CPU fresh probe passed`",
+    "post-restart-verify --bug-id BUG-1792 --target backend-main -> verified health identity business probes; runtime_identity_match=true"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

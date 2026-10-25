@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import date, timedelta
 
@@ -154,6 +155,103 @@ def test_stock_fact_aggregation_is_weighted_recomputed_and_records_missing_evide
         subject.aggregate_l1_day(rows)
     assert exc_info.value.l1_code == "L1-00"
     assert exc_info.value.weight_coverage == 0.0
+
+
+@pytest.mark.parametrize("formal", [False, True])
+@pytest.mark.parametrize(
+    ("status", "reason", "source_date"),
+    [
+        ("source_unavailable", "hmm_risk_stock_fact_circ_mv_source_unavailable", None),
+        (
+            "latest_value_non_finite",
+            "hmm_risk_stock_fact_circ_mv_latest_value_non_finite",
+            date(2021, 8, 9),
+        ),
+        (
+            "latest_value_non_positive",
+            "hmm_risk_stock_fact_circ_mv_latest_value_non_positive",
+            date(2021, 8, 9),
+        ),
+    ],
+)
+def test_missing_causal_cap_preserves_authoritative_cause_and_lineage(
+    formal: bool, status: str, reason: str, source_date: date | None
+) -> None:
+    rows = [_stock_row(index) for index in range(10)]
+    lineage = {
+        "circ_mv_fact_status": status,
+        "circ_mv_reason_code": reason,
+        "circ_mv_source_date": source_date,
+        "circ_mv_staleness_trading_days": 1 if source_date else None,
+        "circ_mv_history_start": date(2020, 7, 30),
+        "circ_mv_pit_eligible_start": date(2021, 8, 10),
+        "circ_mv_crossed_pit_entry_boundary": source_date is not None,
+        "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+    }
+    for row in rows:
+        row["trade_date"] = date(2021, 8, 10)
+    rows[0].update(symbol="000792.SZ", prev_circ_mv_cny=None, **lineage)
+    kwargs = {"moneyflow_contributor_eligibility": {row["symbol"]: True for row in rows}} if formal else {}
+
+    with pytest.raises(subject.ObservationCoverageError) as exc_info:
+        subject.aggregate_l1_day(rows, **kwargs)
+
+    failure = exc_info.value
+    assert failure.count_coverage == pytest.approx(0.9)
+    assert failure.weight_coverage == 0.0
+    expected_lineage = {key: value.isoformat() if isinstance(value, date) else value for key, value in lineage.items()}
+    assert failure.missing_evidence == ({"symbol": "000792.SZ", "fields": ["prev_circ_mv_cny"], **expected_lineage},)
+    if formal:
+        assert failure.reason_code == "hmm_risk_c010_price_domain_weight_denominator_invalid"
+    # No stock is dropped or assigned a fabricated weight; a later real fact recovers normally.
+    assert len(rows) == 10
+    assert rows[0]["prev_circ_mv_cny"] is None
+    recovered = [{**row, "trade_date": date(2021, 8, 11)} for row in rows]
+    recovered[0].update(
+        prev_circ_mv_cny=100_000.0,
+        circ_mv_fact_status="available",
+        circ_mv_reason_code=None,
+        circ_mv_source_date=date(2021, 8, 10),
+    )
+    aggregate = subject.aggregate_l1_day(recovered, **kwargs)
+    assert aggregate.count_coverage == 1.0
+    assert aggregate.weight_coverage == 1.0
+    assert aggregate.l1_return == pytest.approx(0.01)
+    assert aggregate.missing_evidence == ()
+
+
+def test_missing_causal_cap_does_not_invent_lineage_for_legacy_rows() -> None:
+    row = _stock_row(0)
+    row["prev_circ_mv_cny"] = None
+    with pytest.raises(subject.ObservationCoverageError) as exc_info:
+        subject.aggregate_l1_day([row])
+    assert exc_info.value.missing_evidence == (
+        {
+            "symbol": row["symbol"],
+            "fields": ["prev_circ_mv_cny"],
+            "circ_mv_source_date": None,
+            "circ_mv_staleness_trading_days": None,
+        },
+    )
+
+
+def test_missing_causal_cap_receipt_is_json_serializable_without_a_permissive_default() -> None:
+    row = _stock_row(0)
+    row.update(
+        prev_circ_mv_cny=None,
+        circ_mv_source_date=date(2021, 8, 9),
+        circ_mv_history_start=date(2020, 7, 30),
+        circ_mv_pit_eligible_start=date(2021, 8, 10),
+        circ_mv_fact_status="latest_value_non_finite",
+        circ_mv_reason_code="hmm_risk_stock_fact_circ_mv_latest_value_non_finite",
+    )
+    with pytest.raises(subject.ObservationCoverageError) as exc_info:
+        subject.aggregate_l1_day([row])
+    readback = json.loads(json.dumps(exc_info.value.missing_evidence, allow_nan=False))[0]
+    assert readback["circ_mv_source_date"] == "2021-08-09"
+    assert readback["circ_mv_history_start"] == "2020-07-30"
+    assert readback["circ_mv_pit_eligible_start"] == "2021-08-10"
+    assert readback["circ_mv_reason_code"] == row["circ_mv_reason_code"]
 
 
 def test_feature_domain_aggregation_excludes_only_moneyflow_contribution() -> None:
@@ -347,6 +445,7 @@ def test_feature_panel_recomputes_all_20_features() -> None:
     assert "diagnostic_only" not in definition
     assert "cross_section_contract" not in definition
     assert "moneyflow_denominator_by_feature" not in definition
+
 
 def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> None:
     calendar = [item.date() for item in pd.bdate_range("2023-01-02", periods=25)]

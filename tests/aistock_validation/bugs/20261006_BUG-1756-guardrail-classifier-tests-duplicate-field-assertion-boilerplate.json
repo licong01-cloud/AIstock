@@ -1,0 +1,254 @@
+{
+  "actual": "Guardrails有效测试3852行/生产5709行，67.47%；最大分类器测试1929有效行存在大量同形断言样板。",
+  "allowed_write_scope": [
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1756",
+  "closed_at": "2026-10-06T12:11:53Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-06T12:03:24.355482Z",
+  "description": "Guardrails有效测试3852行/生产5709行，67.47%；最大分类器测试1929有效行存在大量同形断言样板。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261006-8e96a5057db0",
+      "timestamp": "2026-10-06T12:03:24.355482Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "等价去重字段断言，所有原场景与安全合同保留；真实统计行数，不伪报30%达标或运行时加速。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "validation.workflow_automation",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "validation.workflow_automation",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "ci_change_classifier_test_owner"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ]
+  },
+  "first_seen_at": "2026-10-06T12:03:24.355482Z",
+  "fix_branch": null,
+  "fix_commit": "d8ff5ba51ebd9b4c341de703fcbe504d06944e8b",
+  "fixed_at": "2026-10-06T12:11:53Z",
+  "github_issue_number": 5570,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5570",
+  "last_seen_at": "2026-10-06T12:03:24.355482Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5572",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P3",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1756",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "182709df73a4dc3f",
+    "recorded_at": "2026-10-06T12:12:51.461416Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d99e02f3113a612077268f8894e2ecbeff22a608",
+    "source_merge_commit": "d8ff5ba51ebd9b4c341de703fcbe504d06944e8b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5572",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1756-final -> 100 passed",
+      "python -m nox -s guardrail_changed_files -> passed, files=1 findings=0 blocking=0 ownership=1/1"
+    ],
+    "validation_evidence_digest": "886f44154a588d5ed16edb526c71838182fcc8325b0c211ba5424a24adc17483"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Guardrail classifier tests duplicate field assertion boilerplate",
+  "trigger_condition": {
+    "fingerprint": "8e96a5057db09eca6386641a",
+    "source_event_id": "FE-20261006-8e96a5057db0"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1756-final -> 100 passed",
+    "python -m nox -s guardrail_changed_files -> passed, files=1 findings=0 blocking=0 ownership=1/1"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

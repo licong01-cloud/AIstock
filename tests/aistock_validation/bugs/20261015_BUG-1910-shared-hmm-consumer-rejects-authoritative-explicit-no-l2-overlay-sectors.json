@@ -1,0 +1,436 @@
+{
+  "actual": "HMM coefficient artifact has stock sector mapping without coefficients for authoritative quote-unavailable sectors on as_of 2026-10-14, effective 2026-10-15.",
+  "allowed_write_scope": [
+    "backend/services/selection_center/hmm_runtime.py",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/strategy_package/selection_signal_preparation.py",
+    "backend/tests/selection_center/test_hmm_runtime.py",
+    "backend/tests/strategy_package/test_selection_signal_preparation.py",
+    "backend/tests/advisory_historical_range/test_r2b_hmm_binding.py",
+    "backend/services/selection_center/hmm_overlay_contract.py",
+    "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md",
+    "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1910",
+  "closed_at": "2026-10-15T15:40:57.538743Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-15T03:30:25.564299Z",
+  "description": "HMM coefficient artifact has stock sector mapping without coefficients for authoritative quote-unavailable sectors on as_of 2026-10-14, effective 2026-10-15.",
+  "design_compliance_001": [
+    "1 PASS：完整交付共享消费修复，不以简化、占位或 mock-only 宣称完成；真实登记日度资产两端 fresh-process 只读 smoke 通过。",
+    "2 PASS：未声明缺系数、伪造声明、无映射、非有限系数、authority/hash/日期错配均失败；不吞异常、不造默认系数、不返回空结果冒充成功。",
+    "3 PASS：唯一业务合同调整为已授权的显式 no-overlay 处理；正常调分排序、原股票池与两端独立时钟不变，合同文档同步。",
+    "4 PASS：不新增审批/数据门禁/调度器，保留已授权的历史生成入口；本任务只读消费及 LocalSIM 继续禁止消费时生成。"
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261015-4a8344b1cfbe",
+      "timestamp": "2026-10-15T03:30:25.564283Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Validated no-overlay sectors preserve raw scores with explicit reasons; normal sectors retain existing adjustment/ranking; preflight and execution share validation; official read-only asset consumption never generates coefficients.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/selection_center/hmm_overlay_contract.py",
+      "backend/services/selection_center/hmm_runtime.py",
+      "backend/tests/selection_center/test_hmm_runtime.py",
+      "backend/tests/strategy_package/test_selection_signal_preparation.py",
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json"
+    ],
+    "added_files": [
+      "backend/services/selection_center/hmm_overlay_contract.py",
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+    ],
+    "changed_files": [
+      "backend/services/selection_center/hmm_overlay_contract.py",
+      "backend/services/selection_center/hmm_runtime.py",
+      "backend/tests/selection_center/test_hmm_runtime.py",
+      "backend/tests/strategy_package/test_selection_signal_preparation.py",
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/selection_center/hmm_runtime.py",
+        "backend/services/selection_center/runtime_profile.py",
+        "backend/services/strategy_package/selection_signal_preparation.py",
+        "backend/tests/selection_center/test_hmm_runtime.py",
+        "backend/tests/strategy_package/test_selection_signal_preparation.py",
+        "backend/tests/advisory_historical_range/test_r2b_hmm_binding.py",
+        "backend/services/selection_center/hmm_overlay_contract.py",
+        "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+      ],
+      "impacted_modules": [
+        "selection_center",
+        "paper_v2",
+        "strategy_package",
+        "hmm",
+        "qe.single_experiment",
+        "advisory.historical_range",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/selection_center/hmm_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/services/selection_center/runtime_profile.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/services/strategy_package/selection_signal_preparation.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/selection_center/test_hmm_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_selection_signal_preparation.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r2b_hmm_binding.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/selection_center/hmm_overlay_contract.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/selection_center/hmm_runtime.py",
+        "backend/services/selection_center/runtime_profile.py",
+        "backend/services/strategy_package/selection_signal_preparation.py",
+        "backend/tests/selection_center/test_hmm_runtime.py",
+        "backend/tests/strategy_package/test_selection_signal_preparation.py",
+        "backend/tests/advisory_historical_range/test_r2b_hmm_binding.py",
+        "backend/services/selection_center/hmm_overlay_contract.py",
+        "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/selection_center/hmm_runtime.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/strategy_package/selection_signal_preparation.py",
+      "backend/tests/selection_center/test_hmm_runtime.py",
+      "backend/tests/strategy_package/test_selection_signal_preparation.py",
+      "backend/tests/advisory_historical_range/test_r2b_hmm_binding.py",
+      "backend/services/selection_center/hmm_overlay_contract.py",
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/selection_center/hmm_runtime.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/strategy_package/selection_signal_preparation.py",
+      "backend/tests/selection_center/test_hmm_runtime.py",
+      "backend/tests/strategy_package/test_selection_signal_preparation.py",
+      "backend/tests/advisory_historical_range/test_r2b_hmm_binding.py",
+      "backend/services/selection_center/hmm_overlay_contract.py",
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+    ]
+  },
+  "first_seen_at": "2026-10-15T03:30:25.564299Z",
+  "fix_branch": null,
+  "fix_commit": "c16db8b8bd2d42928a34d25e38be3d072ce797b8",
+  "fix_summary": "以一个共享日度校验器核验 schema、authority、原生登记 SHA256、模型和日期身份；合法 no-overlay 保留股票与原分数并显式记录未应用及原因。正常调分排序保持不变；未知缺失和身份漂移继续失败。支持原生压缩 membership，系数解析和哈希绑定同一次读取。未修改 LocalSIM、HMM 或数据模块代码。",
+  "fixed_at": "2026-10-15T08:07:06Z",
+  "github_issue_number": 6097,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6097",
+  "last_seen_at": "2026-10-15T03:30:25.564299Z",
+  "module": "selection_center",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6100",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/selection_center/test_hmm_runtime.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "advisory_historical_range_backend"
+  ],
+  "review_rounds": [
+    "第1轮：复现原报错并实现共享 validator；补齐 snapshot-only LocalSIM 对原生登记的只读查询，两端不分别写适配器。",
+    "第2轮：修复原生压缩 membership 读取与区间未来隔离，并把系数哈希绑定解析的同一批字节，消除二次读取身份漂移风险。",
+    "第3轮：逐项复核 fail-closed、正常调分/排序、禁生成、HMM 关闭及模块边界；新声明未知映射不得隐藏为排除，聚焦矩阵63项通过，四项 DESIGN-COMPLIANCE-001 通过。",
+    "第4轮CI反馈：paper_v2_backend 首轮1190通过、1失败，唯一失败为空membership提前拒绝后漏掉既有错误context.symbol；保留相同fail-closed判定并恢复原生候选诊断，失败节点定向复跑1项PASS，不修改模拟盘或放宽校验，重新推送触发CI。"
+  ],
+  "risk_area": "bug",
+  "root_cause": "共享消费者将完整行业 membership 的行业集合强制要求为系数集合子集，没有消费 HMM 原生产物 explicit_no_l2_overlay_v1 的已登记不可用声明；预检和执行又各自实现了不一致的校验。不是行情补数或系数生成问题。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_cc7eccb6202e4816b9d7c7d6b748bd37/selection-artifacts?limit=1&expected_artifact_id=ssa_3006d6c04e724e629007a909fffd2cdb&expected_manifest_sha256=93a7fb7c5c0745c96d2d97376db3c669e527256666ed1e014a710c38799a7dc6&expected_runtime_config_hash=1c3d8089029073f140b36a8c5cb58e2252e5493d6ae2cadb032e14d7d512ebfa&expected_trade_date=2026-10-16&expected_data_source=DB_HISTORICAL",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/smoke_registered_consumers.py F:/Dev/AIstock_worktrees/BUG-1910-shared-hmm-consumer-rejects-authoritative-explic-20261015 9c97a277-9ab3-4373-9b9d-ff4b034dcf01 X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015 -> passed: native persisted daily registration as_of2026-10-14/effective2026-10-15; Advisory and native LocalSIM each retain5918 candidates/membership,124 coefficient sectors,7 no-overlay sectors/29 stocks preserving raw scores,zero exclusions,exact normal adjustment/ranking. Independent diagnostic scores/envelopes, not inference or P&L. BEGIN READ ONLY/ROLLBACK,no generation/tasks/service control; CURRENT_READ_ONLY_DIAGNOSTIC,historical_as_known_verified remains false. Final HEAD and source hashes: X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/registered-consumers-final.json.",
+      "python X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/smoke_registered_consumers.py F:/Dev/AIstock_worktrees/BUG-1910-shared-hmm-consumer-rejects-authoritative-explic-20261015 9c97a277-9ab3-4373-9b9d-ff4b034dcf01 X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015 -> passed: both consumers5918 candidates/124 coefficient sectors/7 no-overlay sectors/29 no-overlay stocks,no generation/read-only"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1910/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1910",
+      "business_smoke_semantic": {
+        "contract_id": "strategy_package_selection_artifact_readback",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "69e92a3fa375bfa137923bc393bf540a199d85cf7a952cbe3eec215c39dc26f4",
+      "expected_identity": "c16db8b8bd2d42928a34d25e38be3d072ce797b8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T15:35:11.016704Z",
+      "mode": "read_only",
+      "observed_identity": "3bf6d0e751305ccc69da38968009036e12de5bd8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "19b5002e108bf8647ca5eb9219b9d62a9966cd2dfcea7c6eca5f6b20521efc0b",
+      "receipt_sha256": "70a7e87c98f8f7572deb59507679944ee878e511ad1e7be7405190a7b4827d39",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7ac4a8e9ada3bce7738006868acfdb7bb812db9a1b34db61a26ba33a6c9e78cd",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1910",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "eb2dcfca00a4ef05",
+    "recorded_at": "2026-10-15T08:07:48.329138Z",
+    "runtime_contract_digest": "0943de531b97450cda24de96ea571c0e7b57132b7380f064231db405a7f7e590",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "088b7398c74214e21e1d1cd6ace187fc02a8076a",
+    "source_merge_commit": "c16db8b8bd2d42928a34d25e38be3d072ce797b8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6100",
+    "validation_evidence": [
+      "validation-receipt: id=b2cd4a2afcee7452 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/selection_center/test_runtime_selection.py::test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference -q --basetemp=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-ci-failed-node -o cache_dir=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-cache` result=`passed: 1 in4.42s; exact failing CI node after diagnostic-context compatibility fix, no broad repeat`",
+      "validation-receipt: id=4ad46800f6e0eeb4 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/hmm_runtime.py backend/services/selection_center/hmm_overlay_contract.py backend/tests/selection_center/test_hmm_runtime.py backend/tests/strategy_package/test_selection_signal_preparation.py docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json` result=`passed: zero findings`",
+      "validation-receipt: id=0a5d1d333f8d0718 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/selection_center/hmm_runtime.py` result=`passed`",
+      "validation-receipt: id=4f0b3ca381db3282 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "34c70e7729d997087b8773f1efb801c91774d0727339354c8dffe163a093778f"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "selection_center"
+  ],
+  "title": "Shared HMM consumer rejects authoritative explicit no-L2 overlay sectors",
+  "trigger_condition": {
+    "fingerprint": "4a8344b1cfbec4672f6f8503",
+    "source_event_id": "FE-20261015-4a8344b1cfbe"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=b2cd4a2afcee7452 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/selection_center/test_runtime_selection.py::test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference -q --basetemp=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-ci-failed-node -o cache_dir=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-cache` result=`passed: 1 in4.42s; exact failing CI node after diagnostic-context compatibility fix, no broad repeat`",
+    "validation-receipt: id=4ad46800f6e0eeb4 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/hmm_runtime.py backend/services/selection_center/hmm_overlay_contract.py backend/tests/selection_center/test_hmm_runtime.py backend/tests/strategy_package/test_selection_signal_preparation.py docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json` result=`passed: zero findings`",
+    "validation-receipt: id=0a5d1d333f8d0718 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/selection_center/hmm_runtime.py` result=`passed`",
+    "validation-receipt: id=4f0b3ca381db3282 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
+    "2026-10-15 user restart: canonical identity and exact native artifact header smoke PASS; fresh-process shared consumer diagnostic PASS at 3bf6d0e751305ccc69da38968009036e12de5bd8; evidence X:/AIstock_temp/ADVISORY/post-restart-1910-1912-20261015/; no production replay/account operations"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "selection_center",
+        "paper_v2",
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "selection_center",
+          "paper_v2",
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -25,6 +25,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeContractError,
     HistoricalRangePlanningArtifactEnvelopeV1,
     HistoricalRangeSourceRevisionRefV1,
+    sealed_json_view,
 )
 
 
@@ -228,6 +229,11 @@ class HistoricalRangeArtifactStore:
                 "planning artifact was loaded through the sealed artifact API",
             )
         return envelope
+
+    def load_readonly(self, ref: HistoricalRangeArtifactRefV1) -> HistoricalRangeArtifactEnvelopeV1:
+        """Internal read path; ordinary load keeps its mutable-copy contract."""
+        envelope = self.load(ref)
+        return envelope.model_copy(update={"payload": sealed_json_view(envelope.payload)})
 
     def load_planning(self, ref: HistoricalRangeArtifactRefV1) -> HistoricalRangePlanningArtifactEnvelopeV1:
         envelope = self._load(ref, planning=True)

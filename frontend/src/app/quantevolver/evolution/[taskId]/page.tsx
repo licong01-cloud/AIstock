@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { QEReadCache } from "../../components/read-cache";
+import { useActiveRefresh, isExecutingTask } from "../../components/use-active-refresh";
 import { ArrowLeft, ChevronDown, ChevronRight, Star } from "lucide-react";
 import dynamic from "next/dynamic";
 import { AllStocksTable } from "../../components/AllStocksTable";
@@ -135,6 +137,9 @@ interface Loop {
   is_sota: boolean;
   action_type?: string;
   config_json?: any;
+  agent_analysis?: any;
+  config_summary?: any;
+  metrics_summary?: any;
   metrics_json?: any;
   experiment_id?: string | null;
   archive_run_id?: string | null;
@@ -142,6 +147,12 @@ interface Loop {
 
 export default function EvolutionDetailPage({ params }: { params: { taskId: string } }) {
   const taskId = params.taskId;
+  const reads = useRef(new QEReadCache());
+  const currentTask = useRef(taskId);
+  currentTask.current = taskId;
+  const expandedRef = useRef(new Set<number>());
+  const loopVersions = useRef<Record<string, string>>({});
+  useEffect(() => () => { reads.current.clear(); }, [taskId]);
 
   const [task, setTask] = useState<any>(null);
   const [loops, setLoops] = useState<Loop[]>([]);
@@ -178,54 +189,80 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
   }, [taskId]);
 
   const fetchEnhancedDirect = useCallback((loopId: string) => {
-    setLoadingLoops(prev => new Set(prev).add(loopId));
-    fetch(`${API}/quantevolver/evolution/tasks/${taskId}/loops/${loopId}/enhanced-metrics`)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(res => {
-        if (res?.status === "success" && res?.data) {
-          setEnhancedCache(prev => ({ ...prev, [loopId]: res.data }));
-        } else {
-          console.warn(`Loop ${loopId} enhanced-metrics 返回异常:`, res?.message);
-          setEnhancedErrors(prev => ({ ...prev, [loopId]: res?.message ?? "数据格式异常" }));
-        }
-      })
-      .catch(e => {
-        console.error(`Loop ${loopId} enhanced-metrics 加载失败:`, e);
-        setEnhancedErrors(prev => ({ ...prev, [loopId]: String(e?.message ?? "加载失败") }));
-      })
-      .finally(() => setLoadingLoops(prev => { const n = new Set(prev); n.delete(loopId); return n; }));
+    const index = Number(loopId.match(/Loop(\d+)$/i)?.[1]);
+    if (!Number.isInteger(index)) { setEnhancedErrors(previous => ({ ...previous, [loopId]: "无效 Loop 标识" })); return; }
+    const version = loopVersions.current[loopId] || "";
+    setLoadingLoops(previous => new Set(previous).add(loopId));
+    const base = `${API}/quantevolver/evolution/tasks/${taskId}/loops/${index}`;
+    Promise.all(["config", "metrics", "analysis"].map(kind =>
+      reads.current.read(`${base}/${kind}`, `${base}/${kind}:${version}`)
+    )).then(([config, metrics, analysis]) => {
+      if (currentTask.current !== taskId || loopVersions.current[loopId] !== version || !expandedRef.current.has(index)) return;
+      const fullMetrics = metrics.data?.metrics_json || {};
+      setLoops(previous => previous.map(loop => loop.loop_id === loopId ? {
+        ...loop, config_json: config.data?.config_json, metrics_json: fullMetrics,
+        agent_analysis: analysis.data?.agent_analysis,
+      } : loop));
+      setEnhancedCache(previous => {
+        const next = { ...previous, [loopId]: fullMetrics.enhanced_metrics || {} };
+        // Only a bounded number of detailed loops stays resident in this page.
+        const keys = Object.keys(next);
+        keys.slice(0, Math.max(0, keys.length - 8)).forEach(key => delete next[key]);
+        return next;
+      });
+      setEnhancedErrors(previous => { const next = { ...previous }; delete next[loopId]; return next; });
+    }).catch(reason => {
+      if (currentTask.current === taskId && reason.name !== "AbortError") {
+        setEnhancedErrors(previous => ({ ...previous, [loopId]: String(reason.message || reason) }));
+      }
+    }).finally(() => {
+      if (currentTask.current === taskId) setLoadingLoops(previous => { const next = new Set(previous); next.delete(loopId); return next; });
+    });
   }, [taskId]);
 
+  const loadSummary = useCallback(async (initial = false) => {
+    const url = `${API}/quantevolver/evolution/tasks/${taskId}/loops/comparison`;
+    const result = await reads.current.read(url, url, false);
+    if (currentTask.current !== taskId) return;
+    if (result.status !== "success" || !result.data) throw new Error("任务摘要响应无效");
+    const nextLoops = (result.data.loops || []).map((loop: any) => ({
+      ...loop, config_json: loop.config_summary || {}, metrics_json: loop.metrics_summary || {},
+    }));
+    nextLoops.forEach((loop: any) => {
+      const version = `${loop.status}:${loop.updated_at || ""}:${loop.experiment_id || ""}`;
+      if (loopVersions.current[loop.loop_id] !== version) {
+        setEnhancedCache(previous => { const next = { ...previous }; delete next[loop.loop_id]; return next; });
+      }
+      loopVersions.current[loop.loop_id] = version;
+    });
+    setTask(result.data.task || result.data);
+    setLoops(nextLoops);
+    if (initial || !isExecutingTask(result.data.task || result.data)) await loadArchiveStatus(nextLoops);
+    setError(null);
+    // Preserve operator expansion; do not automatically mount a SOTA's heavy charts.
+    for (const index of expandedRef.current) {
+      const loop = nextLoops.find((item: Loop) => item.loop_index === index);
+      if (loop) fetchEnhancedDirect(loop.loop_id);
+    }
+  }, [taskId, loadArchiveStatus, fetchEnhancedDirect]);
+
+  const summaryRead = useRef(loadSummary);
+  summaryRead.current = loadSummary;
   useEffect(() => {
-    if (!taskId) return;
-    setLoading(true);
-    fetch(`${API}/quantevolver/evolution/tasks/${taskId}?detail=full`)
-      .then(r => {
-        if (!r.ok) throw new Error(`任务 API 错误: HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(res => {
-        if (res?.status === "success" && res.data) {
-          const nextLoops = res.data.loops ?? [];
-          setTask(res.data.task ?? res.data);
-          setLoops(nextLoops);
-          setSelectedLoopIndices(new Set());
-          void loadArchiveStatus(nextLoops);
-          const sotaLoop = nextLoops.find((l: Loop) => l.is_sota);
-          if (sotaLoop) {
-            setExpandedLoops(new Set([sotaLoop.loop_index]));
-            fetchEnhancedDirect(sotaLoop.loop_id);
-          }
-        } else {
-          setError(res?.message ?? "任务不存在");
-        }
-      })
-      .catch(e => setError(String(e?.message ?? "加载失败，请重试")))
-      .finally(() => setLoading(false));
-  }, [taskId, fetchEnhancedDirect, loadArchiveStatus]);
+    setLoading(true); setTask(null); setLoops([]); setExpandedLoops(new Set());
+    setEnhancedCache({}); setEnhancedErrors({}); setSelectedLoopIndices(new Set());
+    loopVersions.current = {};
+    expandedRef.current = new Set();
+    let cancelled = false;
+    summaryRead.current(true).catch(reason => { if (!cancelled) setError(String(reason)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; reads.current.clear(); };
+  }, [taskId]);
+
+  useActiveRefresh(async () => {
+    try { await summaryRead.current(); }
+    catch (reason) { setError(String(reason)); throw reason; }
+  }, isExecutingTask(task), taskId);
 
   const fetchEnhanced = useCallback((loopId: string) => {
     if (enhancedCache[loopId] || loadingLoops.has(loopId)) return;
@@ -238,9 +275,17 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
     setCandidateActionId(loop.loop_id);
     setCandidateMessage(null);
     try {
-      const config = loop.config_json || {};
-      const metrics = loop.metrics_json || {};
-      const enhanced = enhancedCache[loop.loop_id];
+      const base = `${API}/quantevolver/evolution/tasks/${taskId}/loops/${loop.loop_index}`;
+      // Explicit promotion loads the full snapshot even if the panel was never expanded.
+      const [payload, metricPayload, analysisPayload] = await Promise.all([
+        reads.current.read(`${base}/config`, `${base}/config`, false),
+        reads.current.read(`${base}/metrics`, `${base}/metrics`, false),
+        reads.current.read(`${base}/analysis`, `${base}/analysis`, false),
+      ]);
+      const config = payload.data?.config_json || {};
+      const metrics = metricPayload.data?.metrics_json || {};
+      const enhanced = metrics.enhanced_metrics;
+      const completeLoop = { ...loop, config_json: config, metrics_json: metrics, agent_analysis: analysisPayload.data?.agent_analysis };
       const factorList = Array.isArray(config.factor_list) ? config.factor_list : [];
       const candidate = await strategyPackageApi.createCandidateFromQELoop({
         qe_task_id: taskId,
@@ -254,7 +299,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
           qe_task_id: taskId,
           qe_loop_id: loopPathId,
           loop_index: loop.loop_index,
-          loop_data: loop,
+          loop_data: completeLoop,
           loop_config: config,
           enhanced_summary: enhanced?.summary ?? null,
         } as JsonObject,
@@ -393,22 +438,25 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
   };
 
   const toggleLoop = (loopIndex: number, loopId: string) => {
-    setExpandedLoops(prev => {
-      const next = new Set(prev);
-      if (next.has(loopIndex)) {
-        next.delete(loopIndex);
-      } else {
-        next.add(loopIndex);
-        fetchEnhanced(loopId);
-      }
-      return next;
-    });
+    const next = new Set(expandedRef.current);
+    if (next.has(loopIndex)) {
+      next.delete(loopIndex);
+      setLoops(previous => previous.map(loop => loop.loop_id === loopId ? {
+        ...loop, config_json: loop.config_summary || {}, metrics_json: loop.metrics_summary || {}, agent_analysis: undefined,
+      } : loop));
+      setEnhancedCache(previous => { const rest = { ...previous }; delete rest[loopId]; return rest; });
+    } else {
+      next.add(loopIndex);
+    }
+    expandedRef.current = next;
+    setExpandedLoops(next);
+    if (next.has(loopIndex)) fetchEnhanced(loopId);
   };
 
   if (loading) {
     return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: "#f1f5f9" }}><div style={{ fontSize: 14, color: "#64748b" }}>加载中...</div></div>;
   }
-  if (error || !task) {
+  if (!task) {
     return <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: "#f1f5f9" }}><div style={{ fontSize: 14, color: "#ef4444" }}>{error ?? "任务数据加载失败"}</div></div>;
   }
 
@@ -425,6 +473,8 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", padding: "24px 32px" }}>
+      {error && <div role="alert">{error}（保留上次成功读取的结果）</div>}
+      <button onClick={() => { reads.current.clear(); void summaryRead.current(true).catch(reason => setError(String(reason))); }}>刷新详情</button>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24 }}>
         <button onClick={() => window.close()} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 6, border: "1px solid #e2e8f0", backgroundColor: "#fff", cursor: "pointer", fontSize: 13, color: "#475569" }}>
@@ -514,7 +564,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
       <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 1200 }}>
         {loops.map(loop => {
           const isExpanded = expandedLoops.has(loop.loop_index);
-          const m = loop.metrics_json ?? {};
+          const m = { ...(loop.metrics_json || {}), ...(loop.metrics_summary || {}) };
           const actionType = loop.action_type ?? m.action_type ?? "initial";
           const actionColor = ACTION_COLORS[actionType] ?? "#64748b";
           const loopArchiveStatus = archiveStatusForLoop(loop);
@@ -578,8 +628,10 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                 )}
                 <div style={{ flex: 1 }} />
                 <MetricBadge label="IC" value={fmtNum(m.ic)} />
-                <MetricBadge label="Sharpe" value={fmtNum(m.information_ratio ?? m.sharpe, 2)} />
-                <MetricBadge label="年化" value={fmtPct(m.annualized_return)} color={(m.annualized_return ?? 0) >= 0 ? "#e53935" : "#22a35a"} />
+                <MetricBadge label="Sharpe" value={fmtNum(m.sharpe, 2)} />
+                <MetricBadge label="CAGR" value={fmtPct(m.cagr)} color={(m.cagr ?? 0) >= 0 ? "#e53935" : "#22a35a"} />
+                <MetricBadge label="超额年化" value={fmtPct(m.annualized_return)} />
+                <MetricBadge label="IR" value={fmtNum(m.information_ratio, 2)} />
                 <MetricBadge label="MDD" value={fmtPct(m.max_drawdown)} color="#22a35a" />
               </div>
 
@@ -612,7 +664,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                         <MetricCard label="IC" value={fmtNum(m.ic)} />
                         <MetricCard label="ICIR" value={fmtNum(m.icir)} />
                         <MetricCard label="Rank IC" value={fmtNum(m.rank_ic)} />
-                        <MetricCard label="年化收益" value={fmtPct(m.annualized_return)} color={(m.annualized_return ?? 0) >= 0 ? "#e53935" : "#22a35a"} />
+                        <MetricCard label="CAGR" value={fmtPct(m.cagr)} color={(m.cagr ?? 0) >= 0 ? "#e53935" : "#22a35a"} />
                         <MetricCard label="最大回撤" value={fmtPct(m.max_drawdown)} color="#22a35a" />
                       </div>
 
@@ -643,31 +695,31 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                       )}
 
                       {/* IC 诊断 */}
-                      {em?.dates && em?.ic_series && (
+                      {(em?.ic_diagnostics || (em?.dates && em?.ic_series)) && (
                         <Section title="IC 诊断">
-                          <IcSeriesChart dates={em.dates} ic_series={em.ic_series} rank_ic_series={em.rank_ic_series} ic_rolling_30d_mean={em.ic_rolling_30d_mean} ic_rolling_30d_std={em.ic_rolling_30d_std} ic_positive_ratio={em.ic_positive_ratio} />
+                          <IcSeriesChart {...(em.ic_diagnostics || em)} />
                         </Section>
                       )}
 
                       {/* 收益曲线 */}
-                      {em?.dates && (em?.cumulative_excess_no_cost || em?.cumulative_excess_with_cost) && (
+                      {(em?.return_curves || (em?.dates && (em?.cumulative_excess_no_cost || em?.cumulative_excess_with_cost))) && (
                         <Section title="收益曲线">
-                          <ReturnCurveChart dates={em.dates} cumulative_excess_no_cost={em.cumulative_excess_no_cost} cumulative_excess_with_cost={em.cumulative_excess_with_cost} cumulative_benchmark={em.cumulative_benchmark} drawdown_series={em.drawdown_series} />
+                          <ReturnCurveChart {...(em.return_curves || em)} />
                         </Section>
                       )}
 
                       {/* 训练过程 */}
-                      {em?.train_loss_curve && (
+                      {(em?.training_diagnostics || em?.train_loss_curve) && (
                         <Section title="训练过程">
-                          <LossCurveChart train_loss_curve={em.train_loss_curve} val_loss_curve={em.val_loss_curve} best_epoch={em.best_epoch} overfit_ratio={em.overfit_ratio} convergence_ratio={em.convergence_ratio} />
+                          <LossCurveChart {...(em.training_diagnostics || em)} />
                         </Section>
                       )}
 
                       {/* Agent 诊断 */}
-                      {m.agent_analysis && (
+                      {loop.agent_analysis && (
                         <Section title="Agent 诊断">
                           <pre style={{ fontSize: 11, color: "#475569", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 300, overflow: "auto", backgroundColor: "#f8fafc", padding: 12, borderRadius: 6 }}>
-                            {typeof m.agent_analysis === "string" ? m.agent_analysis : JSON.stringify(m.agent_analysis, null, 2)}
+                            {typeof loop.agent_analysis === "string" ? loop.agent_analysis : JSON.stringify(loop.agent_analysis, null, 2)}
                           </pre>
                         </Section>
                       )}

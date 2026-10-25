@@ -1,4 +1,5 @@
 from datetime import date
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -7,7 +8,49 @@ import pytest
 from backend.services.dataset_release.source_fact_history import filter_source_fact_history
 
 
-def test_monthly_producer_keeps_raw_history_but_static_remains_pit(tmp_path):
+def test_fact_population_excludes_b_shares_not_st_ipo_or_delisted():
+    from backend.services.dataset_release.source_fact_history import fact_codes
+    assert fact_codes(['000861.SZ', '301396.SZ', '600811.SH', '200001.SZ', '900901.SH',
+                       '000985.SH', '430047.BJ', '600811.sh ']) == ('000861.SZ', '301396.SZ', '600811.SH')
+
+
+def test_factor_default_keeps_observed_history_before_pit_entry():
+    from types import SimpleNamespace
+    from backend.services.dataset_release.factor_materializer import _filter_producer_population
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp('2024-07-01'), '600811.SH')],
+        names=['datetime', 'instrument'])
+    frame = pd.DataFrame({'close': [10.]}, index=index)
+    spec = SimpleNamespace(fact_stock_codes=(), qfq_denominator_authority=SimpleNamespace(by_code={'600811.SH': 1}),
+        pit_snapshot=SimpleNamespace(spans=(), cutoff=date(2026, 9, 30)))
+    actual, receipt = _filter_producer_population(frame, spec,
+        SimpleNamespace(start=date(2024, 7, 1), end=date(2024, 7, 31)))
+    pd.testing.assert_frame_equal(actual, frame)
+    assert receipt['pit_selection_unchanged'] is True
+
+
+def test_real_facts_outside_buy_spans_keep_all_daily_and_minute_fields():
+    from backend.tests.dataset_release.test_canonical_stock_transformer import (
+        _spec, _daily, _minute_day, _adj, _limits, DAY1, DAY2,
+    )
+    from backend.services.dataset_release.canonical_stock_transformer import CanonicalStockTransformer
+    from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
+    original = _spec()
+    pit = replace(original.pit_snapshot, spans=())
+    authority = replace(original.qfq_denominators, pit_spans_sha256=pit.spans_sha256)
+    spec = replace(original, pit_snapshot=pit, qfq_denominators=authority)
+    daily = list(CanonicalStockTransformer().transform_daily(spec,
+        daily_rows=[_daily(DAY1), _daily(DAY2)], adj_factor_rows=_adj(),
+        stk_limit_rows=_limits(DAY1, DAY2), suspend_rows=[]))
+    minute = list(CanonicalStockTransformer().transform_minute(spec,
+        minute_rows=_minute_day(DAY1) + _minute_day(DAY2), adj_factor_rows=_adj(),
+        stk_limit_rows=_limits(DAY1, DAY2), suspend_rows=[]))
+    assert len(daily) == 2 and len(minute) == 480
+    assert set(daily[0]) == set(minute[0]) == {'datetime', 'instrument', *QLIB_STOCK_FIELDS}
+
+
+
+
+def test_monthly_producer_keeps_raw_and_static_facts_outside_pit(tmp_path):
     from dataclasses import replace
     from backend.tests.dataset_release.test_factor_partition_producer import FixtureReader, _spec
     from backend.services.dataset_release.factor_materializer import FactorPartitionProducer
@@ -28,7 +71,7 @@ def test_monthly_producer_keeps_raw_history_but_static_remains_pit(tmp_path):
     raw = pd.read_parquet(root / "daily_basic.parquet")
     static = pd.read_parquet(root / "static_factors.parquet")
     assert (pd.Timestamp("2026-06-01"), "000001.SZ") in raw.index
-    assert (pd.Timestamp("2026-06-01"), "000001.SZ") not in static.index
+    assert (pd.Timestamp("2026-06-01"), "000001.SZ") in static.index
     assert set(raw.index.get_level_values("instrument")) == set(static.index.get_level_values("instrument"))
 
 

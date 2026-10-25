@@ -368,7 +368,7 @@ class _FakeFrozenHMMProcess:
 def _hmm_candidate(root: Path) -> tuple[Path, FrozenHMMCoefficientAuthority, _FakeFrozenHMMProcess]:
     candidate = root / "candidate"
     inputs = {
-        "factor_bundle/sector_data.h5": b"sector",
+        "components/sector_context_candidate_v1/sector_quote_facts.h5": b"sector",
         "index_context/index_daily.h5": b"index",
         "components/sector_context_candidate_v1/sector_code_map.json": b"{}\n",
         "components/sector_context_candidate_v1/market_context.parquet": b"market",
@@ -465,7 +465,7 @@ def test_formal_hmm_derive_binds_candidate_without_fit_or_database(tmp_path: Pat
 def test_formal_hmm_derive_rejects_candidate_input_drift(tmp_path: Path) -> None:
     candidate, authority, process = _hmm_candidate(tmp_path)
     manifest = _read(candidate / "qe_dataset_manifest.json")
-    (candidate / "factor_bundle" / "sector_data.h5").write_bytes(b"tampered")
+    (candidate / "components/sector_context_candidate_v1/sector_quote_facts.h5").write_bytes(b"tampered")
     executor = MonthlyHMMCoefficientExecutor(authority, process, tmp_path)
 
     with pytest.raises(MonthlyHMMDeriveError, match="input pin differs"):
@@ -473,6 +473,63 @@ def test_formal_hmm_derive_rejects_candidate_input_drift(tmp_path: Path) -> None
             _context("DERIVE", candidate_root=candidate),
             dataset_manifest_sha256=str(manifest["dataset_manifest_sha256"]),
         )
+
+
+def test_formal_hmm_derive_accepts_external_frozen_authority_inputs(tmp_path: Path) -> None:
+    candidate, authority, process = _hmm_candidate(tmp_path / "external")
+    releases, artifacts = tmp_path / "releases", tmp_path / "artifacts"
+    releases.mkdir()
+    artifacts.mkdir()
+    candidate = candidate.rename(releases / "candidate")
+    manifest = _read(candidate / "qe_dataset_manifest.json")
+    adapter = OfficialDeriveAdapter(
+        releases, MonthlyHMMCoefficientExecutor(authority, process, artifacts),
+        additional_artifact_roots=(artifacts,),
+    )
+    first = _context(
+        "DERIVE", candidate_root=candidate,
+        build_scope={"dataset_manifest_sha256": manifest["dataset_manifest_sha256"]},
+    )
+
+    result = adapter.execute(first)
+
+    assert all(item.path.is_relative_to(releases) or item.path.is_relative_to(artifacts)
+               for item in result.input_artifacts)
+    expected = {path.read_bytes() for path in (authority.model_path, authority.config_path, process.script_path)}
+    assert expected <= {item.path.read_bytes() for item in result.input_artifacts}
+    coefficient = next(item.path for item in result.output_artifacts if item.path.name.startswith("coefficients_"))
+    before = coefficient.read_bytes()
+    assert _read(coefficient)["model_path"] == process.execution_path(authority.model_path)
+    resumed = ProducerContext(
+        stage=first.stage, operation_id=first.operation_id, attempt=2,
+        request=first.request, plan=first.plan, prior_receipts=first.prior_receipts,
+    )
+    adapter.execute(resumed)
+    assert coefficient.read_bytes() == before
+
+
+@pytest.mark.parametrize("changed_input", ["model", "config", "script"])
+def test_formal_hmm_derive_rejects_authority_change_during_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_input: str,
+) -> None:
+    candidate, authority, process = _hmm_candidate(tmp_path)
+    manifest = _read(candidate / "qe_dataset_manifest.json")
+    executor = MonthlyHMMCoefficientExecutor(authority, process, tmp_path)
+    run = process.run
+    changed = {"model": authority.model_path, "config": authority.config_path, "script": process.script_path}[changed_input]
+
+    def drift(payload: Mapping[str, Any]) -> bytes:
+        output = run(payload)
+        changed.write_bytes(changed.read_bytes() + b" ")
+        return output
+
+    monkeypatch.setattr(process, "run", drift)
+    with pytest.raises(MonthlyHMMDeriveError, match="authority changed during execution"):
+        executor.execute(
+            _context("DERIVE", candidate_root=candidate),
+            dataset_manifest_sha256=str(manifest["dataset_manifest_sha256"]),
+        )
+    assert not tuple((candidate / "derived").glob("coefficients_*.json"))
 
 
 def test_formal_hmm_derive_resume_accepts_only_identical_candidate_assets(

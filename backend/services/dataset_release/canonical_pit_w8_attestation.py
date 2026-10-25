@@ -139,6 +139,21 @@ def validate_w8_attestation(
     return CanonicalPitW8Attestation(payload=payload, digest=digest)
 
 
+def bind_real_w8_attestation(candidate_bundle: Mapping[str, Any], value: Mapping[str, Any]) -> CanonicalPitW8Attestation:
+    """Read an existing independent real PASS; never manufacture attestation."""
+    bundle = validate_candidate_validation_bundle(candidate_bundle, allow_real=True)
+    if bundle.payload["candidate_identity"]["scope"] != "full":
+        raise CanonicalPitW8AttestationError("real W8 cannot attest a fixture bundle")
+    receipt = validate_w8_attestation(value, expected_candidate_bundle_digest=bundle.digest, require_real_pass=True)
+    subject = receipt.payload["subject"]
+    expected = {"candidate_id": bundle.payload["candidate_identity"]["candidate_id"],
+                "release_id": bundle.payload["candidate_identity"]["release_id"],
+                "artifact_root_digest": bundle.payload["artifact_root_digest"]}
+    if subject != expected:
+        raise CanonicalPitW8AttestationError("real W8 subject identity differs from bundle")
+    return receipt
+
+
 def _attestation_json_bytes(value: Any) -> bytes:
     """Independent W8 canonicalization; do not import W6 serializer."""
 
@@ -180,5 +195,6 @@ __all__ = [
     "CanonicalPitW8Attestation",
     "CanonicalPitW8AttestationError",
     "build_fixture_w8_attestation",
+    "bind_real_w8_attestation",
     "validate_w8_attestation",
 ]
