@@ -521,6 +521,170 @@ def test_unfinished_campaign_cannot_resume_with_changed_source(tmp_path, monkeyp
         module.run_continuous_campaign(module.FileRef.model_validate(frozen["request"]))
 
 
+@pytest.mark.parametrize("changed", ["adapter", "ledger", "core", "quantity", "new_engine_file"])
+def test_successor_only_allows_audited_adapter_source_transition(changed):
+    from copy import deepcopy
+    from backend.services.simulation_execution.localsim.timing_continuation import ADAPTER, validate_source_transition
+
+    old = {"campaign": {ADAPTER: "a", "quantity": "b"}, "localsim": {"ledger": "c"}, "timing_core": {"core": "d"}}
+    new = deepcopy(old)
+    group, key = {"adapter": ("campaign", ADAPTER), "ledger": ("localsim", "ledger"),
+                  "core": ("timing_core", "core"), "quantity": ("campaign", "quantity"),
+                  "new_engine_file": ("timing_core", "added")}[changed]
+    new[group][key] = "changed"
+    if changed == "adapter":
+        validate_source_transition(old, new)
+    else:
+        with pytest.raises(ValueError, match="ENGINE_CHANGED"):
+            validate_source_transition(old, new)
+
+
+@pytest.mark.parametrize("changed", ["sha256", "size", "missing"])
+def test_successor_price_or_pit_component_changes_are_not_name_compatible(changed):
+    from types import SimpleNamespace
+    from backend.services.simulation_execution.localsim.timing_continuation import _same_component
+
+    old = SimpleNamespace(components={"component": {"sha256": "a", "size": 100}})
+    new = SimpleNamespace(components={"component": {"sha256": "a", "size": 100}})
+    if changed == "missing":
+        new.components.clear()
+    else:
+        new.components["component"][changed] = "different" if changed == "sha256" else 101
+    with pytest.raises(ValueError, match="PRICE_INPUT_CHANGED"):
+        _same_component(old, new, "component")
+
+
+def successor_campaign_fixture(tmp_path, monkeypatch, *, prefix_accounts=12, changed_completed_state=False):
+    """Two synthetic days; use real native orders/fees/ledger in all accounts."""
+    from backend.services.strategy_package.models import StrategyPackageManifest
+    from backend.services.simulation_execution.localsim import timing_continuation, timing_portfolio
+
+    module, preflight, templates, Path = price_campaign_fixture(tmp_path, monkeypatch, two_days=True)
+    monkeypatch.setattr(StrategyPackageManifest, "model_validate", lambda value: None)
+    frozen = module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                                output_root=tmp_path / "output", producer_commit="1" * 40)
+    request = module.FileRef.model_validate(frozen["request"])
+    original = timing_portfolio.run_portfolio_day
+    calls = []
+
+    def stop_after_prefix(**kwargs):
+        if len(calls) == prefix_accounts:
+            raise OSError("controlled pre-adoption interruption")
+        calls.append(kwargs["run_id"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(timing_portfolio, "run_portfolio_day", stop_after_prefix)
+    with pytest.raises(OSError, match="pre-adoption interruption"):
+        module.run_continuous_campaign(request)
+    monkeypatch.setattr(timing_portfolio, "run_portfolio_day", original)
+    candidate = tmp_path / "repaired_candidate.json"
+    module.publish(candidate, {"role": "REPAIRED_SYNTHETIC_CANDIDATE"})
+    candidate_ref = module.FileRef.model_validate(module.ref(candidate))
+    states = [{}, {("000001.SZ", "2026-09-21"): "FULL_DAY_SUSPENDED"} if changed_completed_state else {}]
+
+    def inspected_successor(inspected, ref):
+        module.checked_file(ref)
+        return {"source_refs": [ref.model_dump()], "states": states, "stock_count": 2,
+                "equivalent_price_component_count": 22, "pit_component_count": 1,
+                "stage": "COMPLETE_SUCCESSOR_SOURCE_BATCH_INSPECTED"}
+
+    monkeypatch.setattr(timing_continuation, "inspect_successor_sources", inspected_successor)
+    return module, timing_continuation, request, candidate_ref, original
+
+
+def test_adopted_successor_preserves_prefix_and_retries_same_twelve_accounts(tmp_path, monkeypatch):
+    from pathlib import Path
+    from backend.services.simulation_execution.localsim import timing_portfolio
+
+    module, continuation, request, candidate, original = successor_campaign_fixture(tmp_path, monkeypatch)
+    root = Path(request.path).parent
+    prefix = {p: p.read_bytes() for p in (root / "days").glob("*/*.json")}
+    assert len(prefix) == 12
+    adopted = continuation.adopt_successor(request_ref=request, candidate_ref=candidate, producer_commit="2" * 40)
+    assert adopted["preserved_account_days"] == 12
+    assert adopted["resume_trade_date"] == "2026-09-22"
+    replayed = []
+    market_sources = []
+    candidate_type = module.CandidateReader
+    original_market = candidate_type.market
+
+    def observe_market(self, symbol, day):
+        market_sources.append(self.ref.sha256)
+        return original_market(self, symbol, day)
+
+    monkeypatch.setattr(candidate_type, "market", observe_market)
+
+    def count_new_days(**kwargs):
+        replayed.append(kwargs["run_id"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(timing_portfolio, "run_portfolio_day", count_new_days)
+    completed = module.run_continuous_campaign(request)
+    assert len(replayed) == 12
+    assert market_sources and set(market_sources) == {candidate.sha256}
+    assert all(p.read_bytes() == body for p, body in prefix.items())
+    result = module.read_json(Path(completed["results"]["path"]))
+    assert result["producer_source_commit"] == "2" * 40
+    assert result["original_producer_source_commit"] == "1" * 40
+    assert result["input_successor"] == adopted["successor"]
+    assert len(result["comparisons"]) == 36
+    assert all(len(a["days"]) == 2 for a in result["accounts"])
+    assert all(module.read_json(Path(a["days"][1]["path"]))["input_successor"] == adopted["successor"]
+               for a in result["accounts"])
+    retry = module.run_continuous_campaign(request)
+    assert retry["status"] == "ALREADY_MATERIALIZED" and retry["results"] == completed["results"]
+    again = continuation.adopt_successor(request_ref=request, candidate_ref=candidate, producer_commit="2" * 40)
+    assert again["status"] == "ALREADY_ADOPTED" and again["successor"] == adopted["successor"]
+    assert len(replayed) == 12
+    # A committed post-cutover journal also restores its missing index without
+    # another fill, just like the original day-atomic recovery contract.
+    day_path = Path(result["accounts"][0]["days"][1]["path"])
+    original_summary = day_path.read_bytes()
+    day_path.unlink()
+    recovered = module.run_continuous_campaign(request)
+    assert recovered["results"] == completed["results"] and len(replayed) == 12
+    assert day_path.read_bytes() == original_summary
+
+
+@pytest.mark.parametrize("problem", ["completed_suspension", "incomplete_account_day"])
+def test_successor_cannot_bypass_changed_or_partial_completed_prefix(tmp_path, monkeypatch, problem):
+    from pathlib import Path
+
+    module, continuation, request, candidate, _ = successor_campaign_fixture(
+        tmp_path, monkeypatch, prefix_accounts=2 if problem == "incomplete_account_day" else 12,
+        changed_completed_state=problem == "completed_suspension")
+    root = Path(request.path).parent
+    prefix = {p: p.read_bytes() for p in (root / "days").glob("*/*.json")}
+    reason = "COMPLETED_INPUT_CHANGED" if problem == "completed_suspension" else "PARTIAL_OR_COMPLETE_PREFIX"
+    with pytest.raises(ValueError, match=reason):
+        continuation.adopt_successor(request_ref=request, candidate_ref=candidate, producer_commit="2" * 40)
+    assert not (root / "input_successor.json").exists()
+    assert all(p.read_bytes() == body for p, body in prefix.items())
+    assert not (root / "continuous_results.json").exists()
+
+
+@pytest.mark.parametrize("problem", ["candidate_drift", "prefix_drift", "reader_source_drift"])
+def test_adopted_successor_refuses_drift_before_new_economic_writes(tmp_path, monkeypatch, problem):
+    from pathlib import Path
+    from backend.services.position_timing.intraday.store import IntradayError
+
+    module, continuation, request, candidate, _ = successor_campaign_fixture(tmp_path, monkeypatch)
+    continuation.adopt_successor(request_ref=request, candidate_ref=candidate, producer_commit="2" * 40)
+    root = Path(request.path).parent
+    if problem == "candidate_drift":
+        p = Path(candidate.path)
+        p.write_bytes(p.read_bytes() + b" ")
+    elif problem == "prefix_drift":
+        p = next((root / "days").glob("*/*.json"))
+        p.write_bytes(p.read_bytes() + b" ")
+    else:
+        monkeypatch.setattr(continuation, "input_reader_identity", lambda: {"changed": True})
+    with pytest.raises((ValueError, IntradayError), match="IDENTITY_MISMATCH|SOURCE_CHANGED"):
+        module.run_continuous_campaign(request)
+    assert len(list((root / "journals").glob("*/generations/00000001.json"))) == 12
+    assert not (root / "continuous_results.json").exists()
+
+
 def unknown_campaign_fixture(tmp_path, monkeypatch, problem=None):
     module, preflight, templates_ref, Path = price_campaign_fixture(tmp_path, monkeypatch)
     templates = module.read_json(Path(templates_ref.path))

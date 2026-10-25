@@ -323,9 +323,9 @@ def build_timing_plan_events(*, intents, series, rule, source_commit, day, quant
     return events, unavailable
 
 
-def _campaign_day_summary(*, record, receipt_ref, request, initial, day_index, previous):
+def _campaign_day_summary(*, record, receipt_ref, request, initial, day_index, previous, source_successor=None):
     account = record["checkpoint"]["account"]
-    return {"schema_version": "localsim_timing_continuous_day_v1",
+    summary = {"schema_version": "localsim_timing_continuous_day_v1",
             "request_identity": request["identity"], "initial_account_id": initial["account_id"],
             "day_index": day_index, "trade_date": request["trade_dates"][day_index],
             "previous_day": previous, "account_receipt": receipt_ref,
@@ -339,9 +339,13 @@ def _campaign_day_summary(*, record, receipt_ref, request, initial, day_index, p
             "parents": [{k: v for k, v in row.items() if k != "session"} for row in account["parents"]],
             "native_quantity_evidence": account["native_quantity_evidence"],
             "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP"}
+    if source_successor is not None:
+        summary["input_successor"] = source_successor
+    return summary
 
 
-def _read_campaign_day(*, path, store, request, initial, day_index, previous, child_identity, cost):
+def _read_campaign_day(*, path, store, request, initial, day_index, previous, child_identity, cost,
+                       source_successor=None):
     from .timing_portfolio import validate_day_ledger
 
     record = store.latest()
@@ -357,7 +361,8 @@ def _read_campaign_day(*, path, store, request, initial, day_index, previous, ch
     validate_day_ledger(record, initial=initial, cost=cost)
     journal = store.root / "generations" / "00000001.json"
     summary = _campaign_day_summary(record=record, receipt_ref=ref(journal), request=request,
-                                     initial=initial, day_index=day_index, previous=previous)
+                                     initial=initial, day_index=day_index, previous=previous,
+                                     source_successor=source_successor)
     if path.exists() and read_json(path) != summary:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_DAY_SUMMARY_CONFLICT")
     publish(path, summary)  # Also completes a committed day whose summary was interrupted.
@@ -406,15 +411,8 @@ def summarize_continuous_campaign(accounts: list[dict]) -> list[dict]:
     return rows
 
 
-def run_continuous_campaign(request_ref: FileRef) -> dict:
-    """Run/read back all twelve accounts only after a complete input inspect."""
-    from backend.services.strategy_package.models import StrategyPackageManifest
-
-    from .timing_portfolio import (
-        attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, run_portfolio_day,
-    )
-    from .timing_store import TimingFileRepository
-
+def validate_campaign_request(request_ref: FileRef) -> dict:
+    """Validate the original immutable request without touching account data."""
     request_path = checked_file(request_ref)
     request = read_json(request_path)
     identity_fields = {k: v for k, v in request.items() if k not in {"identity", "release_identity"}}
@@ -422,6 +420,21 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
             or digest(identity_fields) != request["identity"]
             or request["release_identity"] != "localsim_timing_campaign_v1_" + request["identity"][:24]):
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REQUEST_IDENTITY_CONFLICT")
+    return request
+
+
+def run_continuous_campaign(request_ref: FileRef) -> dict:
+    """Run/read back all twelve accounts only after a complete input inspect."""
+    from backend.services.strategy_package.models import StrategyPackageManifest
+
+    from .timing_continuation import load_successor
+    from .timing_portfolio import (
+        attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, run_portfolio_day,
+    )
+    from .timing_store import TimingFileRepository
+
+    request = validate_campaign_request(request_ref)
+    request_path = Path(request_ref.path)
     inspected = inspect_price_templates(FileRef.model_validate(request["preflight"]),
                                          FileRef.model_validate(request["price_templates"]))
     if (list(inspected["days"]) != request["trade_dates"]
@@ -434,8 +447,12 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REQUEST_DAY_POPULATION_CONFLICT")
     root = request_path.parent
     completed_path = root / "continuous_results.json"
+    successor = load_successor(request_ref, request, inspected)
+    successor_ref = ref(root / "input_successor.json") if successor else None
+    if completed_path.exists() and read_json(completed_path).get("input_successor") != successor_ref:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_RESULT_SUCCESSOR_CONFLICT")
     same_source = request["source_identity"] == campaign_source_identity()
-    if not same_source and not completed_path.exists():
+    if not same_source and successor is None and not completed_path.exists():
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_CHANGED")
     preflight = inspected["preflight"]
     package = read_json(checked_file(FileRef.model_validate(preflight["inputs"]["package"])))["package"]
@@ -449,22 +466,28 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
             or len({a["account_id"] for a in initials}) != 12
             or any(Decimal(a["cash_cny"]) != Decimal("10000000") or a["positions"] or a["fills"] for a in initials)):
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_INITIAL_ACCOUNT_CONFLICT")
-    candidate = CandidateReader(FileRef.model_validate(preflight["inputs"]["candidate_manifest"]))
+    candidate = CandidateReader(FileRef.model_validate(
+        successor["candidate"] if successor else preflight["inputs"]["candidate_manifest"]))
     histories = {a["account_id"]: [] for a in initials}
     day_refs = {a["account_id"]: [] for a in initials}
     for day_index, day_string in enumerate(request["trade_dates"]):
         day = date.fromisoformat(day_string)
         day_input = inspected["days"][day_string]
+        day_successor = successor_ref if successor and day_index >= successor["prefix"]["completed_days"] else None
         projection = read_json(checked_file(FileRef.model_validate(day_input["native"]["projection"])))
         pending, markets = [], {}
         for initial in initials:
             account_id = initial["account_id"]
             previous = day_refs[account_id][-1] if day_refs[account_id] else None
-            child_identity = digest([request["identity"], account_id, day_string, previous])
+            identity_parts = [request["identity"], account_id, day_string, previous]
+            if day_successor is not None:
+                identity_parts.append(day_successor)
+            child_identity = digest(identity_parts)
             store = TimingFileRepository(root / "journals", "lsc_" + child_identity[:48])
             path = root / "days" / account_id / (day_string + ".json")
             summary = _read_campaign_day(path=path, store=store, request=request, initial=initial,
-                                          day_index=day_index, previous=previous, child_identity=child_identity, cost=cost)
+                                          day_index=day_index, previous=previous, child_identity=child_identity, cost=cost,
+                                          source_successor=day_successor)
             if summary is None:
                 if completed_path.exists():
                     raise ValueError("LOCALSIM_TIMING_CAMPAIGN_COMPLETED_PREFIX_MISSING")
@@ -511,7 +534,8 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
                                              unavailable=unavailable)
             commit_portfolio_day(store=store, result=result, input_identity=child_identity, day_index=0)
             summary = _read_campaign_day(path=path, store=store, request=request, initial=initial,
-                                          day_index=day_index, previous=previous, child_identity=child_identity, cost=cost)
+                                          day_index=day_index, previous=previous, child_identity=child_identity, cost=cost,
+                                          source_successor=day_successor)
             histories[initial["account_id"]].append(summary)
             day_refs[initial["account_id"]].append(ref(path))
     accounts = []
@@ -529,7 +553,8 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
                          "fee_positive_parent_count": sum(d["fee_positive_parent_count"] for d in days),
                          "days": day_refs[initial["account_id"]], "day_summaries": days})
     results = {"schema_version": "localsim_timing_continuous_results_v1", "producer": "LOCALSIM",
-               "producer_source_commit": request["producer_source_commit"], "release_identity": request["release_identity"],
+               "producer_source_commit": successor["producer_source_commit"] if successor else request["producer_source_commit"],
+               "release_identity": successor["release_identity"] if successor else request["release_identity"],
                "request": request_ref.model_dump(), "source_inspection_stage": inspected["stage"],
                "cost_policy_file_sha256": preflight["inputs"]["cost_policy"]["sha256"],
                "execution_contract_sha256": request["execution_contract_sha256"],
@@ -540,6 +565,9 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
                "economic_confirmation": False, "production_account_created": False,
                "database_accessed": False, "dataset_mutated": False, "market_network_accessed": False,
                "service_process_control": False}
+    if successor:
+        results.update(input_successor=successor_ref, original_producer_source_commit=request["producer_source_commit"],
+                       original_release_identity=request["release_identity"])
     already = completed_path.exists()
     publish(completed_path, results)
     return {"status": "ALREADY_MATERIALIZED" if already else "MATERIALIZED", "results": ref(completed_path),
@@ -713,12 +741,16 @@ def prepare(*, package_snapshot: FileRef, admission: FileRef, native_accounts: F
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in {"inspect", "freeze", "run"}:
+    if len(sys.argv) > 1 and sys.argv[1] in {"inspect", "freeze", "run", "adopt-successor"}:
         command = sys.argv[1]
         parser = argparse.ArgumentParser(description=__doc__)
-        if command == "run":
+        if command in {"run", "adopt-successor"}:
             parser.add_argument("--request", type=Path, required=True)
             parser.add_argument("--request-sha256", required=True)
+            if command == "adopt-successor":
+                parser.add_argument("--candidate", type=Path, required=True)
+                parser.add_argument("--candidate-sha256", required=True)
+                parser.add_argument("--producer-commit", required=True)
         else:
             for name in ("preflight", "price-templates"):
                 parser.add_argument("--" + name, type=Path, required=True)
@@ -729,6 +761,12 @@ def main():
         args = parser.parse_args(sys.argv[2:])
         if command == "run":
             result = run_continuous_campaign(FileRef(path=str(args.request.resolve()), sha256=args.request_sha256))
+        elif command == "adopt-successor":
+            from .timing_continuation import adopt_successor
+
+            result = adopt_successor(request_ref=FileRef(path=str(args.request.resolve()), sha256=args.request_sha256),
+                                     candidate_ref=FileRef(path=str(args.candidate.resolve()), sha256=args.candidate_sha256),
+                                     producer_commit=args.producer_commit)
         else:
             kwargs = {"preflight_ref": FileRef(path=str(args.preflight.resolve()), sha256=args.preflight_sha256),
                       "templates_ref": FileRef(path=str(args.price_templates.resolve()), sha256=args.price_templates_sha256)}

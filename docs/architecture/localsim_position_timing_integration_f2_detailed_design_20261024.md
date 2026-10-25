@@ -38,6 +38,7 @@
 - backend/services/simulation_execution/localsim/timing_research.py
 - backend/services/simulation_execution/localsim/timing_store.py
 - backend/services/simulation_execution/localsim/timing_campaign.py
+- backend/services/simulation_execution/localsim/timing_continuation.py
 - backend/services/simulation_execution/localsim/timing_portfolio.py
 - backend/tests/simulation_execution/test_localsim_position_timing.py
 - backend/tests/simulation_execution/test_localsim_timing_campaign.py
@@ -130,6 +131,20 @@ P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 
 
 ## Verification Plan / Design Acceptance Index
 
+### 2026-10-26：修复候选的受控接续
+
+用户已授权核验新旧输入、保留兼容的948个已完成账户日并继续原12账户研究。数据窗口的BUG-2089/2090修复已正式激活，但原请求仍绑定不可变的旧candidate；禁止修改请求、账户、账本或断点，也不能用active自动替换。
+
+最小增量登记为上述LocalSIM专属`timing_continuation.py`、原campaign入口、既有campaign定向测试及本任务设计/验收文档；不修改共享择时或数据代码。新增显式`adopt-successor`离线入口，在原run目录追加一次不可变`input_successor.json`。记录原request/旧candidate、新candidate完整FileRef、原价格计划身份、完整研究人口、费用/执行合同、接续源码身份、已提交前缀实体引用及检查证据。原请求和旧产物不重写；新账户日的身份及摘要显式携带后继身份。
+
+采用同一新candidate供全体12账户的后续交易日读取；原共享价格模板仍保留原路径、政策及SHA。接续前必须证明本研究全部历史目标股票的日历、日线prev_close/上下限、分钟OHLCV/amount/factor组件pin及股票报价范围与旧candidate一致，原价格引用来源逐一等价；PIT组件不得发生迁移。其他证券的修复不能被误称为全数据集等价。新停牌组件由唯一共享原生projector解析，UNKNOWN/UNRESOLVED保持拒绝。
+
+先完成原价格计划和新来源的整批inspect，再读取账户前缀。核验12账户有相同连续已提交日数、原生journal/summary/hash链、跨日资金持仓和T+1，并按每一天真实目标及此前真实持仓的并集，证明新旧停牌状态不改变任何已完成输入。任一已完成输入不等价则拒绝adopt，不删除或重做前缀；无合法后继合同则保持BLOCKED。不得把“新数据已激活”当成经济前缀等价证明。
+
+接续仅允许campaign编排与新增接续适配器的审核变更；账户/撮合/费用、择时核心、策略数量和执行政策的冻结源码必须保持一致。新输入读取器及公共停牌authority的实际源码另行绑定。后继记录冻结后，未完成运行仍严格拒绝任何未登记源码或输入变化；恢复重读该记录而非active。后续日事务、成交、费用和账本继续调用原链。原288产物不变；完整181日及36组连续经济比较、exact retry未完成前，F-010/F-013不得声明PASS。
+
+接续复杂度审查：固定615证券、181日、12账户；行情等价检查6152个日历/日线/分钟组件，另检查PIT组件及两份稀疏停牌事实。按组件流式hash，不构造证券×分钟×账户笛卡尔积；停牌表用证券/日期向量筛选，再交唯一projector。前缀遍历948个原生日journal，实际市场键6926个；按原生账本逐日重放确认事实，内存仅保留必要账户和引用。来源hash在前缀核验后再次检查，封存前缀引用以防检查期间漂移。恢复整批检查只做一遍，日内计算继续沿用原日行情共享与原生事务，不增加模型/数据复制。
+
 | ID | 必须验收 |
 |---|---|
 | F-001 | 自身上位合同显式 opt-in，旧 TWAP/default/release/退役规则不变 |
@@ -144,6 +159,7 @@ P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 
 | F-010 | 最新加入策略绑定、12 个连续离线账户、1000 万元及年初日历；合法计划缺口不能伪造 |
 | F-011 | 连续消费者的价格模板整批校验、原生数量规划、多股票共享账户、确认时钟、日事务恢复及独立比较 |
 | F-012 | 审计 UNKNOWN/NONE 精确绑定；B0/C2 合法 NONE；C1 实需缺价保留 UNAVAILABLE；备用 SELL 不阻断且不改变人口 |
+| F-013 | 不可变后继绑定；整批source先于outcomes；原生账本与实际输入前缀兼容；跨日接续及重试不重做旧经济事实 |
 
 ## Rollout / Rollback / Risks / Production Gates
 
@@ -164,8 +180,9 @@ database_read/write=false；dataset_mutation=false；live_market_network=false�
 | F-007 | localsim/timing_store.py/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/recovery-proof-r1.json；retry-metrics-r3.json：原288行SHA不变 | PASS | - |
 | F-008 | localsim/timing_research.py及现有只读比较器 | artifact: X:/AIstock_temp/localsim-position-timing/compare-metrics-r1.json；36组matched B0，先inspect后读结果 | PASS | - |
 | F-009 | WSL离线验证及审计钩子 | artifact: X:/AIstock_temp/localsim-position-timing/native-quantity-validation-r2.json；数据库/数据集/行情/服务操作均false | PASS | - |
-| F-010 | localsim/timing_campaign.py；验收报告第7节 | artifact: X:/AIstock_temp/localsim-position-timing/continuous-run-r5.json；minute-gap-diagnosis-r6.json；real-prefix-validation-r6.json：79日/948账户日通过，181日/9050目标及12初态保留 | BLOCKED | 601010.SH/2026-05-08 11:30七字段NaN，为实际遗留持仓所需；失败日无经济写入，需数据owner正式输入合同，不能合入结项 |
+| F-010 | localsim/timing_campaign.py；验收报告第7/10节 | artifact: X:/AIstock_temp/localsim-position-timing/successor-feasibility-r8.json；615股票/6152行情组件/6926实际市场键/948账户日前缀兼容 | BLOCKED | 数据侧已修复合法停牌事实并激活；LocalSIM正式后继接续和完整181日经济比较执行中，尚不能合入结项 |
 | F-011 | localsim/timing_campaign.py/timing_portfolio.py/runtime.py | artifact: X:/AIstock_temp/localsim-position-timing/direct-validation-r5.json；78个直接节点，12账户×2日恢复；real-prefix-validation-r6.json独立复核948日原生账本 | PASS | - |
 | F-012 | localsim/timing_campaign.py/timing_portfolio.py | pytest backend/tests/simulation_execution/test_localsim_timing_campaign.py -q；artifact: X:/AIstock_temp/localsim-position-timing/shared-price-inspection-r4.json：真实181日/73997事件及14 UNKNOWN整批通过 | PASS | - |
+| F-013 | localsim/timing_continuation.py/timing_campaign.py | artifact: X:/AIstock_temp/localsim-position-timing/direct-successor-validation-r10.json；92项通过，含后继恢复/幂等/漂移拒绝；successor-feasibility-r8.json：948日兼容 | PENDING | 待正式adopt、真实接续和exact retry |
 
 F-011只验收消费能力、功能不变量与原生数量规划，不代替F-010真实历史模拟。F2完整范围仍不满足合入条件，PR保留草稿。源码、离线研究、运行激活和经济效果必须分别报告。
