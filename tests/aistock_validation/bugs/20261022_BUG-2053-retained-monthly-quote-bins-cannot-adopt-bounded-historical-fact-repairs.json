@@ -1,0 +1,417 @@
+{
+  "actual": "Factor correction does not amend completed day/minute binaries; old full-fact audit gaps therefore persist in retained quote inputs.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_build_resume.py",
+    "backend/services/dataset_release/monthly_fact_correction.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/services/dataset_release/monthly_quote_fact_correction.py",
+    "backend/services/dataset_release/monthly_legacy_validation.py",
+    "backend/services/dataset_release/monthly_prev_close_repair.py",
+    "backend/services/dataset_release/monthly_minute_repair.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+    "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2053",
+  "closed_at": "2026-10-22T04:27:19.656913Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T01:55:58.872822Z",
+  "description": "Factor correction does not amend completed day/minute binaries; old full-fact audit gaps therefore persist in retained quote inputs.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-3b5dc1ebda68",
+      "timestamp": "2026-10-22T01:55:58.872822Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/monthly-202609-closure-20261020/closure-readback-r2.json"
+  ],
+  "expected": "Retain completed exports; adopt bounded frozen stock quote repairs with copy-on-write, matching daily QFQ basis, native receipt pins and real quote catalogs. Missing limit references remain explicit. Index and suspension corrections are separate existing monthly work, not claimed fixed by this BUG.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json"
+    ],
+    "added_files": [
+      "backend/services/dataset_release/monthly_quote_fact_correction.py"
+    ],
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_mature_build_runner.py",
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_build_resume.py",
+        "backend/services/dataset_release/monthly_fact_correction.py",
+        "backend/routers/monthly_dataset_releases.py",
+        "backend/tests/dataset_release/test_monthly_build_resume.py",
+        "backend/services/dataset_release/monthly_quote_fact_correction.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_mature_build_runner.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_build_resume.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_fact_correction.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/routers/monthly_dataset_releases.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_build_resume.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_quote_fact_correction.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_mature_build_runner.py",
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_build_resume.py",
+        "backend/services/dataset_release/monthly_fact_correction.py",
+        "backend/routers/monthly_dataset_releases.py",
+        "backend/tests/dataset_release/test_monthly_build_resume.py",
+        "backend/services/dataset_release/monthly_quote_fact_correction.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_fact_correction.py",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_fact_correction.py",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py"
+    ]
+  },
+  "first_seen_at": "2026-10-22T01:55:58.872822Z",
+  "fix_branch": null,
+  "fix_commit": "e50464f1d08b8caf06baba878c5d22e7aa235b76",
+  "fixed_at": "2026-10-22T02:34:30Z",
+  "github_issue_number": 6552,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6552",
+  "last_seen_at": "2026-10-22T01:55:58.872822Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6553",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python direct tests cover missing-only repairs, atomic copy-on-write, interrupted transaction recovery, new feature creation, idempotency, inherited successor proof, QFQ basis mismatch, operator API and private-state guards; no database or service writes.",
+      "Fresh AIstock Python imports persistent quote correction, router, runner and executes 31 direct quote tests plus native monthly matrix; original release and active profile untouched",
+      "Fresh AIstock Python imported persistent quote correction/router/runner and executed direct quote and native monthly tests; no database/profile/service writes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\monthly-202609-closure-20261020\\bounded-quote-facts-r2\\post-restart-bug2053.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2053",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3b17641f19ef1e7bff942a1d8a0c6ad393644c44dbf4837c00db4c180be96e6d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e50464f1d08b8caf06baba878c5d22e7aa235b76",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T04:24:51.436625Z",
+      "mode": "read_only",
+      "observed_identity": "a9d2bbf1006feb2970513c169e5615bada2e184b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "37a2ea3c8f7ec1aeb8e1f8ccbacf357cea250c53329cb6490d0c072afbf3f03a",
+      "receipt_sha256": "c6b23a86fd72ad573c4a29d228ece3ca101d7239d41b8010537e84c4a6638ea1",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "fa2d153246347f1a701e2094bbf418e881f00111d9716aefc9e22d2b37fc6550",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2053",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "121756b837bc1800",
+    "recorded_at": "2026-10-22T02:35:19.915907Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eea4af5e6b5816d1137476cb379eca38b5a913bb",
+    "source_merge_commit": "e50464f1d08b8caf06baba878c5d22e7aa235b76",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6553",
+    "validation_evidence": [
+      "validation-receipt: id=65742b189a1f561d commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; 0 new blocking findings`",
+      "validation-receipt: id=954ab83c9481c587 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`152 passed before path relocation regression`",
+      "validation-receipt: id=d56665de9a10cf56 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py -q` result=`9 passed including copied metadata and relocated original writer path; foreign source and value drift remain rejected`"
+    ],
+    "validation_evidence_digest": "0b50a5e0314aa08c3ac5ea99b7523969fd2532f5895015573ef5363cf9995248"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Retained monthly quote bins cannot adopt bounded historical fact repairs without repeating completed exports",
+  "trigger_condition": {
+    "fingerprint": "3b5dc1ebda687d017b690119",
+    "source_event_id": "FE-20261022-3b5dc1ebda68"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=65742b189a1f561d commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; 0 new blocking findings`",
+    "validation-receipt: id=954ab83c9481c587 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`152 passed before path relocation regression`",
+    "validation-receipt: id=d56665de9a10cf56 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py -q` result=`9 passed including copied metadata and relocated original writer path; foreign source and value drift remain rejected`",
+    "BUG-2053 worker-scheduler post-restart read-only identity and business smoke verified; runtime_identity_match=true; process_control_performed=false",
+    "Post-restart worker-scheduler identity and business smoke PASS; existing September day/minute readback PASS; database_write=false; process_control=false"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

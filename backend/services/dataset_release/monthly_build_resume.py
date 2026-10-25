@@ -179,13 +179,19 @@ class MonthlyBuildResume:
                     if history is None:
                         raise MonthlyBuildResumeError("pending history repair has no frozen authority")
                     self.record = dict(recover_history_commit(root=staging_root, journal=self.path,
-                        record=self.record, expected_projection=history.sha256))
+                        record=self.record, expected_projection=history.sha256, cas=cas))
                 from .monthly_quote_catalog import recover_quote_catalog
                 self.record = recover_quote_catalog(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 from .monthly_prev_close_repair import recover_prev_close
                 self.record = recover_prev_close(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 from .monthly_minute_repair import recover_minute_correction
                 self.record = recover_minute_correction(root=staging_root, journal=self.path, record=self.record, cas=cas)
+                from .monthly_fact_correction import recover_factor_repairs
+                self.record = recover_factor_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
+                from .monthly_quote_fact_correction import recover_quote_repairs
+                self.record = recover_quote_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
+                from .monthly_index_repair import recover_index_repairs
+                self.record = recover_index_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 for relative, expected in self.record["files"].items():
                     if not isinstance(relative, str) or not relative or any(token in relative for token in ("\\", ":", "\x00")) or ".." in Path(relative).parts or Path(relative).is_absolute():
                         raise MonthlyBuildResumeError("retained data file escaped staging")

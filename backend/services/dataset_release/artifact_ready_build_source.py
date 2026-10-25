@@ -341,7 +341,7 @@ class ArtifactReadyBuildSource:
             )
         buffered: list[Mapping[str, Any]] = []
         requested = {
-            str(value).upper() for value in (instruments or tuple(span.ts_code for span in self.pit_snapshot.spans))
+            str(value).upper() for value in (instruments or tuple(self.qfq_authority.by_code))
         }
         source_requested = (
             set(

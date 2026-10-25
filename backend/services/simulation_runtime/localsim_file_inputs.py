@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
+from datetime import date, timedelta
 from functools import wraps
 
 from backend.data_service.frozen_dataset import FrozenDataset, FrozenDatasetError, digest
@@ -49,6 +50,16 @@ def localsim_file_inputs(binding, *, run_id):
 
 def capture_file_input_worker(function, *, worker_id):
     """Carry immutable identity, not a caller-owned reader, across thread exits."""
+    from .localsim_input_source_plan import current_source_day, current_source_plan, localsim_plan_inputs
+    plan = current_source_plan()
+    if plan is not None:
+        plan, trade_date = deepcopy(plan), current_source_day()
+
+        @wraps(function)
+        def planned_worker(*args, **kwargs):
+            with localsim_plan_inputs(plan, trade_date=trade_date):
+                return function(*args, **kwargs)
+        return planned_worker
     dataset = current_file_dataset()
     if dataset is None:
         return function
@@ -64,6 +75,19 @@ def capture_file_input_worker(function, *, worker_id):
 
 
 def resolve_replay_source(authority, *, job, release, end_trade_date=None, require_latest_completed=False):
+    from .localsim_input_source_plan import SOURCE_PLAN_ID, frozen_source_plan
+    if job.historical_source_id == SOURCE_PLAN_ID:
+        from zoneinfo import ZoneInfo
+        from .localsim_product_control import LocalSimHistoricalSourceResolutionV1
+        plan = frozen_source_plan(release, job=job)
+        if end_trade_date is not None and end_trade_date != job.end_trade_date:
+            raise FrozenDatasetError("frozen source plan cannot be extended during restore")
+        current = authority.clock().astimezone(ZoneInfo("Asia/Shanghai")).date()
+        latest = authority.calendar.latest_trading_day_on_or_before(current - timedelta(days=1))
+        days = tuple(date.fromisoformat(row["decision_date"]) for row in plan["days"])
+        if latest is None or job.end_trade_date >= current or (require_latest_completed and job.end_trade_date != latest):
+            raise FrozenDatasetError("LocalSIM frozen plan is not a legal completed-day range")
+        return LocalSimHistoricalSourceResolutionV1(SOURCE_PLAN_ID, plan["plan_hash"], days, current, latest)
     kwargs = dict(historical_source_id=job.historical_source_id, start_trade_date=job.start_trade_date,
                   end_trade_date=end_trade_date or job.end_trade_date, require_latest_completed=require_latest_completed)
     if job.historical_source_id == FILE_SOURCE_ID:

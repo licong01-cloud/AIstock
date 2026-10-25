@@ -1258,6 +1258,58 @@ def _validate(
     }
 
 
+def _validate_industry_factor_rows(invocation, *, factor_receipt, proof):
+    """Compare to the current sealed producer, not a superseded projection.
+
+    The ordinary native validator checks the actual output signatures and
+    month values. This only composes its retained industry/factor receipts;
+    it never scans historical data or grants readiness on its own.
+    """
+    from .monthly_build_resume import load_sealed_build_json
+    from .monthly_fact_correction import SCHEMA
+    from .monthly_industry_history import factor_file_receipts
+
+    entries = factor_file_receipts(factor_receipt)
+    sector = entries["sector_data.h5"]
+    if proof.get("sector_row_count") == sector["inherited_rows"] + sector["month_rows"]:
+        return
+    reference = factor_receipt.get("fact_correction_ref")
+    if reference is None:
+        raise CandidateBuildStageError("industry repair row count differs from physical factor tail")
+    authority = load_sealed_build_json(invocation.cas, reference)
+    if (authority.get("schema_version") != SCHEMA
+            or authority.get("target_cutoff") != sector["cutoff"]
+            or authority.get("database_write") is not False
+            or authority.get("active_profile_write") is not False
+            or authority.get("runtime_action") is not False):
+        raise CandidateBuildStageError("industry factor successor authority differs")
+    files = authority.get("files")
+    if not isinstance(files, list):
+        raise CandidateBuildStageError("industry factor successor files are missing")
+    selected = {}
+    for name in ("sector_data.h5", "static_factors.parquet"):
+        entry = entries[name]
+        pins = [row for row in files if isinstance(row, Mapping) and row.get("dataset") == entry["dataset"]]
+        if len(pins) != 1:
+            raise CandidateBuildStageError("industry factor successor file identity is ambiguous")
+        pin = pins[0]
+        if (pin.get("relative_path") != f"factor_bundle/{name}"
+                or pin.get("sha256") != entry["sha256"] or pin.get("size") != entry["size"]
+                or entry.get("fact_correction_ref") != reference):
+            raise CandidateBuildStageError("industry factor successor file pin differs")
+        selected[name] = pin.get("validation_payload")
+    counts = selected["sector_data.h5"]
+    static = selected["static_factors.parquet"]
+    if (not isinstance(counts, Mapping) or not isinstance(static, Mapping)
+            or type(counts.get("row_count")) is not int
+            or counts["row_count"] != sector["inherited_rows"] + sector["month_rows"]
+            or type(counts.get("september_rows")) is not int
+            or counts["september_rows"] != sector["month_rows"]
+            or static.get("input_sha256") != {entry["dataset"]: entry["sha256"]
+                for entry in entries.values() if entry["dataset"] != "static_factors"}):
+        raise CandidateBuildStageError("industry factor successor row counts or static inputs differ")
+
+
 def _validate_native_month(
     invocation: BuildStageInvocation, *, pit: FrozenPitSnapshot,
     factor_receipt: Mapping[str, Any], index_receipt: Mapping[str, Any],
@@ -1275,6 +1327,16 @@ def _validate_native_month(
     common = {"root": invocation.staging_root, "cutoff": pit.cutoff,
               "predecessor_manifest_sha256": prefix.manifest_sha256,
               "source_bundle_sha256": invocation.build_inputs["source_bundle_sha256"]}
+    history_ref = factor_receipt.get("industry_history_projection_ref")
+    expected_history = invocation.plan.get("industry_history_projection_sha256")
+    if expected_history is not None or history_ref is not None:
+        from .monthly_industry_history import IndustryHistoryProjection
+        from .monthly_build_resume import load_sealed_build_json
+        proof = load_sealed_build_json(invocation.cas, history_ref)
+        projection = IndustryHistoryProjection.read(proof["projection"])
+        if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
+            raise CandidateBuildStageError("industry repair was not verified against frozen authority")
+        _validate_industry_factor_rows(invocation, factor_receipt=factor_receipt, proof=proof)
     consumer = validate_candidate_consumer_smoke_receipt(
         _prerequisite_json(invocation, "consumer_smoke"), profile=invocation.profile.profile,
         cutoff=pit.cutoff, expected_index_codes=invocation.profile.index_codes,
@@ -1295,18 +1357,6 @@ def _validate_native_month(
             repair_inputs=invocation.build_inputs.get("monthly_repair_inputs") if component == "factor" else None)
         ledger.chunk(f"native-month-writer-QA-{component}")
     output_pins = {}
-    history_ref = factor_receipt.get("industry_history_projection_ref")
-    expected_history = invocation.plan.get("industry_history_projection_sha256")
-    if expected_history is not None or history_ref is not None:
-        from .monthly_industry_history import IndustryHistoryProjection, factor_file_receipts
-        from .monthly_build_resume import load_sealed_build_json
-        proof = load_sealed_build_json(invocation.cas, history_ref)
-        projection = IndustryHistoryProjection.read(proof["projection"])
-        if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
-            raise CandidateBuildStageError("industry repair was not verified against frozen authority")
-        sector_entry = factor_file_receipts(factor_receipt)["sector_data.h5"]
-        if proof.get("sector_row_count") != sector_entry["inherited_rows"] + sector_entry["month_rows"]:
-            raise CandidateBuildStageError("industry repair row count differs from physical factor tail")
     for report in reports.values():
         for path, pin in report["verified_output_files"].items():
             if path in output_pins:
@@ -1847,7 +1897,7 @@ def _patch_legacy_factor_component(
         repaired_prefixes, null_repairs = repair_materials(repair_inputs, predecessor=prefix)
     if prefix.cutoff != start - date.resolution:
         raise CandidateBuildStageError("legacy factor predecessor is not the preceding month")
-    codes = tuple(sorted({span.ts_code for span in pit.spans if span.eligible_start <= pit.cutoff and span.eligible_end >= start}))
+    codes = tuple(source.qfq_authority.by_code)
     # A September IPO cannot have an August rolling seed. Use the physical
     # provider catalog to avoid searching the unindexed historical H5 for it.
     catalog = prefix.root / Path(prefix.manifest["components"]["day_meta_export"]["path"]).parent / "instruments/all.txt"
@@ -1901,7 +1951,7 @@ def _patch_legacy_factor_component(
             static_ordered_columns=invocation.profile.static_ordered_columns,
             row_group_rows=rows_per_chunk, max_source_partition_rows=max(250_000, invocation.profile.resource_policy.validation_read_chunk_rows),
             qfq_source_summary=source.qfq_source_summary, overlay_summary=source.factor_overlay_summary,
-            allow_partial_ranges=True, instrument_filter=codes,
+            allow_partial_ranges=True, instrument_filter=codes, fact_stock_codes=codes,
         ), reader=_FactorReader(source, instrument_filter=codes), initial_state=state, checkpoint=checkpoint,
     )
     target = invocation.staging_root / "factor_bundle"
@@ -1980,7 +2030,7 @@ def _prepare_legacy_bin_patch(
         raise CandidateBuildStageError("legacy month tail cutoff does not advance")
     from .monthly_quote_population import observed_quote_days
 
-    known_codes = frozenset(span.ts_code for span in pit.spans)
+    known_codes = frozenset(source.qfq_authority.by_code)
     quote_days = observed_quote_days(
         _merged_rows(source, component, "kline_daily_raw", staging=invocation.staging_root,
                      key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
@@ -2708,6 +2758,7 @@ def _prepare_bin_patch_phase(
         trading_days=selected_days,
         qfq_denominators=source.qfq_authority,
         instrument_filter=(codes or None),
+        fact_stock_codes=tuple(source.qfq_authority.by_code),
         initial_adj_factors=seeds,
         quote_days=quote_days,
     )
@@ -3333,8 +3384,10 @@ def _rewrite_private_qlib_authorities(
             raise CandidateBuildStageError(f"canonical rows do not cover frozen PIT span: {span.ts_code}")
         expected_codes.add(span.ts_code)
         lines.append(f"{span.ts_code}\t{start.isoformat()}\t{end.isoformat()}")
-    if not lines or set(ranges) != expected_codes:
+    if not lines or not expected_codes.issubset(ranges):
         raise CandidateBuildStageError("canonical stock authority differs from frozen PIT instruments")
+    lines = [f"{code}\t{start.isoformat()}\t{end.isoformat()}"
+             for code, (start, end) in sorted(ranges.items())]
     all_path = qlib_root / "instruments" / "all.txt"
     _atomic_private_bytes(all_path, ("\n".join(lines) + "\n").encode("utf-8"))
     index_path = qlib_root / "instruments" / "index.txt"
