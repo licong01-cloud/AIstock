@@ -215,6 +215,9 @@ def _run_nightly_pytest_shards(
         return False
     plan = env["AISTOCK_TEST_PLAN"]
     groups = _pytest_file_shards(roots, workers=workers)
+    # The complete Advisory matrix also exercises producers whose existing
+    # output contract requires X. Synthetic scratch must satisfy that contract.
+    scratch_parent = _offline_fixture_parent(plan)
     artifact_root = Path(env["AISTOCK_TEST_METRICS_RECEIPT"]).parent if env.get("AISTOCK_TEST_METRICS_RECEIPT") else ROOT / "tmp" / "validation"
     directory = ROOT / artifact_root / "nightly_shards" / plan / uuid4().hex
     directory.mkdir(parents=True)
@@ -238,9 +241,9 @@ def _run_nightly_pytest_shards(
         started = time.monotonic()
         # A short sibling path satisfies repo-external artifact contracts and
         # Windows CreateProcess cwd limits. Only this worker's new scratch is cleaned.
-        with TemporaryDirectory(prefix=f"aistock-pytest-{index}-", dir=ROOT.parent) as temporary, log.open("w", encoding="utf-8") as output:
+        with TemporaryDirectory(prefix=f"aistock-pytest-{index}-", dir=scratch_parent) as temporary, log.open("w", encoding="utf-8") as output:
             temporary_path = Path(temporary).resolve()
-            if temporary_path.parent != ROOT.parent.resolve():
+            if temporary_path.parent != scratch_parent.resolve():
                 raise RuntimeError("offline fixture scratch escaped its owner directory")
             worker_args.append(f"--basetemp={temporary_path / 'tests'}")
             result = subprocess.run(
@@ -284,6 +287,12 @@ def _run_nightly_pytest_shards(
                     env=coverage_env, external=True)
         session.run(sys.executable, "-m", "coverage", "report", "--fail-under=70", env=coverage_env, external=True)
     return True
+
+
+def _offline_fixture_parent(plan: str) -> Path:
+    if plan == "advisory_modeling_backend":
+        return Path("X:/") if os.name == "nt" else Path("/mnt/x")
+    return ROOT.parent
 
 
 def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tuple[str, ...] | None:

@@ -91,6 +91,23 @@ def test_offline_sharding_never_changes_local_or_pr_execution(monkeypatch):
     assert noxfile._run_nightly_pytest_shards(object(), (), (), {}) is False
 
 
+def test_advisory_full_shards_keep_roots_workers_numeric_limits_and_X_output_contract(monkeypatch):
+    monkeypatch.setattr(noxfile, "_env", lambda env: env)
+    calls = []
+    monkeypatch.setattr(noxfile, "_run_nightly_pytest_shards", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
+    class Session:
+        name = "advisory_modeling_backend"
+        def run(self, *args, **kwargs):
+            pytest.fail("complete regression escaped its shard runner")
+    roots = ("backend/tests/advisory_modeling", "backend/tests/advisory_model_first")
+    noxfile._run_pytest(Session(), *roots, "-q")
+    args, options = calls[0]
+    assert args[1] == roots and args[2] == ("-q",) and options == {"workers": 6}
+    assert all(args[3][key] == "1" for key in noxfile.HMM_TEST_NUMERIC_ENV)
+    assert noxfile._offline_fixture_parent(Session.name) == (Path("X:/") if os.name == "nt" else Path("/mnt/x"))
+    assert noxfile._offline_fixture_parent("hmm_risk_backend") == noxfile.ROOT.parent
+
+
 def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeypatch):
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
     monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
