@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Retain all real SH/SZ source suspension resolutions within the release calendar, keep resume and ambiguous-event semantics, and leave PIT selection sidecars unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2035-shared-suspension-export-incorrectly-hides-factual-events-outside-select.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/monthly_preparation_shared.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2035-shared-suspension-export-incorrectly-hides-factual-events-outside-select.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_shared_components.py",
@@ -105,8 +112,8 @@
   },
   "first_seen_at": "2026-10-20T11:05:01.944709Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1fafc945ccf95a348cefc7eac3dd6c1cfa0695c7",
+  "fixed_at": "2026-10-20T11:15:07Z",
   "github_issue_number": 6488,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6488",
   "last_seen_at": "2026-10-20T11:05:01.944709Z",
@@ -114,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6490",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,10 +139,11 @@
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "runtime_identity_match": "pending",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -144,7 +153,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -153,6 +162,9 @@
     "fingerprint": "1a7e77c60be0ae69b6900ad5",
     "source_event_id": "FE-20261020-1a7e77c60be0"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. Fresh-process targeted tests: selection-excluded suspension source facts, mixed S/R authority, native prefix reuse and private shared adoption; 65 initial passes plus all 9 failed cases corrected and passed with --lf. No database writes or process control."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
