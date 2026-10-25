@@ -16,6 +16,20 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("path", ["schedules", "targets", "not-registered"])
+@pytest.mark.parametrize("payload,expected", [
+    ({"data": {"items": []}}, "passed"),
+    ({"status": "success", "data": {"items": [{"status": "failed"}]}}, "passed"),
+    ({"status": "failed", "data": {"items": []}}, "failed"),
+    ({"status": "success", "data": {"ok": False, "items": []}}, "failed"),
+    ({"status": "success", "data": {"status": "error", "items": []}}, "failed"),
+    ({"status": "success", "data": {"status": "success", "items": "bad"}}, "failed"),
+])
+def test_local_data_collection_smoke_accepts_real_envelope_not_error(path, payload, expected):
+    verdict = _business_semantic(f"http://127.0.0.1:8001/api/v1/local-data/{path}", payload, "a" * 64)
+    assert verdict["verdict"] == ("failed" if path == "not-registered" else expected)
+
+
 @pytest.mark.parametrize('case,expected', [('partial', 'passed'), ('empty', 'failed'), ('fake-zero', 'failed'), ('empty-available', 'failed'), ('no-proof', 'failed'), ('loading', 'pending')])
 def test_pipeline_overview_probe_validates_partial_observation_contract(case, expected):
     source = {'state': 'loading', 'data': None, 'collected_at': None, 'stale': False, 'refreshing': True}
@@ -1094,17 +1108,6 @@ def test_rotation_l2_overview_semantic_contract(query, envelope, fields, reason)
         assert reason in semantic["reason"]
 
 
-def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
-    semantic = _business_semantic(
-        "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/not-registered",
-        {"status": "ok", "data": {}}, "f" * 64,
-    )
-
-    assert semantic["contract_id"] is None
-    assert semantic["verdict"] == "failed"
-    assert "no target-owned business-smoke semantic contract" in semantic["reason"]
-
-
 def _extension_probe():
     policy = dict(schema_version="hmm_coefficient_extension_policy_v1", enabled=True, snapshot_id="snapshot-1",
                   model_sha256="a" * 64, config_sha256="b" * 64, coefficient_start="2026-06-01", signal_presets=["balanced"])
@@ -1459,7 +1462,7 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
 
 
-@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py"])
+@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py", "component_artifact_manifest.py", "component_manifest_producer.py", "factor_materializer.py", "source_fact_history.py", *(f"legacy:{name}.py" for name in ("component_artifact_manifest", "component_manifest_producer", "factor_materializer", "source_fact_history"))])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -1479,14 +1482,16 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
         monthly_sources = ["backend/services/dataset_release/monthly_industry_history.py",
                            "backend/services/dataset_release/build_stage.py"]
     elif isinstance(monthly, str):
-        monthly_sources = [f"backend/services/dataset_release/{monthly}"]
+        monthly_sources = [f"backend/services/dataset_release/{monthly.removeprefix('legacy:')}"]
+        if monthly.startswith("legacy:"):
+            monthly_sources.append("scripts/dataset_release_worker.py")
 
     selected, error = workflow._select_runtime_probe_route(
         target, runtime_files=monthly_sources if monthly else ["scripts/dataset_release_worker.py"],
     )
 
     assert error is None
-    if monthly:
+    if monthly and not str(monthly).startswith("legacy:"):
         assert selected["probe_route_id"] == "monthly_release_worker_process"
         assert selected["probe_mode"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_MODE
         assert selected["probes"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS
