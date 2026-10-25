@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2037",
-  "closed_at": null,
+  "closed_at": "2026-10-25T08:06:55.338159Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -84,8 +84,8 @@
   },
   "first_seen_at": "2026-10-20T11:49:52.235231Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ba9a8f9b7d1cf645a17cf72bcd4722487b7e415f",
+  "fixed_at": "2026-10-20T12:06:39Z",
   "github_issue_number": 6493,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6493",
   "last_seen_at": "2026-10-20T11:49:52.235231Z",
@@ -93,6 +93,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6494",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -118,9 +119,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2037-facts-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2037",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "ba9a8f9b7d1cf645a17cf72bcd4722487b7e415f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T08:06:51.907605Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "c611472eae67489af137cdfc4bd8cdab4210bd0329118f84b2a2b8f7e8470a1f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2097be41a7a7326f05d2a0cb5344454454ad2b94f78162032cefa339d74ef218",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -130,7 +154,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -139,6 +163,9 @@
     "fingerprint": "eeeaf2a5858478127fe77f09",
     "source_event_id": "FE-20261020-eeeaf2a58584"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. Isolated interpreter imported summarize_sector_context and verified factual_members implementation; database_access=false. Targeted RED 4 failures -> GREEN 4 passed; final related matrix 78 passed.; Isolated interpreter loaded summarize_sector_context factual_members implementation; database_access=false"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

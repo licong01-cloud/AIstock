@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1984",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:39:32.455708Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,15 +28,15 @@
   "expected": "New raw keys take a direct bulk COPY/insert path; only existing conflicting keys are compared or precision-enriched, with atomic failure and unchanged existing valid facts.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json",
       "tdx-api-main/web/integrity_test.go",
-      "tdx-api-main/web/raw_rows.go"
+      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json",
       "tdx-api-main/web/integrity_test.go",
-      "tdx-api-main/web/raw_rows.go"
+      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -95,8 +95,8 @@
   },
   "first_seen_at": "2026-10-19T10:12:02.861830Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "75889488293951f2cecdf83ff5b2fb090f41b8ad",
+  "fixed_at": "2026-10-19T10:31:45Z",
   "github_issue_number": 6357,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6357",
   "last_seen_at": "2026-10-19T10:12:02.861830Z",
@@ -104,6 +104,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6359",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -132,9 +133,32 @@
     "planned_target_ids": [
       "tdx-go-backend"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1984-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1984",
+      "business_smoke_semantic": {
+        "contract_id": "tdx_raw_kline_facts",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "cfa3a63f284f1b7624f94e824efb8ac531120bcace55a6447ed983627c497141",
+      "expected_identity": "75889488293951f2cecdf83ff5b2fb090f41b8ad",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:46.895278Z",
+      "mode": "read_only",
+      "observed_identity": "b222c628add6476222e754b945454f017ba89c40",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "fa653cceedd7e9ba0926a1bb6a524313857be126f79f129a1025e81ad20cec73",
+      "receipt_sha256": "77a5e1e958f47b0cbe901880beefdc75230f1ffe4f18894cb6b2bb05354ac41b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "949711d1e17f8fe90a2e33094b5afbb64cb3e719712133c78dc9bfdd0bf33973",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "tdx-go-backend"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
@@ -144,7 +168,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1984",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e9bb04d151a47878",
+    "recorded_at": "2026-10-19T10:32:31.656307Z",
+    "runtime_contract_digest": "cfa3a63f284f1b7624f94e824efb8ac531120bcace55a6447ed983627c497141",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1145f98e13b50ce114ab0661e9160b579ab275c2",
+    "source_merge_commit": "75889488293951f2cecdf83ff5b2fb090f41b8ad",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6359",
+    "validation_evidence": [
+      "validation-receipt: id=a16ff7327b4ec993 commit=1145f98e13b50ce114ab0661e9160b579ab275c2 kind=nox plan=l0 status=passed command=`nox -s l0 --no-venv -> passed; offline Go web matrix with explicit existing DEV` result=`9 tests passed; actual DEV 240-row replay 3-8s, rollback and units verified. RED/GREEN new-key operations, exact replay, NULL-only precision, mixed atomic conflict rollback, daily/minute schemas passed. Three code review passes and DESIGN-COMPLIANCE-001 four items passed; git diff --check passed.`"
+    ],
+    "validation_evidence_digest": "36907b3f80192a907808d29c12436cb10f1af607e1e5ec9bf66e186f81f2e48e"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -153,6 +198,10 @@
     "fingerprint": "505b5eb0b02017103144c8ff",
     "source_event_id": "FE-20261019-505b5eb0b020"
   },
+  "validation_evidence": [
+    "validation-receipt: id=a16ff7327b4ec993 commit=1145f98e13b50ce114ab0661e9160b579ab275c2 kind=nox plan=l0 status=passed command=`nox -s l0 --no-venv -> passed; offline Go web matrix with explicit existing DEV` result=`9 tests passed; actual DEV 240-row replay 3-8s, rollback and units verified. RED/GREEN new-key operations, exact replay, NULL-only precision, mixed atomic conflict rollback, daily/minute schemas passed. Three code review passes and DESIGN-COMPLIANCE-001 four items passed; git diff --check passed.`",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1688",
-  "closed_at": null,
+  "closed_at": "2026-10-25T08:24:29.827808Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,12 +30,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1688-unified-monthly-source-adapter-retains-legacy-sector-research-policy-ins.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1688-unified-monthly-source-adapter-retains-legacy-sector-research-policy-ins.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +96,8 @@
   },
   "first_seen_at": "2026-10-02T19:13:18.874016Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "668a5c75aa90effdc125d183a97e222bde8ac9ad",
+  "fixed_at": "2026-10-02T19:30:41Z",
   "github_issue_number": 5296,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5296",
   "last_seen_at": "2026-10-02T19:13:18.874016Z",
@@ -103,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5298",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -121,24 +124,47 @@
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1688-facts-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1688",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "668a5c75aa90effdc125d183a97e222bde8ac9ad",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T08:24:25.855794Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "f9282a8edcdf82d22e25f76558be0ccc4776fc3e8ee7ed81ed1e5df64762c5a0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "42020d76b6eac569031dec8dd0e49844ecc22c84258aed5edd6a3c39e9b09d36",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
-    "runtime_impact": "backend",
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main"
+      "worker-scheduler"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -147,6 +173,10 @@
     "fingerprint": "4ac9c9438ac2cbec2797ccb7",
     "source_event_id": "FE-20261002-4ac9c9438ac2"
   },
+  "validation_evidence": [
+    "Exact source merge/CI and original isolated monthly source publication-policy regression retained; runtime metadata corrected to actual single supervised worker, no gate removed, no data or source changes.",
+    "Source PR current merge identity and source CI SUCCESS independently verified. rtk pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_blocked_actual_audit_prevents_materialization_and_seal -q -> passed; isolated process binds publication policy and blocks invalid audit before writes"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
