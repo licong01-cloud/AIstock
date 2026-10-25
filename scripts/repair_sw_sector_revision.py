@@ -17,7 +17,7 @@ from dotenv import dotenv_values  # noqa: E402
 
 from backend.services.sector_data_builder import (  # noqa: E402
     _BUILD_DAY_SQL, _DELETE_STALE_DAY_SQL, _PREFLIGHT_DAY_SQL,
-    DEFAULT_ST_PIT_UNIVERSE_KEY, IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX,
+    _AUTHORITATIVE_UNIVERSES_SQL, CANONICAL_PIT_AUTHORITY_ID,
 )
 from backend.services.sector_data_repair import (  # noqa: E402
     projection_revision_plan, membership_revision_spans, _MARK_SQL, _CLEAR_SQL,
@@ -75,14 +75,12 @@ def load_plan(conn, source_id, start, end):
     plan = projection_revision_plan(previous, facts, start, end, approved_history=history)
     unknown = plan["unverified_existing_identities"]
     with conn.cursor() as cur:
-        cur.execute("""SELECT DISTINCT spans.ts_code FROM market.stock_universe_pit_spans spans
-            JOIN market.stock_universe_pit_state state USING (universe_key)
-            WHERE state.status='ready' AND NOT state.dirty
-              AND (state.universe_key=%s OR state.universe_key LIKE %s)
-              AND spans.eligible_start<=%s AND spans.eligible_end>=%s
-              AND spans.ts_code=ANY(%s)""",
-            (DEFAULT_ST_PIT_UNIVERSE_KEY, IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX + "%", end, start,
-             [r["ts_code"] for r in unknown]))
+        cur.execute(_AUTHORITATIVE_UNIVERSES_SQL.rstrip().rstrip(",") + """
+            SELECT DISTINCT spans.ts_code FROM market.stock_universe_pit_spans spans
+            JOIN authoritative_universes USING (universe_key, rule_version)
+            WHERE spans.eligible_start<=%(trade_date)s AND spans.eligible_end>=%(start)s
+              AND spans.ts_code=ANY(%(unknown)s)""",
+            dict(params(end), start=start, unknown=[r["ts_code"] for r in unknown]))
         eligible = {r[0] for r in cur.fetchall()}
     plan["unverified_required_identities"] = [r for r in unknown if r["ts_code"] in eligible]
     plan["unverified_outside_consumption_count"] = len(unknown) - len(plan["unverified_required_identities"])
@@ -114,8 +112,7 @@ def audit_day(conn, day, *, projection_changes=()):
 
 
 def params(day):
-    return dict(trade_date=day, live_universe_key=DEFAULT_ST_PIT_UNIVERSE_KEY,
-                qe_universe_pattern=IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX + "%")
+    return dict(trade_date=day, authority_id=CANONICAL_PIT_AUTHORITY_ID)
 
 
 def repair_sql(conn, plan, dates, target):
