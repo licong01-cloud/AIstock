@@ -18,6 +18,25 @@ def _complete_actions() -> list[dict[str, str]]:
     return [{"component": component.value, "action": ComponentAction.REUSE.value} for component in Component]
 
 
+def test_native_factor_history_file_identities_use_dataset_not_relative_path():
+    from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
+    from backend.services.dataset_release.monthly_industry_history import factor_file_receipts
+
+    receipt = {"files": [{"dataset": name} for name in (*FACTOR_H5_DATASETS, "static_factors")]}
+    entries = factor_file_receipts(receipt)
+    assert entries["sector_data.h5"]["dataset"] == "sector_data"
+    assert entries["static_factors.parquet"]["dataset"] == "static_factors"
+    assert len(entries) == 8
+    assert all("relative_path" not in entry for entry in entries.values())
+
+    for files in (receipt["files"][:-1], [*receipt["files"], receipt["files"][0]],
+                  [{"dataset": "../sector_data"}, *receipt["files"][1:]],
+                  [{"relative_path": "sector_data.h5"}, *receipt["files"][1:]]):
+        from backend.services.dataset_release.errors import SourceManifestError
+        with pytest.raises(SourceManifestError, match="factor.*identity|factor.*population"):
+            factor_file_receipts({"files": files})
+
+
 def test_action_plan_requires_one_action_for_every_component() -> None:
     assert _actions({"actions": _complete_actions()}) == {component: ComponentAction.REUSE for component in Component}
 

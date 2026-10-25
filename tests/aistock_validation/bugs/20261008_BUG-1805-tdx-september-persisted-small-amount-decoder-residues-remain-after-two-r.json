@@ -1,0 +1,401 @@
+{
+  "actual": "Fourteen rows still match the defective pre-BUG-1789 amount decoder, while both current TDX services return correct values.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1805",
+  "closed_at": "2026-10-08T08:40:21Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-08T05:11:08.892656Z",
+  "data_repair_delivery": {
+    "dataset_write": false,
+    "dependency_install": false,
+    "dev_business_table_write": false,
+    "dev_receipt_sha256": "4acf3cd6aa17a69678debd93dd3ac451b630936c7b2afddda01f1c920db9c952",
+    "dev_validation": "14目标行+14控制行，11个真实压缩chunk；金额更新、幂等、末行漂移整笔回滚、缺行、错误来源、数据库身份及既存schema约束均通过；fixture DDL/DML全部回滚并经独立连接确认不存在。",
+    "formal_bug_closure": "READY_FOR_PR: registered allowlisted explicit-path L0 passed; DEV/production readback retained as separate pinned data evidence. No workflow bypass.",
+    "planning_readonly_evidence": "生产通用参数计划的聚合核验EXPLAIN触发8秒超时；定制计划同一核验返回1条事实约0.031秒。首次UPDATE规划约6.9秒。仅只读诊断，未执行EXPLAIN ANALYZE UPDATE。",
+    "production_apply": true,
+    "production_attempt_receipt_sha256": "dbecbc7c09301ade39eed4a60b1fefbe4b5ad9524296ab2db9c8833479c5ca64",
+    "production_authorization": "用户明确授权r3 SQL dd3c83c943f0ed6a1de5e9f07f4af4cd34d1722b48f1cb8e6b8a407c07e13510，仅同一14行amount_li；本轮按精确字节执行一次，未复用授权执行其他SQL。",
+    "production_r3_commit_confirmed": false,
+    "production_r3_independent_rollback_readback_unchanged": true,
+    "production_r3_receipt_sha256": "fc409313c13343b66c912e68498a55185f27ffc12ab4e3cc86a7824049fbe849",
+    "production_r3_sqlstate": "57014",
+    "production_r4_commit_confirmed": false,
+    "production_r4_failure_location": "inline_code_block line66, exact batch UPDATE statement; precheck passed. SELECT planning/timing PASS is not UPDATE performance proof.",
+    "production_r4_independent_rollback_readback_unchanged": true,
+    "production_r4_receipt_sha256": "50f80c02f6ac9a9541d989860e9091d103cc5c9f617f2068cd4253faf6659f51",
+    "production_r4_remaining_performance_gap": "DEV compression configuration matched but 21488 fixture rows do not match production chunk/segment density; actual compressed UPDATE path remains unresolved. No replacement SQL or additional production write attempted.",
+    "production_r4_sqlstate": "57014",
+    "production_r5_commit_confirmed": false,
+    "production_r5_decompression_limit_readonly": 200000,
+    "production_r5_error_message": "tuple decompression limit exceeded by operation",
+    "production_r5_independent_rollback_readback_unchanged": true,
+    "production_r5_monitor_sha256": "99ba86ea1950b62d086b002a1432edee83a08d1fff201fc088b1c15c5b6c1eca",
+    "production_r5_observation": "6个样本无blocking pid；最后样本AccessShareLock64297、RowExclusiveLock64406。track_io_timing=off且无pg_stat_kcache，未声称精确CPU或I/O耗时。修复会话已退出。未修改解压上限或数据库配置。",
+    "production_r5_receipt_sha256": "3da3dafbe9ec1d6089ea6b31862056b78372bd3e93d56de0bbf21edcb8ad8694",
+    "production_r5_sqlstate": "53400",
+    "production_r6_changed_rows": 14,
+    "production_r6_commit_confirmed": true,
+    "production_r6_control_rows_unchanged": 14,
+    "production_r6_independent_readback": true,
+    "production_r6_issue_readback_comment": "https://github.com/licong01-cloud/AIstock/issues/5743#issuecomment-6054262433",
+    "production_r6_other_columns_unchanged": true,
+    "production_r6_receipt_sha256": "4323b60e00352bcd7c514fac09bf9cbef77f7a5f9d62c46973df2c19b5007ca4",
+    "production_readback": "此前超时已回滚；r5仅把r4超时60s改600s，约96秒触发53400 tuple decompression limit exceeded by operation，未提交。独立连接确认14条完整目标行和14条控制行与冻结事实逐值一致，生产净修改0行。",
+    "production_readback_current": "r6 已在生产提交14行 amount_li，独立连接确认全部新金额正确、所有其他列及14条对照记录不变；SQL执行24.857246秒。r0-r5为历史失败回滚，不代表当前状态。",
+    "production_retry_receipt_sha256": "bc03285c916997e068918eb6bcbb41a31c570c7489fde7dd478fd967f80d869e",
+    "profile_write": false,
+    "r3_dev_receipt_sha256": "ffdedc4e4af92dba48d316ad0c4909cfd2b3bffcd8612a4697ac814125c48d4f",
+    "r3_sql_sha256": "dd3c83c943f0ed6a1de5e9f07f4af4cd34d1722b48f1cb8e6b8a407c07e13510",
+    "r4_dev_receipt_sha256": "f95c5e6dccd54cfcb300a49a2b07f8b6afba8a50bbe06979626bce4fbfeb9b30",
+    "r4_dev_scale_validation": {
+      "compressed_chunks": 368,
+      "corrected_rows": 14,
+      "fixture_absent_independent_readback": true,
+      "fixture_ddl_dml_rolled_back": true,
+      "fixture_rows": 21488,
+      "idempotent_replay_s": 0.237456,
+      "negative_tests": [
+        "missing_target",
+        "wrong_source",
+        "amount_drift",
+        "wrong_database_guard",
+        "post_update_atomic_rollback"
+      ],
+      "other_columns_controls_and_background_unchanged": true,
+      "production_full_scale_execution_proven": false,
+      "space_partitions": 16,
+      "whole_batch_repair_s": 0.440567
+    },
+    "r4_only_changes": [
+      "same 14 frozen keys and old/new amount values, literal bpchar identity matches char(9) column",
+      "replace 14-row loop and 42 statements with batch precheck, one exact UPDATE, batch readback",
+      "keep database/source/frequency/adjustment/old-value/count/non-amount guards and atomic rollback",
+      "statement_timeout 60s; no global planner setting or explicit chunk decompression"
+    ],
+    "r4_production_readonly_evidence": "10656 compressed chunks; before/update/after EXPLAIN passed, UPDATE planning 2.699286s, no UPDATE executed. SELECT planning 6209.027ms cold/1312.015ms warm, execution 71.772ms/34.688ms, all14 originals unchanged.",
+    "r4_production_readonly_plan_sha256": "2b532d85c26720a7d86635f4ff1ded1d1bda47ed9736ef7387796c6f92e52ff2",
+    "r4_production_select_timing_sha256": "e9367e48a9ae4b47de3d9fe54463264c1be7caf3c201a9874b98a7344ae9e156",
+    "r4_review_rounds": [
+      "exact target and write scope",
+      "compressed execution, idempotency and fail-closed rollback",
+      "real production read-only planning, frozen artifact pins and safe executor diagnostics"
+    ],
+    "r4_sql_sha256": "3b867ec27bea9fc4ec13d56ffb31a743f0a83d48469517fd1b486059e8adf6bd",
+    "r5_production_authorization": "用户对仅延长r4事务超时至10分钟、锁等待仍5秒并监测的明确方案回复开始按建议执行；实际仅60s改600s，同一14行amount_li和全部保护不变。",
+    "r6_configuration_changed": false,
+    "r6_design_compliance": [
+      "all fourteen authorized targets repaired, no subset success claim",
+      "errors raised with atomic rollback, independent readback required",
+      "only amount_li changes; source, prices and volume unchanged",
+      "no added production approval gate or decompression-limit adjustment"
+    ],
+    "r6_dev_receipt_sha256": "0c86b6df66c1da8d20cac3397840e9c6ee405a5f07f65174192d6abb8e0bb5a5",
+    "r6_dev_validation": {
+      "compressed_chunks": 176,
+      "decompression_limit_changed": false,
+      "decompression_limit_dev": 100000,
+      "decompression_limit_production": 200000,
+      "fixture_absent_independent_readback": true,
+      "fixture_ddl_dml_rolled_back": true,
+      "fixture_rows": 359040,
+      "idempotent_changed_rows": 0,
+      "idempotent_replay_s": 0.015918,
+      "late_target_failure_rolls_back_earlier_updates": true,
+      "old_or_case_sqlstate": "53400",
+      "other_columns_and_background_unchanged": true,
+      "point_repair_s": 0.298568
+    },
+    "r6_explicit_chunk_decompression": false,
+    "r6_production_authorization": "用户本轮授权首选逐行精确UPDATE方案，先在现有DEV验证再更新生产；仅同一14行amount_li，一笔事务，不改其他列或配置。",
+    "r6_repair_session_exited_readonly_check": true,
+    "r6_review_rounds": [
+      "same frozen fourteen facts and amount-only write scope",
+      "359040-row compressed RED-to-GREEN, full-content preservation and late-target atomic rollback",
+      "literal equality SQL, artifact pins, exact DEV receipt and independent production readback"
+    ],
+    "r6_sql_sha256": "ac04696675d497dfbe3723cba94b3f3f61c73513d0107912a24a2ba8ea81d160",
+    "review_passes": 3,
+    "root_cause_bug": "BUG-1789",
+    "runtime_action": false,
+    "september_readback": {
+      "checked_stock_day_keys": 1439,
+      "full_history_audit": false,
+      "monthly_ready_claimed": false,
+      "provider_read_errors": 0,
+      "provider_readback_keys": 47,
+      "provider_receipt_sha256": "26213c5357d501270e24a74f4e1c5c8a489869a52e55cd1588ac2f6d76e46cf5",
+      "provider_returned_240_bars_keys": 47,
+      "receipt_sha256": "023555b3cc4c6a9322ec75757e96d5325445867a80a1a1ee17c803ea4a2b4973",
+      "remaining_amount_mismatch": 0,
+      "remaining_parity_keys": 47,
+      "remaining_unique_price_mismatch": 2,
+      "remaining_volume_delta_shares": [
+        18,
+        50
+      ],
+      "remaining_volume_mismatch": 45,
+      "repaired_fourteen_stock_days_pass": 14,
+      "source_repair_scope_does_not_include_remaining_47": true
+    },
+    "source_readback_sha256": "7aff51cb58d57668b8f18a79051f15e15c64901656c0d71e53d896e9ce946801",
+    "sql_sha256": "b19f93322475c272c2b430e265e6caf51305cf677a5d610c8c8b8126640c6c58",
+    "state": "PRODUCTION_R6_APPLY_INDEPENDENT_READBACK_PASS",
+    "successor_dev_receipt_sha256": "e09569129c2e6b535b0c4fc266ec5fbc6d70eb330b150d4738e71a3e835ec340",
+    "successor_only_changes": [
+      "r4 statement_timeout 60s -> 600s; all other SQL bytes unchanged"
+    ],
+    "successor_production_authorization": "用户明确授权此r4 SQL，仅修复生产同一14行amount_li，不改其他列；精确哈希3b867ec27bea9fc4ec13d56ffb31a743f0a83d48469517fd1b486059e8adf6bd已提交一次。不得复用该授权执行其他SQL。",
+    "successor_sql_sha256": "1828fab72e5c699e476e1e462505414cb9cf5ef8f793c0746088c259671fa10c",
+    "summary": "已合入解码修复不会自动修复库存事实；本次仅处理8只股票的14条旧金额解码残留，排除分桶差异及其他未解释量价差异。",
+    "symbol_count": 8,
+    "target": "aistock.market.kline_minute_raw.amount_li",
+    "target_count": 14
+  },
+  "description": "Fourteen rows still match the defective pre-BUG-1789 amount decoder, while both current TDX services return correct values.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261008-f2f82a0c99ff",
+      "timestamp": "2026-10-08T05:11:08.892656Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-production-precision-readback.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/source_readback.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/repair_14_amount_li.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/dev_validation.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_apply.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_apply_r2.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/repair_14_amount_li_r3.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/dev_validation_r3.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_apply_r3.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/repair_14_amount_li_r4.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/dev_batch_r4_scale_validation.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_readonly_plan_r4.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_select_timing_r4.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_apply_r4.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/repair_14_amount_li_r5.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/dev_batch_r5_scale_validation.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_apply_r5.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_monitor_r5.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/repair_14_amount_li_r6.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/dev_point_r6_validation.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/production_apply_r6.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/september_after_repair_readback.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1805-20261008/provider_residual_readback.json"
+  ],
+  "expected": "All 14 approved target facts match verified TDX wire amounts; only amount_li changes, with DEV validation and separately authorized production apply/readback.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-08T05:11:08.892656Z",
+  "fix_branch": null,
+  "fix_commit": "30ee9dfe6923cdfde7d40bbc768adf566fb7e92a",
+  "fixed_at": "2026-10-08T08:40:21Z",
+  "github_issue_number": 5743,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5743",
+  "last_seen_at": "2026-10-08T05:11:08.892656Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5775",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1805",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ad6877a7c9d4b363",
+    "recorded_at": "2026-10-08T08:41:18.046838Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "08b4b9311fad3571c1e50bb951f8eda6b319fca4",
+    "source_merge_commit": "30ee9dfe6923cdfde7d40bbc768adf566fb7e92a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5775",
+    "validation_evidence": [
+      "python -m nox -s l0 -- tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json -> passed"
+    ],
+    "validation_evidence_digest": "b339653a8baa1b89871bc5533d9c6fdc1ec97790c6e599c460abb42288fea44f"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX September persisted small-amount decoder residues remain after two-row repair",
+  "trigger_condition": {
+    "fingerprint": "f2f82a0c99ffb6bce7e95247",
+    "source_event_id": "FE-20261008-f2f82a0c99ff"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -- tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

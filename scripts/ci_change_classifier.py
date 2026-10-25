@@ -125,6 +125,9 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_validation_budget.py",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
+    "scripts/aistock_runtime_semantics.py",
     "scripts/aistock_runner_health.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
@@ -161,6 +164,8 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
 WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    "scripts/aistock_validation_budget.py": ("backend/tests/scripts/test_aistock_validation_budget.py",),
+    "scripts/aistock_runtime_semantics.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
     ".github/workflows/runner-queue-watchdog.yml": (
         "backend/tests/scripts/test_aistock_runner_health.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
@@ -250,6 +255,8 @@ PROMPT_EVALUATION_FILES = {
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
     "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
+    "scripts/activate_canonical_pit_default.py": ("qlib_data_backend",),
+    "backend/tests/scripts/test_activate_canonical_pit_default.py": ("qlib_data_backend",),
     "backend/db/pg_pool.py": ("platform_api_backend",),
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
@@ -290,7 +297,18 @@ DEPENDENCY_FILES = {
     "frontend/package-lock.json",
 }
 GO_PATH_PREFIXES = ("tdx-api-main/",)
-GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum"}
+GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum", "tdx-api-main/web/go.mod", "tdx-api-main/web/go.sum"}
+# Python consumers still need their own catalog plans; these additionally
+# validate the shared TDX protocol/build contract without market or DB access.
+TDX_GO_VALIDATION_INPUTS = {
+    "tdx-api-main/web/start.bat",
+    "scripts/start_tdx_go_backend.py",
+    "start_all_ai_stock.bat",
+    "backend/data_service/tdx_adapter.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_go_integrity.py",
+    "backend/tests/scripts/test_start_tdx_go_backend.py",
+}
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".sql", ".sh", ".ps1")
 CODE_ROOT_FILES = {"noxfile.py", "pyproject.toml", "pytest.ini"}
 
@@ -453,6 +471,17 @@ def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
         normalized.startswith(("backend/tests/", "tests/"))
         and name.startswith("test_")
         and name.endswith(".py")
+        and (repo_root / normalized).is_file()
+    )
+
+
+def _is_frontend_test_file(path: str, *, repo_root: Path) -> bool:
+    normalized = _normalize_path(path)
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        normalized.startswith(("frontend/tests/", "frontend/e2e/", "frontend/src/"))
+        and any(name.endswith(f".{kind}.{ext}") for kind in ("spec", "test")
+                for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs"))
         and (repo_root / normalized).is_file()
     )
 
@@ -649,6 +678,7 @@ def _changed_test_plan_coverage(
     *,
     repo_root: Path,
     file_backend_sessions: dict[str, list[str]],
+    frontend_test_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     test_files = [path for path in paths if _is_python_test_file(path, repo_root=repo_root)]
     selected_sessions = list(
@@ -670,9 +700,19 @@ def _changed_test_plan_coverage(
             for session in sessions
             if any(_test_target_covers_path(target, path) for target in targets_by_session.get(session, set()))
         ]
+    # Type/lint is not execution of a changed spec. Compare only the targets
+    # emitted to the frontend runner; never infer coverage from module ownership.
+    frontend_tests = [path for path in paths if _is_frontend_test_file(path, repo_root=repo_root)]
+    for path in frontend_tests:
+        coverage[path] = [
+            f"frontend:{target}" for target in frontend_test_targets or []
+            if _test_target_covers_path(f"frontend/{target}", path)
+        ]
     unexecuted = [path for path, covering_sessions in coverage.items() if not covering_sessions]
     return {
-        "changed_test_files": test_files,
+        "changed_test_files": test_files + frontend_tests,
+        "backend_changed_test_files": test_files,
+        "frontend_changed_test_files": frontend_tests,
         "coverage": coverage,
         "deferred_test_files": deferred_test_files,
         "resolution_error": resolution_error,
@@ -707,10 +747,13 @@ def _plan_routing(plan_key: str, plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
+def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str] | None = None) -> dict[str, Any]:
     catalog = flow.validation_catalog_snapshot()
     plans = catalog.plans
     selection = flow.select_validation(paths, _catalog=catalog)
+    budget_ownership = flow.match_changed_files(
+        budget_scope_paths, _modules=catalog.modules, _rules=catalog.rules,
+    ) if budget_scope_paths else {}
     selected_plan_keys: list[str] = []
     dev_db_plan_keys: list[str] = []
     frontend_test_targets: list[str] = []
@@ -737,7 +780,8 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             if _plan_requires_dev_db(plan) and plan_key not in dev_db_plan_keys:
                 dev_db_plan_keys.append(plan_key)
             target = str(plan.get("frontend_test_path") or "").strip()
-            if plan.get("ci_lane") == "frontend" and target and target not in frontend_test_targets:
+            if (plan.get("ci_lane") == "frontend" and plan.get("enabled", True)
+                    and plan.get("runner_enabled", True) and target and target not in frontend_test_targets):
                 frontend_test_targets.append(target)
         has_related_deferred_plan = any(
             plan_key not in SHARED_PLAN_KEYS
@@ -778,6 +822,10 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         "file_backend_sessions": file_backend_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
         "required_plans": selected_plan_keys,
+        "workflow_budget_required": any(
+            rule.get("primary_module") == "validation.workflow_automation"
+            for rule in budget_ownership.get("matched_rules", [])
+        ),
     }
 
 
@@ -983,21 +1031,28 @@ def classify_changed_files(
         for path in routable_non_bug_registry_files
         if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
-    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in routable_non_bug_registry_files if _is_frontend_path(path)]
-    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path)]
+    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path) or path in TDX_GO_VALIDATION_INPUTS]
     business_files = [
         path
         for path in routable_non_bug_registry_files
         if path not in workflow_fast_files
-        and path not in go_files
+        and not _is_go_path(path)
         and not _is_docs_path(path)
         and not _catalog_validation_required(path)
     ]
-    catalog_selection = _catalog_backend_selection(business_files)
+    catalog_selection = _catalog_backend_selection(business_files, budget_scope_paths=non_bug_registry_files)
     selected_plan_keys = catalog_selection["selected_plan_keys"]
     suppressed_plan_keys = catalog_selection["suppressed_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
+    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
+    budget_test = "backend/tests/scripts/test_aistock_validation_budget.py"
+    if (catalog_selection["workflow_budget_required"]
+            and "validation_workflow_automation" not in backend_sessions
+            and budget_test not in workflow_test_targets):
+        workflow_test_targets.append(
+            budget_test + "::test_workflow_automation_has_an_honest_production_denominator"
+        )
     dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
     mapped_backend_files = catalog_selection["mapped_files"]
@@ -1010,6 +1065,7 @@ def classify_changed_files(
         business_files,
         repo_root=repo_root,
         file_backend_sessions=catalog_selection["file_backend_sessions"],
+        frontend_test_targets=frontend_test_targets,
     )
     unexecuted_test_files = changed_test_plan_coverage["unexecuted_test_files"]
     if changed_test_plan_coverage["resolution_error"]:
@@ -1059,7 +1115,7 @@ def classify_changed_files(
     if frontend_files:
         reasons.append("frontend code changed; run the single frontend type/lint gate")
     if go_files:
-        reasons.append("TDX Go code changed; run the Go unit-test gate")
+        reasons.append("TDX source, dependencies, launcher or shared collector changed; run offline Go validation")
 
     backend_required = bool(backend_sessions) and not docs_lite_only and not close_sync_metadata_only
     dev_db_required = bool(dev_db_plan_keys) and not docs_lite_only and not close_sync_metadata_only
@@ -1152,7 +1208,8 @@ def classify_changed_files(
         "codeql_pr_test_only": bool(codeql_languages) and not codeql_pr_languages,
         "unmapped_code_files": unmapped_code_files,
         "changed_test_plan_coverage": changed_test_plan_coverage,
-        "backend_changed_test_files": changed_test_plan_coverage["changed_test_files"],
+        "backend_changed_test_files": changed_test_plan_coverage["backend_changed_test_files"],
+        "frontend_changed_test_files": changed_test_plan_coverage["frontend_changed_test_files"],
         "unexecuted_test_files": unexecuted_test_files,
         "obsolete_surface_removal": bool(deleted_files),
         "nightly_deferred_verification": {

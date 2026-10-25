@@ -51,10 +51,10 @@ class MonthlyObservedSourceAuthority(MonthlySourceAuthority):
         if query.query_id == "adj_factor_construction":
             if self._month_start is None:
                 raise SourceProviderContractError("construction facts require a monthly source request")
-            codes = sorted({span.ts_code for span in pit_snapshot.spans})
+            codes = list(self._stock_source_codes(pit_snapshot))
             if selected_stock_codes:
                 if not set(selected_stock_codes) <= set(codes):
-                    raise SourceProviderContractError("construction source sample escapes PIT")
+                    raise SourceProviderContractError("construction source sample escapes fact population")
                 codes = sorted(selected_stock_codes)
             anchors = []
             source_anchors = self._construction_anchors(pit_snapshot) if callable(self._construction_anchors) else self._construction_anchors
@@ -75,7 +75,9 @@ class MonthlyObservedSourceAuthority(MonthlySourceAuthority):
             source_cutoff = cutoff - date.resolution
         requests = super()._partition_requests(
             query, source_cutoff, pit_snapshot=pit_snapshot, selected_stock_codes=selected_stock_codes,
-            start_override=self._month_start if query.date_expression is not None else None,
+            # Sparse suspension facts must repair inherited PIT-clipped prefixes.
+            # This is materialization, not an historical price/refresh audit.
+            start_override=self._month_start if query.date_expression is not None and query.query_id != "suspend_d" else None,
         )
         identity = load_default_security_source_identity_manifest() if query.query_id == "moneyflow_ts" else None
         for key, params in requests:

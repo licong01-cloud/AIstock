@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 import hashlib
+import json
 import struct
 from types import SimpleNamespace
 
@@ -12,6 +14,9 @@ import pytest
 import backend.services.dataset_release.build_stage as stages
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.canonical_stock_transformer import build_qfq_denominator_authority
+from backend.services.dataset_release.canonical_stock_transformer import CanonicalStockTransformError, CanonicalStockTransformSpec, _TransformContext
+from backend.services.dataset_release.artifact_ready_build_source import _filter_stk_limit_rows_to_pit
+from backend.services.dataset_release.monthly_quote_population import observed_quote_days
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.contracts import Component, ComponentAction
@@ -22,6 +27,9 @@ from backend.services.dataset_release.monthly_worker import ProducerContext
 from backend.services.dataset_release.minute_overlay import canonical_session_times
 from backend.services.dataset_release.pit import FrozenPitSnapshot, FrozenPitSpan
 from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
+from backend.services.dataset_release import monthly_quote_catalog as catalog
+from backend.services.dataset_release.monthly_build_resume import _atomic, _signature
+from backend.services.dataset_release.monthly_legacy_validation import MonthlyLegacyValidationError, validate_qlib_month
 
 
 def _setup(tmp_path, *, dataset="daily_bin", metadata=None):
@@ -115,6 +123,29 @@ def test_real_month_prepare_generates_native_operation_without_old_csv_lineage(t
     assert len(rows) == 1 and float(rows[0]["close"]) == 6.0
     assert all(start.year == 2026 and start.month == 9 for name, ranges, _ in calls if name != "adj_factor" for start, _ in ranges)
     assert not (invocation.staging_root / "daily_bin").exists()
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
+    invocation, source, pit, toolchain, _, data, _ = _setup(tmp_path, dataset=dataset)
+    # Real September quotes must remain readable for an August holding. This
+    # does NOT extend its PIT buy interval into September.
+    pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    source.qfq_authority = build_qfq_denominator_authority(
+        data["adj_factor"], pit_snapshot=pit, cutoff=pit.cutoff,
+    )
+    prepared = stages._prepare_bin_patch(
+        invocation, source=source, pit=pit, dataset=dataset,
+        toolchain=toolchain, checkpoint=lambda: None,
+    )
+    payload = invocation.cas.get_json(prepared["qlib_dump_operations"][0]["preparation_ref"])
+    refs = [item for item in payload["csv_refs"] if Path(item["id"]).stem == "000001.SZ"]
+    assert len(refs) == 1
+    with (invocation.staging_root / refs[0]["id"]).open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == (240 if dataset == "minute_bin" else 1)
+    assert all(float(row["close"]) == 6.0 for row in rows)
+    assert pit.spans[0].eligible_end == date(2026, 8, 31)
 
 
 def test_month_prepare_appends_all_declared_index_csv_not_only_csi300(tmp_path):
@@ -220,6 +251,10 @@ def test_real_native_minute_chain_has_exactly_240_closing_bars_and_immutable_pre
     assert values[2:] == (6.0,) * 240
     assert struct.unpack("<ff", (provider / "features/000001.sz/close.1min.bin").read_bytes()) == (0, 10)
     assert receipt["csv"]["rows"] == 240
+    assert receipt["native_writer"]["quote_catalog"]["mode"] == "physical_quote_catalog_v1"
+    assert (target / "instruments/all.txt").read_text(encoding="utf-8") == (
+        "000001.SZ\t2026-08-31 15:00:00\t2026-09-01 15:00:00\n"
+    )
 
 
 @pytest.mark.parametrize("fault", ["source", "prefix", "preparation", "target"])
@@ -236,3 +271,391 @@ def test_native_finalize_rejects_foreign_receipt_without_writing_signoff(tmp_pat
     with pytest.raises(stages.CandidateBuildStageError):
         _append_and_finalize(tmp_path, mutate_child=mutate)
     assert not (tmp_path / ".staging/september.building/daily_bin/materialization_receipt.json").exists()
+
+
+def _retained(tmp_path):
+    invocation, _, materialization = _append_and_finalize(tmp_path, dataset="minute_bin")
+    root, cas = invocation.staging_root, invocation.cas
+    provider = root / "minute_bin/qlib"
+    # This quote-only stock is absent from the monthly PIT population/CSVs.
+    extra = provider / "features/000698.sz"
+    extra.mkdir()
+    (extra / "close.1min.bin").write_bytes((provider / "features/000001.sz/close.1min.bin").read_bytes())
+    old = b"000001.SZ\t2026-08-31\t2026-08-31\n"
+    (provider / "instruments/all.txt").write_bytes(old)
+    native = materialization["native_writer"]
+    native.pop("quote_catalog", None)
+    native["instruments_sha256"] = hashlib.sha256(old).hexdigest()
+    native["instruments_signature"] = list(_signature(provider / "instruments/all.txt"))
+    _atomic(root / "minute_bin/materialization_receipt.json", materialization)
+    ref = cas.put_json(materialization).as_dict()
+    finalized = dict(finalize_receipt_ref=cas.put_json(dict(minute_receipt_ref=ref,
+                    minute_materialization_receipt_file_ref=ref)).as_dict())
+    journal = root.parent / "resume.json"
+    record = dict(binding_digest="a" * 64,
+                  steps={"finalize-bins": cas.put_json(finalized).as_dict()},
+                  files={relative: list(_signature(root / relative)) for relative in catalog._FILES if relative != catalog._META})
+    _atomic(journal, record)
+    resume = SimpleNamespace(root=root, path=journal, record=record,
+                             context=SimpleNamespace(checkpoint=lambda: None))
+    prices = {p: (p.read_bytes(), _signature(p)) for p in provider.glob("features/*/*.bin")}
+    return invocation, resume, finalized, prices
+
+
+def test_retained_catalog_repair_preserves_prices_and_is_idempotent(tmp_path):
+    invocation, resume, finalized, prices = _retained(tmp_path)
+    repaired = catalog.refresh_retained_quote_catalog(resume, finalized=finalized, cas=invocation.cas)
+    actual = (resume.root / catalog._CATALOG).read_text(encoding="utf-8")
+    assert "000698.SZ\t2026-08-31 15:00:00\t2026-09-01 15:00:00" in actual
+    assert all((p.read_bytes(), _signature(p)) == value for p, value in prices.items())
+    assert catalog.refresh_retained_quote_catalog(resume, finalized=repaired, cas=invocation.cas) == repaired
+    assert invocation.cas.get_json(finalized["finalize_receipt_ref"]) != invocation.cas.get_json(repaired["finalize_receipt_ref"])
+    assert json.loads(resume.path.read_text()) == resume.record
+    updated = invocation.cas.get_json(repaired["finalize_receipt_ref"])
+    materialization = invocation.cas.get_json(updated["minute_receipt_ref"])
+    assert "quote_catalog" not in materialization["native_writer"]  # Original writer proof stays honest.
+    result = validate_qlib_month(root=resume.root, materialization=materialization, cas=invocation.cas,
+        cutoff=date(2026, 9, 1), predecessor_manifest_sha256=materialization["predecessor_manifest_sha256"],
+        source_bundle_sha256="e" * 64)
+    assert result["status"] == "PASS"
+
+
+@pytest.mark.parametrize("interrupted_replace", [1, 2, 3])
+def test_retained_catalog_recovers_each_interrupted_small_file_commit(tmp_path, monkeypatch, interrupted_replace):
+    invocation, resume, finalized, prices = _retained(tmp_path)
+    original, count = catalog._replace, 0
+
+    def interrupted(path, payload):
+        nonlocal count
+        original(path, payload)
+        count += 1
+        if count == interrupted_replace:
+            raise OSError("simulated interruption after atomic replacement")
+
+    monkeypatch.setattr(catalog, "_replace", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        catalog.refresh_retained_quote_catalog(resume, finalized=finalized, cas=invocation.cas)
+    monkeypatch.setattr(catalog, "_replace", original)
+    record = catalog.recover_quote_catalog(root=resume.root, journal=resume.path, record=resume.record, cas=invocation.cas)
+    assert "000698.SZ" in (resume.root / catalog._CATALOG).read_text()
+    assert json.loads(resume.path.read_text()) == record
+    assert not catalog._pending(resume.root).exists()
+    assert all((p.read_bytes(), _signature(p)) == value for p, value in prices.items())
+
+
+@pytest.mark.parametrize("fault", ["catalog", "input", "mode"])
+def test_monthly_validation_rejects_catalog_and_provenance_drift(tmp_path, fault):
+    invocation, _, materialization = _append_and_finalize(tmp_path, dataset="minute_bin")
+    authority = materialization["native_writer"]["quote_catalog"]
+    if fault == "catalog":
+        (invocation.staging_root / catalog._CATALOG).write_bytes(b"000001.SZ\t2026-09-01\t2026-09-01\n")
+    elif fault == "input":
+        authority["input_instruments_sha256"] = "f" * 64
+    else:
+        authority["mode"] = "pit_universe_spans"
+    with pytest.raises(MonthlyLegacyValidationError, match="catalog"):
+        validate_qlib_month(root=invocation.staging_root, materialization=materialization,
+            cas=invocation.cas, cutoff=date(2026, 9, 1),
+            predecessor_manifest_sha256=materialization["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
+
+
+def _retained_prev_close(tmp_path, dataset="daily_bin", repair_day="2026-08-31"):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, provider, materialization = _append_and_finalize(tmp_path, dataset=dataset)
+    root, cas = invocation.staging_root, invocation.cas
+    prefix, freq = dataset.removesuffix("_bin"), "day" if dataset == "daily_bin" else "1min"
+    finalized = {"finalize_receipt_ref": cas.put_json({f"{prefix}_receipt_ref": cas.put_json(materialization).as_dict()}).as_dict()}
+    journal = root.parent / "resume.json"
+    files = {p.relative_to(root).as_posix(): list(_signature(p)) for p in (root / dataset).rglob("*") if p.is_file()}
+    record = {"binding_digest": "a" * 64, "steps": {"finalize-bins": cas.put_json(finalized).as_dict()}, "files": files}
+    _atomic(journal, record)
+    facts = [{"ts_code": "000001.SZ", "trade_date": repair_day, "pre_close": "11.0", "up_limit": "12.1", "down_limit": "9.9"}]
+    authority = cas.put_json({"schema_version": correction.SCHEMA, "facts": facts}).as_dict()
+    binding = {"authority_ref": authority, "target_cutoff": "2026-09-01", "operation_id": "dmr_" + "1" * 32,
+               "predecessor_manifest_sha256": materialization["predecessor_manifest_sha256"]}
+    plan = {"target_cutoff": "2026-09-01", correction.BINDING: binding,
+            "predecessor": {"dataset_manifest_sha256": materialization["predecessor_manifest_sha256"]}}
+    resume = SimpleNamespace(root=root, path=journal, record=record,
+                             context=SimpleNamespace(operation_id=binding["operation_id"], checkpoint=lambda: None))
+    return invocation, provider, materialization, finalized, resume, plan, freq
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+@pytest.mark.parametrize("repair_day", ["2026-08-31", "2026-09-01"])
+@pytest.mark.parametrize("packaging_started", [False, True])
+def test_exact_prev_close_correction_keeps_prices_source_and_append_proof(tmp_path, dataset, repair_day, packaging_started):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, predecessor, original, finalized, resume, plan, freq = _retained_prev_close(tmp_path, dataset, repair_day)
+    resume.record["finalization_started"] = packaging_started
+    _atomic(resume.path, resume.record)
+    before = {p: p.read_bytes() for p in resume.root.rglob("*.bin") if not p.name.startswith("prev_close.")}
+    inherited = (predecessor / f"features/000001.sz/prev_close.{freq}.bin").read_bytes()
+    updated = correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
+    inner = invocation.cas.get_json(updated["finalize_receipt_ref"])
+    actual = invocation.cas.get_json(inner[f"{dataset.removesuffix('_bin')}_receipt_ref"])
+    assert actual["native_writer"] == original["native_writer"]
+    assert actual["prev_close_correction"]["counts"]["repaired_stock_dates"] == 1
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    assert (predecessor / f"features/000001.sz/prev_close.{freq}.bin").read_bytes() == inherited
+    assert correction.apply_prev_close_corrections(resume, finalized=updated, cas=invocation.cas, plan=plan) == updated
+    report = validate_qlib_month(root=resume.root, materialization=actual, cas=invocation.cas,
+        cutoff=date(2026, 9, 1), predecessor_manifest_sha256=original["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
+    assert report["status"] == "PASS" and report["historical_values_read"] == 0
+    target = resume.root / dataset / f"qlib/features/000001.sz/prev_close.{freq}.bin"
+    target.write_bytes(target.read_bytes() + b"bad!")
+    with pytest.raises(RuntimeError, match="corrected bytes"):
+        validate_qlib_month(root=resume.root, materialization=actual, cas=invocation.cas,
+            cutoff=date(2026, 9, 1), predecessor_manifest_sha256=original["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
+
+
+@pytest.mark.parametrize("interrupted_replace", [1, 2])
+def test_prev_close_correction_recovers_exact_files_without_reexport(tmp_path, monkeypatch, interrupted_replace):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, _, _, finalized, resume, plan, _ = _retained_prev_close(tmp_path)
+    replace, calls = correction._replace, []
+    def interrupted(path, payload):
+        replace(path, payload)
+        calls.append(path)
+        if len(calls) == interrupted_replace:
+            raise OSError("simulated interruption")
+    monkeypatch.setattr(correction, "_replace", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
+    monkeypatch.setattr(correction, "_replace", replace)
+    record = correction.recover_prev_close(root=resume.root, journal=resume.path, record=resume.record, cas=invocation.cas)
+    assert record == json.loads(resume.path.read_bytes())
+    assert not correction._pending(resume.root).exists()
+    target = resume.root / "daily_bin/qlib/features/000001.sz/prev_close.day.bin"
+    assert struct.unpack("<fff", target.read_bytes()) == (0, 11, 6)
+
+
+def test_prev_close_failed_packaging_does_not_allow_published_root(tmp_path):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, _, _, finalized, resume, plan, _ = _retained_prev_close(tmp_path)
+    resume.record["finalization_started"] = True
+    root = resume.root
+    before = {p: p.read_bytes() for p in root.rglob("*.bin")}
+    resume.root = tmp_path / "published"
+    with pytest.raises(RuntimeError, match="private retained staging"):
+        correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
+@pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope"])
+def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, fault):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    root = tmp_path / "data_repair_staging"
+    root.mkdir()
+    def pin(name, value):
+        path = root / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
+    row = {"ts_code": "000001.SZ", "trade_date": "20260831", "pre_close": "11" if fault != "nonfinite" else "nan"}
+    rows_hash = hashlib.sha256(canonical_json_bytes([row])).hexdigest()
+    source = {"schema_version": "local_data_stk_limit_pre_close_repair_v1", "provider": "tushare.stk_limit", "units": "CNY_per_share",
+              "trade_date": "2026-08-31", "source_rows": [row], "patches": [row], "source_rows_sha256": rows_hash,
+              "target_database": "aistock"}
+    source_path, source_hash = pin("source.json", source)
+    plan = {"schema_version": "local_data_stk_limit_history_production_plan_v1", "target_database": "aistock", "target_table": "market.stk_limit",
+            "changed_columns": ["pre_close"] if fault != "scope" else ["up_limit"],
+            "daily": [{"source_plan_path": source_path, "source_plan_sha256": source_hash if fault != "source_hash" else "0" * 64,
+                       "source_rows_sha256": rows_hash, "keys": 1, "trade_date": "2026-08-31"}]}
+    plan_path, plan_hash = pin("plan.json", plan)
+    receipt = {"schema_version": "local_data_stk_limit_history_production_apply_v1", "plan_sha256": plan_hash,
+               "production_apply": "PASS", "production_readback": "PASS_INDEPENDENT_FRESH_CONNECTION" if fault != "unclosed" else "pending",
+               "non_target_columns_unchanged": True, "verified_keys": 1}
+    receipt_path, receipt_hash = pin("receipt.json", receipt)
+    inputs = {"plan_path": plan_path, "plan_sha256": plan_hash, "receipt_path": receipt_path, "receipt_sha256": receipt_hash}
+    if fault:
+        with pytest.raises(ValueError):
+            correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
+    else:
+        actual = correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
+        assert actual["facts"] == [{**row, "trade_date": "2026-08-31"}] and actual["database_write"] is False
+        single_receipt = {"schema_version": "local_data_stk_limit_pre_close_production_readback_v1",
+            "source_plan_sha256": source_hash, "source_rows_sha256": rows_hash, "database": "aistock",
+            "production_database_written": True, "other_columns_unchanged": True, "other_same_day_keys_unchanged": True,
+            "trade_date": "2026-08-31", "readback_keys": 1, "expected_keys": 1}
+        single_path, single_hash = pin("single-receipt.json", single_receipt)
+        single = {"plan_path": source_path, "plan_sha256": source_hash, "receipt_path": single_path, "receipt_sha256": single_hash}
+        group = correction.capture_approved_corrections({"repairs": [inputs, single]}, repair_root=root, cutoff=date(2026, 9, 30))
+        assert group["facts"] == actual["facts"] and len(group["sources"]) == 2  # One fact, not double accumulation.
+        with pytest.raises(ValueError, match="nested"):
+            correction.capture_approved_corrections({"repairs": [{"repairs": []}]}, repair_root=root, cutoff=date(2026, 9, 30))
+
+
+def test_quote_population_is_exact_observed_trading_days_not_catalog_extension():
+    day = date(2026, 9, 1)
+    fact = dict(ts_code="000001.SZ", trade_date=day, open_li=10, high_li=10,
+                low_li=10, close_li=10, volume_hand=1, amount_li=1)
+    rows = [fact, fact, {**fact, "trade_date": date(2026, 9, 2), "volume_hand": 0, "amount_li": 0},
+            {**fact, "ts_code": "000002.SZ"}, {**fact, "trade_date": date(2026, 10, 1)}]
+    assert observed_quote_days(rows, known_codes=frozenset({"000001.SZ"}),
+                               trading_days=(day, date(2026, 9, 2))) == (("000001.SZ", day),)
+
+
+def test_quote_keys_keep_limit_fact_without_changing_buy_spans(tmp_path):
+    _, source, pit, _, _, _, _ = _setup(tmp_path)
+    day = date(2026, 9, 1)
+    pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    fact = dict(ts_code="000001.SZ", trade_date=day, pre_close=6, up_limit=6.6, down_limit=5.4)
+    assert list(_filter_stk_limit_rows_to_pit([fact], pit)) == []
+    assert list(_filter_stk_limit_rows_to_pit([fact], pit, quote_days=(("000001.SZ", day),))) == [fact]
+    spec = CanonicalStockTransformSpec(pit.cutoff, pit, (day,), source.qfq_authority,
+                                      quote_days=(("000001.SZ", day),))
+    assert list(_TransformContext(spec).expected_code_days()) == [("000001.SZ", day)]
+    assert pit.spans[0].eligible_end < day
+    for keys in [(("000002.SZ", day),), (("000001.SZ", date(2026, 10, 1)),),
+                 (("000001.SZ", day), ("000001.SZ", day))]:
+        with pytest.raises(CanonicalStockTransformError, match="quote days"):
+            replace(spec, quote_days=keys)
+
+
+def test_stock_without_observed_quote_is_not_extended_after_buy_exit(tmp_path):
+    _, source, pit, _, _, _, _ = _setup(tmp_path)
+    pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    spec = CanonicalStockTransformSpec(pit.cutoff, pit, (pit.cutoff,), source.qfq_authority)
+    assert list(_TransformContext(spec).expected_code_days()) == []
+
+
+def test_real_quote_for_never_eligible_security_does_not_create_buy_membership():
+    from backend.tests.dataset_release.test_canonical_stock_transformer import CODE, DAY1, DAY2, _adj, _pit
+    other = "000002.SZ"
+    pit = _pit()
+    codes = (other, CODE)
+    authority = build_qfq_denominator_authority(
+        [{"ts_code": other, "trade_date": DAY1, "adj_factor": 1.0}, *_adj()],
+        pit_snapshot=pit, cutoff=DAY2, fact_stock_codes=codes,
+    )
+    spec = CanonicalStockTransformSpec(DAY2, pit, (DAY1, DAY2), authority,
+                                      fact_stock_codes=codes, quote_days=((other, DAY1),))
+    context = _TransformContext(spec)
+    assert context.is_expected_day(other, DAY1)
+    # Admission of real source rows is independent of buy eligibility. This
+    # must not create required/synthesized days without observed quotes.
+    assert context.is_expected_day(other, DAY2)
+    assert list(context.expected_code_days()) == [(other, DAY1), (CODE, DAY1), (CODE, DAY2)]
+    assert {span.ts_code for span in pit.spans} == {CODE}
+    inferred = CanonicalStockTransformSpec(DAY2, pit, (DAY1, DAY2), authority)
+    assert _TransformContext(inferred).codes == frozenset(codes)
+    assert list(_TransformContext(inferred).expected_code_days()) == [(CODE, DAY1), (CODE, DAY2)]
+
+
+def test_monthly_fact_materialization_keeps_never_pit_security(tmp_path):
+    import pandas as pd
+    from backend.tests.dataset_release.test_factor_partition_producer import FixtureReader, PARTITIONS, STOCKS, _spec
+    from backend.services.dataset_release.factor_materializer import FactorPartitionProducer
+    from backend.services.dataset_release.streaming_artifacts import iter_parquet_frames
+    reader = FixtureReader()
+    root = tmp_path / "facts"
+    root.mkdir()
+    base = _spec(root)
+    pit = replace(base.pit_snapshot, spans=(base.pit_snapshot.spans[0],))
+    adj = pd.concat([reader.frames[("adj_factor", part.partition_key)] for part in PARTITIONS]).sort_values(["ts_code", "trade_date"])
+    authority = build_qfq_denominator_authority(adj.to_dict("records"), pit_snapshot=pit,
+                                               cutoff=pit.cutoff, fact_stock_codes=STOCKS)
+    spec = replace(base, pit_snapshot=pit, qfq_denominator_authority=authority, fact_stock_codes=STOCKS)
+    produced = FactorPartitionProducer().produce(spec, reader=reader)
+    for dataset in ("daily_pv", "daily_basic", "moneyflow", "sector_data", "static_factors"):
+        chunks = [chunk for chunk in produced.chunks if chunk.dataset == dataset]
+        actual = pd.concat(list(iter_parquet_frames([produced.source_root / chunk.relative_path for chunk in chunks], max_rows=1000)))
+        assert set(actual.index.get_level_values("instrument")) == set(STOCKS)
+    assert {span.ts_code for span in pit.spans} == {STOCKS[0]}
+
+
+def _industry_factor_successor(tmp_path, mutate=lambda _a, _f: None):
+    from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
+    from backend.services.dataset_release.monthly_fact_correction import SCHEMA
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    entries = [{"dataset": name, "sha256": hashlib.sha256(name.encode()).hexdigest(),
+                "size": 123, "inherited_rows": 90, "month_rows": 10, "cutoff": "2026-09-30"}
+               for name in (*FACTOR_H5_DATASETS, "static_factors")]
+    files = [{"dataset": entry["dataset"],
+              "relative_path": "factor_bundle/" + entry["dataset"] + (".parquet" if entry["dataset"] == "static_factors" else ".h5"),
+              "sha256": entry["sha256"], "size": entry["size"],
+              "validation_payload": {"row_count": 100, "september_rows": 10}}
+             for entry in entries if entry["dataset"] in {"sector_data", "static_factors"}]
+    files[-1]["validation_payload"]["input_sha256"] = {
+        entry["dataset"]: entry["sha256"] for entry in entries if entry["dataset"] != "static_factors"}
+    authority = {"schema_version": SCHEMA, "target_cutoff": "2026-09-30", "files": files,
+                 "database_write": False, "active_profile_write": False, "runtime_action": False}
+    factor = {"files": entries}
+    mutate(authority, factor)
+    reference = cas.put_json(authority).as_dict()
+    factor["fact_correction_ref"] = reference
+    for entry in entries:
+        if entry["dataset"] in {"sector_data", "static_factors"}:
+            entry["fact_correction_ref"] = reference
+    return SimpleNamespace(cas=cas), factor, {"sector_row_count": 80}
+
+
+def test_industry_rows_accept_pinned_factor_successor_without_old_row_count(tmp_path):
+    invocation, factor, proof = _industry_factor_successor(tmp_path)
+    stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+
+
+@pytest.mark.parametrize("change", ["sector_hash", "static_hash", "static_dependency", "row_count",
+                                   "month_rows", "cutoff", "schema", "duplicate", "write_flag", "path", "missing"])
+def test_industry_rows_reject_unverified_factor_successor(tmp_path, change):
+    def mutate(authority, factor):
+        sector = next(row for row in authority["files"] if row["dataset"] == "sector_data")
+        static = next(row for row in authority["files"] if row["dataset"] == "static_factors")
+        if change == "sector_hash":
+            sector["sha256"] = "f" * 64
+        elif change == "static_hash":
+            static["sha256"] = "f" * 64
+        elif change == "static_dependency":
+            static["validation_payload"]["input_sha256"]["sector_data"] = "f" * 64
+        elif change == "row_count":
+            sector["validation_payload"]["row_count"] = 101
+        elif change == "month_rows":
+            sector["validation_payload"]["september_rows"] = 11
+        elif change == "cutoff":
+            authority["target_cutoff"] = "2026-08-31"
+        elif change == "schema":
+            authority["schema_version"] = "unapproved"
+        elif change == "write_flag":
+            authority["database_write"] = True
+        elif change == "path":
+            sector["relative_path"] = "factor_bundle/unrelated.h5"
+        elif change == "missing":
+            authority["files"].remove(static)
+        else:
+            authority["files"].append(sector)
+
+    invocation, factor, proof = _industry_factor_successor(tmp_path, mutate)
+    with pytest.raises(stages.CandidateBuildStageError):
+        stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+
+
+def test_industry_rows_preserve_original_contract_without_successor(tmp_path):
+    invocation, factor, proof = _industry_factor_successor(tmp_path)
+    factor.pop("fact_correction_ref")
+    with pytest.raises(stages.CandidateBuildStageError):
+        stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+    proof["sector_row_count"] = 100
+    stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+
+
+def test_industry_row_metadata_fails_before_month_value_validation(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_build_bridge, monthly_industry_history
+
+    def invalid_rows(authority, factor):
+        authority["files"][0]["validation_payload"]["row_count"] = 101
+
+    invocation, factor, proof = _industry_factor_successor(tmp_path, invalid_rows)
+    proof.update(projection={}, status="PASS", database_write=False)
+    factor["industry_history_projection_ref"] = invocation.cas.put_json(proof).as_dict()
+    invocation.plan = {"industry_history_projection_sha256": "a" * 64}
+    invocation.build_inputs = {"monthly_legacy_predecessor": {}, "source_bundle_sha256": "b" * 64}
+    invocation.staging_root = tmp_path
+    invocation.profile = SimpleNamespace()
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix",
+                        lambda **_: SimpleNamespace(manifest_sha256="c" * 64))
+    monkeypatch.setattr(monthly_industry_history.IndustryHistoryProjection, "read",
+                        lambda _: SimpleNamespace(sha256="a" * 64))
+    with pytest.raises(stages.CandidateBuildStageError, match="row counts"):
+        stages._validate_native_month(invocation, pit=SimpleNamespace(cutoff=date(2026, 9, 30)),
+            factor_receipt=factor, index_receipt={}, daily_receipt={}, minute_receipt={},
+            ledger=None, checkpoint=lambda: pytest.fail("month value scan must not run"))

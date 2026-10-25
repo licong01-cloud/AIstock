@@ -38,10 +38,7 @@ from .industry_pit.contracts import (
     UnavailableIndustryIdentity,
 )
 from .industry_pit.resolver import IndustryPitResolver, resolve_dual_authority
-from .stock_universe_pit_service import (
-    DEFAULT_ST_PIT_UNIVERSE_KEY,
-    IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX,
-)
+from .canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
 
 
 logger = logging.getLogger(__name__)
@@ -1127,23 +1124,40 @@ def read_sector_data_candidate(
     )
 
 
-_PREFLIGHT_DAY_SQL = """\
+_AUTHORITATIVE_UNIVERSES_SQL = """\
 WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
+    SELECT s.universe_key, s.rule_version
+    FROM market.stock_universe_pit_authority_pointer p
+    JOIN market.stock_universe_pit_authority_versions v
+      ON v.authority_id = p.authority_id
+     AND v.rule_version = p.current_rule_version
+     AND v.rolling_key = p.current_rolling_key
+    JOIN market.stock_universe_pit_state s
+      ON s.universe_key = p.current_rolling_key
+     AND s.rule_version = p.current_rule_version
+    WHERE p.authority_id = %(authority_id)s
+      AND v.status IN ('ACTIVE_CANONICAL', 'DEPLOYED_LEGACY_PENDING_MIGRATION', 'EMERGENCY_LEGACY_ROLLBACK')
+      AND s.status = 'ready'
+      AND s.dirty = FALSE
+      AND s.start_date <= %(trade_date)s
+      AND s.end_date >= %(trade_date)s
+      AND EXISTS (
+          SELECT 1 FROM market.stock_universe_pit_spans x
+          WHERE x.universe_key = s.universe_key AND x.rule_version = s.rule_version
       )
+      AND (v.status <> 'ACTIVE_CANONICAL' OR NOT EXISTS (
+          SELECT 1 FROM market.stock_universe_pit_spans x
+          WHERE x.universe_key = s.universe_key AND x.rule_version <> s.rule_version
+      ))
 ),
+"""
+
+
+_PREFLIGHT_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1293,23 +1307,11 @@ SELECT
 """
 
 
-_DELETE_STALE_DAY_SQL = """\
-WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
-      )
-),
+_DELETE_STALE_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1338,23 +1340,11 @@ WHERE target.trade_date = %(trade_date)s
 """
 
 
-_BUILD_DAY_SQL = """\
-WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
-      )
-),
+_BUILD_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1452,6 +1442,27 @@ ON CONFLICT (trade_date, ts_code) DO UPDATE SET
     sw2_mf_buy_elg_vol  = EXCLUDED.sw2_mf_buy_elg_vol,
     sw2_mf_sell_elg_vol = EXCLUDED.sw2_mf_sell_elg_vol,
     sw2_mf_net_vol      = EXCLUDED.sw2_mf_net_vol
+WHERE (
+    sector_data.sw2_open, sector_data.sw2_high, sector_data.sw2_low, sector_data.sw2_close,
+    sector_data.sw2_pct_change, sector_data.sw2_vol, sector_data.sw2_amount,
+    sector_data.sw2_pe, sector_data.sw2_pb, sector_data.sw2_total_mv,
+    sector_data.sw2_mf_buy_sm_amt, sector_data.sw2_mf_sell_sm_amt,
+    sector_data.sw2_mf_buy_md_amt, sector_data.sw2_mf_sell_md_amt,
+    sector_data.sw2_mf_buy_lg_amt, sector_data.sw2_mf_sell_lg_amt,
+    sector_data.sw2_mf_buy_elg_amt, sector_data.sw2_mf_sell_elg_amt,
+    sector_data.sw2_mf_net_amt, sector_data.sw2_mf_buy_elg_vol,
+    sector_data.sw2_mf_sell_elg_vol, sector_data.sw2_mf_net_vol
+) IS DISTINCT FROM (
+    EXCLUDED.sw2_open, EXCLUDED.sw2_high, EXCLUDED.sw2_low, EXCLUDED.sw2_close,
+    EXCLUDED.sw2_pct_change, EXCLUDED.sw2_vol, EXCLUDED.sw2_amount,
+    EXCLUDED.sw2_pe, EXCLUDED.sw2_pb, EXCLUDED.sw2_total_mv,
+    EXCLUDED.sw2_mf_buy_sm_amt, EXCLUDED.sw2_mf_sell_sm_amt,
+    EXCLUDED.sw2_mf_buy_md_amt, EXCLUDED.sw2_mf_sell_md_amt,
+    EXCLUDED.sw2_mf_buy_lg_amt, EXCLUDED.sw2_mf_sell_lg_amt,
+    EXCLUDED.sw2_mf_buy_elg_amt, EXCLUDED.sw2_mf_sell_elg_amt,
+    EXCLUDED.sw2_mf_net_amt, EXCLUDED.sw2_mf_buy_elg_vol,
+    EXCLUDED.sw2_mf_sell_elg_vol, EXCLUDED.sw2_mf_net_vol
+)
 """
 
 
@@ -1468,12 +1479,17 @@ class SectorDataBuilder:
 
     def build_date(self, trade_date: dt.date) -> int:
         """Build one day atomically and return the inserted or updated row count."""
-        with get_conn() as conn:
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
             with conn.cursor() as cur:
+                # One stable dependency snapshot. Concurrent revisions either stay
+                # pending after this commit or cause serialization failure/retry.
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None)
+                # Serialize against the member writer before taking the read
+                # snapshot; a transition cannot slip past first-day invalidation.
+                cur.execute("LOCK TABLE market.sw_index_member IN SHARE MODE", None)
                 params = {
                     "trade_date": trade_date,
-                    "live_universe_key": DEFAULT_ST_PIT_UNIVERSE_KEY,
-                    "qe_universe_pattern": f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+                    "authority_id": CANONICAL_PIT_AUTHORITY_ID,
                 }
                 cur.execute(_PREFLIGHT_DAY_SQL, params)
                 (
@@ -1514,7 +1530,9 @@ class SectorDataBuilder:
                 cur.execute(_DELETE_STALE_DAY_SQL, params)
                 cur.execute(_BUILD_DAY_SQL, params)
                 rows = cur.rowcount
-            conn.commit()
+                from .sector_data_repair import clear_revision_date
+
+                clear_revision_date(conn, trade_date, rows)
         return rows
 
     def build_range(self, start_date: dt.date, end_date: dt.date) -> int:
@@ -1555,3 +1573,10 @@ class SectorDataBuilder:
             with conn.cursor() as cur:
                 cur.execute(_TRADE_DATES_SQL, {"start": start, "end": end})
                 return [row[0] for row in cur.fetchall()]
+
+    def pending_dates(self, through: dt.date) -> List[dt.date]:
+        """Read the durable revision queue, not a full-history content audit."""
+        from .sector_data_repair import pending_revision_dates
+
+        with get_conn() as conn:
+            return pending_revision_dates(conn, through)

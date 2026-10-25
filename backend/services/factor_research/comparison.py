@@ -56,7 +56,7 @@ def validate_comparison_spec(value: object, *, candidate_names: set[str], repo_r
         raise ResearchError("invalid_comparison", f"Unknown comparison fields: {sorted(set(spec) - allowed)}")
     if spec.get("research_role") not in ROLES:
         raise ResearchError("invalid_comparison", "Unknown research_role")
-    if spec.get("horizon") not in {"1d", "5d", "10d", "20d"}:
+    if spec.get("horizon") not in {"1d", "5d", "10d", "20d", "40d", "60d", "120d", "240d"}:
         raise ResearchError("invalid_comparison", "horizon must use the shared label names")
     baseline = spec.get("baseline")
     candidate = spec.get("candidate")
@@ -366,7 +366,9 @@ def _hac(values: list[dict], maxlags: int, calendar: pd.DatetimeIndex) -> dict:
         array = np.asarray([item["value"] for item in segment], dtype=float)
         report: dict[str, Any] = {"start": segment[0]["date"], "end": segment[-1]["date"],
                                   "n_dates": len(segment), "mean": float(array.mean()),
-                                  "hac_maxlags": maxlags}
+                                  "hac_maxlags": maxlags, "mean_ci95_normal": None,
+                                  "serial_correlation_adjusted": maxlags > 0,
+                                  "interval_method": "asymptotic_normal_95_bartlett_hac_no_multiplicity_adjustment"}
         if len(array) <= maxlags + 1 or np.allclose(array, array[0]):
             report.update(standard_error=None, t_value=None, reason="insufficient_or_zero_variance")
         else:
@@ -380,7 +382,9 @@ def _hac(values: list[dict], maxlags: int, calendar: pd.DatetimeIndex) -> dict:
             else:
                 standard_error = float(np.sqrt(lrv / len(array)))
                 report.update(standard_error=standard_error,
-                              t_value=float(array.mean() / standard_error), reason=None)
+                              t_value=float(array.mean() / standard_error), reason=None,
+                              mean_ci95_normal=[float(array.mean() - 1.959963984540054 * standard_error),
+                                                float(array.mean() + 1.959963984540054 * standard_error)])
         reports.append(report)
     return {"status": "computed", "reason": None if len(reports) == 1 else "reported_by_contiguous_segment",
             "segments": reports, "overall_mean": float(np.mean([item["value"] for item in values])),
@@ -712,6 +716,13 @@ def _compute_window_result(*, spec: dict, fit_window: dict, evaluation_window: d
 
 def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, run_spec: dict) -> dict:
     """Compute predeclared B versus B+F/replacement/interaction windows."""
+    from backend.services.quantevolver.qe_eval_v2_metric_engine import HOLDING_PERIODS
+
+    periods = ctx.get("holding_periods", HOLDING_PERIODS)
+    shift_n = periods.get(spec["horizon"])
+    if (type(shift_n) is not int or shift_n < 2 or spec["horizon"] not in ctx["fwd_ret_mats"]
+            or ("holding_periods" in ctx and "label_calendar" not in ctx)):
+        raise ResearchError("comparison_unavailable", "Requested horizon requires engine mapping, labels and original label_calendar")
     calendar = pd.DatetimeIndex(ctx["close_unstacked"].index)
     price_calendar = pd.DatetimeIndex(ctx.get("label_calendar", calendar))
     instruments = ctx["close_unstacked"].columns
@@ -744,9 +755,6 @@ def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, 
     last_price_position = _last_available_price_position(price_calendar, spec["knowledge_cutoff"])
     if last_price_position < 0:
         raise ResearchError("comparison_unavailable", "No close price is available by the knowledge cutoff")
-    from backend.services.quantevolver.qe_eval_v2_metric_engine import HOLDING_PERIODS
-
-    shift_n = HOLDING_PERIODS[spec["horizon"]]
     mature_rows = _mature_dates(calendar, last_price_position, shift_n, price_calendar)
     returns = returns.where(mature_rows, axis=0)
     model_inputs = list(dict.fromkeys([*spec["baseline"], spec["candidate"],

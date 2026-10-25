@@ -8,6 +8,7 @@ import type {
   LocalSimReplay,
   LocalSimRuntimeProfile,
   LocalSimRuntimeProfileVersion,
+  LocalSimSchedulerVerification,
   RuntimeProfileConfigRequest,
   TradingCalendarStatus,
 } from "./types";
@@ -26,8 +27,9 @@ export class LocalSimApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
+    cache: "no-store",
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
   });
@@ -52,8 +54,8 @@ export const localSimApi = {
     return request(`/trading-calendar/status${suffix}`);
   },
 
-  async listPackages(): Promise<Array<{ package_id: string; package_name?: string; package_status: string }>> {
-    const data = await request<{ packages: Array<{ package_id: string; package_name?: string; package_status: string }> }>(
+  async listPackages(): Promise<Array<{ package_id: string; display_name?: string; package_name?: string; package_status: string; created_at?: string }>> {
+    const data = await request<{ packages: Array<{ package_id: string; display_name?: string; package_name?: string; package_status: string; created_at?: string }> }>(
       "/strategy-packages?view=summary&limit=200",
     );
     return data.packages || [];
@@ -66,11 +68,32 @@ export const localSimApi = {
     return data.execution_policies || [];
   },
 
-  async readiness(): Promise<LocalSimCutoverReadiness> {
+  async readiness(signal?: AbortSignal): Promise<LocalSimCutoverReadiness> {
     const data = await request<{ readiness: LocalSimCutoverReadiness }>(
       "/simulation-runtime/localsim/cutover-readiness",
+      { signal },
     );
-    return data.readiness;
+    const value = data.readiness;
+    if (!value || value.schema_version !== "localsim_cutover_readiness_v1"
+      || typeof value.ready !== "boolean" || !Array.isArray(value.blockers)
+      || !value.blockers.every((reason) => typeof reason === "string")
+      || !Number.isInteger(value.in_flight_economic_run_count) || value.in_flight_economic_run_count < 0
+      || !Number.isFinite(Date.parse(value.checked_at))
+      || (value.ready !== (value.blockers.length === 0))
+      || (value.ready && value.in_flight_economic_run_count > 0)) {
+      throw new LocalSimApiError("切流状态返回不完整或相互矛盾，请重新核验", 200, "LOCALSIM_READINESS_INVALID");
+    }
+    return value;
+  },
+
+  async schedulerVerification(signal?: AbortSignal): Promise<LocalSimSchedulerVerification> {
+    const data = await request<{ scheduler: LocalSimSchedulerVerification }>(
+      "/simulation-runtime/scheduler/verification-status?broker_backend=local_sim", { signal },
+    );
+    if (!data.scheduler || typeof data.scheduler.running !== "boolean" || typeof data.scheduler.thread_alive !== "boolean") {
+      throw new LocalSimApiError("调度核验返回不完整，请重新读取", 200, "LOCALSIM_SCHEDULER_VERIFICATION_INVALID");
+    }
+    return data.scheduler;
   },
 
   async listAccounts(params: {
@@ -78,16 +101,19 @@ export const localSimApi = {
     status?: LocalSimAccountStatus;
     cursor?: string;
     limit?: number;
+    signal?: AbortSignal;
   } = {}): Promise<LocalSimListResponse<LocalSimAccount>> {
     const query = new URLSearchParams({ limit: String(params.limit || 100) });
     if (params.packageId) query.set("package_id", params.packageId);
     if (params.status) query.set("status", params.status);
     if (params.cursor) query.set("cursor", params.cursor);
-    return request(`/simulation-runtime/localsim/accounts?${query.toString()}`);
+    const data = await request<LocalSimListResponse<LocalSimAccount>>(`/simulation-runtime/localsim/accounts?${query.toString()}`, { signal: params.signal });
+    if (!Array.isArray(data.items)) throw new LocalSimApiError("账户列表返回不完整，请重新读取", 200, "LOCALSIM_ACCOUNTS_INVALID");
+    return data;
   },
 
-  async getAccount(accountId: string): Promise<LocalSimControlResponse> {
-    return request(`/simulation-runtime/localsim/accounts/${encodeURIComponent(accountId)}`);
+  async getAccount(accountId: string, signal?: AbortSignal): Promise<LocalSimControlResponse> {
+    return request(`/simulation-runtime/localsim/accounts/${encodeURIComponent(accountId)}`, {signal});
   },
 
   async createAccount(payload: {
@@ -146,10 +172,12 @@ export const localSimApi = {
     );
   },
 
-  async listReplays(cursor?: string): Promise<LocalSimListResponse<LocalSimReplay>> {
+  async listReplays(cursor?: string, signal?: AbortSignal): Promise<LocalSimListResponse<LocalSimReplay>> {
     const query = new URLSearchParams({ limit: "100" });
     if (cursor) query.set("cursor", cursor);
-    return request(`/simulation-runtime/localsim/replays?${query.toString()}`);
+    const data = await request<LocalSimListResponse<LocalSimReplay>>(`/simulation-runtime/localsim/replays?${query.toString()}`, { signal });
+    if (!Array.isArray(data.items)) throw new LocalSimApiError("回放列表返回不完整，请重新读取", 200, "LOCALSIM_REPLAYS_INVALID");
+    return data;
   },
 
   async createReplay(payload: {
@@ -166,13 +194,13 @@ export const localSimApi = {
   }): Promise<LocalSimControlResponse> {
     return request("/simulation-runtime/localsim/replays", post({
       schema_version: "localsim_replay_create_request_v1",
-      historical_source_id: "market.kline_minute_raw.v1",
+      historical_source_id: "dataset_files.frozen_market.v1",
       ...payload,
     }));
   },
 
-  async getReplay(replayJobId: string): Promise<LocalSimControlResponse> {
-    return request(`/simulation-runtime/localsim/replays/${encodeURIComponent(replayJobId)}`);
+  async getReplay(replayJobId: string, signal?: AbortSignal): Promise<LocalSimControlResponse> {
+    return request(`/simulation-runtime/localsim/replays/${encodeURIComponent(replayJobId)}`, { signal });
   },
 
   async cancelReplay(replayJobId: string, expectedVersion: number): Promise<LocalSimControlResponse> {

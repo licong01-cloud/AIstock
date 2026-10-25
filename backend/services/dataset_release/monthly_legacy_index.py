@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -29,6 +29,7 @@ def append_legacy_index_context(
     cutoff: date, source_bundle_sha256: str,
     definitions: Sequence[IndexDefinition] = DOMESTIC_INDEX_DEFINITIONS,
     checkpoint: Callable[[], None] = lambda: None,
+    historical_corrections: Sequence[Mapping[str, Any]] = (),
 ) -> IndexMaterializationReceipt:
     ensure_sha256(source_bundle_sha256, field="monthly index source bundle")
     definitions = validate_index_definitions(definitions)
@@ -50,6 +51,13 @@ def append_legacy_index_context(
     inherited = pd.read_hdf(path, "data")
     if tuple(inherited.columns) != RAW_COLUMNS:
         raise LegacyMonthlyPrefixError("inherited raw index storage schema differs")
+    inherited_count = len(inherited)
+    if historical_corrections:
+        from .monthly_index_corrections import correct_raw_frame
+        corrections, _ = merge_index_rows_missing_only(_normalized_rows(historical_corrections), [])
+        if any(row["trade_date"] > prefix.cutoff for row in corrections):
+            raise LegacyMonthlyPrefixError("index correction escapes inherited dates")
+        inherited = correct_raw_frame(inherited, corrections)
     days = tuple(source.trading_dates(start, cutoff))
     if not days or days != tuple(sorted(set(days))) or any(not start <= day <= cutoff for day in days):
         raise LegacyMonthlyPrefixError("native index month calendar differs")
@@ -101,7 +109,9 @@ def append_legacy_index_context(
         "predecessor_manifest_sha256": prefix.manifest_sha256, "source_bundle_sha256": source_bundle_sha256,
         "cutoff": cutoff.isoformat(), "month_start": start.isoformat(), "validation_scope": "month_delta",
         "h5_storage_contract": "inherited_raw_8_share_volume_thousand_cny_v1",
-        "normalized_parquet_scope": "month_delta", "inherited_rows": len(inherited), "month_rows": len(rows),
+        "normalized_parquet_scope": "month_delta", "inherited_rows": inherited_count, "month_rows": len(rows),
+        "historical_correction_rows": len(historical_corrections),
+        "historical_corrections_sha256": hashlib.sha256(canonical_json_bytes(historical_corrections)).hexdigest(),
         "rows": len(combined), "index_count": len(definitions), "files": files,
         "inherited_h5_sha256": pin["sha256"], "historical_business_audit_performed": False,
         "publication_allowed": False, "database_access": False, "provider_access": False,

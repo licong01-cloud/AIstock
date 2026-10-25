@@ -15,9 +15,26 @@ from backend.services.dataset_release.source_authority import (
     SourceRequiredDatasetEmpty,
     SourceAuditIncomplete,
     SourceQuerySpec,
+    SourceProviderContractError,
     _validate_core_index_membership_authority,
     imported_source_session_factory,
 )
+
+
+def test_monthly_source_fact_codes_do_not_change_pit_selection(dataset_profile):
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+    pit = SimpleNamespace(spans=(SimpleNamespace(ts_code="000001.SZ"),))
+    source = MonthlyObservedSourceAuthority(
+        dataset_profile, None, progress=lambda _: None, month_start=date(2026, 9, 1),
+        fact_stock_codes=("000001.SZ", "000002.SZ"),
+    )
+    requests = list(source._partition_requests(PRODUCTION_QUERY_SPECS["daily_basic"],
+                    date(2026, 9, 30), pit_snapshot=pit))
+    assert requests and all(params["codes"] == ["000001.SZ", "000002.SZ"] for _, params in requests)
+    assert tuple(span.ts_code for span in pit.spans) == ("000001.SZ",)
+    with pytest.raises(SourceProviderContractError, match="population"):
+        list(source._partition_requests(PRODUCTION_QUERY_SPECS["daily_basic"], date(2026, 9, 30),
+                                        pit_snapshot=pit, selected_stock_codes=("000003.SZ",)))
 
 
 @pytest.mark.parametrize("query_id", ["kline_daily_raw", "kline_minute_raw", "daily_basic"])
@@ -42,6 +59,9 @@ def test_raw_source_sealer_keeps_row_identity_and_emits_exact_month_leaves(tmp_p
         if query_id == "kline_minute_raw":
             payload["freq"] = "1min"
         payload.update({field: 1000 for field in query.value_columns})
+        if query_id in {'kline_daily_raw', 'kline_minute_raw'}:
+            payload.update(volume_shares_source='tushare_daily' if query_id == 'kline_daily_raw' else 'tushare_stk_mins',
+                           volume_shares_sha256='a' * 64)
         payloads.append(payload)
     expected_rows = [
         {
@@ -94,6 +114,70 @@ def test_raw_source_sealer_keeps_row_identity_and_emits_exact_month_leaves(tmp_p
         )
 
 
+@pytest.mark.parametrize("query_id,mutation,error", [
+    ("moneyflow_ts", None, None),
+    ("moneyflow_ts", "legacy", None),
+    ("kline_minute_raw", None, None),
+    ("kline_minute_raw", "missing", "partition contract differs"),
+    ("daily_basic", "unexpected", "partition contract differs"),
+    ("moneyflow_ts", "malformed", "source_code_membership_digest"),
+    ("moneyflow_ts", "reuse_drift", "content/reuse partition differs"),
+    ("moneyflow_ts", "payload_drift", "partition contract differs"),
+])
+def test_stage_reads_producer_code_membership_contract(tmp_path, dataset_profile, query_id, mutation, error):
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+    from backend.services.dataset_release.source_authority import SourceTableSchema, _sealed_partition_from_stage
+
+    ControlStore.initialize(tmp_path)
+    cas = CASStore(tmp_path)
+    authority = MonthlyObservedSourceAuthority(
+        dataset_profile, cas, progress=lambda _: None, month_start=date(2024, 8, 1),
+        sector_source_policy="classification_published_snapshot_v1",
+    )
+    query = PRODUCTION_QUERY_SPECS[query_id]
+    key, params = next(authority._partition_requests(
+        query, date(2024, 8, 31),
+        pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code="302132.SZ")]),
+    ))
+    payload = {"ts_code": params["codes"][0], **{field: 1000 for field in query.value_columns}}
+    if query_id == "kline_minute_raw":
+        payload.update(trade_time="2024-08-13 09:31:00", freq="1min",
+                       volume_shares_source="tushare_stk_mins", volume_shares_sha256="a" * 64)
+    else:
+        payload["trade_date"] = "2024-08-13"
+    if query_id == "moneyflow_ts":
+        assert payload["ts_code"] == "300114.SZ"  # 正式共享历史证券身份，而非 HMM 私有映射。
+    session = SimpleNamespace(stream=lambda *_args, **_kwargs: iter([{
+        "row_key": json.dumps([payload[field] for field in query.key_columns]),
+        "row_payload": json.dumps(payload),
+    }]))
+    sealed = authority._seal_query_partition(
+        session, query=query, partition_key=key, params=params, tokens=(),
+        table_schema=SourceTableSchema(query.table_identity, query.required_columns),
+    )
+    raw, reuse = sealed.as_build_input(), sealed.as_reuse_input()
+    if mutation in {"legacy", "missing"}:
+        raw["source_code_membership_digest"] = reuse["source_code_membership_digest"] = None
+    elif mutation in {"unexpected", "malformed"}:
+        raw["source_code_membership_digest"] = reuse["source_code_membership_digest"] = (
+            "a" * 64 if mutation == "unexpected" else "invalid"
+        )
+    elif mutation == "reuse_drift":
+        reuse["source_code_membership_digest"] = "b" * 64
+    elif mutation == "payload_drift":
+        raw["source_payload_columns"] = reuse["source_payload_columns"] = ["ts_code", "trade_date"]
+    if error:
+        with pytest.raises(SourceAuditIncomplete, match=error):
+            _sealed_partition_from_stage(cas, raw, {sealed.spec.identity: reuse})
+    else:
+        loaded = _sealed_partition_from_stage(cas, raw, {sealed.spec.identity: reuse})
+        assert loaded.as_build_input() == raw
+        assert loaded.rows_ref == sealed.rows_ref
+        assert loaded.source_partition_params_digest == sealed.source_partition_params_digest
+
+
 @pytest.mark.parametrize("mismatch", [False, True])
 def test_validated_text_keys_avoid_reencoding_without_weakening_identity(monkeypatch, mismatch):
     from backend.services.dataset_release import source_authority as source
@@ -112,6 +196,8 @@ def test_validated_text_keys_avoid_reencoding_without_weakening_identity(monkeyp
         "trade_time": "2026-09-30 09:31:00",
         "freq": "1min",
         **{field: 1000 for field in query.value_columns},
+        'volume_shares_source': 'tushare_stk_mins',
+        'volume_shares_sha256': 'a' * 64,
     }
     keys = [payload[field] for field in query.key_columns]
     if mismatch:
@@ -146,6 +232,7 @@ def test_numeric_key_identity_still_distinguishes_integer_and_float(key, value):
     query = replace(PRODUCTION_QUERY_SPECS["kline_daily_raw"], key_columns=("close_li",))
     spec = _query_partition_spec(query, "numeric-key", SourceTableSchema(query.table_identity, query.required_columns))
     payload = {field: 1000 for field in query.value_columns}
+    payload.update(volume_shares_source='tushare_daily', volume_shares_sha256='a' * 64)
     payload["close_li"] = value
     raw = {"row_key": json.dumps([key]), "row_payload": json.dumps(payload)}
     if isinstance(value, float):
@@ -168,6 +255,7 @@ def test_optimized_raw_validator_retains_fail_closed_payload_contract(fault):
     query = PRODUCTION_QUERY_SPECS["kline_daily_raw"]
     spec = _query_partition_spec(query, "fail-closed", SourceTableSchema(query.table_identity, query.required_columns))
     payload = {"ts_code": "000001.SZ", "trade_date": "2026-09-30", **{field: 1000 for field in query.value_columns}}
+    payload.update(volume_shares_source='tushare_daily', volume_shares_sha256='a' * 64)
     if fault == "null_key":
         payload["ts_code"] = None
     elif fault == "numeric_text_key":
@@ -256,6 +344,67 @@ def test_production_source_allowlist_preserves_exact_daily_and_minute_ordering()
     assert "source_row.trade_time < (%(end)s::date + interval '1 day')" in minute.sql
     assert minute.sql.endswith("ORDER BY source_row.ts_code,source_row.trade_time,source_row.freq")
     assert "to_jsonb(source_row)" not in daily.sql + minute.sql
+
+
+@pytest.mark.parametrize("query_id", ["margin_detail", "daily_basic", "kline_daily_raw", "kline_minute_raw"])
+def test_margin_publication_scope_is_independent_of_pit_stock_queries(dataset_profile, query_id):
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+
+    authority = MonthlyObservedSourceAuthority(
+        dataset_profile, None, progress=lambda _: None, month_start=date(2026, 9, 1),
+    )
+    pit = SimpleNamespace(spans=[SimpleNamespace(ts_code="000001.SZ")])
+    query = PRODUCTION_QUERY_SPECS[query_id]
+    requests = list(authority._partition_requests(query, date(2026, 9, 30), pit_snapshot=pit))
+    assert requests and all(params["start"] == date(2026, 9, 1) for _, params in requests)
+    if query_id == "margin_detail":
+        assert query.code_column is query.code_policy is None
+        assert "%(codes)s" not in query.sql
+        assert "provider_publication_scope_v1" in query.query_version
+        assert all("codes" not in params for _, params in requests)
+    else:
+        assert "%(codes)s" in query.sql
+        assert all(params["codes"] == ["000001.SZ"] for _, params in requests)
+    assert [span.ts_code for span in pit.spans] == ["000001.SZ"]
+
+
+def test_margin_publication_sql_in_existing_readonly_dev():
+    import os
+
+    if os.getenv("AISTOCK_MONTHLY_MARGIN_DEV_READBACK") != "1":
+        pytest.skip("explicit existing DEV read-only validation only")
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_margin_publication
+
+    target = {key: os.environ[f"TDX_DB_DEV_{env}"] for key, env in (
+        ("host", "HOST"), ("port", "PORT"), ("dbname", "NAME"), ("user", "USER"), ("password", "PASSWORD"),
+    )}
+    assert target["port"] == "5433" and "dev" in target["dbname"].lower()
+    query = PRODUCTION_QUERY_SPECS["margin_detail"]
+    day = date(2026, 9, 1)
+    provider = [dict(ts_code=code, trade_date=day.isoformat(), **dict.fromkeys(query.value_columns, 1.0))
+                for code in ("000001.SZ", "000002.SZ", "510050.SH")]
+    columns = "ts_code text, trade_date date," + ",".join(f"{name} numeric" for name in query.value_columns)
+    sql = (f"WITH provider_rows AS (SELECT * FROM jsonb_to_recordset(%(provider_rows)s::jsonb) AS fact({columns})) "
+           + query.sql.replace(query.table_identity, "provider_rows"))
+    with psycopg2.connect(**target, application_name="BUG-1818-readonly-DEV") as connection:
+        connection.set_session(readonly=True, autocommit=False)
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SHOW transaction_read_only")
+            assert cursor.fetchone()["transaction_read_only"] == "on"
+            cursor.execute(sql, dict(provider_rows=json.dumps(provider), codes=["000001.SZ"], start=day, end=day))
+            actual = [json.loads(row["row_payload"]) for row in cursor.fetchall()]
+    assert {row["ts_code"] for row in actual} == {row["ts_code"] for row in provider}
+    receipt = {"eligible_sources": {"margin_detail": ["tushare"]},
+               "eligible_quality_statuses": {"margin_detail": ["ok"]},
+               "rows": [{"dataset": "margin_detail", "trade_date": day.isoformat(), "sources": [{
+                   "data_source": "tushare", "status": "success", "error_present": False,
+                   "quality_status": "ok", "expected_rows": len(provider),
+               }]}]}
+    gate = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=day, rows=actual, receipt=receipt, gate=gate)
+    assert gate.status == "PASS"
 
 
 def test_dated_source_query_cannot_bypass_refresh_audit_contract() -> None:
@@ -489,3 +638,55 @@ def test_core_index_stage_receipt_closes_source_pins_and_pool_counts() -> None:
     broken["coverage"]["csi300"]["first_effective_from"] = "2018-08-02"
     with pytest.raises(SourceAuditIncomplete, match="core-index"):
         _validate_core_index_stage_receipt(broken, **arguments)
+
+
+@pytest.mark.parametrize("outside_population", [False, True])
+def test_full_fact_component_keeps_pit_membership_separate(tmp_path, dataset_profile, outside_population):
+    from contextlib import nullcontext
+    from backend.tests.dataset_release.test_component_manifest_producer import _pit, _source
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.contracts import Component
+    from backend.services.dataset_release.component_manifest_producer import (
+        produce_component_artifact_manifest, snapshot_candidate_artifacts,
+    )
+    from backend.services.dataset_release.component_artifact_manifest import (
+        ComponentArtifactManifestError, load_component_artifact_manifest,
+    )
+
+    root = tmp_path / "candidate"
+    for relative in ("daily_bin/qlib/features/000002.sz/close.day.bin",
+                     "minute_bin/qlib/features/000002.sz/close.1min.bin",
+                     "factor_bundle/daily_pv.h5", "index_context/index_csv/000985.CSI.csv"):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fixture-fact")
+    pit = _pit()  # Only 000001.SZ is eligible. 000002.SZ must not acquire a PIT span.
+    qfq = SimpleNamespace(values=(("000001.SZ", 1.25), ("000002.SZ", 1.5)),
+                          per_code_series=(("000001.SZ", 1, "c" * 64), ("000002.SZ", 1, "d" * 64)))
+    sources = {component: _source(component) for component in Component}
+    for component, rows in sources.items():
+        if component is not Component.DOMESTIC_INDEX_CONTEXT:
+            rows.append({**rows[0], "identity": "stk_limit_rule_coverage:2026-07-01_2026-07-31",
+                         "dataset": "stk_limit_rule_coverage",
+                         "affected_instruments": ["000003.SZ" if outside_population else "000002.SZ"]})
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    snapshot = snapshot_candidate_artifacts(root)
+    with (pytest.raises(ComponentArtifactManifestError, match="factual population")
+          if outside_population else nullcontext()):
+        reference = produce_component_artifact_manifest(
+            cas, candidate_root=root, profile=dataset_profile, scope="full", cutoff=pit.cutoff,
+            candidate_identity="6" * 64, artifact_root=snapshot.artifact_root,
+            producer_fingerprint="7" * 64, artifact_fingerprint="8" * 64,
+            validation_fingerprint="9" * 64, source_content_root="a" * 64,
+            artifact_ready_content_root="b" * 64, pit_snapshot=pit,
+            source_partitions=sources, qfq_authority=qfq, artifact_snapshot=snapshot,
+        )
+    if outside_population:
+        return
+    manifest = load_component_artifact_manifest(cas, reference)
+    daily = manifest.component(Component.DAILY_BIN)
+    assert daily.pit_instruments == ("000001.SZ",)
+    assert set(daily.pit_span_digest_by_code) == {"000001.SZ"}
+    assert set(daily.artifact_partitions[0].instruments) == {"000001.SZ", "000002.SZ"}
+    assert daily.adj_writer_targets("000002.SZ") == ("qlib/features/000002.sz/close.day.bin",)

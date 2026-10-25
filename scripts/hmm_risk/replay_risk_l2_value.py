@@ -34,7 +34,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-sha256", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--executor-commit")
+    parser.add_argument(
+        "--contract-version", choices=(VERSION, "hmm_risk_l2_warning_persistence_value_v1"), default=VERSION
+    )
     args = parser.parse_args(argv)
+    version = args.contract_version
+    persistence = None
+    if version != VERSION:
+        from backend.services.hmm_risk import risk_l2_value_persistence as persistence
     output = None
     try:
         validated = validate_output_location(args.output)
@@ -45,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             require(
                 bool(args.executor_commit) and head == args.executor_commit, "child source differs", "identity_mismatch"
             )
-            result = execute(args.request, args.request_sha256)
+            result = (persistence.execute if persistence else execute)(args.request, args.request_sha256)
             write_once(output, result)
             print(json.dumps({"status": result["status"], "receipt_sha256": result["receipt_sha256"], "new_fits": 0}))
         else:
@@ -74,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
                         head,
                         "--output",
                         str(path),
+                        "--contract-version",
+                        version,
                     ],
                     check=True,
                     env=env,
@@ -81,31 +90,34 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 child = read_json(path)
                 verify_receipt(child)
-                require(
-                    child.get("schema_version") == VERSION + "_result"
-                    and child.get("request_sha256") == args.request_sha256
-                    and child.get("source_pins") == APPROVED_PINS
-                    and child.get("planned_return_dates") == 423
-                    and child.get("sector_count") == 131
-                    and len(child.get("daily", [])) == 423
-                    and child.get("status")
-                    in {
-                        "INSUFFICIENT_REFERENCE_PATH",
-                        "REFERENCE_RISK_REDUCTION_OBSERVED",
-                        "REFERENCE_RISK_REDUCTION_NOT_OBSERVED",
-                    }
-                    and all(
-                        type(child.get(k)) is int and child[k] == 0
-                        for k in ("new_fits", "new_filter_calls", "new_predict_calls")
+                if persistence:
+                    persistence.validate_child(child, args.request, args.request_sha256)
+                else:
+                    require(
+                        child.get("schema_version") == VERSION + "_result"
+                        and child.get("request_sha256") == args.request_sha256
+                        and child.get("source_pins") == APPROVED_PINS
+                        and child.get("planned_return_dates") == 423
+                        and child.get("sector_count") == 131
+                        and len(child.get("daily", [])) == 423
+                        and child.get("status")
+                        in {
+                            "INSUFFICIENT_REFERENCE_PATH",
+                            "REFERENCE_RISK_REDUCTION_OBSERVED",
+                            "REFERENCE_RISK_REDUCTION_NOT_OBSERVED",
+                        }
+                        and all(
+                            type(child.get(k)) is int and child[k] == 0
+                            for k in ("new_fits", "new_filter_calls", "new_predict_calls")
+                        )
+                        and all(
+                            child.get(k) is False
+                            for k in ("database_access", "tail_accessed", "dataset_write", "runtime_action")
+                        )
+                        and child.get("zero_compute_poison_active") is True,
+                        "child envelope differs from the exact zero-compute request",
+                        "identity_mismatch",
                     )
-                    and all(
-                        child.get(k) is False
-                        for k in ("database_access", "tail_accessed", "dataset_write", "runtime_action")
-                    )
-                    and child.get("zero_compute_poison_active") is True,
-                    "child envelope differs from the exact zero-compute request",
-                    "identity_mismatch",
-                )
                 children.append(child)
             require(source_head() == head, "parent source changed", "identity_mismatch")
             require(
@@ -115,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             report = receipt(
                 {
-                    "schema_version": VERSION + "_acceptance",
+                    "schema_version": version + "_acceptance",
                     "execution_status": "COMPLETED",
                     "executor_commit": head,
                     "request_sha256": args.request_sha256,
@@ -145,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         # Preserve a typed CLI failure, including subprocess and final write/readback failures.
         failure = receipt(
             {
-                "schema_version": VERSION + "_failure",
+                "schema_version": version + "_failure",
                 "execution_status": "FAILED",
                 "reason_code": getattr(exc, "reason_code", "hmm_risk_l2_value_execution_failed"),
                 "exception_type": type(exc).__name__,
