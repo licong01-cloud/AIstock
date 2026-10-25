@@ -15,6 +15,7 @@ import pytest
 
 from backend.services.hmm_data_source import coefficient_extension as ext
 from backend.services.hmm_training_service import HMMTrainingService
+from scripts.precompute_hmm_coefficients import build_stock_sector_membership_spans
 
 
 def _profile(tmp_path: Path, generation: str = "release-a", end: str = "2024-07-03"):
@@ -132,10 +133,9 @@ def _payload(plan):
         "preset_coeffs": plan["preset_coeffs"],
         "input_file_sha256": {k: v["sha256"] for k, v in plan["frozen_input_bundle"]["files"].items()},
         "daily_coefficients": {d: {"801783.SI": 1.05} for d in dates},
-        "stock_sector_membership_spans": {
-            "000001.SZ": [{"from": dates[0], "to": dates[-1], "sector_code": "801783.SI"}],
-            "000002.SZ": [{"from": dates[0], "to": dates[-1], "sector_code": "801019.SI"}],
-        },
+        "stock_sector_membership_spans": build_stock_sector_membership_spans(
+            {d: {"000001.SZ": "801783.SI", "000002.SZ": "801019.SI"} for d in dates}
+        ),
         "quote_unavailable_sector_codes_by_date": {d: ["801019.SI"] for d in dates},
         "input_data_max_dates_by_date": {d: {"sector_data": d, "index_daily": d, "market_context": d} for d in dates},
     }
@@ -169,6 +169,223 @@ def test_monthly_release_extends_same_model_and_keeps_old_exact_windows(tmp_path
         preset_coeffs=old["preset_coeffs"],
         inputs=new_input,
     )
+
+
+def _completed_extension(tmp_path, monkeypatch):
+    plan, config, snapshot, inputs = _plan(tmp_path)
+    primary = ext.publish_window(_payload(plan), plan, plan["test_start"], plan["backtest_end"])
+    config["coefficient_windows"] = [primary]
+    job = {
+        "status": "COMPLETED",
+        "plan_json": deepcopy(plan),
+        "result_json": {
+            "status": "REGISTERED",
+            "training_performed": False,
+            "extension_key": plan["extension_key"],
+            "windows": [primary],
+        },
+    }
+    service = HMMTrainingService()
+    registrations = []
+    monkeypatch.setattr(service, "_get_config", lambda _: {"config_json": config})
+    monkeypatch.setattr(service, "get_snapshot", lambda _: snapshot)
+    monkeypatch.setattr(ext, "resolve_active_input", lambda: inputs)
+
+    def register(p, windows):
+        assert {k: v for k, v in p.items() if k not in {"config_json", "windows"}} == {
+            k: v for k, v in plan.items() if k not in {"config_json", "windows"}
+        }
+        registrations.extend(windows)
+        config["coefficient_windows"].extend(windows)
+
+    def no_inference(*args, **kwargs):
+        pytest.fail("completed immutable coefficients must be cropped without inference or training")
+
+    monkeypatch.setattr(service, "_register_coefficient_extension_windows", register)
+    monkeypatch.setattr(service, "_execute_coefficient_extension_plan", no_inference)
+    monkeypatch.setattr("backend.services.hmm_training_service.subprocess.run", no_inference)
+    return service, plan, config, job, primary, registrations
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "temporary_database", "temporary_registration", "typed_identity", "terminal_job"]
+)
+def test_shared_startup_crops_completed_file_job_without_legacy_scheduler(tmp_path, monkeypatch, failure):
+    import sys
+    import psycopg2
+    from backend.ingestion import tdx_scheduler
+    from backend.routers import hmm_training
+
+    service, plan, config, job, primary, registrations = _completed_extension(tmp_path, monkeypatch)
+    inputs = ext.resolve_active_input()
+    inputs["qe_default_window"] = {"test_start": "2024-06-03", "backtest_end": "2024-07-02"}
+    job["job_id"] = "existing-primary"
+    if failure == "terminal_job":
+        job["status"] = "FAILED"
+    source = Path(plan["model_path"]).parent / primary["coefficient_filename"]
+    before = source.read_bytes(), deepcopy(job)
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            pass
+
+        def fetchall(self):
+            return [{"config_id": plan["config_id"], "config_json": config}]
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=lambda **_: Cursor())
+
+    monkeypatch.setattr("backend.services.hmm_training_service.get_conn", connection)
+    monkeypatch.setattr(service, "_enqueue_coefficient_extension", lambda _: job)
+    monkeypatch.setattr(service, "get_daily_coefficient_job", lambda _: job)
+    monkeypatch.setattr(service, "reconcile_daily_coefficient_subscriptions", lambda: [])
+    monkeypatch.setattr(
+        service, "run_daily_coefficients_job", lambda *_: pytest.fail("terminal job must not reexecute")
+    )
+    attempts, snapshot_loader = [], service.get_snapshot
+
+    def snapshot(identity):
+        attempts.append(identity)
+        if len(attempts) == 1 and failure == "temporary_database":
+            raise psycopg2.OperationalError("temporary file subscription database outage")
+        if failure == "typed_identity":
+            raise ext.CoefficientExtensionError("hmm_coefficient_extension_contract_invalid", "identity conflict")
+        return snapshot_loader(identity)
+
+    monkeypatch.setattr(service, "get_snapshot", snapshot)
+    register = service._register_coefficient_extension_windows
+    registration_failures = []
+
+    def register_with_recovery(p, windows):
+        if failure == "temporary_registration" and not registration_failures:
+            registration_failures.append(True)
+            raise psycopg2.InterfaceError("temporary registry connection outage after artifact publication")
+        return register(p, windows)
+
+    monkeypatch.setattr(service, "_register_coefficient_extension_windows", register_with_recovery)
+    monkeypatch.setattr(hmm_training, "HMMTrainingService", lambda: service)
+    monkeypatch.setattr(tdx_scheduler, "DEFAULT_TEST_OUTPUT_DIR", tmp_path)
+    owner = tdx_scheduler.TDXScheduler()
+    monkeypatch.setattr(owner, "_fetchall", lambda *_: [])  # Unchanged audit watermark, including startup catch-up.
+    monkeypatch.setattr(tdx_scheduler, "scheduler", owner)
+    monkeypatch.setitem(sys.modules, "apscheduler.schedulers.asyncio", None)
+    monkeypatch.setattr(hmm_training, "_scheduler", None)
+    monkeypatch.setattr(hmm_training, "_completion_scheduler", None)
+
+    async def scenario():
+        hmm_training.init_hmm_scheduler()
+        entry = owner._completion_callbacks[hmm_training._HMM_COMPLETION_CALLBACK_ID]
+        owner._dispatch_completion_callbacks()
+        await asyncio.wrap_future(entry.future)
+        if failure in {"temporary_database", "temporary_registration"}:
+            assert entry.future.result() is False
+            owner._dispatch_completion_callbacks()
+            await asyncio.wrap_future(entry.future)
+        owner._dispatch_completion_callbacks()
+        assert entry.future is None
+        assert entry.completed_watermark == entry.dispatched_watermark
+        assert len(attempts) == (2 if failure in {"temporary_database", "temporary_registration"} else 1)
+        if failure in {None, "temporary_database", "temporary_registration"}:
+            assert len(registrations) == 1
+            assert (registrations[0]["test_start"], registrations[0]["backtest_end"]) == ("2024-07-01", "2024-07-02")
+        else:
+            assert registrations == []
+        assert source.read_bytes() == before[0] and job == before[1]
+        hmm_training.shutdown_hmm_scheduler()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        owner.shutdown()
+
+
+@pytest.mark.parametrize(
+    "requested_start,requested_end,legal_portfolio_window",
+    [
+        ("2024-06-03", "2024-07-02", ["2024-07-01", "2024-07-02"]),
+        ("2024-07-02", "2024-07-03", ["2024-07-02", "2024-07-03"]),
+        ("2024-06-03", "2024-06-28", None),
+        ("2024-06-03", "2024-07-04", None),
+    ],
+)
+def test_completed_extension_adds_separate_legal_portfolio_window_without_inference(
+    tmp_path, monkeypatch, requested_start, requested_end, legal_portfolio_window
+):
+    service, plan, config, job, primary, registrations = _completed_extension(tmp_path, monkeypatch)
+    before = deepcopy(config)
+    before_job = deepcopy(job)
+    source = Path(plan["model_path"]).parent / primary["coefficient_filename"]
+    source_bytes = source.read_bytes()
+    requested = {"test_start": requested_start, "backtest_end": requested_end}
+    window = service._ensure_coefficient_portfolio_window(plan, job, requested)
+    if legal_portfolio_window is not None:
+        assert [window["test_start"], window["backtest_end"]] == legal_portfolio_window
+        assert registrations == [window]
+        assert window["extension_key"] == primary["extension_key"] == plan["extension_key"]
+        assert window["extension_reader_sha256"] == primary["extension_reader_sha256"]
+        assert service._ensure_coefficient_portfolio_window(plan, job, requested) == window
+        assert registrations == [window]  # No duplicate registration or repeated DB update.
+    else:
+        assert window is None and registrations == []
+    assert config["coefficient_windows"][0] == before["coefficient_windows"][0]
+    assert source.read_bytes() == source_bytes
+    assert requested == {"test_start": requested_start, "backtest_end": requested_end}
+    assert config["coefficient_extension"] == before["coefficient_extension"]
+    assert job == before_job  # Never mutate a terminal job's plan, result or admission identity.
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "source_bytes",
+        "plan_identity",
+        "training",
+        "unregistered",
+        "traversal",
+        "duplicate_primary",
+        "primary_binding",
+        "conflict",
+        "target_bytes",
+    ],
+)
+def test_portfolio_crop_rejects_unproven_source_or_conflicting_registration(tmp_path, monkeypatch, damage):
+    service, plan, config, job, primary, registrations = _completed_extension(tmp_path, monkeypatch)
+    requested = {"test_start": "2024-06-03", "backtest_end": "2024-07-02"}
+    source = Path(plan["model_path"]).parent / primary["coefficient_filename"]
+    if damage in {"conflict", "target_bytes"}:
+        window = service._ensure_coefficient_portfolio_window(plan, job, requested)
+        if damage == "conflict":
+            config["coefficient_windows"][-1] = dict(window, coefficient_sha256="0" * 64)
+        else:
+            (source.parent / window["coefficient_filename"]).write_bytes(b"tampered target")
+        registrations.clear()
+    elif damage == "source_bytes":
+        source.write_bytes(b"tampered primary")
+    elif damage == "plan_identity":
+        job["plan_json"]["extension_reader_sha256"] = "0" * 64
+    elif damage == "training":
+        job["result_json"]["training_performed"] = True
+    elif damage == "unregistered":
+        config["coefficient_windows"] = []
+    elif damage == "traversal":
+        primary["coefficient_filename"] = "../untrusted.json"
+    elif damage == "primary_binding":
+        primary["extension_key"] = "0" * 64
+    else:
+        job["result_json"]["windows"].append(dict(primary))
+    before = deepcopy(config)
+    files = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
+    with pytest.raises(ext.CoefficientExtensionError, match="registration_conflict"):
+        service._ensure_coefficient_portfolio_window(plan, job, requested)
+    assert registrations == [] and config == before
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()} == files
 
 
 def test_extension_start_cannot_relabel_post_fit_history_as_no_leakage(tmp_path):
@@ -303,8 +520,99 @@ def test_crop_preserves_legal_unavailable_and_does_not_materialize_stock_day_pan
     result = ext.window_payload(_payload(plan), plan, "2024-07-01", "2024-07-02")
     assert list(result["daily_coefficients"]) == ["2024-07-01", "2024-07-02"]
     assert "801019.SI" not in result["daily_coefficients"]["2024-07-02"]
-    assert result["stock_sector_membership_spans"]["000002.SZ"][0]["to"] == "2024-07-02"
+    assert result["stock_sector_membership_spans"]["000002.SZ"][0]["end_date"] == "2024-07-02"
     assert "stock_sector_map_by_date" not in result
+
+
+def test_canonical_producer_membership_turnover_roundtrips_through_window_crop(tmp_path):
+    plan, *_ = _plan(tmp_path)
+    dates = plan["trade_dates"]
+    maps = {
+        dates[0]: {"000001.SZ": "801783.SI", "000002.SZ": "801019.SI"},
+        dates[1]: {"000001.SZ": "801019.SI", "000002.SZ": "801019.SI", "000003.SZ": "801783.SI"},
+        dates[2]: {"000001.SZ": "801783.SI", "000003.SZ": "801783.SI"},
+    }
+    payload = _payload(plan)
+    payload["stock_sector_membership_spans"] = build_stock_sector_membership_spans(maps)
+    payload["quote_unavailable_sector_codes_by_date"][dates[2]] = []
+    result = ext.window_payload(payload, plan, dates[1], dates[2])
+    assert result["stock_sector_membership_spans"] == build_stock_sector_membership_spans(
+        {d: maps[d] for d in dates[1:]}
+    )
+    assert result["quote_unavailable_sector_codes_by_date"] == {dates[1]: ["801019.SI"], dates[2]: []}
+    assert "stock_sector_map_by_date" not in result
+
+
+def test_reviewed_reader_change_has_new_identity_without_retrying_old_terminal_job(tmp_path, monkeypatch):
+    old, config, snapshot, inputs = _plan(tmp_path)
+    sha256 = ext.file_sha256
+    reader = Path(ext.__file__)
+    monkeypatch.setattr(ext, "file_sha256", lambda path: "b" * 64 if path == reader else sha256(path))
+    new = ext.build_plan(
+        config_id=old["config_id"],
+        config=config,
+        snapshot=snapshot,
+        signal_preset=old["signal_preset"],
+        preset_coeffs=old["preset_coeffs"],
+        inputs=inputs,
+    )
+    assert old["extension_key"] != new["extension_key"]
+    assert old["output_path"] != new["output_path"]
+    assert new["extension_reader_sha256"] == "b" * 64
+    for key in (
+        "policy",
+        "model_sha256",
+        "model_inference_origin",
+        "generator_sha256",
+        "dataset_identity",
+        "trade_dates",
+    ):
+        assert old[key] == new[key]
+    payload = ext.window_payload(_payload(new), new, new["test_start"], new["backtest_end"])
+    assert payload["extension_reader_sha256"] == new["extension_reader_sha256"]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "legacy_names",
+        "missing_start",
+        "missing_end",
+        "missing_sector",
+        "non_string",
+        "invalid_date",
+        "reversed",
+        "overlap",
+        "unordered",
+    ],
+)
+def test_canonical_membership_schema_and_interval_errors_still_fail_closed(tmp_path, damage):
+    plan, *_ = _plan(tmp_path)
+    payload = _payload(plan)
+    spans = payload["stock_sector_membership_spans"]["000001.SZ"]
+    span = spans[0]
+    dates = plan["trade_dates"]
+    if damage == "legacy_names":
+        span["from"], span["to"] = span.pop("start_date"), span.pop("end_date")
+    elif damage == "missing_start":
+        span.pop("start_date")
+    elif damage == "missing_end":
+        span.pop("end_date")
+    elif damage == "missing_sector":
+        span.pop("sector_code")
+    elif damage == "non_string":
+        span["start_date"] = None
+    elif damage == "invalid_date":
+        span["start_date"] = "2024-07-99"
+    elif damage == "reversed":
+        span["start_date"], span["end_date"] = dates[-1], dates[0]
+    elif damage == "overlap":
+        spans.append(dict(span, start_date=dates[1]))
+    else:
+        span["start_date"] = dates[1]
+        spans.append(dict(span, start_date=dates[0], end_date=dates[0]))
+    with pytest.raises(ext.CoefficientExtensionError, match="PIT membership span"):
+        ext.window_payload(payload, plan, plan["test_start"], plan["backtest_end"])
 
 
 @pytest.mark.parametrize(
@@ -347,16 +655,22 @@ def test_immutable_publish_is_idempotent_and_matches_existing_qe_reader(tmp_path
     summary = dict(plan["dataset_identity"], profile_sha256=plan["dataset_identity"]["active_profile_sha256"])
     from backend.services.quantevolver.qe_active_dataset_profile import QE_ACTIVE_PROFILE_SUMMARY_PARAM
 
+    params = {
+        "sector_hmm_model_path": plan["model_path"],
+        "hmm_signal_preset": "preset_A",
+        "hmm_config_json": {"strict_no_leakage": True, "coefficient_windows": [window]},
+        QE_ACTIVE_PROFILE_SUMMARY_PARAM: summary,
+    }
     content = composer._precompute_hmm_coefficients(
-        {
-            "sector_hmm_model_path": plan["model_path"],
-            "hmm_signal_preset": "preset_A",
-            "hmm_config_json": {"strict_no_leakage": True, "coefficient_windows": [window]},
-            QE_ACTIVE_PROFILE_SUMMARY_PARAM: summary,
-        },
+        params,
         {"test_start": "2024-07-01", "backtest_end": "2024-07-02"},
     )
     assert json.loads(content)["backtest_end"] == "2024-07-02"
+    with pytest.raises(ValueError, match="strict_no_leakage"):
+        composer._precompute_hmm_coefficients(
+            params,
+            {"test_start": "2024-06-03", "backtest_end": "2024-07-02"},
+        )
     original = asset.read_bytes()
     asset.write_bytes(b"collision")
     with pytest.raises(ext.CoefficientExtensionError, match="overwrite"):
@@ -383,13 +697,23 @@ def test_executor_uses_file_only_worker_and_registers_all_exact_windows(tmp_path
     assert calls[0][1]["frozen_input_bundle"] == plan["frozen_input_bundle"]
     assert not any(k.startswith("db_") for k in calls[0][1])
     assert result["training_performed"] is False and len(registrations) == 2
+    assert sorted((w["test_start"], w["backtest_end"]) for w in registrations) == [
+        ("2024-07-01", "2024-07-02"),
+        ("2024-07-01", "2024-07-03"),
+    ]
+    for window in registrations:
+        asset = Path(plan["model_path"]).parent / window["coefficient_filename"]
+        assert ext.file_sha256(asset) == window["coefficient_sha256"]
+        assert json.loads(asset.read_text())["test_start"] == window["test_start"]
     assert len(checks) == 2
     assert not list(tmp_path.glob("*.pending"))
     service._execute_coefficient_extension_plan(plan)
     assert len(calls) == 2  # Recovered RUNNING jobs may repeat inference, never fit.
 
 
-@pytest.mark.parametrize("field", ["output_path", "frozen_input_bundle", "config_json", "windows"])
+@pytest.mark.parametrize(
+    "field", ["output_path", "frozen_input_bundle", "config_json", "windows", "extension_reader_sha256"]
+)
 def test_persisted_plan_cannot_change_inputs_paths_or_parameters_under_same_key(tmp_path, monkeypatch, field):
     plan, config, snapshot, inputs = _plan(tmp_path)
     service = HMMTrainingService()
@@ -404,6 +728,8 @@ def test_persisted_plan_cannot_change_inputs_paths_or_parameters_under_same_key(
         tampered[field]["dataset_root"] = "/old-release"
     elif field == "config_json":
         tampered[field]["seed"] = 99
+    elif field == "extension_reader_sha256":
+        tampered[field] = "0" * 64
     else:
         tampered[field] = [["2024-07-02", "2024-07-03"]]
     with pytest.raises(RuntimeError, match="binding_changed"):
@@ -469,11 +795,12 @@ def test_scheduler_is_nonblocking_and_never_calls_training(monkeypatch):
     assert calls == ["extension"]
 
 
-def test_scheduler_reconciles_new_release_without_reenrollment_or_retraining(tmp_path, monkeypatch):
+@pytest.mark.parametrize("terminal_status", ["COMPLETED", "FAILED"])
+def test_scheduler_reconciles_new_release_without_reenrollment_or_retraining(tmp_path, monkeypatch, terminal_status):
     _, config, snapshot, inputs = _plan(tmp_path)
     next_inputs = ext.resolve_active_input(_profile(tmp_path, "release-next", "2024-07-04"))
     service = HMMTrainingService()
-    enqueued, executed = [], []
+    enqueued, executed, ensured = [], [], []
 
     class Cursor:
         def __enter__(self):
@@ -501,14 +828,19 @@ def test_scheduler_reconciles_new_release_without_reenrollment_or_retraining(tmp
         lambda p: enqueued.append(p) or {"job_id": p["extension_key"], "status": "PENDING"},
     )
     monkeypatch.setattr(service, "run_daily_coefficients_job", lambda job: executed.append(job))
-    monkeypatch.setattr(service, "get_daily_coefficient_job", lambda job: {"job_id": job, "status": "COMPLETED"})
-    service.reconcile_coefficient_extensions()
+    monkeypatch.setattr(service, "get_daily_coefficient_job", lambda job: {"job_id": job, "status": terminal_status})
+    monkeypatch.setattr(service, "_ensure_coefficient_portfolio_window", lambda p, j, w: ensured.append((p, j, w)))
+    first = service.reconcile_coefficient_extensions()
     inputs = next_inputs
-    service.reconcile_coefficient_extensions()
+    second = service.reconcile_coefficient_extensions()
     assert len(executed) == 2 and executed[0] != executed[1]
     assert enqueued[0]["policy"] == enqueued[1]["policy"]
     assert enqueued[1]["backtest_end"] == "2024-07-04"
     assert enqueued[0]["model_sha256"] == enqueued[1]["model_sha256"]
+    assert first[0]["status"] == second[0]["status"] == terminal_status
+    assert len(ensured) == (2 if terminal_status == "COMPLETED" else 0)
+    if ensured:
+        assert ensured[1][2] == next_inputs["qe_default_window"]
 
 
 def test_worker_failure_is_persisted_not_reported_as_completed(tmp_path, monkeypatch):

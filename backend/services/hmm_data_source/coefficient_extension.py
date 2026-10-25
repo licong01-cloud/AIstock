@@ -322,6 +322,8 @@ def build_plan(
             lo, hi = str(w.get("test_start") or ""), str(w.get("backtest_end") or "")
             if start <= lo <= hi <= end and lo in dates and hi in dates:
                 windows.add((lo, hi))
+    generator_sha = file_sha256(Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py")
+    reader_sha = file_sha256(Path(__file__))
     key = fingerprint(
         {
             "policy": policy,
@@ -331,9 +333,10 @@ def build_plan(
             "input_identity": inputs["identity"],
             "start": start,
             "end": end,
-            "generator_sha256": file_sha256(
-                Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py"
-            ),
+            "generator_sha256": generator_sha,
+            # A reviewed reader fix gets a new admission identity; it must not
+            # silently retry or mutate a terminal job from the previous code.
+            "extension_reader_sha256": reader_sha,
         }
     )
     filename = f"coefficients_{signal_preset}_{start}_{end}__auto_{key[:24]}.json"
@@ -349,9 +352,8 @@ def build_plan(
         "model_path": str(model_path),
         "model_sha256": policy["model_sha256"],
         "model_inference_origin": origin,
-        "generator_sha256": file_sha256(
-            Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py"
-        ),
+        "generator_sha256": generator_sha,
+        "extension_reader_sha256": reader_sha,
         "config_json": dict(config),
         "test_start": start,
         "backtest_end": end,
@@ -403,14 +405,17 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         previous_end = ""
         for span in rows:
             if not isinstance(span, dict) or not all(
-                isinstance(span.get(k), str) for k in ("from", "to", "sector_code")
+                isinstance(span.get(k), str) for k in ("start_date", "end_date", "sector_code")
             ):
                 _fail("invalid PIT membership span")
-            date.fromisoformat(span["from"])
-            date.fromisoformat(span["to"])
-            if span["from"] > span["to"] or span["from"] <= previous_end:
+            try:
+                date.fromisoformat(span["start_date"])
+                date.fromisoformat(span["end_date"])
+            except ValueError:
+                _fail("invalid PIT membership span date")
+            if span["start_date"] > span["end_date"] or span["start_date"] <= previous_end:
                 _fail("overlapping or unordered PIT membership spans")
-            previous_end = span["to"]
+            previous_end = span["end_date"]
     unavailable = payload.get("quote_unavailable_sector_codes_by_date")
     asofs = payload.get("input_data_max_dates_by_date")
     if any(
@@ -426,7 +431,7 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
             symbol: span["sector_code"]
             for symbol, rows in spans.items()
             for span in rows
-            if span["from"] <= d <= span["to"]
+            if span["start_date"] <= d <= span["end_date"]
         }
         if maps is not None and maps[d] != day_map:
             _fail(f"PIT maps differ from membership spans on {d}")
@@ -455,12 +460,12 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         result["stock_sector_map_by_date"] = {d: result["stock_sector_map_by_date"][d] for d in dates}
     result["stock_sector_membership_spans"] = {
         symbol: [
-            dict(span, **{"from": max(span["from"], start), "to": min(span["to"], end)})
+            dict(span, start_date=max(span["start_date"], start), end_date=min(span["end_date"], end))
             for span in rows
-            if span["from"] <= end and span["to"] >= start
+            if span["start_date"] <= end and span["end_date"] >= start
         ]
         for symbol, rows in spans.items()
-        if any(span["from"] <= end and span["to"] >= start for span in rows)
+        if any(span["start_date"] <= end and span["end_date"] >= start for span in rows)
     }
     result.update(
         {
@@ -473,6 +478,7 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
             "snapshot_id": plan["snapshot_id"],
             "config_id": plan["config_id"],
             "extension_key": plan["extension_key"],
+            "extension_reader_sha256": plan["extension_reader_sha256"],
             "generation_mode": EXTENSION_MODE,
         }
     )
@@ -534,4 +540,5 @@ def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         "coefficient_bytes": byte_count,
         "extension_key": plan["extension_key"],
         "generator_sha256": plan["generator_sha256"],
+        "extension_reader_sha256": plan["extension_reader_sha256"],
     }

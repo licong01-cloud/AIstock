@@ -56,12 +56,20 @@ def test_day_executor_scopes_file_inputs_then_closes_without_controlling_service
         assert kwargs["data_source"] == "DATASET_FILES" and kwargs["trade_date"] == DAYS[1]
         assert dataset.raw_minute_rows(SYMBOL, DAYS[1])[0]["close"] == 10.5
         calls.append(dataset.run_id)
-        run = SimpleNamespace(status=SimulationDailyRunStatus.SUCCEEDED, run_payload_json={"no_rebalance_required": True})
+        run = SimpleNamespace(run_id="original-day", status=SimulationDailyRunStatus.SUCCEEDED,
+                              run_payload_json={"no_rebalance_required": True})
         return SimpleNamespace(results=[SimpleNamespace(strategy_id="account", binding_id="binding", run=run, is_success=True)])
 
-    scheduler = SimpleNamespace(repository=SimpleNamespace(get_strategy_runtime_release=lambda _: release), run_once=run_once)
+    closes = []
+    def complete_close(**kwargs):
+        assert current_file_dataset(required=True).run_id == "same-original-job:2026-01-20"
+        assert kwargs == {"run_id": "original-day", "trade_date": DAYS[1], "strategy_id": "account",
+                          "binding_id": "binding", "release_id": "release"}
+        closes.append(kwargs)
+    scheduler = SimpleNamespace(repository=SimpleNamespace(get_strategy_runtime_release=lambda _: release),
+                                run_once=run_once, complete_localsim_replay_close=complete_close)
     LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=scheduler)(job, DAYS[1])
-    assert calls == ["same-original-job:2026-01-20"] and current_file_dataset() is None
+    assert calls == ["same-original-job:2026-01-20"] and len(closes) == 1 and current_file_dataset() is None
     job.historical_source_sha256 = "f" * 64
     with pytest.raises(Exception, match="source mismatch"):
         LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=scheduler)(job, DAYS[1])

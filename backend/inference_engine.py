@@ -53,7 +53,9 @@ from .services.advisory_historical_range.inference_session import (
 )
 from .services.advisory_historical_range.inference_inputs import InferenceInputSession, frame_identity
 from .services.advisory_historical_range.inference_features import InferenceFeatureSession
-from .services.canonical_equity_pit import CanonicalPitAuthorityResolver, PitAuthorityStatus
+from .services.canonical_equity_pit import (
+    CanonicalPitAuthorityResolver, PitAuthorityStatus, require_canonical_new_task_binding,
+)
 from .services.canonical_pit_inference_boundary import (
     CanonicalPitInferenceBoundaryError,
     InferencePitIdentity,
@@ -82,7 +84,10 @@ def _resolve_inference_pit_identity_for_run(
     declared = pit_identity is not None or manifest_inference_pit_identity(manifest) is not None
     live_binding = None
     if not declared:
-        live_binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
+        live_binding = require_canonical_new_task_binding(
+            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding(),
+            consumer="inference",
+        )
     return resolve_inference_pit_identity(
         pit_identity,
         manifest=manifest,
@@ -1627,6 +1632,11 @@ class InferenceEngine:
                 raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
             task_dir = self.assets_root / task_id
 
+        source_route = getattr(self.input_session, "source_plan_route", None)
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import session_pit_identity
+            pit_identity = session_pit_identity(self.input_session, request_identity=pit_identity,
+                                                manifest_identity=manifest_inference_pit_identity(manifest))
         resolved_pit_identity = _resolve_inference_pit_identity_for_run(
             manifest=manifest,
             pit_identity=pit_identity,
@@ -1733,6 +1743,10 @@ class InferenceEngine:
         start_date, start_date_source = self._resolve_inference_start_date(
             actual_date, required_window, buffer_days=5
         )
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import validate_native_window
+            validate_native_window(source_route, start=start_date.date(), cutoff=actual_date.date(),
+                                   decision=requested_trade_date.date(), pit_binding=resolved_pit_identity.binding)
 
         logger.info(
             "因子所需数据窗口: %s交易日 + 5日安全余量, start_date=%s, source=%s",
@@ -2430,6 +2444,10 @@ class InferenceEngine:
                 receipt["query_template_version"] = "frozen_market_dataset_files_v1"
                 receipt["parameter_hash"] = _inference_receipt_sha256({
                     "native_parameters": receipt["parameter_hash"], "file_binding_hash": file_dataset.identity})
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import input_receipt
+            self.last_inference_receipt["input_context"]["source_plan_receipt"] = input_receipt(
+                source_route, self.last_inference_receipt)
         timings.mark("source_receipts")
         # 保存信号到数据库（使用提取的模块级函数）
         if persist_signals:

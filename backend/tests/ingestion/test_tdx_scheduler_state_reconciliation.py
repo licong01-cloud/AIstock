@@ -23,6 +23,23 @@ from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.audit_backed_data_health import AuditDatasetCheckResult
 
 
+def test_pit_day_roll_uses_existing_executor_and_never_duplicates_inflight_work():
+    from concurrent.futures import Future
+    from threading import RLock
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._schedule_thread = object()
+    scheduler._lock = RLock()
+    future = Future()
+    calls = []
+    scheduler._executor = SimpleNamespace(submit=lambda fn: calls.append(fn) or future)
+    scheduler._dispatch_canonical_pit_roll()
+    scheduler._dispatch_canonical_pit_roll()
+    assert len(calls) == 1
+    future.set_result({"status": "ready"})
+    scheduler._dispatch_canonical_pit_roll()
+    assert len(calls) == 1  # cheap sweep is throttled even after completion
+
+
 ROOT = Path(__file__).resolve().parents[3]
 BUG_1106_MIGRATION = (
     ROOT / "backend" / "migrations" / "ingestion_jobs_scheduler_scan_indexes_20260816.sql"
@@ -670,6 +687,142 @@ def test_go_provider_population_includes_real_ipo_quotes_without_widening_buy_po
         return [{"ts_code": "301569.SZ"}, {"ts_code": "920162.BJ"}]
     scheduler._fetchall = fetch
     assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ", "920162.BJ"]
+
+
+def test_go_default_population_ends_before_delisting_effective_day_but_keeps_quote_evidence():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    def fetch(sql, params):
+        assert "delist_date>start_day" in sql
+        assert "delist_date>=start_day" not in sql
+        assert "k.trade_date BETWEEN start_day AND end_day" in sql
+        assert "k.volume_hand>0 OR k.volume_shares>0" in sql
+        assert "stock_universe" not in sql and "list_status='L'" not in sql
+        assert params == (dt.date(2026, 10, 23), dt.date(2026, 10, 23))
+        return [{"ts_code": "000001.SZ"}]
+
+    scheduler._fetchall = fetch
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 23), dt.date(2026, 10, 23)) == ["000001.SZ"]
+
+
+def test_go_provider_population_excludes_b_shares_from_both_source_branches():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    def fetch(sql, params):
+        assert "stock_universe" not in sql
+        assert "population" in sql
+        for pattern in ("200%%.SZ", "201%%.SZ", "900%%.SH"):
+            assert f"ts_code NOT LIKE '{pattern}'" in sql
+        return [{"ts_code": code} for code in ("000001.SZ", "200706.SZ", "201872.SZ", "900901.SH", "920162.BJ")]
+
+    scheduler._fetchall = fetch
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 20), dt.date(2026, 10, 20)) == ["000001.SZ", "920162.BJ"]
+
+
+def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda *_: pytest.fail("explicit codes must not widen to the default population")
+    day = dt.date(2026, 10, 20)
+    assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "900901.SH"]) == []
+    assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "000001.SZ"]) == ["000001.SZ"]
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+@pytest.mark.parametrize("missing_a", [False, True])
+def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset, missing_a):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    latest = dt.datetime(2026, 10, 20, 15)
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000}
+             for code in ["000001.SZ", "200706.SZ"]]
+    minute = [{"ts_code": code, "freq": "1m", "bars": 240, "bad_bars": 0,
+               "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH"]]
+    if missing_a:
+        (daily if dataset == "kline_daily_raw" else minute).pop(0)
+
+    def fetch(sql, _params=()):
+        if "kline_daily_raw" in sql:
+            return daily
+        if "kline_minute_raw" in sql:
+            return minute
+        return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH"]]
+
+    scheduler._fetchall = fetch
+    count, _, coverage = scheduler._raw_date_observation(dataset, dt.date(2026, 10, 20))
+    assert count == (0 if missing_a else 1 if dataset == "kline_daily_raw" else 240)
+    assert coverage == {"expected_symbols": 1, "incomplete_symbols": int(missing_a)}
+
+
+@pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
+@pytest.mark.parametrize("entry", ["init", "init_default", "incremental"])
+def test_go_manual_routes_pass_explicit_non_b_population(monkeypatch, data_kind, entry):
+    from backend.routers import ingestion as api
+
+    day = dt.date(2026, 10, 20)
+    calls = []
+    selected = []
+
+    def population(start, end, *, requested_codes=None):
+        assert start == end == day
+        selected.append(requested_codes)
+        return ["000001.SZ"]
+
+    monkeypatch.setattr(api.scheduler, "_go_provider_codes", population)
+    monkeypatch.setattr(api, "_latest_trading_day_on_or_before", lambda *_: day)
+    monkeypatch.setattr(api, "_fetchall", lambda *_: [{"latest": day}])
+    monkeypatch.setattr(api, "_create_init_job", lambda *_: uuid.uuid4())
+    monkeypatch.setattr(api, "_create_job", lambda *_: uuid.uuid4())
+    monkeypatch.setattr(api, "_execute", lambda *_: None)
+    monkeypatch.setattr(api.requests, "post", lambda url, **kw: calls.append(kw["json"]) or SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"code": 0, "data": {"task_id": str(uuid.uuid4())}}))
+
+    if entry in {"init", "init_default"}:
+        options = {"start_date": str(day)}
+        if entry == "init":
+            options["codes"] = ["200706.SZ", "000001.SZ"]
+        api.start_ingestion_init(api.IngestionInitRequest(dataset=data_kind, options=options))
+        assert selected == [options.get("codes")]
+    else:
+        api.trigger_go_incremental(api.GoIncrementalRequest(data_kind=data_kind, start_date=str(day)))
+        assert selected == [None]
+    assert len(calls) == 1
+    assert calls[0]["codes"] == ["000001.SZ"]
+
+
+@pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
+def test_go_init_b_only_never_creates_job_or_dispatches_all(monkeypatch, data_kind):
+    from fastapi import HTTPException
+    from backend.routers import ingestion as api
+
+    monkeypatch.setattr(api, "_latest_trading_day_on_or_before", lambda *_: dt.date(2026, 10, 20))
+    monkeypatch.setattr(api, "_create_init_job", lambda *_: pytest.fail("must reject before creating a job"))
+    monkeypatch.setattr(api.requests, "post", lambda *_a, **_kw: pytest.fail("empty codes must never mean all"))
+    with pytest.raises(HTTPException, match="no non-B-share"):
+        api.start_ingestion_init(api.IngestionInitRequest(
+            dataset=data_kind, options={"codes": ["200706.SZ", "900901.SH"]}))
+
+
+@pytest.mark.parametrize("requested", [["200706.SZ"], ["200706.SZ", "000001.SZ"]])
+def test_scheduled_explicit_go_codes_exclude_b_before_dispatch(monkeypatch, requested):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 10, 20)
+    scheduler._latest_completed_trading_day = lambda: day
+    scheduler._execute = lambda *_: None
+    logs, posted = [], []
+    scheduler._log_ingestion_run = lambda *args, **_kwargs: logs.append(args)
+    scheduler._record_refresh_audit_from_table_range = lambda **_kw: True
+    monkeypatch.setattr(scheduler_module.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(scheduler_module.requests, "post", lambda _url, **kw: posted.append(kw["json"]) or SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"code": 0, "data": {"task_id": str(uuid.uuid4())}}))
+    monkeypatch.setattr(scheduler_module.requests, "get", lambda *_a, **_kw: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"code": 0, "data": {"status": "done"}}))
+    scheduler._run_go_incremental(uuid.uuid4(), None, "kline_daily_raw", "unit", {
+        "start_date": str(day), "end_date": str(day), "codes": requested})
+    if requested == ["200706.SZ"]:
+        assert posted == []
+        assert logs[-1][4] == "failed"
+    else:
+        assert len(posted) == 1
+        assert posted[0]["codes"] == ["000001.SZ"]
 
 
 @pytest.mark.parametrize("go_state,expected", [("missing", 1), ("running", 0), ("transport_error", 0),
@@ -1899,8 +2052,8 @@ def _stub_trading_calendar(scheduler):
     scheduler._next_trading_day = lambda _anchor_date, *, inclusive=False: dt.date(2026, 7, 13)
 
 
-def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
-    """BUG-957: audit cursor configured + audit hit -> no table MAX scan at all."""
+def test_non_minute_auto_range_refresh_audit_cursor_skips_physical_max_scan():
+    """Keep the existing audit opt-in for non-minute datasets unchanged."""
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
 
@@ -1908,8 +2061,8 @@ def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
         queries.append(sql)
         if "FROM market.data_stats_config" in sql:
             return [{
-                "table_name": "market.kline_minute_raw",
-                "date_column": "trade_time",
+                "table_name": "market.margin_detail",
+                "date_column": "trade_date",
                 "extra_info": {"cursor_source": "refresh_audit"},
             }]
         if "FROM market.dataset_date_refresh_audit" in sql:
@@ -1919,14 +2072,14 @@ def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
 
-    assert scheduler._compute_auto_range("kline_minute_raw") == (
+    assert scheduler._compute_auto_range("margin_detail") == (
         dt.date(2026, 7, 13),
         dt.date(2026, 7, 13),
     )
-    assert not any("FROM market.kline_minute_raw" in sql for sql in queries)
+    assert not any("FROM market.margin_detail" in sql for sql in queries)
 
 
-def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
+def test_non_minute_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
     """BUG-957: audit cursor configured but no audit rows -> bounded physical scan."""
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
@@ -1935,8 +2088,8 @@ def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
         queries.append(sql)
         if "FROM market.data_stats_config" in sql:
             return [{
-                "table_name": "market.kline_minute_raw",
-                "date_column": "trade_time",
+                "table_name": "market.margin_detail",
+                "date_column": "trade_date",
                 "extra_info": {"cursor_source": "refresh_audit"},
             }]
         if "FROM market.dataset_date_refresh_audit" in sql:
@@ -1948,18 +2101,19 @@ def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
 
-    assert scheduler._compute_auto_range("kline_minute_raw") == (
+    assert scheduler._compute_auto_range("margin_detail") == (
         dt.date(2026, 7, 13),
         dt.date(2026, 7, 13),
     )
     assert any("INTERVAL '45 days'" in sql for sql in queries)
     assert not any(
-        "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql for sql in queries
+        "FROM market.margin_detail" in sql and "INTERVAL" not in sql for sql in queries
     )
 
 
-def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
-    """BUG-957: recent cursor found in the bounded window -> no unbounded scan."""
+@pytest.mark.parametrize("audit_config", [{}, {"cursor_source": "refresh_audit"}])
+def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_config):
+    """Neither an old success audit nor a physical timestamp proves a complete day."""
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
 
@@ -1969,7 +2123,7 @@ def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
             return [{
                 "table_name": "market.kline_minute_raw",
                 "date_column": "trade_time",
-                "extra_info": {},
+                "extra_info": audit_config,
             }]
         if "INTERVAL '45 days'" in sql:
             return [{"mx": dt.date(2026, 7, 10)}]
@@ -1977,18 +2131,44 @@ def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
 
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
 
     assert scheduler._compute_auto_range("kline_minute_raw") == (
-        dt.date(2026, 7, 13),
+        dt.date(2026, 7, 10),
         dt.date(2026, 7, 13),
     )
-    assert not any(
-        "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql for sql in queries
+    assert not any("MAX(trade_time)" in sql or "dataset_date_refresh_audit" in sql for sql in queries)
+    probe = next(sql for sql in queries if "FROM market.kline_minute_raw" in sql)
+    assert "ORDER BY trade_time DESC" in probe and "LIMIT 1" in probe
+    assert "AT TIME ZONE 'Asia/Shanghai'" in probe
+    assert "freq='1m'" in probe
+
+
+@pytest.mark.parametrize("observed_day", [dt.date(2026, 7, 13), dt.date(2026, 7, 14)])
+def test_minute_auto_range_does_not_skip_same_day_or_accept_future_facts(observed_day):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda sql, *_: (
+        [{"table_name": "market.kline_minute_raw", "date_column": "trade_time", "extra_info": {}}]
+        if "data_stats_config" in sql else [{"mx": observed_day}]
     )
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
+    if observed_day.day == 14:
+        with pytest.raises(RuntimeError, match="beyond latest trading date"):
+            scheduler._compute_auto_range("kline_minute_raw")
+    else:
+        assert scheduler._compute_auto_range("kline_minute_raw") == (observed_day, observed_day)
 
 
-def test_auto_range_bounded_fast_path_falls_back_to_unbounded_scan():
-    """BUG-957: bounded window empty (stalled/bootstrap) -> exact old unbounded scan."""
+def test_minute_auto_range_keeps_disabled_configuration_inactive():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._fetchall = lambda sql, *_: queries.append(sql) or []
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
+    assert scheduler._compute_auto_range("kline_minute_raw") == (None, None)
+    assert len(queries) == 1 and "data_stats_config" in queries[0]
+
+
+def test_minute_auto_range_never_falls_back_to_full_history():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
 
@@ -2008,17 +2188,17 @@ def test_auto_range_bounded_fast_path_falls_back_to_unbounded_scan():
 
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
 
-    start, end = scheduler._compute_auto_range("kline_minute_raw")
-    assert (start, end) == (dt.date(2026, 7, 13), dt.date(2026, 7, 13))
+    with pytest.raises(RuntimeError, match="no recent cursor"):
+        scheduler._compute_auto_range("kline_minute_raw")
     bounded = [sql for sql in queries if "INTERVAL '45 days'" in sql]
     unbounded = [
         sql for sql in queries
         if "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql
     ]
     assert len(bounded) == 1
-    assert len(unbounded) == 1
-    assert queries.index(bounded[0]) < queries.index(unbounded[0])
+    assert not unbounded
 
 
 def test_freshness_target_persists_schedule_owner_retry_time_and_t_plus_one_deadline(monkeypatch):
