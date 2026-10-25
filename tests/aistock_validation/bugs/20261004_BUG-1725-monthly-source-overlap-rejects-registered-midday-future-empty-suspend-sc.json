@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1725",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:50:17.056154Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -130,10 +130,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1725-corrected-contract-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1725",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "d5dfe9b718d3a23de3da51d528eeabf83fab50bec97eae9bfb76acd819e74c9c",
+      "expected_identity": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:50:13.249728Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "669450f6af092b4695754d3ea4952a8cd7579da828c8a388b52ebe1b63a4ea9d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "03d855a3b8857169a910962493a2f935c199cec3c46d937e5e5f165402cf6a02",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -164,7 +186,7 @@
     ],
     "validation_evidence_digest": "33a14406f694c8b5e0812a594e92eadcf6f8c81f60641f9670e9093f57cfdacc"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -174,7 +196,8 @@
     "source_event_id": "FE-20261004-56bfb5ca3c88"
   },
   "validation_evidence": [
-    "gh run view 37178298588 --repo licong01-cloud/AIstock --json status,conclusion,headSha -> completed success for236e49b1c76752be2dad9567ca11e00601f1522f; local98 and DEV13 passed; production DDL/dependency/runtime actions noop"
+    "gh run view 37178298588 --repo licong01-cloud/AIstock --json status,conclusion,headSha -> completed success for236e49b1c76752be2dad9567ca11e00601f1522f; local98 and DEV13 passed; production DDL/dependency/runtime actions noop",
+    "Exact merged source scope and canonical-root supervised Worker probe PASS; target metadata correction reviewed twice; original source checks retained; no data/source/gate/runtime changes."
   ],
   "verification_budget": {
     "budget": "standard",
