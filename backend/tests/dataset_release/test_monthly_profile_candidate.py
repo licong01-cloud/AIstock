@@ -408,3 +408,56 @@ def test_profile_builder_never_overwrites_existing_target(tmp_path: Path) -> Non
             derived_asset_registry_path=registry,
         )
     assert output.read_bytes() == b"owned"
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_profile_builder_retry_reuses_only_identical_validated_bytes(tmp_path, monkeypatch, different):
+    context, closure, registry = _fixture(tmp_path)
+    validated = []
+    monkeypatch.setattr("backend.services.quantevolver.qe_active_dataset_profile.load_qe_profile",
+                        lambda path: {"path": path})
+    monkeypatch.setattr("backend.services.quantevolver.qe_active_dataset_profile.validate_controller_snapshot",
+                        lambda value: validated.append(value))
+    builder = SealedMonthlyProfileCandidateBuilder()
+    output = builder.execute(context, release_closure_path=closure, derived_asset_registry_path=registry)
+    if different:
+        value = json.loads(output.read_bytes())
+        value["generation"] = "another-generation"
+        output.write_bytes(canonical_json_bytes(value) + b"\n")
+    before = output.read_bytes(), output.stat().st_mtime_ns
+    if different:
+        with pytest.raises(MonthlyProfileCandidateError, match="profile target"):
+            builder.execute(context, release_closure_path=closure, derived_asset_registry_path=registry)
+    else:
+        assert builder.execute(context, release_closure_path=closure, derived_asset_registry_path=registry) == output
+        assert len(validated) == 2
+    assert (output.read_bytes(), output.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("linked_parent", [False, True])
+def test_profile_builder_retry_rejects_linked_output_chain(tmp_path, monkeypatch, linked_parent):
+    context, closure, registry = _fixture(tmp_path)
+    output = Path(context.plan["profile_candidate"])
+    linked = output.parent if linked_parent else output
+    monkeypatch.setattr("backend.services.dataset_release.monthly_profile_candidate._is_link",
+                        lambda path: path == linked)
+    with pytest.raises(MonthlyProfileCandidateError, match="profile target path is linked"):
+        SealedMonthlyProfileCandidateBuilder().execute(
+            context, release_closure_path=closure, derived_asset_registry_path=registry,
+        )
+
+
+def test_profile_builder_retry_does_not_skip_controller_validation(tmp_path, monkeypatch):
+    context, closure, registry = _fixture(tmp_path)
+    monkeypatch.setattr("backend.services.quantevolver.qe_active_dataset_profile.load_qe_profile", lambda path: {})
+    monkeypatch.setattr("backend.services.quantevolver.qe_active_dataset_profile.validate_controller_snapshot",
+                        lambda profile: None)
+    builder = SealedMonthlyProfileCandidateBuilder()
+    output = builder.execute(context, release_closure_path=closure, derived_asset_registry_path=registry)
+    before = output.read_bytes()
+    def fail(profile):
+        raise ValueError("candidate input drift")
+    monkeypatch.setattr("backend.services.quantevolver.qe_active_dataset_profile.validate_controller_snapshot", fail)
+    with pytest.raises(ValueError, match="candidate input drift"):
+        builder.execute(context, release_closure_path=closure, derived_asset_registry_path=registry)
+    assert output.read_bytes() == before

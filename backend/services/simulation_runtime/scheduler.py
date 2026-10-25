@@ -6674,6 +6674,54 @@ class SimulationLifecycleScheduler:
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
 
+    def complete_localsim_replay_close(
+        self, *, run_id: str, trade_date: date, strategy_id: str, binding_id: str, release_id: str,
+    ) -> dict[str, Any]:
+        """Close only the original historical day; never drive another account or resubmit orders."""
+        run = self.repository.get_simulation_daily_run(run_id)
+        if (run.trade_date != trade_date or run.strategy_id != strategy_id or run.binding_id != binding_id
+                or run.release_id != release_id or run.broker_backend != SimulationBrokerBackend.LOCAL_SIM
+                or run.status not in {SimulationDailyRunStatus.SUCCEEDED, SimulationDailyRunStatus.FAILED_TERMINAL}):
+            raise DataUnavailableError(
+                "LocalSim replay close scope does not match the completed day",
+                context={"reason_code": "LOCALSIM_REPLAY_CLOSE_SCOPE_INVALID", "run_id": run_id},
+            )
+
+        def complete(candidate):
+            payload = candidate.run_payload_json
+            persisted = payload.get("local_sim_persistence") or {}
+            close = payload.get("local_sim_close_valuation_v1") or {}
+            outbox = payload.get("local_sim_projection_outbox_v1") or {}
+            if not all(isinstance(value, dict) for value in (persisted, close, outbox)):
+                return False
+            try:
+                stamp = self._scheduler_time(datetime.fromisoformat(persisted["snapshot_time"]))
+                return (
+                    persisted.get("terminal") is True and persisted.get("paper_v2_run_id") == run_id
+                    and stamp.date() == trade_date and stamp.time() == time(15, 0)
+                    and close.get("schema_version") == "local_sim_close_valuation_v1"
+                    and close.get("snapshot_time") == persisted["snapshot_time"]
+                    and close.get("parent_resubmitted") is False
+                    and outbox.get("run_id") == run_id and outbox.get("status") == "PROJECTED"
+                    and type(outbox.get("generation")) is int
+                    and outbox["generation"] == payload.get("local_sim_economic_generation")
+                )
+            except (KeyError, TypeError, ValueError):
+                return False
+
+        if not complete(run):
+            self._refresh_terminal_local_sim_valuation(run=run)
+            run = self.repository.get_simulation_daily_run(run_id)
+        if not complete(run):
+            raise DataUnavailableError(
+                "LocalSim replay day has no durable close valuation",
+                context={"reason_code": "LOCALSIM_REPLAY_CLOSE_NOT_COMPLETE", "run_id": run_id,
+                         "trade_date": trade_date.isoformat()},
+            )
+        return {"run_id": run_id, "trade_date": trade_date.isoformat(),
+                "snapshot_time": run.run_payload_json["local_sim_persistence"]["snapshot_time"],
+                "close_valuation_complete": True, "parent_resubmitted": False}
+
     def _refresh_post_close_local_sim_valuations(
         self, *, trade_date: date, strategy_id: str | None, limit: int, as_of_time: datetime | None
     ) -> list[dict[str, Any]]:
@@ -6718,13 +6766,13 @@ class SimulationLifecycleScheduler:
                 context={"reason_code": "LOCALSIM_CLOSE_VALUATION_ACTIVE_STATE", "run_id": run.run_id},
             )
         raw = context.local_broker.export_execution_snapshot()
+        orders = tuple(raw["orders"])
+        if context.market_data_source != MinuteDataSource.TDX_REALTIME.value:
+            paper_repository = self._paper_repository_for_local_sim(binding=binding, run=run, context=context)
+            orders = tuple(paper_repository.list_orders_for_run(run.run_id))
         snapshot = LocalSimExecutionSnapshot(
-            orders=tuple(raw["orders"]), fills=(), events=(), cash_entries=(),
+            orders=orders, fills=(), events=(), cash_entries=(),
             positions=dict(raw["positions"]), account=raw["account"], handle_statuses=tuple(raw["handle_statuses"]),
-        )
-        self._local_sim_existing_projection_result(
-            run_id=run.run_id,
-            observed_positions=snapshot.positions, observed_account=snapshot.account,
         )
         execution = SimulationExecutionResult(
             run=run, execution_plan=plan, broker_backend=binding.broker_backend, status="SUBMITTED",
@@ -6734,7 +6782,8 @@ class SimulationLifecycleScheduler:
             ),
         )
         self._local_sim_persistence_coordinator().persist_execution_result(
-            binding=binding, run=run, execution=execution, context=context, valuation_refresh=True
+            binding=binding, run=run, execution=execution, context=context,
+            valuation_refresh=True, valuation_as_of_time=close_time,
         )
         latest = self.repository.get_simulation_daily_run(run.run_id)
         return {"run_id": run.run_id, "trade_date": run.trade_date.isoformat(), "status": latest.status.value,
@@ -8966,6 +9015,11 @@ class SimulationLifecycleScheduler:
     ) -> dict[str, Any]:
         config = source_release.release_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        if source_binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+            from .localsim_pit_migration import POLICY_KEY, refresh_migrated_daily_pit
+
+            if POLICY_KEY in metadata:
+                metadata = refresh_migrated_daily_pit(metadata, trade_date=trade_date)
         created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
         purpose = SimulationLifecycleScheduler._roll_forward_purpose(source_binding.broker_backend)
         metadata.update(

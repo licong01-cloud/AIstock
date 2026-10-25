@@ -759,6 +759,7 @@ def _local_sim_context_with_real_broker(
     positions: dict[str, PositionLot] | None = None,
     paper_repository: InMemoryPaperTradingV2Repository | None = None,
     execution_policy: dict[str, Any] | None = None,
+    market_data_provider: Any | None = None,
 ) -> SimulationRunContext:
     manifest = _score_weighted_manifest(release)
     current_positions = dict(positions or {})
@@ -770,7 +771,7 @@ def _local_sim_context_with_real_broker(
         data_source=MinuteDataSource.DB_HISTORICAL,
         manifest=manifest,
         package_id=release.package_id,
-        market_data_provider=FakeLocalSimMarketDataProvider(),
+        market_data_provider=market_data_provider or FakeLocalSimMarketDataProvider(),
         execution_policy=policy,
         initial_positions=current_positions,
     )
@@ -19812,6 +19813,7 @@ def test_native_replay_binding_isolation(job_status, explicit, allowed, monkeypa
 def test_closed_native_historical_executor_runs_real_broker_and_preserves_residual(monkeypatch):
     from backend.services.simulation_runtime.localsim_replay_runtime import LocalSimHistoricalReplayDayExecutor
     from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+    from backend.tests.simulation_runtime.test_localsim_replay_close_valuation import ClosingHistoricalProvider
 
     release, binding, _, repo = _release_and_bindings()
     native = binding.model_copy(update={
@@ -19824,6 +19826,7 @@ def test_closed_native_historical_executor_runs_real_broker_and_preserves_residu
     paper_repo = InMemoryPaperTradingV2Repository()
     context = _local_sim_context_with_real_broker(
         portfolio_id="portfolio_replay_window_regression", release=release, paper_repository=paper_repo,
+        market_data_provider=ClosingHistoricalProvider(),
         execution_policy={"policy_id": "replay_partial", "policy_sha256": "frozen",
                           "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 6, "allow_partial_fill": True}}},
     )

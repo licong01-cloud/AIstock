@@ -708,6 +708,62 @@ const returns = activePool.map((row, index) => ({
   is_win: row.return_bps > 0,
 }));
 
+test("Advisory return history bounds rendered rows without dropping records or issuing requests", async ({ page }) => {
+  await mockShellApis(page);
+  const history = Array.from({ length: 164 }, (_, index) => ({
+    ...returns[index % returns.length], episode_id: `history-${index}`, stock_name: `历史样本${index}`,
+  }));
+  const { calls } = await mockAdvisoryApis(page, { returnsByProgramId: { [PROGRAM_ID]: history } });
+  await page.goto("/paper-v2/advisory");
+  const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Episode 收益与胜率证据", exact: true }) });
+  const rows = section.locator("tbody tr");
+  await expect(rows).toHaveCount(25);
+  await expect(section).toContainText("共 164 条");
+  const returnCalls = calls.filter((call) => call.endsWith("/returns")).length;
+  for (let offset = 0; offset < history.length; offset += 25) {
+    await expect(rows).toHaveCount(Math.min(25, history.length - offset));
+    for (let i = 0; i < Math.min(25, history.length - offset); i++) {
+      await expect(rows.nth(i).locator("td strong").first()).toHaveText(`历史样本${offset + i}`);
+    }
+    if (offset + 25 < history.length) await section.getByRole("button", { name: "下一页", exact: true }).click();
+  }
+  await expect(section.getByRole("button", { name: "下一页", exact: true })).toBeDisabled();
+  await section.getByRole("button", { name: "上一页", exact: true }).click();
+  await expect(rows.first()).toContainText("历史样本125");
+  await section.getByRole("button", { name: "首页", exact: true }).click();
+  await expect(rows.first()).toContainText("历史样本0");
+  await expect(section.getByRole("button", { name: "上一页", exact: true })).toBeDisabled();
+  expect(calls.filter((call) => call.endsWith("/returns"))).toHaveLength(returnCalls);
+  expect(calls.filter((call) => !call.startsWith("GET "))).toEqual([]);
+});
+
+test("Advisory return history resets across task and shorter refresh without stale rows", async ({ page }) => {
+  await mockShellApis(page);
+  const other = { ...program, program_id: "advp_returns_other", program_name: "另一收益任务" };
+  const history = Array.from({ length: 51 }, (_, index) => ({ ...returns[0], episode_id: `history-${index}`, stock_name: `旧样本${index}` }));
+  const byProgram: Record<string, JsonObject[]> = { [PROGRAM_ID]: history, [String(other.program_id)]: [] };
+  await mockAdvisoryApis(page, { extraPrograms: [other], returnsByProgramId: byProgram });
+  await page.goto("/paper-v2/advisory");
+  const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Episode 收益与胜率证据", exact: true }) });
+  await expect(section).toContainText("共 51 条");
+  await section.getByRole("button", { name: "末页", exact: true }).click();
+  await expect(section.locator("tbody tr")).toHaveCount(1);
+  await expect(section).toContainText("旧样本50");
+  await page.getByRole("button", { name: "另一收益任务", exact: true }).click();
+  await expect(section).toContainText("暂无 episode 收益");
+  await expect(section).not.toContainText("旧样本");
+  await page.getByRole("button", { name: String(program.program_name), exact: true }).click();
+  await expect(section.locator("tbody tr")).toHaveCount(25);
+  await expect(section).toContainText("第 1 / 3 页");
+  await section.getByRole("button", { name: "末页", exact: true }).click();
+  byProgram[PROGRAM_ID] = [{ ...returns[0], episode_id: "fresh", stock_name: "刷新样本" }];
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(section).toContainText("刷新样本");
+  await expect(section.locator("tbody tr")).toHaveCount(1);
+  await expect(section).toContainText("第 1 / 1 页，共 1 条");
+  await expect(section.getByRole("button", { name: "下一页", exact: true })).toBeDisabled();
+});
+
 function json(route: Route, data: unknown, status = 200) {
   return route.fulfill({
     status,
@@ -803,6 +859,7 @@ async function mockAdvisoryApis(page: Page, options: {
   forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
+  returnsByProgramId?: Record<string, JsonObject[]>;
   deliveryPreflight?: JsonObject | ((body: JsonObject) => JsonObject);
 } = {}) {
   const calls: string[] = [];
@@ -1191,7 +1248,7 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/returns`) && method === "GET") {
       await wait(options.detailDelayMs);
-      return json(route, { ok: true, returns: currentRouteProgramId === PROGRAM_ID ? returns : [], metrics: { win_rate: 0.64 } });
+      return json(route, { ok: true, returns: options.returnsByProgramId?.[currentRouteProgramId] ?? (currentRouteProgramId === PROGRAM_ID ? returns : []), metrics: { win_rate: 0.64 } });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${PROGRAM_ID}/enable`) && method === "POST") {
       programStatus = "ENABLED";
@@ -1515,7 +1572,10 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);
   await expect(page.getByText(`第 1 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
-  await page.getByRole("button", { name: "下一页" }).click();
+  const reviewSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "只追加决策记录", exact: true }),
+  });
+  await reviewSection.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(15);
   await expect(page.getByText(`第 2 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
   await page.getByTestId("advisory-review-page-size").selectOption("50");

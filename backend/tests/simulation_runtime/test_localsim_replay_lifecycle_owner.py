@@ -404,7 +404,7 @@ def test_actual_model_artifact_failure_remains_terminal_and_is_not_retried_as_ti
 def test_historical_executor_requires_completed_durable_day(status, projected, expected):
     repo = InMemoryLocalSimSuccessorRepository()
     _, _, job = _replay(repo)
-    run = SimpleNamespace(status=SimulationDailyRunStatus(status), run_payload_json={
+    run = SimpleNamespace(run_id="original-day", status=SimulationDailyRunStatus(status), run_payload_json={
         "local_sim_persistence": {"status": "PERSISTED_WITH_RESIDUAL"},
         "local_sim_projection_outbox_v1": {"status": "PROJECTED" if projected else "PENDING"},
     })
@@ -412,14 +412,20 @@ def test_historical_executor_requires_completed_durable_day(status, projected, e
         strategy_id=job.simulation_account_id, binding_id=job.binding_id, run=run,
         status="LOCALSIM_EXECUTION_RESIDUAL_TERMINAL", error=None, is_success=True,
     )
-    executor = LocalSimHistoricalReplayDayExecutor(
-        lifecycle_scheduler=SimpleNamespace(run_once=lambda **_kwargs: SimpleNamespace(results=[item])),
-    )
+    closes = []
+    executor = LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=SimpleNamespace(
+        run_once=lambda **_kwargs: SimpleNamespace(results=[item]),
+        complete_localsim_replay_close=lambda **kwargs: closes.append(kwargs),
+    ))
     if expected == "complete":
         executor(job, DAYS[0])
+        assert closes == [{"run_id": run.run_id, "trade_date": DAYS[0],
+                           "strategy_id": job.simulation_account_id,
+                           "binding_id": job.binding_id, "release_id": job.release_id}]
     else:
         with pytest.raises(DataUnavailableError, match="not completed durable"):
             executor(job, DAYS[0])
+        assert not closes
 
 
 def test_historical_submit_window_failure_recovers_original_cursor():

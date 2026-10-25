@@ -50,6 +50,7 @@ class HistoricalRangeCreateRequest(R5StrictModel):
     program_specs: list[HistoricalRangeProgramInput] = Field(min_length=1)
     start_trade_date: date
     end_trade_date: date
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
 
     @model_validator(mode="after")
     def validate_dates(self) -> "HistoricalRangeCreateRequest":
