@@ -631,7 +631,7 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
         pending = root.parent / f".{root.name}.industry-history-commit.json"
         resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
                                                        expected_projection=history.sha256)
-        assert pending.exists()
+        assert not pending.exists()
     elif interruption == "legacy_uncommitted":
         materialize = subject.materialize_history_files
         with monkeypatch.context() as legacy:
@@ -686,8 +686,8 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     assert proof["database_write"] is False
     scratch = (root.parent / proof["files"]["sector_data.h5"]["scratch_relative_path"]).parent
     assert not (factor_root / "factor_checkpoint.json").exists()
-    pending = json.loads((root.parent / f".{root.name}.industry-history-commit.json").read_bytes())
-    assert set(pending["files"]) == {"sector_data.h5", "static_factors.parquet"}
+    assert not (root.parent / f".{root.name}.industry-history-commit.json").exists()
+    assert set(proof["files"]) == {"sector_data.h5", "static_factors.parquet"}
     assert set(resume.record["files"]) == set(record["files"])
     for name in ("sector_data.h5", "static_factors.parquet"):
         assert (scratch / (name + ".before")).read_bytes() == original_bytes[name]

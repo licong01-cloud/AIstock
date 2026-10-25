@@ -29,11 +29,20 @@ from backend.services.strategy_package.selection_computation import parse_select
 _QUERY_VERSION = "v1"
 
 
-def _program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
+def program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
+    """Resolve the frozen mark-state universe without reading an active pointer."""
     binding = program.admitted_package_projection.canonical_pit_binding
-    if binding is None:
-        return SELECTION_PIT_UNIVERSE_KEY
-    return binding.frozen_universe_key
+    if binding is not None:
+        return binding.frozen_universe_key
+    if program.selection_input_source_plan is not None:
+        from .task_input_sources import validate_program_source_plan
+
+        plan = validate_program_source_plan(program=program)
+        universe_key = plan["native_policy"]["universe_key"]
+        if not isinstance(universe_key, str) or not universe_key.strip():
+            raise ValueError("planned decision marks require a frozen native PIT universe key")
+        return universe_key
+    return SELECTION_PIT_UNIVERSE_KEY
 
 
 def _query_contract_hash(frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...]) -> str:
@@ -133,9 +142,9 @@ class HistoricalRangeSourceRequirementPlanner:
                 missing_reason_code="ADVISORY_HR_TRADING_CALENDAR_UNAVAILABLE",
                 decision_trade_date=trade_date,
             )
-            # Decision marks are one canonical market/state source per date.  They
-            # deliberately do not inherit a package/component lookback or the
-            # positive PIT universe used by candidate inference.
+            # Quotes remain unfiltered by candidate membership and have no
+            # package/component lookback. State membership uses the Program's
+            # frozen PIT identity, including its explicitly planned native inputs.
             self._add(
                 requirements,
                 source_role="decision_mark_daily_market",
@@ -153,7 +162,7 @@ class HistoricalRangeSourceRequirementPlanner:
                 dependencies=(calendar_id,),
             )
             for program in frozen_programs:
-                pit_universe_key = _program_pit_universe_key(program)
+                pit_universe_key = program_pit_universe_key(program)
                 universe_id = package_requirement_ids[program.package_id] if planned else self._add(
                     requirements,
                     source_role="pit_universe",

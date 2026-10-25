@@ -1,13 +1,13 @@
 {
   "actual": "hmm_risk_backend timeout1800 duration1801.844",
   "allowed_write_scope": [
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "noxfile.py",
-    "backend/tests/test_noxfile_validation_env.py",
-    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
-    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
-    "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json"
+    "backend/tests/test_noxfile_validation_env.py"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "codex-nightly-repair-20261025",
   "bug_id": "BUG-2031",
   "closed_at": null,
   "closure_requirements": [
@@ -264,5 +264,87 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "scope_expansion_reason": "Resume authorized Nightly repair: deduplicate workflow test setup; run all offline Advisory/HMM tests in bounded file shards, combine HMM branch coverage once, retain original 180s/1800s budgets. No service control, database writes or business source changes.",
+  "nightly_followup_evidence": {
+    "run_id": "39837282906",
+    "completed_progress_percent": 80,
+    "timeout_seconds": 1800,
+    "active_node": "backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py::test_child_fresh_process_reproduction_is_real",
+    "isolated_profiled_node_result": "1 passed in52.35s",
+    "rejected_optimization": "numeric conversion cache: unprofiled0.974s before vs1.083s after; reverted",
+    "acceptance": "Full coverage and real child processes retained; full completed session receipt still required",
+    "historical_only": true,
+    "superseded_by": "nightly_repair_20261025"
+  },
+  "design_compliance_review": {
+    "scope": "Complete offline files retained; HMM four workers, Advisory six workers; workflow setup deduplicated with all original positive/negative cases retained.",
+    "failure_semantics": "Original 180s/1800s timeouts, 6300s overall cap, 0.30 ratio and branch-enabled combined coverage 70 retained. No failed/empty shard is accepted.",
+    "business_semantics": "Business source and model contracts unchanged; only synthetic unit fixtures. No formal research training, service control or database writes.",
+    "new_gates": "None"
+  },
+  "nightly_repair_20261025": {
+    "status": "failed_sessions_verified",
+    "source_failure_run": "40123820570",
+    "sessions": [
+      {
+        "session": "validation_workflow_automation",
+        "result": "success",
+        "duration_seconds": 106.782,
+        "timeout_seconds": 300,
+        "execution_source_commit": "e3e4bbde90fec2f14876ef9cea60d05f3a18fb9a",
+        "passed": 847,
+        "test_to_production_ratio": 0.2998988749841992,
+        "ratio_gate": 0.3
+      },
+      {
+        "session": "advisory_modeling_backend",
+        "result": "success",
+        "duration_seconds": 146.187,
+        "timeout_seconds": 180,
+        "execution_source_commit": "a4ce72bc6ba27f8e139b45ed431dd2bc333a87e4",
+        "passed": 2762,
+        "skipped": 5,
+        "added_skip_rules": false
+      },
+      {
+        "session": "hmm_risk_backend",
+        "result": "success",
+        "duration_seconds": 1239.172,
+        "timeout_seconds": 1800,
+        "execution_source_commit": "e3e4bbde90fec2f14876ef9cea60d05f3a18fb9a",
+        "passed": 1103,
+        "deselected_integration": 6,
+        "branch_enabled_combined_coverage_percent": 76.66666666666667,
+        "coverage_gate_percent": 70,
+        "branch_coverage_percent": 67.43,
+        "line_coverage_percent": 80.08
+      }
+    ],
+    "code_review_rounds": [
+      {
+        "round": 1,
+        "kind": "source_and_scope",
+        "result": "passed",
+        "summary": "Workflow/test runner only; real business source and model contracts unchanged; original timeout, ratio and coverage gates retained."
+      },
+      {
+        "round": 2,
+        "kind": "failure_and_fixture_contracts",
+        "result": "passed",
+        "summary": "All files partitioned exactly once; failed/empty shards and missing coverage fail closed; JUnit/coverage merged; worker-owned short external scratch, Advisory X volume and matching temp environment verified; 121 direct runner tests passed."
+      },
+      {
+        "round": 3,
+        "kind": "complete_sessions_and_CI",
+        "result": "passed",
+        "source_ci_run": "40172273503",
+        "source_ci_commit": "a4ce72bc6ba27f8e139b45ed431dd2bc333a87e4",
+        "summary": "All three previously failing complete sessions passed within original budgets; no extra skips or relaxed business rules."
+      }
+    ],
+    "hmm_evidence_reuse": "HMM business source, tests and schema module have zero diff from the full-session execution commit; subsequent changes isolate fixture/temp paths and Advisory workers. Latest helper contracts passed 121 direct tests and source CI.",
+    "full_scheduled_nightly_result": "not_rerun_no_claim",
+    "production_runtime_or_database_changed": false
   }
 }

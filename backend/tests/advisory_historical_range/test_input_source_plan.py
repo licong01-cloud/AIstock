@@ -9,14 +9,14 @@ import pytest
 
 from backend.services.advisory_historical_range import input_source_plan as sources
 from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
-from backend.tests.data_service.test_frozen_dataset import make_dataset, SYMBOL
+from backend.tests.data_service.test_frozen_dataset import make_dataset, make_monthly_dataset, SYMBOL
 
 CALENDAR = [f"2026-01-{d}" for d in (19, 20, 21, 22)]
 POLICY = {"policy_hash": "a" * 64, "universe_key": "TEST_PIT", "rule_version": "test-v1",
           "reader_contract": sources.READER_CONTRACT}
 
 
-def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY):
+def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY, monthly_metadata=False):
     profile_path = make_dataset(tmp_path)
     profile = json.loads(profile_path.read_bytes())
     path = tmp_path / "qe_dataset_manifest.json"
@@ -33,6 +33,9 @@ def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY):
         meta = json.loads(file.read_bytes())
         meta.update(dates, universe_key=policy["universe_key"], rule_version=policy["rule_version"],
                     pit_ensure={"start_date": CALENDAR[0]})
+        if monthly_metadata:
+            meta.pop("pit_ensure")
+            meta.update(source_freeze=True, full_history_content_hash=True)
         if key == "minute_meta_export" and market_start:
             meta["start"] = market_start
         file.write_text(json.dumps(meta), encoding="utf-8")
@@ -58,6 +61,59 @@ def _plan(mode="DATABASE_ONLY", snapshot=None, *, days=None, consumer="ADVISORY"
 
 def _clocks(row):
     return SelectionSignalDayV1(*(date.fromisoformat(row[k]) for k in ("decision_date", "data_cutoff", "target_trade_date")))
+
+
+@pytest.mark.parametrize("consumer", ["ADVISORY", "LOCALSIM"])
+def test_monthly_path_indexed_release_can_freeze_one_native_pit_plan(tmp_path, consumer):
+    snapshot = sources.freeze_file_source(profile_path=make_monthly_dataset(tmp_path), consumer_scope=consumer)
+    plan = _plan("FILE_THEN_DATABASE", snapshot, consumer=consumer)
+    assert plan["component_coverage"]["pit"] == [CALENDAR[0], CALENDAR[2]]
+    assert plan["component_coverage"]["sector"] == [CALENDAR[0], CALENDAR[2]]
+    session = sources.create_input_session(plan, _clocks(plan["days"][0]), consumer_scope=consumer,
+                                           run_id="test-run", max_bytes=10**6)
+    try:
+        assert session.file_dataset.members(date.fromisoformat(CALENDAR[0])) == [SYMBOL]
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("consumer", ["ADVISORY", "LOCALSIM"])
+def test_monthly_pit_metadata_routes_file_to_database_and_restores_without_active(tmp_path, monkeypatch, consumer):
+    snapshot = _snapshot(tmp_path, monthly_metadata=True)
+    plan = _plan("FILE_THEN_DATABASE", snapshot, consumer=consumer)
+    assert plan["component_coverage"]["pit"] == [CALENDAR[0], CALENDAR[2]]
+    assert [row["source"] for row in plan["routes"]] == ["DATASET_FILES", "DATASET_FILES", "DATABASE"]
+    assert plan["first_database_day"] == CALENDAR[-1]
+    assert plan["native_policy"] == POLICY
+    files = _plan("FILE_ONLY", snapshot, consumer=consumer, days=plan["days"][:2])
+    assert all(row["source"] == "DATASET_FILES" for row in files["routes"])
+    monkeypatch.setattr(sources, "freeze_file_source", lambda **_: pytest.fail("restore resolved active"))
+    assert sources.validate_source_plan(plan, consumer_scope=consumer, run_id="test-run") == plan
+    assert sources.validate_source_plan(files, consumer_scope=consumer, run_id="test-run") == files
+
+
+@pytest.mark.parametrize("change", [
+    "unsealed", "missing_hash_contract", "invalid_start", "missing_cutoff", "reversed", "invalid_legacy",
+])
+def test_monthly_pit_metadata_does_not_invent_missing_or_invalid_coverage(tmp_path, change):
+    snapshot = _snapshot(tmp_path, monthly_metadata=True)
+    day = snapshot["metadata"]["day_meta_export"]
+    if change == "unsealed":
+        day["source_freeze"] = False
+    elif change == "missing_hash_contract":
+        day.pop("full_history_content_hash")
+    elif change == "invalid_start":
+        day["start"] = "2026-1-19"
+    elif change == "missing_cutoff":
+        snapshot["pit_coverage"].pop("cutoff_trade_date")
+    elif change == "reversed":
+        snapshot["pit_coverage"]["cutoff_trade_date"] = "2026-01-16"
+    else:
+        day["pit_ensure"] = None  # Explicit legacy declarations cannot be ignored.
+    with pytest.raises(sources.SourcePlanError, match="SOURCE_COMPONENT_COVERAGE_") as exc:
+        sources._coverage(snapshot, POLICY)
+    assert exc.value.receipt["component"] == "pit"
+    assert exc.value.receipt["owner"] == "Data"
 
 
 def test_three_modes_freeze_expiry_and_never_consult_active_on_retry(tmp_path, monkeypatch):
