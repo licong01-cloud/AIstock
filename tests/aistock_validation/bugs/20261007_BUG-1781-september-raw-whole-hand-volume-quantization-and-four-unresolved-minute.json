@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1781",
-  "closed_at": null,
+  "closed_at": "2026-10-07T07:18:54Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -99,10 +99,22 @@
       "tests/aistock_validation/bugs/20261007_BUG-1781-september-raw-whole-hand-volume-quantization-and-four-unresolved-minute.json"
     ]
   },
+  "final_data_disposition": {
+    "acceptance_file_sha256": "6d5afdbe052d343abecf6398566a26187a8652e548ad477ed28cdb4a2e4fae23",
+    "corrected_keys_independently_read_back": 3,
+    "dataset_manifest_sha256": "afa9158b9b1d8cc76ec1e40a6efdb2060365bb3039ea791a0b5caa2bae8c5337",
+    "historical_precision_patch_rows": 1288,
+    "note": "No missing data waived or facts overwritten. Accepted precision/provider differences remain explicit warnings; they are not falsely reported as equal prices or volumes. Current six nullable schema fields independently read back.",
+    "original_remaining_keys": 49,
+    "published_known_provider_price_variances": 1,
+    "published_provider_precision_variances": 45,
+    "quality_status": "ACCEPTED_WITH_WARNINGS",
+    "unexplained_keys": 0
+  },
   "first_seen_at": "2026-10-07T02:51:43.325449Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e3f01008dd97d7fb67f7494f653972f71123ae13",
+  "fixed_at": "2026-10-07T07:18:54Z",
   "github_issue_number": 5656,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5656",
   "implementation_phase": "Backend-main migration and controlled CLI repair only. Worker freeze/audit/bin preservation is independently tracked in BUG-1783; historical minute quote discrepancies are still unresolved and must not be declared repaired.",
@@ -112,6 +124,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5662",
   "premerge_baseline_failure": {
     "catalog_integrity_script": "PASS findings=0",
     "merge_ready": true,
@@ -138,27 +151,15 @@
     ]
   },
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "passed",
   "production_ddl_evidence": {
     "dev_validation": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-dev-schema-apply.json",
-    "production_authorization": "User explicitly authorized add_raw_volume_precision_v1.sql after DEV validation; historical authorization retained, not expanded or reapplied.",
-    "production_apply": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-production-schema-apply.json",
-    "production_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1781-final-production-disposition.json",
     "migration_sha256": "368b05723018e36e4bcc6d85e889742d427def6f6c2559cd62a1f180be23d7a3",
-    "production_ddl_reapplied": false
+    "production_apply": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-production-schema-apply.json",
+    "production_authorization": "User explicitly authorized add_raw_volume_precision_v1.sql after DEV validation; historical authorization retained, not expanded or reapplied.",
+    "production_ddl_reapplied": false,
+    "production_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1781-final-production-disposition.json"
   },
-  "final_data_disposition": {
-    "historical_precision_patch_rows": 1288,
-    "original_remaining_keys": 49,
-    "corrected_keys_independently_read_back": 3,
-    "published_provider_precision_variances": 45,
-    "published_known_provider_price_variances": 1,
-    "unexplained_keys": 0,
-    "acceptance_file_sha256": "6d5afdbe052d343abecf6398566a26187a8652e548ad477ed28cdb4a2e4fae23",
-    "quality_status": "ACCEPTED_WITH_WARNINGS",
-    "dataset_manifest_sha256": "afa9158b9b1d8cc76ec1e40a6efdb2060365bb3039ea791a0b5caa2bae8c5337",
-    "note": "No missing data waived or facts overwritten. Accepted precision/provider differences remain explicit warnings; they are not falsely reported as equal prices or volumes. Current six nullable schema fields independently read back."
-  },
+  "production_ddl_gate": "passed",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -166,6 +167,12 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_readback": {
+    "ci_retry_reason": "Previous synchronize event captured obsolete draft PR body before formal validation receipt body update; actual current body has formal receipts.",
+    "design_compliance": "All four DESIGN-COMPLIANCE-001 checks satisfied for source phase; full monthly data delivery remains separately blocked.",
+    "round_1": "Source pins, exact DEV target and NULL-only repair / precision propagation reviewed; no raw OHLC, amount, unit or tolerance overwrite.",
+    "round_2": "Actual updated main diff and precision consumer paths reviewed; legacy semantics and immutable release/profile boundary preserved."
+  },
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
@@ -179,6 +186,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "database",
@@ -187,14 +195,8 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "review_readback": {
-    "round_1": "Source pins, exact DEV target and NULL-only repair / precision propagation reviewed; no raw OHLC, amount, unit or tolerance overwrite.",
-    "round_2": "Actual updated main diff and precision consumer paths reviewed; legacy semantics and immutable release/profile boundary preserved.",
-    "design_compliance": "All four DESIGN-COMPLIANCE-001 checks satisfied for source phase; full monthly data delivery remains separately blocked.",
-    "ci_retry_reason": "Previous synchronize event captured obsolete draft PR body before formal validation receipt body update; actual current body has formal receipts."
-  },
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -203,6 +205,14 @@
     "fingerprint": "7af9bad7134810ce470e4800",
     "source_event_id": "FE-20261007-7af9bad71348"
   },
+  "validation_evidence": [
+    "Historical DEV, user production authorization, apply and current exact readback independently reconciled. Three corrected keys PASS; 45 volume and one known-price variance retain published acceptance warnings, unexplained=0. Original source CI/tests retained; two metadata reviews and DESIGN-COMPLIANCE-001 passed. No DDL/DML repeated, datasets/profile/services unchanged."
+  ],
+  "validation_receipts": [
+    "validation-receipt: id=cbe31c22c7fe3c73 commit=92b0f151ed25cf090a28efaa038fda4274cdd265 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 22 tests, zero findings`",
+    "validation-receipt: id=93fddaa5524d04c5 commit=92b0f151ed25cf090a28efaa038fda4274cdd265 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed 8 tests, 14 mapped files zero ambiguity`",
+    "validation-receipt: id=42e5f15950fd1130 commit=92b0f151ed25cf090a28efaa038fda4274cdd265 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_backfill_raw_volume_precision.py -q` result=`passed 6 tests`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -250,11 +260,6 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "validation_receipts": [
-    "validation-receipt: id=cbe31c22c7fe3c73 commit=92b0f151ed25cf090a28efaa038fda4274cdd265 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 22 tests, zero findings`",
-    "validation-receipt: id=93fddaa5524d04c5 commit=92b0f151ed25cf090a28efaa038fda4274cdd265 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed 8 tests, 14 mapped files zero ambiguity`",
-    "validation-receipt: id=42e5f15950fd1130 commit=92b0f151ed25cf090a28efaa038fda4274cdd265 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_backfill_raw_volume_precision.py -q` result=`passed 6 tests`"
-  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
