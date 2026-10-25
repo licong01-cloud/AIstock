@@ -28,6 +28,7 @@ from .monthly_hmm_derive import (
 from .monthly_local_validation import MonthlyCandidateLocalValidationExecutor
 from .monthly_mature_build_runner import MatureMonthlyPhysicalBuildRunner
 from .monthly_postgres_source import PostgresMonthlySourceAdapter
+from .monthly_preparation_composition import MonthlyPrivatePreparationExecutor
 from .monthly_profile_candidate import SealedMonthlyProfileCandidateBuilder
 from .monthly_registry import OfficialMonthlyProducerRegistry
 from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSettings
@@ -41,6 +42,7 @@ from .monthly_worker_composition import (
 from .monthly_worker_nodes import MonthlyNodeRuntimeSettings
 from .profile import CANONICAL_PROFILE_ID, DatasetProfile, load_dataset_profile
 from .resource_supervisor import ResourceSupervisor
+from .resource_gate import ResourceGate
 
 
 MONTHLY_HMM_AUTHORITY_SCHEMA = "aistock_monthly_hmm_coefficient_authority_v1"
@@ -236,6 +238,7 @@ def _supervisor_factory(
             control_root=artifact_root,
             policy=profile.resource_policy,
             hybrid_wsl=True,
+            resource_gate=ResourceGate(profile),
         )
 
     return build
@@ -263,11 +266,21 @@ def build_monthly_production_registry(
     artifact = runtime.artifact_root.resolve(strict=True)
     cas = CASStore(artifact)
     source_catalog = ControlStore(artifact)
+    toolchain = profile.qlib_toolchain.build_verified(production.project_root)
+    execution_scope = ResourceSupervisedMonthlyBuildScopeFactory(
+        profile=profile, project_root=production.project_root, toolchain=toolchain,
+        supervisor_factory=_supervisor_factory(profile=profile, artifact_root=artifact),
+    )
     source_adapter = PostgresMonthlySourceAdapter(
         profile=profile,
         cas=cas,
         artifact_root=artifact,
         source_catalog=source_catalog,
+        preparation_executor=MonthlyPrivatePreparationExecutor(
+            profile=profile, cas=cas, project_root=production.project_root,
+            execution_scope_factory=execution_scope,
+            sector_membership_start=production.sector_membership_start,
+        ),
     )
     source = AuditedMonthlySourceProducer(
         producer_id="aistock.monthly.source.postgres_snapshot",
@@ -276,7 +289,6 @@ def build_monthly_production_registry(
         connection_factory=independent_postgres_connection_factory,
         adapter=source_adapter,
     )
-    toolchain = profile.qlib_toolchain.build_verified(production.project_root)
     shared = FrozenMonthlySharedComponentBuilder(
         profile=profile,
         cas=cas,
@@ -287,15 +299,7 @@ def build_monthly_production_registry(
         cas=cas,
         project_root=production.project_root,
         finalizer=UnifiedMonthlyCandidateFinalizer(shared_components=shared),
-        execution_scope_factory=ResourceSupervisedMonthlyBuildScopeFactory(
-            profile=profile,
-            project_root=production.project_root,
-            toolchain=toolchain,
-            supervisor_factory=_supervisor_factory(
-                profile=profile,
-                artifact_root=artifact,
-            ),
-        ),
+        execution_scope_factory=execution_scope,
     )
     build = SealedMonthlyBuildExecutor(
         profile=profile,

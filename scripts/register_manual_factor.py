@@ -2,6 +2,9 @@
 """手工因子入库脚本（Windows 端，Claude 对话直接调用）。
 
 用法:
+    # 仅登记已授权研究候选；不写源码文件、不分类、不评价，不依赖后端重启
+    python register_manual_factor.py register-candidate --target dev --env-file .env --name candidate_name --code-file factor.py
+
     # 单因子入库（代码+LLM分类，不计算指标）
     python register_manual_factor.py save --name m_mom_close_5d --code-file factor.py --description "5日动量"
 
@@ -38,6 +41,26 @@ def _api_request(method: str, path: str, data=None, timeout=600):
         resp = requests.post(url, json=data, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
+
+
+def cmd_register_candidate(args):
+    """Fresh-process service entrypoint; target selection is not write authorization."""
+    if args.direct_db:
+        raise ValueError("register-candidate uses the service; do not specify legacy --direct-db")
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from scripts.factor_research import configure
+
+    target = configure(Path(args.env_file), args.target)
+    from backend.services.manual_factor_service import ManualFactorService
+
+    # Decode bytes without newline conversion: receipt hashes the stored source exactly.
+    code_text = Path(args.code_file).read_bytes().decode("utf-8")
+    result = ManualFactorService().register_candidate(
+        args.name, code_text, description=args.description, expression=args.expression,
+    )
+    print(json.dumps({"database_target": target, **result}, ensure_ascii=False, indent=2))
 
 
 def cmd_save(args):
@@ -231,6 +254,15 @@ def main():
     parser.add_argument("--direct-db", action="store_true", help="直接操作 DB（不通过 API）")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    candidate = sub.add_parser("register-candidate", help="仅登记候选，不覆盖、不分类、不计算指标")
+    candidate.add_argument("--name", required=True)
+    candidate.add_argument("--code-file", required=True)
+    candidate.add_argument("--env-file", required=True)
+    candidate.add_argument("--target", choices=("dev", "production"), required=True,
+                           help="显式选择已有数据库，不替代生产写入授权")
+    candidate.add_argument("--description")
+    candidate.add_argument("--expression")
+
     # save
     p_save = sub.add_parser("save", help="入库因子")
     p_save.add_argument("--name", required=True, help="因子名（m_ 开头）")
@@ -262,6 +294,7 @@ def main():
     args = parser.parse_args()
 
     cmds = {
+        "register-candidate": cmd_register_candidate,
         "save": cmd_save,
         "compute-metrics": cmd_compute_metrics,
         "full-pipeline": cmd_full_pipeline,

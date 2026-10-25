@@ -1,0 +1,355 @@
+{
+  "actual": "LOCAL_VALIDATE raises MonthlyProfileCandidateError predecessor profile bytes differ after BUILD and DERIVE passed.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_profile_candidate.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1981",
+  "closed_at": "2026-10-25T07:40:51.034837Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T03:17:30.316411Z",
+  "description": "LOCAL_VALIDATE raises MonthlyProfileCandidateError predecessor profile bytes differ after BUILD and DERIVE passed.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-0b62e2f0e683",
+      "timestamp": "2026-10-19T03:17:30.316411Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2/monthly/dmr_63a313d97fd046a38d5a876265565014/state.json"
+  ],
+  "expected": "Profile finalization uses exact submitted predecessor bytes despite later active changes; true byte drift remains rejected and completed BUILD/DERIVE remain reusable.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_profile_candidate.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_profile_candidate.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_profile_candidate.py",
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_profile_candidate.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_unified_v2.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_profile_candidate.py",
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_profile_candidate.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_profile_candidate.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ]
+  },
+  "first_seen_at": "2026-10-19T03:17:30.316411Z",
+  "fix_branch": null,
+  "fix_commit": "8fce937cbe7420e312d4aca228830ba3d9ac3645",
+  "fixed_at": "2026-10-19T03:37:17Z",
+  "github_issue_number": 6343,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6343",
+  "last_seen_at": "2026-10-19T03:17:30.316411Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6344",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_profile_candidate.py::test_profile_builder_recovers_only_exact_legacy_candidate_bytes backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_freezes_predecessor_profile_before_active_advances backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_rejects_profile_change_between_snapshot_and_freeze -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_results": [
+    "Round 1: three direct RED failures reproduced legacy active drift, absent per-operation snapshot, and a snapshot-to-submit race. The same three nodes passed GREEN after preserving exact predecessor bytes create-exclusively before plan publication.",
+    "Round 2: reviewed exact-hash/size legacy recovery, single-read JSON parsing, linked-file/ancestor rejection, and immutable-snapshot corruption rejection. No current-profile substitution, source query, activation/CAS relaxation, or plan/checkpoint rewrite. Three adversarial nodes passed.",
+    "Round 3: final small profile/control-plane matrix 82 passed, 1 skipped, including activation/rollback and failed-stage resume invariants. Ruff, L0, compile and diff checks passed. Fresh process resolved the real September plan to its exact v15 generation/manifest while active SHA stayed unchanged.",
+    "Round 4: CI 1740 passed, 86 skipped but one existing router receipt-index assertion failed because the new input snapshot was under receipts. Reproduced that exact node locally RED, moved the frozen input to the operation root rather than changing API behavior or the existing router test, and strengthened the store snapshot path assertion. Exact failed router/store nodes GREEN; CI rerun required.",
+    "DESIGN-COMPLIANCE-001: complete fix to the actual pointer-lifetime defect; unknown or altered predecessor bytes still fail; existing model, PIT, release, CAS and authorization semantics remain unchanged; no additional data gate, approval, full-history scan or framework. September BUILD/DERIVE retained; runtime effectiveness remains pending user restart and formal resume."
+  ],
+  "risk_area": "bug",
+  "root_cause": "The monthly plan retained the mutable global active profile path with v15 SHA256 56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f. After an independently authorized v18 activation, LOCAL_VALIDATE reread v18 bytes and rejected them even though the exact v15 candidate profile and SOURCE/BUILD/DERIVE checkpoints still existed. No market data was missing at this failure point.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh pytest: direct RED 3 failed, exact failed nodes GREEN 3 passed; link/snapshot adversarial checks 3 passed; final related matrix 82 passed, 1 skipped in 11.04s. Ruff, L0, py_compile and git diff --check passed.",
+      "Fresh read-only process loaded persistent _predecessor_profile implementation with the actual September operation plan: resolved generation 20260928-v15-unified-moneyflow1 and manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc; active SHA unchanged; database/candidate/profile writes false.",
+      "Actual September plan resolves exact v15 predecessor generation and manifest in isolated process; active SHA unchanged; database/candidate/profile writes false",
+      "Real sealed September profile construction and existing load_qe_profile/validate_controller_snapshot passed in a fresh process in 9.77s, using only an X:/AIstock_temp/BUG-1981-real-profile-preflight/september-profile.json output (SHA256 5f883e407ed7107cf06e04d0becba65f2ee466c6eb845eb74b41f198982eca4c). No candidate/active writes or database access."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1981-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1981",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "8fce937cbe7420e312d4aca228830ba3d9ac3645",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:47.430467Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "08bfb15505410da9b7dea3c99a324602b51b5972f1d20f8423ddfee2f12d72af",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ea9e9dd0a503b4bf4cf7a062182477860d76535fc48e03b773635ec22cdeb45f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1981",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "10e8d237d554c381",
+    "recorded_at": "2026-10-19T03:38:09.758101Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9867c378bd03e36d2fa38d3e8d869268c00bce8a",
+    "source_merge_commit": "8fce937cbe7420e312d4aca228830ba3d9ac3645",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6344",
+    "validation_evidence": [
+      "validation-receipt: id=52bcb98d386393d3 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_cancel_resume_and_receipt_index_use_same_operation backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_freezes_predecessor_profile_before_active_advances backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_rejects_profile_change_between_snapshot_and_freeze -q` result=`3 passed`",
+      "validation-receipt: id=952d9ce9f0206ff5 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_profile_candidate.py backend/services/dataset_release/monthly_unified.py backend/tests/dataset_release/test_monthly_profile_candidate.py backend/tests/dataset_release/test_monthly_unified_v2.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "d11f093b0a56c50c1ea3ecf9d9030d9441998105aca0fe588336bd327b03f8a6"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly profile finalization rereads mutable active instead of frozen predecessor bytes",
+  "trigger_condition": {
+    "fingerprint": "0b62e2f0e6831d6537a0dcd6",
+    "source_event_id": "FE-20261019-0b62e2f0e683"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=52bcb98d386393d3 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_cancel_resume_and_receipt_index_use_same_operation backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_freezes_predecessor_profile_before_active_advances backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_rejects_profile_change_between_snapshot_and_freeze -q` result=`3 passed`",
+    "validation-receipt: id=952d9ce9f0206ff5 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_profile_candidate.py backend/services/dataset_release/monthly_unified.py backend/tests/dataset_release/test_monthly_profile_candidate.py backend/tests/dataset_release/test_monthly_unified_v2.py` result=`passed`",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

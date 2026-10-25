@@ -1,0 +1,1544 @@
+{
+  "preparation_status": "PREPARED_NOT_SUBMITTED_DATA_HANDOFF_PENDING",
+  "prepared_at_cst": "2026-10-18",
+  "scope": "preparation_only_no_task_creation_no_training_no_backtest",
+  "data_binding": {
+    "new_task": "resolve active once at creation via official entry",
+    "paired_arms": "one saved task binding",
+    "retry": "original task binding",
+    "historical_training": "v15; reference only, never injected into new request",
+    "historical_quote_replay": "v18; not v18 retraining",
+    "dataset_handoff_decision": "pending",
+    "label_availability_choice": "pending; keep original boundary or uniform newly mature labels with separate reporting",
+    "signal_window": "2024-07-01..2026-08-31",
+    "backtest_window": "2024-07-01..2026-08-28"
+  },
+  "readiness": {
+    "runtime_options_loaded": true,
+    "runtime_last_observed_commit": "a93a57db49f72c3d374c328f66707760bf36a177",
+    "source_merge": "27d9b795dba02663d27b5a88e1ab7776b541acf5",
+    "restart_owner": "user",
+    "baseline_reuse_decision": "pending_training_input_comparability_not_asset_absence",
+    "runtime_proof_scope": "runtime identity + OpenAPI; business execution not performed"
+  },
+  "factors": {
+    "computed_factor_names": [
+      "Price_Deviation_Historical_High",
+      "m_drawdown_from_high",
+      "Large_Cap_Momentum_Bias",
+      "RevenueYOY_Momentum",
+      "FundamentalEpsIndustryMomentum",
+      "Industry_Momentum",
+      "m_sw2_net_vol_momentum",
+      "IndustryMomentumExcessReturnCross",
+      "cp_winner_rate_momentum",
+      "elg_flow_high_price_interaction",
+      "m_sw2_elg_individual_diverge"
+    ],
+    "computed_factor_digest": "1e391c6e24e5cae66ee29992def94de9d4a9392312c52c0db70471d098dad4b2",
+    "historical_model_feature_order": [
+      "FundamentalEpsIndustryMomentum",
+      "IndustryMomentumExcessReturnCross",
+      "Industry_Momentum",
+      "Large_Cap_Momentum_Bias",
+      "Price_Deviation_Historical_High",
+      "RevenueYOY_Momentum",
+      "cp_winner_rate_momentum",
+      "elg_flow_high_price_interaction",
+      "m_drawdown_from_high",
+      "m_sw2_elg_individual_diverge",
+      "m_sw2_net_vol_momentum"
+    ],
+    "A_expected_input_count": 10,
+    "B_C_expected_input_count": 11,
+    "observation_panel": {
+      "mode": "reference_factor_intersection",
+      "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+      "schema_version": "qe_observation_panel_v1",
+      "reference_factor_names": [
+        "Price_Deviation_Historical_High"
+      ]
+    }
+  },
+  "immutable_expected_yaml": {
+    "model_by_seed": [
+      {
+        "seed": 42,
+        "kwargs": {
+          "loss": "mse",
+          "device_type": "cpu",
+          "max_bin": 63,
+          "colsample_bytree": 0.8879,
+          "learning_rate": 0.05,
+          "subsample": 0.8789,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "num_leaves": 210,
+          "num_threads": 12,
+          "random_state": 42,
+          "seed": 42
+        }
+      },
+      {
+        "seed": 2024,
+        "kwargs": {
+          "loss": "mse",
+          "device_type": "cpu",
+          "max_bin": 63,
+          "colsample_bytree": 0.8879,
+          "learning_rate": 0.05,
+          "subsample": 0.8789,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "num_leaves": 210,
+          "num_threads": 12,
+          "random_state": 2024,
+          "seed": 2024
+        }
+      },
+      {
+        "seed": 2026,
+        "kwargs": {
+          "loss": "mse",
+          "device_type": "cpu",
+          "max_bin": 63,
+          "colsample_bytree": 0.8879,
+          "learning_rate": 0.05,
+          "subsample": 0.8789,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "num_leaves": 210,
+          "num_threads": 12,
+          "seed": 2026,
+          "random_state": 2026
+        }
+      }
+    ],
+    "infer_processors": [
+      {
+        "class": "RobustZScoreNorm",
+        "kwargs": {
+          "fields_group": "feature",
+          "clip_outlier": true,
+          "fit_start_time": "2018-08-01",
+          "fit_end_time": "2024-06-28"
+        }
+      },
+      {
+        "class": "Fillna",
+        "kwargs": {
+          "fields_group": "feature"
+        }
+      }
+    ],
+    "learn_processors": [
+      {
+        "class": "LongHorizonLabelMaturityPurge",
+        "module_path": "qe_custom_loaders",
+        "kwargs": {
+          "label_horizon": 20,
+          "train_start": "2018-08-01",
+          "train_end": "2022-12-30",
+          "valid_start": "2023-01-03",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "test_end": "2026-08-31"
+        }
+      },
+      {
+        "class": "DropnaLabel"
+      },
+      {
+        "class": "CSZScoreNorm",
+        "kwargs": {
+          "fields_group": "label"
+        }
+      }
+    ],
+    "portfolio": {
+      "executor": {
+        "class": "NestedExecutor",
+        "module_path": "qlib.backtest.executor",
+        "kwargs": {
+          "time_per_step": "day",
+          "inner_executor": {
+            "class": "SimulatorExecutor",
+            "module_path": "qlib.backtest.executor",
+            "kwargs": {
+              "time_per_step": "1min",
+              "generate_portfolio_metrics": false
+            }
+          },
+          "inner_strategy": {
+            "class": "TailTWAPWithLimitStrategy",
+            "module_path": "tail_twap_strategy",
+            "kwargs": {
+              "unfilled_handler": "TAIL_BOOST",
+              "unfilled_trigger_minute": 235,
+              "unfilled_backup_depth": 15
+            }
+          },
+          "generate_portfolio_metrics": true
+        }
+      },
+      "strategy": {
+        "class": "SuspendFilterScoreWeightedTopkStrategyV2",
+        "module_path": "qe_suspend_filter_score_weighted_strategy",
+        "kwargs": {
+          "signal": "<PRED>",
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "filter_suspended_on_signal": true,
+          "suspend_filter_file": "qe_suspend_filter.json",
+          "suspend_filter_strict": true,
+          "risk_policy_enabled": true,
+          "risk_policy_file": "qe_event_risk_policy.json",
+          "risk_policy_strict": true
+        }
+      },
+      "backtest": {
+        "start_time": "2024-07-01",
+        "end_time": "2026-08-28",
+        "account": 100000000,
+        "benchmark": null,
+        "exchange_kwargs": {
+          "freq": "1min",
+          "limit_threshold": [
+            "$limit_up",
+            "$limit_down"
+          ],
+          "deal_price": "close",
+          "open_cost": 0.000095,
+          "close_cost": 0.000595,
+          "min_cost": 5,
+          "trade_unit": 100,
+          "codes": "all"
+        }
+      }
+    },
+    "market": "stock_universe",
+    "benchmark": "000300.SH"
+  },
+  "scenarios": [
+    {
+      "name": "reuse_complete_comparable_B",
+      "condition": "training inputs, fitted processing, prediction and quote/trading conditions comparable",
+      "new_training": 6,
+      "new_backtests": 6,
+      "loop_indices_from_9_loop_draft": [
+        2,
+        4,
+        6,
+        7,
+        8,
+        9
+      ],
+      "baseline": "replay task L1/L4/L7 as same-condition existing results"
+    },
+    {
+      "name": "only_quote_data_changes",
+      "condition": "old model/predictions remain comparable; new quotes differ",
+      "new_training": 6,
+      "new_backtests": 9,
+      "baseline_action": "create ordinary prediction_replay B with original source L1/L3/L5 and recorded prediction SHA; omit feature_processing and perform no fit/inference"
+    },
+    {
+      "name": "training_inputs_changed_or_not_comparable",
+      "condition": "data handoff confirms changed training inputs or processing, or old B cannot be matched",
+      "new_training": 9,
+      "new_backtests": 9,
+      "baseline_action": "use common active data for all B/A/C; old B for context only"
+    }
+  ],
+  "pending_tool": "qe_custom_evo_create_pending",
+  "pending_tool_args_if_rebuild_all": {
+    "task_name": "T7-INPUT B/A/C LGBM-F11 h20 three-seed controlled comparison",
+    "target_desc": "Common reference panel; A excludes PDH model input only; C independently disables train/infer clipping. Research feedback, not untouched validation.",
+    "node_id": "rdagent-node1",
+    "node_parallelism": {
+      "rdagent-node1": 2
+    },
+    "phase_pipeline_enabled": false,
+    "resource_telemetry_enabled": false,
+    "engine_mode": "unified",
+    "consumer_id": "qe_mainline",
+    "purpose": "research",
+    "loops": [
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT B LGBM F11 h20 seed42",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [],
+          "clip_outlier": true
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 42,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "B",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 1,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT A LGBM F11 h20 seed42",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [
+            "Price_Deviation_Historical_High"
+          ],
+          "clip_outlier": true
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 42,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "A",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 1,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT B LGBM F11 h20 seed2024",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [],
+          "clip_outlier": true
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 2024,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "B",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 3,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT A LGBM F11 h20 seed2024",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [
+            "Price_Deviation_Historical_High"
+          ],
+          "clip_outlier": true
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 2024,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "A",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 3,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT B LGBM F11 h20 seed2026",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [],
+          "clip_outlier": true
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 2026,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "B",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 5,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT A LGBM F11 h20 seed2026",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [
+            "Price_Deviation_Historical_High"
+          ],
+          "clip_outlier": true
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 2026,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "A",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 5,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT C LGBM F11 h20 seed42",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [],
+          "clip_outlier": false
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 42,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "C",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 1,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT C LGBM F11 h20 seed2024",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [],
+          "clip_outlier": false
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 2024,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "C",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 3,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      },
+      {
+        "factor_keys": [
+          "Price_Deviation_Historical_High||manual",
+          "m_drawdown_from_high||manual",
+          "Large_Cap_Momentum_Bias||manual",
+          "RevenueYOY_Momentum||manual",
+          "FundamentalEpsIndustryMomentum||manual",
+          "Industry_Momentum||manual",
+          "m_sw2_net_vol_momentum||manual",
+          "IndustryMomentumExcessReturnCross||manual",
+          "cp_winner_rate_momentum||manual",
+          "elg_flow_high_price_interaction||manual",
+          "m_sw2_elg_individual_diverge||manual"
+        ],
+        "model_id": "__seed_LGBModel_conservative_v1__",
+        "model_params": {
+          "loss": "mse",
+          "max_bin": 63,
+          "lambda_l1": 205.6999,
+          "lambda_l2": 580.9768,
+          "max_depth": 8,
+          "subsample": 0.8789,
+          "num_leaves": 210,
+          "device_type": "cpu",
+          "num_threads": 12,
+          "learning_rate": 0.05,
+          "colsample_bytree": 0.8879,
+          "observation_panel": {
+            "mode": "reference_factor_intersection",
+            "panel_id": "ID1544-MAE54-REFERENCE-PDH-v1",
+            "schema_version": "qe_observation_panel_v1",
+            "reference_factor_names": [
+              "Price_Deviation_Historical_High"
+            ]
+          }
+        },
+        "data_split": {
+          "test_end": "2026-08-31",
+          "train_end": "2022-12-30",
+          "valid_end": "2024-06-28",
+          "test_start": "2024-07-01",
+          "train_start": "2018-08-01",
+          "valid_start": "2023-01-03",
+          "backtest_end": "2026-08-28"
+        },
+        "strategy_id": "score_weighted_topk_v2",
+        "label_type": "close",
+        "label_horizon": 20,
+        "disable_alpha158": true,
+        "execution_algo": "TWAP",
+        "execution_algo_params": {},
+        "unfilled_handler": "TAIL_BOOST",
+        "unfilled_handler_params": {
+          "backup_depth": 15,
+          "trigger_minute": 235
+        },
+        "filter_suspended_on_signal": true,
+        "suspend_filter_strict": true,
+        "universe_selection": {
+          "mode": "stock_universe",
+          "pool_ids": []
+        },
+        "enable_sector_hmm": false,
+        "hmm_model_version_id": null,
+        "hmm_signal_preset": null,
+        "ensemble": null,
+        "label": "T7-INPUT C LGBM F11 h20 seed2026",
+        "node_id": "rdagent-node1",
+        "sector_blacklist": [],
+        "strategy_params": {
+          "topk": 50,
+          "n_drop": 1,
+          "method_buy": "top",
+          "hold_thresh": 1,
+          "method_sell": "bottom",
+          "risk_degree": 0.95,
+          "only_tradable": true,
+          "forbid_all_trade_at_limit": false,
+          "max_n_drop": 5,
+          "max_weight": 0.05,
+          "min_n_drop": 0,
+          "min_weight": 0.005,
+          "temperature": 1,
+          "weight_method": "softmax",
+          "min_improvement": 0.01,
+          "threshold_floor": 0.005,
+          "threshold_method": "adaptive",
+          "max_position_ratio": 0.95,
+          "adaptive_multiplier": 0.5,
+          "score_clip_quantile": 0,
+          "enable_dynamic_ndrop": true,
+          "risk_policy": {
+            "enabled": true,
+            "providers": [
+              "st_pit"
+            ],
+            "hard_actions": [
+              "block_buy",
+              "force_exit"
+            ],
+            "score_overlay": {
+              "enabled": false,
+              "positive_multiplier_cap": 1.1,
+              "negative_multiplier_floor": 0.7
+            },
+            "policy_version": "stock_event_risk_policy_v1",
+            "st_universe_key": "aistock_equity_pit_canonical_v2",
+            "strict_data_ready": true,
+            "visible_time_mode": "next_trading_session"
+          }
+        },
+        "feature_processing": {
+          "exclude_from_model": [],
+          "clip_outlier": false
+        },
+        "backtest_only": false,
+        "prediction_replay": false,
+        "runtime_flags": {
+          "qe_only": true,
+          "policy_arm": "P00",
+          "random_seed": 2026,
+          "seed_policy": "fixed",
+          "design_round": "T7-INPUT-BAC-PREPARED-20261018",
+          "archive_policy": "AUTO",
+          "archive_reason": "accurate_nonduplicate_controlled_feature_input_comparison",
+          "comparison_role": "C",
+          "execution_truth": "minute_twap",
+          "trading_pool_id": "stock_universe",
+          "training_pool_id": "stock_universe",
+          "factor_usage_mode": "official_offline",
+          "not_untouched_holdout": true,
+          "runtime_thread_budget": 12,
+          "reference_recipe_task_id": "qe_20261014_105052_14f2",
+          "reference_recipe_loop_index": 5,
+          "zero_db_data_plane_required": true,
+          "individual_factor_return_attribution": false
+        }
+      }
+    ]
+  },
+  "do_not_submit_reasons": [
+    "await user-owned backend restart and normal feature_processing consumption check",
+    "resolve data handoff, cache source comparability and label evaluation boundary before choosing a scenario"
+  ],
+  "not_new_approval_gates": true
+}
