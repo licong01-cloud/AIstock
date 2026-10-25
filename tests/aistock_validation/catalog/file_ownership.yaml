@@ -264,6 +264,7 @@ rules:
     include:
       - backend/services/quantevolver/l2_risk_consumer.py
       - scripts/qe_l2_risk_consumer.py
+      - scripts/qe_l2_risk_admission.py
       - scripts/qe_terminal_interval_executor.py
       - scripts/run_qe_l2_risk_controlled_study.py
       - backend/tests/quantevolver/test_qe_l2_risk_consumer.py
