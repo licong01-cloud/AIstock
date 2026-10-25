@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1823",
-  "closed_at": null,
+  "closed_at": "2026-10-25T08:07:18.288370Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -132,10 +132,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1823-facts.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1823",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_ready",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "45c7c6f3a06bdb4eed5a9b7b84c47eb9d5ae546939f1917e25bf971b11eadd61",
+      "expected_identity": "897442a33e76f47b2b14ace86da5bc963195229f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T08:07:15.550222Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7e2b5917874cfad903af8e4545c1bcf7ae8bb4239737e7042a92dafc429b6888",
+      "receipt_sha256": "7d4b9ab288efa0d97fab41d4f3b78dc898c8470001e436ca5b28013b1cd0666c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4fb2c8442e68541f2a1919c6e99e907545217b8be5ab0a8c188a10752e8bb582",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -145,7 +167,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
