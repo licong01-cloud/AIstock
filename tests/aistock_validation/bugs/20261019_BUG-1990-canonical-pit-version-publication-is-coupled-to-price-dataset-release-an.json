@@ -62,13 +62,24 @@
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1"
   },
   "first_seen_at": "2026-10-19T14:29:10.083761Z",
   "fix_branch": null,
+  "fix_commit": "c1a3ba28fc0b362f521103771340769c922f1d30",
   "fix_summary": "Preserve active canonical v2, add read-only capture/list/offline verify of immutable PIT observations, reuse existing frozen snapshot/binding contracts and singleton; compare an explicit frozen binding by policy and cutoff, keep strict legacy behavior without one. No v3 default or consumer changes.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-25T19:28:42Z",
   "github_issue_number": 6371,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
   "last_seen_at": "2026-10-19T14:29:10.083761Z",
@@ -77,6 +88,7 @@
     "No database DDL/DML, PIT rebuild, activation, dataset/profile mutation, consumer/model changes, service/process control or experiments.",
     "Do not change active v2 policy to v3 or rewrite prior frozen identities."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6719",
   "prior_unmerged_implementation": {
     "disposition": "Retained until replacement source is reviewed/merged; stale v3 policy and consumer changes are not adopted.",
     "head": "7cd29d994676604c926deb9bcc2943cbfcd63a32",
@@ -107,6 +119,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -118,7 +131,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1990",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4d634887cc77fe4e",
+    "recorded_at": "2026-10-25T19:29:36.500871Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3412b17e4ed94fa1f732408ba8c5cfe22f095ef6",
+    "source_merge_commit": "c1a3ba28fc0b362f521103771340769c922f1d30",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6719",
+    "validation_evidence": [
+      "CI 40225310517 SUCCESS at head 3412b17e4ed94fa1f732408ba8c5cfe22f095ef6; final null compatibility RED to GREEN 6 passed; prior related matrix 53 passed; actual DEV read-only capture 5343 symbols 5662 spans; backend-main verification pending user restart."
+    ],
+    "validation_evidence_digest": "c0fde2e2f555827b4b96ae22676ac389016efde7bed1368033a7f2d019726a45"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -129,7 +163,8 @@
   },
   "validation_evidence": [
     "RED missing independent module; RED explicit policy binding rejected with physical-catalog mismatch. GREEN 53 related contract tests; Ruff and existing registry/catalog/changed-file checks passed.",
-    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states."
+    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states.",
+    "CI 40225310517 SUCCESS at head 3412b17e4ed94fa1f732408ba8c5cfe22f095ef6; final null compatibility RED to GREEN 6 passed; prior related matrix 53 passed; actual DEV read-only capture 5343 symbols 5662 spans; backend-main verification pending user restart."
   ],
   "verification_budget": {
     "budget": "standard",
