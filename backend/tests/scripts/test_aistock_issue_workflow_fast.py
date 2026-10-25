@@ -1462,10 +1462,10 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
 
 
-@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py", "component_artifact_manifest.py", "component_manifest_producer.py", "factor_materializer.py", "source_fact_history.py", *(f"legacy:{name}.py" for name in ("component_artifact_manifest", "component_manifest_producer", "factor_materializer", "source_fact_history"))])
+@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py", "component_artifact_manifest.py", "component_manifest_producer.py", "factor_materializer.py", "source_fact_history.py", "artifact_ready_source.py", "candidate_validator.py", "canonical_stock_transformer.py", *(f"legacy:{name}.py" for name in ("component_artifact_manifest", "component_manifest_producer", "factor_materializer", "source_fact_history", "artifact_ready_source", "candidate_validator", "canonical_stock_transformer"))])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
-    catalog = workflow._load_runtime_target_catalog()
-    target = catalog["targets"]["worker-scheduler"]
+    target = workflow._load_runtime_target_catalog()["targets"]["worker-scheduler"]
+    assert set(target["probe_routes"][0]["source_globs"]).isdisjoint(target["probe_routes"][1]["required_source_globs"])
     monthly_sources = [
         "backend/services/dataset_release/artifact_ready_build_source.py",
         "backend/services/dataset_release/build_stage.py",
