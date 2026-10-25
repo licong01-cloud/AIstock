@@ -30,12 +30,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1688-unified-monthly-source-adapter-retains-legacy-sector-research-policy-ins.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1688-unified-monthly-source-adapter-retains-legacy-sector-research-policy-ins.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +96,8 @@
   },
   "first_seen_at": "2026-10-02T19:13:18.874016Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "668a5c75aa90effdc125d183a97e222bde8ac9ad",
+  "fixed_at": "2026-10-02T19:30:41Z",
   "github_issue_number": 5296,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5296",
   "last_seen_at": "2026-10-02T19:13:18.874016Z",
@@ -103,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5298",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +130,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -138,7 +142,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -147,6 +151,9 @@
     "fingerprint": "4ac9c9438ac2cbec2797ccb7",
     "source_event_id": "FE-20261002-4ac9c9438ac2"
   },
+  "validation_evidence": [
+    "Exact source merge/CI and original isolated monthly source publication-policy regression retained; runtime metadata corrected to actual single supervised worker, no gate removed, no data or source changes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
