@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2018",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:36:26.176478Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -274,10 +274,32 @@
       "backend-main",
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2018-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2018",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "d5a995d1c2bb59672a8b8d644ce1a88734ff8afb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:43.621748Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "4ae34138be3c8fc60db895657550cc4d7ea13f2838b576586d717b552e7402d3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "167f9beb4aac282d6eeddf03c250c268ab12fa90c5b3aa4e00f47c70e0b22208",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -309,7 +331,7 @@
     ],
     "validation_evidence_digest": "089555befba12b48d4d069eccf890bd6a63df97498c99a295c4157f1d14dea34"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -320,7 +342,8 @@
   },
   "validation_evidence": [
     "python -m nox -s l0 --no-venv --no-install -> passed (blocking=0)",
-    "python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_canonical_stock_transformer.py -q -> 50 passed"
+    "python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_canonical_stock_transformer.py -q -> 50 passed",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
   ],
   "verification_budget": {
     "budget": "standard",
