@@ -517,10 +517,18 @@ def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[st
         value = payload.get(field)
         if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
             return "failed", f"collection payload reports failure {field}={value.strip()}", {}
+    # Local-data returns the standard {status, data: {items, ...}} envelope.
+    # Validate both levels; an outer success marker must not hide an inner
+    # error/malformed collection. Row statuses themselves are collection facts.
+    if isinstance(payload.get("data"), dict):
+        state, reason, facts = _validate_collection_payload(payload["data"])
+        return state, reason, {**facts, "envelope": "data"}
     for key in _COLLECTION_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list):
             return "passed", None, {"items_key": key, "size": len(value)}
+        if key == "items" and key in payload:
+            return "failed", "collection items must be an array", {}
     if payload.get("ok") is True:
         return "passed", None, {"ok": True}
     for field in _STATUS_FIELD_NAMES:
