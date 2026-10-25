@@ -25,6 +25,7 @@ from .canonical import digest_named_fields
 from .errors import DatasetReleaseError
 from .index_contract import DOMESTIC_INDEX_DEFINITIONS
 from .pit import FrozenPitSnapshot
+from .source_fact_history import is_a_share
 from .stock_schema import QLIB_STOCK_FIELDS, qlib_stock_schema_digest
 
 
@@ -234,6 +235,7 @@ class CanonicalStockTransformSpec:
     instrument_filter: tuple[str, ...] | None = None
     initial_adj_factors: Mapping[str, float] | None = None
     quote_days: tuple[tuple[str, date], ...] = ()
+    fact_stock_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.pit_snapshot.cutoff != self.cutoff:
@@ -251,7 +253,12 @@ class CanonicalStockTransformSpec:
             or days[-1] > self.cutoff
         ):
             raise CanonicalStockTransformError("frozen trading days must be sorted, unique and scope-bounded")
-        codes = {span.ts_code for span in self.pit_snapshot.spans}
+        pit_codes = {span.ts_code for span in self.pit_snapshot.spans}
+        codes = set(self.fact_stock_codes or self.qfq_denominators.by_code)
+        if (self.fact_stock_codes != tuple(sorted(set(self.fact_stock_codes)))
+                or not pit_codes.issubset(codes)
+                or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in codes)):
+            raise CanonicalStockTransformError("frozen factual stock population is invalid")
         if codes.intersection(_INDEX_CODES):
             raise CanonicalStockTransformError("domestic index codes cannot enter the stock PIT contract")
         if set(self.qfq_denominators.by_code) != codes:
@@ -286,6 +293,7 @@ class CanonicalStockTransformSpec:
                     code: float(value) for code, value in sorted((self.initial_adj_factors or {}).items())
                 },
                 "quote_days": self.quote_days,
+                **({"fact_stock_codes": self.fact_stock_codes} if self.fact_stock_codes else {}),
                 "qlib_stock_schema_digest": qlib_stock_schema_digest(),
             },
         )
@@ -321,12 +329,18 @@ def build_qfq_denominator_authority(
     *,
     pit_snapshot: FrozenPitSnapshot,
     cutoff: date,
+    fact_stock_codes: tuple[str, ...] = (),
 ) -> QfqDenominatorAuthority:
     """Compute exact per-stock QFQ bases in one O(instruments) streaming pass."""
 
     if pit_snapshot.cutoff != cutoff:
         raise CanonicalStockTransformError("QFQ cutoff differs from PIT cutoff")
-    expected_codes = {span.ts_code for span in pit_snapshot.spans}
+    expected_codes = set(fact_stock_codes) if fact_stock_codes else None
+    pit_codes = {span.ts_code for span in pit_snapshot.spans}
+    if (fact_stock_codes != tuple(sorted(set(fact_stock_codes)))
+            or (expected_codes is not None and not pit_codes.issubset(expected_codes))
+            or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in (expected_codes or ()))):
+        raise CanonicalStockTransformError("QFQ factual stock population is invalid")
     maxima: dict[str, float] = {}
     per_code_digests: dict[str, Any] = {}
     per_code_counts: dict[str, int] = {}
@@ -341,7 +355,8 @@ def build_qfq_denominator_authority(
         previous = key
         code = row["ts_code"]
         observed_date = row["trade_date"]
-        if code not in expected_codes or observed_date > cutoff:
+        if (not is_a_share(code) or (expected_codes is not None and code not in expected_codes)
+                or observed_date > cutoff):
             continue
         value = row["adj_factor"]
         maxima[code] = max(value, maxima.get(code, value))
@@ -358,7 +373,7 @@ def build_qfq_denominator_authority(
         source_digest.update(canonical_row)
         per_code_digests.setdefault(code, hashlib.sha256()).update(canonical_row)
         per_code_counts[code] = per_code_counts.get(code, 0) + 1
-    missing = sorted(expected_codes.difference(maxima))
+    missing = sorted((expected_codes if expected_codes is not None else pit_codes).difference(maxima))
     if missing:
         raise CanonicalStockTransformError(
             "adj_factor cannot establish every PIT stock denominator",
@@ -448,7 +463,7 @@ class CanonicalStockTransformer:
             key=lambda row: (row["ts_code"], row["trade_date"]),
         )
         latest_adj_by_code = {code: float(value) for code, value in (spec.initial_adj_factors or {}).items()}
-        for code, trading_day in context.expected_code_days():
+        for code, trading_day in context.observed_and_expected_code_days(raw):
             target = (code, trading_day)
             _consume_adj_through(adj, target, latest_adj_by_code)
             qfq = _qfq_for_day(spec, latest_adj_by_code, code, trading_day)
@@ -556,7 +571,7 @@ class CanonicalStockTransformer:
                 report=report,
             ), key=lambda row: (row["ts_code"], row["trade_date"]),
         )
-        for code, trading_day in context.expected_code_days():
+        for code, trading_day in context.observed_and_expected_code_days(raw):
             target = (code, trading_day)
             _consume_adj_through(adj, target, latest_adj_by_code)
             qfq = _qfq_for_day(spec, latest_adj_by_code, code, trading_day)
@@ -684,7 +699,7 @@ def suspended_zero_turnover_placeholder(
 class _TransformContext:
     def __init__(self, spec: CanonicalStockTransformSpec) -> None:
         self.spec = spec
-        all_codes = frozenset(span.ts_code for span in spec.pit_snapshot.spans)
+        all_codes = frozenset(spec.fact_stock_codes or spec.qfq_denominators.by_code)
         self.codes = frozenset(spec.instrument_filter) if spec.instrument_filter is not None else all_codes
         self._trading_days = spec.trading_days
         self._trading_day_set = frozenset(spec.trading_days)
@@ -702,14 +717,26 @@ class _TransformContext:
     def is_expected_day(self, code: str, observed: date) -> bool:
         if code not in self.codes or observed not in self._trading_day_set:
             return False
-        return (code, observed) in self._quote_days or any(
-            start <= observed <= end for start, end in self._spans[code]
-        )
+        # A normalized real source row is itself evidence of a factual day.
+        # PIT is used below only to detect missing required days, never to
+        # discard facts outside buy-eligible intervals.
+        return True
+
+    def observed_and_expected_code_days(self, raw) -> Iterator[tuple[str, date]]:
+        """Streaming union; no code x full-history Cartesian product."""
+        expected = iter(self.expected_code_days())
+        required = next(expected, None)
+        while required is not None or raw.current_key is not None:
+            actual = raw.current_key
+            target = actual if required is None else required if actual is None else min(required, actual)
+            yield target
+            if required == target:
+                required = next(expected, None)
 
     def expected_code_days(self) -> Iterator[tuple[str, date]]:
-        for code in sorted(self._spans):
+        for code in sorted(self.codes):
             days = set(self._quote_days_by_code.get(code, ()))
-            for start, end in self._spans[code]:
+            for start, end in self._spans.get(code, ()):
                 left = bisect_left(self._trading_days, start)
                 right = bisect_right(self._trading_days, end)
                 days.update(self._trading_days[left:right])

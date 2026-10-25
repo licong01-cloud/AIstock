@@ -242,11 +242,24 @@ class MatureMonthlyPhysicalBuildRunner:
             from .monthly_prev_close_repair import apply_prev_close_corrections
             finalized = apply_prev_close_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
             from .monthly_minute_repair import apply_minute_corrections
-            finalized = apply_minute_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
+            from .monthly_minute_coverage import automatic_repair_plan
+            minute_plan = automatic_repair_plan(context.plan,
+                build_inputs=compiled.physical_plan.get("build_inputs", {}), cas=self.cas,
+                operation_id=context.operation_id)
+            finalized = apply_minute_corrections(resume, finalized=finalized, cas=self.cas, plan=minute_plan)
             finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             from .monthly_industry_history import apply_retained_history
             prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)
+            from .monthly_fact_correction import apply_factor_repairs
+            prepare = apply_factor_repairs(resume, prepare=prepare, plan=context.plan, cas=self.cas)
+            from .monthly_quote_fact_correction import apply_quote_repairs
+            finalized = apply_quote_repairs(resume, finalized=finalized, prepare=prepare, plan=context.plan, cas=self.cas)
+            if context.plan.get('monthly_quote_fact_repairs') is not None:
+                finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
+            from .monthly_index_repair import apply_index_repairs
+            prepare, finalized = apply_index_repairs(resume, prepare=prepare, finalized=finalized, plan=context.plan, cas=self.cas)
+            finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             prepare_ref = self._seal_stage(prepare, expected="prepare")
             finalize_prerequisites["prepare"] = prepare_ref.sha256
             smoke = tools.consumer_smoke.execute(

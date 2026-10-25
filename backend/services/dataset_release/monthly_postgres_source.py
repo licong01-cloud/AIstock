@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "16"
+POSTGRES_SOURCE_ADAPTER_VERSION = "18"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -357,11 +357,13 @@ class PostgresMonthlySourceAdapter:
                 "source_audit_contract": AUDIT_SCHEMA,
                 "business_validation_scope": "target_calendar_month_only_v1",
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
+                "factual_population_policy": "all_shsz_source_facts_independent_of_pit_v1",
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
                 "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
                 "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
                 "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
+                "historical_minute_coverage_policy": "fact_catalog_delta_same_snapshot_all_execution_fields_v1",
             },
         )
 
@@ -389,8 +391,26 @@ class PostgresMonthlySourceAdapter:
             repair_prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
             repair_inputs = validate_monthly_repair_inputs(repair_inputs, predecessor=repair_prefix, target_cutoff=target_cutoff)
         deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
+        if deferred_margin_sha is not None:
+            from .monthly_late_publication import effective_margin_deferral
+            effective = effective_margin_deferral(connection, repair_inputs, trade_date=target_cutoff.isoformat())
+            if effective["deferred_trade_date"] is None:
+                deferred_margin_sha = None  # Include arrived facts; existing strict SOURCE audit decides completeness.
         if self.profile.profile == CANONICAL_PROFILE_ID:
             self._require_pit_coverage(connection, target_cutoff)
+        fact_stock_codes = ()
+        if self.profile.profile == CANONICAL_PROFILE_ID:
+            # Same exported read-only snapshot as every data-bearing query.
+            # Listing/ST/PIT eligibility never removes a security's facts.
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT ts_code FROM market.stock_basic "
+                               "WHERE ts_code ~ '^[0-9]{6}\\.(SH|SZ)$' AND list_date <= %s "
+                               "UNION SELECT ts_code FROM market.kline_daily_raw "
+                               "WHERE trade_date BETWEEN %s AND %s AND adjust_type='none' "
+                               "AND ts_code ~ '^[0-9]{6}\\.(SH|SZ)$' ORDER BY ts_code",
+                               (target_cutoff, target_cutoff.replace(day=1), target_cutoff))
+                from .source_fact_history import fact_codes
+                fact_stock_codes = fact_codes(row[0] for row in cursor.fetchall())
 
         # The native month path inherits the controller-bound immutable release,
         # not a historical SOURCE inventory. Comparing old raw partition keys
@@ -410,7 +430,7 @@ class PostgresMonthlySourceAdapter:
             start = target_cutoff.replace(day=1)
             # Any historical PIT member can remain a holding after buy exit.
             # Construction anchors are boundary facts, not buy eligibility.
-            codes = tuple(sorted({span.ts_code for span in pit.spans}))
+            codes = tuple(sorted(set(fact_stock_codes).union(span.ts_code for span in pit.spans)))
             return collect_qfq_construction_anchors(prefix, month_start=start, instruments=codes,
                                                     checkpoint=checkpoint, progress=progress)
 
@@ -441,6 +461,7 @@ class PostgresMonthlySourceAdapter:
             month_start=target_cutoff.replace(day=1), construction_anchors=construction_anchors,
             deferred_margin_cutoff=target_cutoff if deferred_margin_sha is not None else None,
             monthly_sector_mapping=sector_mapping,
+            fact_stock_codes=fact_stock_codes,
         )
         try:
             _preflight_refresh_readiness(
@@ -650,6 +671,15 @@ class PostgresMonthlySourceAdapter:
             gates = tuple(prepared_limit if gate.gate == "suspend_limit" else gate for gate in gates)
             audit_artifacts = (*audit_artifacts, *prepared_artifacts)
         close_source_audit(cutoff=target_cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
+        from .monthly_minute_coverage import capture_historical_coverage
+        from .monthly_build_bridge import load_monthly_predecessor_prefix
+
+        prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
+        historical_minutes = capture_historical_coverage(
+            prefix=prefix, pit=frozen.pit_snapshot, cutoff=target_cutoff, connection=connection,
+        ) if prefix is not None else None
+        historical_minutes_ref = self.cas.put_json(historical_minutes) if historical_minutes is not None else None
+        checkpoint()
         source_stage_ref = seal_source_stage_receipt(self.cas, frozen, profile=self.profile.profile)
 
         bundle_path = input_root / "frozen-source-bundle.json"
@@ -661,6 +691,8 @@ class PostgresMonthlySourceAdapter:
             source_stage_ref=source_stage_ref,
         )
         bundle["monthly_repair_inputs"] = repair_inputs
+        if historical_minutes_ref is not None:
+            bundle["historical_minute_coverage_ref"] = historical_minutes_ref.as_dict()
         repair_payload_ref = None
         if repair_inputs is not None:
             # Typed deferrals bind this exact canonical payload, not the outer
@@ -679,6 +711,8 @@ class PostgresMonthlySourceAdapter:
         ]
         if repair_payload_ref is not None:
             artifacts.append(_cas_artifact(self.cas, repair_payload_ref))
+        if historical_minutes_ref is not None:
+            artifacts.append(_cas_artifact(self.cas, historical_minutes_ref))
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)

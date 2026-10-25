@@ -204,10 +204,47 @@ def prepare(request, source_commit):
         release_binding=source["release_binding"],
         expected_calendar_sha256=source["calendar_sha256"],
     )
+    return features_from_aggregates(
+        request,
+        source_commit,
+        frozen,
+        parameters,
+        model_identity,
+        window,
+        aggregates,
+        assets["benchmark"],
+        plan["as_of"],
+        {
+            **{k: v for k, v in identity.items() if k not in ("structural_membership", "domain_reasons")},
+            "calendar_sha256": source["calendar_sha256"],
+            "industry_authority_sha256": canonical_sha256(source["industry_authority"]),
+            "security_identity_sha256": source["security_identity_sha256"],
+            "provider_absence_sha256": source["provider_absence_sha256"],
+        },
+        identity["domain_reasons"],
+    )
+
+
+def features_from_aggregates(
+    request,
+    source_commit,
+    frozen,
+    parameters,
+    model_identity,
+    window,
+    aggregates,
+    benchmark,
+    as_of,
+    identity,
+    domain_reasons,
+    *,
+    version=VERSION,
+):
+    """One unchanged C-010/A5 feature kernel for explicit file and DB sources."""
     panel, definition, cross = build_c010_feature_domain_panel(
         aggregates,
         trading_dates=window,
-        csi300_returns={day: assets["benchmark"][day] for day in window},
+        csi300_returns={day: benchmark[day] for day in window},
         expected_sector_count=131,
         direct_sector_level="L2",
         canonical_sector_codes=frozen["catalog"],
@@ -217,19 +254,19 @@ def prepare(request, source_commit):
     for code in frozen["catalog"]:
         frame = panel.xs(code, level="l1_code")
         for day in rows:
-            as_of = plan["as_of"][day]
-            vector = frame.reindex(pd.to_datetime([as_of]))[list(ALL_CORE_FEATURES)].to_numpy(dtype=np.float64)[0]
+            observed = as_of[day]
+            vector = frame.reindex(pd.to_datetime([observed]))[list(ALL_CORE_FEATURES)].to_numpy(dtype=np.float64)[0]
             valid = bool(np.isfinite(vector).all())
             rows[day][code] = {
-                "as_of_date": as_of,
+                "as_of_date": observed,
                 "features": vector.tolist() if valid else None,
                 "reason_code": None
                 if valid
-                else identity["domain_reasons"].get((as_of, code), "hmm_risk_c010_observation_unavailable"),
+                else domain_reasons.get((observed, code), "hmm_risk_c010_observation_unavailable"),
             }
     return receipt(
         {
-            "schema_version": VERSION + "_features",
+            "schema_version": version + "_features",
             "request_sha256": request["receipt_sha256"],
             "source_commit": source_commit,
             "model_identity": model_identity,
@@ -237,13 +274,9 @@ def prepare(request, source_commit):
             "feature_names": list(ALL_CORE_FEATURES),
             "parameters": parameters,
             "rows": rows,
-            "as_of": plan["as_of"],
+            "as_of": as_of,
             "inference_identity": {
-                **{k: v for k, v in identity.items() if k not in ("structural_membership", "domain_reasons")},
-                "calendar_sha256": source["calendar_sha256"],
-                "industry_authority_sha256": canonical_sha256(source["industry_authority"]),
-                "security_identity_sha256": source["security_identity_sha256"],
-                "provider_absence_sha256": source["provider_absence_sha256"],
+                **identity,
                 "cross_section_sha256": canonical_sha256(cross),
             },
         }
@@ -299,12 +332,17 @@ def validate_bundle(request, bundle, expected_sha256):
         "feature bundle differs from model/request authorities",
         "identity_mismatch",
     )
+    validate_feature_rows(request, bundle, plan["as_of"])
+
+
+def validate_feature_rows(request, bundle, as_of):
+    """Validate the complete 20D carrier, independently of its explicit source."""
     require(set(bundle["rows"]) == set(request["decision_dates"]), "feature date grid differs")
     for day, rows in bundle["rows"].items():
         require(set(rows) == set(bundle["catalog"]), "feature sector grid differs")
         for row in rows.values():
             require(
-                set(row) == {"as_of_date", "features", "reason_code"} and row["as_of_date"] == plan["as_of"][day],
+                set(row) == {"as_of_date", "features", "reason_code"} and row["as_of_date"] == as_of[day],
                 "feature schema/as-of differs",
             )
             values, reason = row["features"], row["reason_code"]
@@ -322,6 +360,11 @@ def validate_bundle(request, bundle, expected_sha256):
 
 def infer(request, bundle, *, expected_bundle_sha256):
     validate_bundle(request, bundle, expected_bundle_sha256)
+    return predict_prepared(request, bundle)
+
+
+def predict_prepared(request, bundle, *, version=VERSION):
+    """Pure parameter prediction; callers first authenticate their source carrier."""
     predictions, changed = risk.predictions_from_parameters(
         bundle["rows"], request["decision_dates"], bundle["catalog"], bundle["parameters"]
     )
@@ -341,7 +384,7 @@ def infer(request, bundle, *, expected_bundle_sha256):
         )
     return receipt(
         {
-            "schema_version": VERSION + "_prediction",
+            "schema_version": version + "_prediction",
             "request_sha256": request["receipt_sha256"],
             "features_sha256": bundle["receipt_sha256"],
             "source_commit": bundle["source_commit"],
@@ -363,11 +406,11 @@ def infer(request, bundle, *, expected_bundle_sha256):
     )
 
 
-def validate_prediction(request, bundle, result):
+def validate_prediction(request, bundle, result, *, version=VERSION):
     """Parent readback checks business fields against its own prepared authority."""
     verify_receipt(result)
     require(
-        result["schema_version"] == VERSION + "_prediction"
+        result["schema_version"] == version + "_prediction"
         and result["request_sha256"] == request["receipt_sha256"]
         and result["features_sha256"] == bundle["receipt_sha256"]
         and result["source_commit"] == bundle["source_commit"]
@@ -427,6 +470,14 @@ def validate_prediction(request, bundle, result):
                 ],
             }
         )
+    expected_rows, expected_changed = risk.predictions_from_parameters(
+        bundle["rows"], request["decision_dates"], bundle["catalog"], bundle["parameters"]
+    )
+    require(
+        rows == expected_rows and result["inactive_changed_rows"] == expected_changed,
+        "prediction differs from frozen parameter readback",
+        "prediction_failed",
+    )
     require(result["dates"] == summaries, "display/coverage readback differs")
     require(
         result["capability_state"]
