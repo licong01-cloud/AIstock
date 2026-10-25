@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-09T04:01:05.825458Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "897442a33e76f47b2b14ace86da5bc963195229f",
+  "fixed_at": "2026-10-09T04:19:52Z",
   "github_issue_number": 5809,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5809",
   "last_seen_at": "2026-10-09T04:01:05.825458Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5811",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -132,6 +133,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -143,7 +145,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -152,6 +154,9 @@
     "fingerprint": "52100427d7196b715b634653",
     "source_event_id": "FE-20261009-52100427d719"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. RED: out-of-request date at rows 11 and 15 accepted by old code; GREEN: exact failed nodeids passed; final related matrix 83 passed, Ruff/compile/diff-check/L0 PASS.; Fresh Python process imported tracked TushareSyncEngine: valid 15-row batch PASS, row15 wrong date REJECTED before persistence; database_opened=false; network_access=false; runtime_action=false.; Three review rounds: complete batch dates rather than first10; existing provider_contract_error and bounded 10-sample error unchanged; _sync_by_date validates before replace/upsert, no new dataset/strategy/whole-history checks or DDL/DML. Companion BUG-1822 binds completed date-scoped writer facts."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
