@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1981",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:40:51.034837Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,19 +31,19 @@
   "expected": "Profile finalization uses exact submitted predecessor bytes despite later active changes; true byte drift remains rejected and completed BUILD/DERIVE remain reusable.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json",
       "backend/services/dataset_release/monthly_profile_candidate.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_profile_candidate.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json",
       "backend/services/dataset_release/monthly_profile_candidate.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_profile_candidate.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -132,8 +132,8 @@
   },
   "first_seen_at": "2026-10-19T03:17:30.316411Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8fce937cbe7420e312d4aca228830ba3d9ac3645",
+  "fixed_at": "2026-10-19T03:37:17Z",
   "github_issue_number": 6343,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6343",
   "last_seen_at": "2026-10-19T03:17:30.316411Z",
@@ -141,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6344",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -174,9 +175,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1981-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1981",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "8fce937cbe7420e312d4aca228830ba3d9ac3645",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:47.430467Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "08bfb15505410da9b7dea3c99a324602b51b5972f1d20f8423ddfee2f12d72af",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ea9e9dd0a503b4bf4cf7a062182477860d76535fc48e03b773635ec22cdeb45f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -186,7 +210,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1981",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "10e8d237d554c381",
+    "recorded_at": "2026-10-19T03:38:09.758101Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9867c378bd03e36d2fa38d3e8d869268c00bce8a",
+    "source_merge_commit": "8fce937cbe7420e312d4aca228830ba3d9ac3645",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6344",
+    "validation_evidence": [
+      "validation-receipt: id=52bcb98d386393d3 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_cancel_resume_and_receipt_index_use_same_operation backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_freezes_predecessor_profile_before_active_advances backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_rejects_profile_change_between_snapshot_and_freeze -q` result=`3 passed`",
+      "validation-receipt: id=952d9ce9f0206ff5 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_profile_candidate.py backend/services/dataset_release/monthly_unified.py backend/tests/dataset_release/test_monthly_profile_candidate.py backend/tests/dataset_release/test_monthly_unified_v2.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "d11f093b0a56c50c1ea3ecf9d9030d9441998105aca0fe588336bd327b03f8a6"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -195,6 +241,11 @@
     "fingerprint": "0b62e2f0e6831d6537a0dcd6",
     "source_event_id": "FE-20261019-0b62e2f0e683"
   },
+  "validation_evidence": [
+    "validation-receipt: id=52bcb98d386393d3 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_cancel_resume_and_receipt_index_use_same_operation backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_freezes_predecessor_profile_before_active_advances backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_rejects_profile_change_between_snapshot_and_freeze -q` result=`3 passed`",
+    "validation-receipt: id=952d9ce9f0206ff5 commit=9867c378bd03e36d2fa38d3e8d869268c00bce8a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_profile_candidate.py backend/services/dataset_release/monthly_unified.py backend/tests/dataset_release/test_monthly_profile_candidate.py backend/tests/dataset_release/test_monthly_unified_v2.py` result=`passed`",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
