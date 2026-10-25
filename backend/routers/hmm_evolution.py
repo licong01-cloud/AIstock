@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.background import BackgroundTask
 
 from backend.services.hmm_evolution.asset_content_policy import (
     require_text_asset,
@@ -108,6 +109,7 @@ TERMINAL_BATCH_STATUSES = frozenset({"completed", "partial_failed", "failed", "c
 class ApiSuccess:
     data: Any
     status_code: int
+    background: BackgroundTask | None = None
 
 
 class CandidateSourceRequest(BaseModel):
@@ -242,12 +244,15 @@ async def _call(
         value = operation()
         if inspect.isawaitable(value):
             value = await value
+        background = None
         if isinstance(value, ApiSuccess):
             success_status = value.status_code
+            background = value.background
             value = value.data
         return JSONResponse(
             status_code=success_status,
             content=jsonable_encoder({"status": "ok", "data": value, "trace_id": trace_id}),
+            background=background,
         )
     except HMMEvolutionError as exc:
         return JSONResponse(status_code=exc.http_status, content=exc.as_dict(trace_id=trace_id))
@@ -620,18 +625,32 @@ async def _create_batch(
         execution_purpose=request.execution_purpose,
         benchmark_id=request.benchmark_id,
     )
-    if created:
-        await asyncio.to_thread(
-            _record_api_receipt_stage,
-            runtime,
-            batch,
-            api_stage_started_at,
-            utc_now(),
-        )
     return ApiSuccess(
-        data={"batch": batch, "created": created},
+        data={
+            "batch": batch,
+            "created": created,
+            "performance_record_status": "scheduled" if created else "not_scheduled",
+        },
         status_code=202 if created else 200,
+        background=BackgroundTask(_record_api_receipt_stage_safely, runtime, batch, api_stage_started_at, utc_now())
+        if created
+        else None,
     )
+
+
+def _record_api_receipt_stage_safely(
+    runtime: HMMEvolutionRuntime, batch: dict[str, Any], started_at: Any, completed_at: Any
+) -> None:
+    """Telemetry runs after response delivery; it has no business-state authority."""
+    try:
+        _record_api_receipt_stage(runtime, batch, started_at, completed_at)
+    except Exception as exc:
+        # Do not expose potentially credential-bearing DB exception messages.
+        logger.error(
+            "hmm_evolution_performance_record_failed batch_id=%s stage=api error_type=%s",
+            batch.get("batch_id"),
+            type(exc).__name__,
+        )
 
 
 def _record_api_receipt_stage(
@@ -662,12 +681,28 @@ def _record_api_receipt_stage(
             STAGE_API_RECEIPT_PERSIST: {
                 "started_at": started_at.isoformat(),
                 "completed_at": completed_at.isoformat(),
-                "duration_ms": max(
-                    0, int(round((completed_at - started_at).total_seconds() * 1000))
-                ),
+                "duration_ms": max(0, int(round((completed_at - started_at).total_seconds() * 1000))),
             }
         },
     )
+
+
+def _performance_receipt_payload(runtime: HMMEvolutionRuntime, **identity: str) -> dict[str, Any]:
+    try:
+        receipt = runtime.repository.get_performance_receipt(**identity)
+    except Exception as exc:
+        logger.error(
+            "hmm_evolution_performance_record_failed batch_id=%s eval_id=%s stage=read error_type=%s",
+            identity.get("batch_id"),
+            identity.get("eval_id"),
+            type(exc).__name__,
+        )
+        return {
+            "performance_receipt": None,
+            "receipt_unavailable": True,
+            "performance_record_reason": "hmm_evolution_performance_record_failed",
+        }
+    return {"performance_receipt": receipt, "receipt_unavailable": receipt is None}
 
 
 @router.get("/evaluations/{eval_id}")
@@ -678,14 +713,8 @@ async def get_evaluation(
 ) -> JSONResponse:
     async def operation() -> dict[str, Any]:
         row = await asyncio.to_thread(runtime.service.get_evaluation, eval_id)
-        receipt = await asyncio.to_thread(
-            runtime.repository.get_performance_receipt, eval_id=eval_id
-        )
-        return {
-            **row,
-            "performance_receipt": receipt,
-            "receipt_unavailable": receipt is None,
-        }
+        telemetry = await asyncio.to_thread(_performance_receipt_payload, runtime, eval_id=eval_id)
+        return {**row, **telemetry}
 
     return await _call(operation, trace_id=trace_id)
 
@@ -711,14 +740,8 @@ async def get_batch(
 ) -> JSONResponse:
     async def operation() -> dict[str, Any]:
         row = await asyncio.to_thread(runtime.service.get_batch, batch_id)
-        receipt = await asyncio.to_thread(
-            runtime.repository.get_performance_receipt, batch_id=batch_id
-        )
-        return {
-            **row,
-            "performance_receipt": receipt,
-            "receipt_unavailable": receipt is None,
-        }
+        telemetry = await asyncio.to_thread(_performance_receipt_payload, runtime, batch_id=batch_id)
+        return {**row, **telemetry}
 
     return await _call(operation, trace_id=trace_id)
 
@@ -756,14 +779,13 @@ async def retry_failed_batch(
             created_by=request.created_by.strip(),
             idempotency_key=str(idempotency_key or "").strip() or None,
         )
-        await asyncio.to_thread(
-            _record_api_receipt_stage,
-            runtime,
-            batch,
-            api_stage_started_at,
-            utc_now(),
+        return ApiSuccess(
+            data={**batch, "performance_record_status": "scheduled"},
+            status_code=202,
+            background=BackgroundTask(
+                _record_api_receipt_stage_safely, runtime, batch, api_stage_started_at, utc_now()
+            ),
         )
-        return ApiSuccess(data=batch, status_code=202)
 
     return await _call(operation, trace_id=trace_id)
 
@@ -790,9 +812,7 @@ async def list_workers(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> JSONResponse:
     async def operation() -> dict[str, Any]:
-        rows = await asyncio.to_thread(
-            runtime.repository.list_worker_runtime_status, limit=limit
-        )
+        rows = await asyncio.to_thread(runtime.repository.list_worker_runtime_status, limit=limit)
         return {
             "workers": [
                 {

@@ -1,0 +1,347 @@
+{
+  "actual": "Runtime source fix is loaded, but legal 2026-05-20..2026-08-28 window is absent because only database_daily is dispatched by the shared callback.",
+  "allowed_write_scope": [
+    "backend/routers/hmm_training.py",
+    "backend/services/hmm_training_service.py",
+    "backend/tests/hmm_data_source/test_coefficient_extension.py",
+    "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2017-hmm-frozen-file-reconciliation-depends-on-missing-optional-scheduler.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2017",
+  "closed_at": "2026-10-20T08:04:07.930426Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T06:43:05.805029Z",
+  "description": "Runtime source fix is loaded, but legal 2026-05-20..2026-08-28 window is absent because only database_daily is dispatched by the shared callback.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-e5c13acdf035",
+      "timestamp": "2026-10-20T06:43:05.805011Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Startup catch-up and existing data-completion wakes reconcile enabled frozen-file extensions without APScheduler; completed primary jobs can append legal subwindows zero-fit and zero-reinference. Transient orchestration DB failures retain retryability; business blocks remain fail-closed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/hmm_training.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2017-hmm-frozen-file-reconciliation-depends-on-missing-optional-scheduler.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/hmm_training.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2017-hmm-frozen-file-reconciliation-depends-on-missing-optional-scheduler.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/routers/hmm_training.py",
+        "backend/services/hmm_training_service.py",
+        "backend/tests/hmm_data_source/test_coefficient_extension.py",
+        "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+      ],
+      "impacted_modules": [
+        "hmm",
+        "qe.core",
+        "selection_center",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/routers/hmm_training.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/services/hmm_training_service.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_coefficient_extension.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/routers/hmm_training.py",
+        "backend/services/hmm_training_service.py",
+        "backend/tests/hmm_data_source/test_coefficient_extension.py",
+        "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/hmm_training.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/hmm_training.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T06:43:05.805029Z",
+  "fix_branch": null,
+  "fix_commit": "2301d4d3a4add0d179896219998ceab162cc040f",
+  "fixed_at": "2026-10-20T07:31:23Z",
+  "github_issue_number": 6440,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6440",
+  "last_seen_at": "2026-10-20T06:43:05.805029Z",
+  "module": "hmm",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6442",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/configs/fc0683a9-6ca0-4d55-b053-17c2360c3c40/coefficient-extension?job_id=0b8bb408-298d-4340-8654-96f689ecfb2d",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B -I - (explicit BUG-2017 task-root sys.path) -> PASS: hmm_training/health/HMMTrainingService/coefficient_extension imports resolve inside task worktree. Isolated shared startup regression 5 passed: no APS dependency, zero-fit/zero-reinference completed-primary projection, same-watermark OperationalError and InterfaceError recovery, identity and terminal-failure non-retry. Poisoned production DB/network attempts=0; production DB/asset writes=0; service_control=false. Runtime verification remains pending after source merge and user restart; actual 72-date registration/readback is separately required.",
+      "AIstock Python 3.12.12 -B -I stdin at f4687db656536c63d8c9fc513e27c18543b585e9 -> passed; explicit BUG-2017 source-root imports hmm_training/hmm_risk/health/HMM service/extension reader; production DB/network poison attempts=0; producer and reader SHA pins unchanged; no production writes/fits/service control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2017-close-sync-20261020\\tmp\\issue_workflow\\BUG-2017\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2017",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_frozen_coefficient_extension",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "51f68baf253110d5a517f2835924549cd9f9e70a2f80336f16205bf2f24d5e3c",
+      "expected_identity": "2301d4d3a4add0d179896219998ceab162cc040f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T07:47:14.417821Z",
+      "mode": "read_only",
+      "observed_identity": "4d9e1cd11835a47f0ad322d8c727f5bddcbb439c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "46df4eda71e9b13f8f9b29c24f278bd6ea925f0c385bba10bbe109e3dd557397",
+      "receipt_sha256": "be4722db3d575199bcdc569c70f3fd73bb63b73c069cacd5b78971126bf5c7d7",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1917fadfdbf941357ea2ea824f279147d85b8a1cbeb2d013bb771d335871cb21",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2017",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "29a7d361bbdb14e2",
+    "recorded_at": "2026-10-20T07:32:07.572853Z",
+    "runtime_contract_digest": "51f68baf253110d5a517f2835924549cd9f9e70a2f80336f16205bf2f24d5e3c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "032b8b6816456b91b1c032b9af45fd679ddff6e0",
+    "source_merge_commit": "2301d4d3a4add0d179896219998ceab162cc040f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6442",
+    "validation_evidence": [
+      "validation-receipt: id=b1895fb1e89dbd96 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_data_source/test_coefficient_extension.py::test_shared_startup_crops_completed_file_job_without_legacy_scheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_shared_completion_binding_survives_missing_legacy_apscheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_completion_adapter_retries_only_orchestration_failure -q` result=`passed (17 passed at 032b8b6816456b91b1c032b9af45fd679ddff6e0 after BUG-2016 main sync)`",
+      "validation-receipt: id=773fededb8ffda7e commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/routers/hmm_training.py backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py` result=`passed (0 blocking at final HEAD after BUG-2016 main sync)`",
+      "validation-receipt: id=ca2e8e98c5579011 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (reuse 8 passed at e33692bac29bdefe46e9a09f2c9bcc05f47e02dd; registry/catalog sources unchanged by subsequent main sync; not rerun)`",
+      "validation-receipt: id=9ebbac570cbec7cb commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=ruff plan=direct status=passed command=`ruff check, python -m py_compile four changed Python files and git diff --check` result=`passed (fresh-process task-root imports also passed; production database/network poison attempts=0)`"
+    ],
+    "validation_evidence_digest": "92423aa5d90e4ad013dcb733be53b9b19b30a50f1adf960cd50060d8e7d9f804"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "hmm"
+  ],
+  "title": "HMM frozen-file reconciliation depends on missing optional scheduler",
+  "trigger_condition": {
+    "fingerprint": "e5c13acdf03595cbbec8cbfb",
+    "source_event_id": "FE-20261020-e5c13acdf035"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=b1895fb1e89dbd96 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_data_source/test_coefficient_extension.py::test_shared_startup_crops_completed_file_job_without_legacy_scheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_shared_completion_binding_survives_missing_legacy_apscheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_completion_adapter_retries_only_orchestration_failure -q` result=`passed (17 passed at 032b8b6816456b91b1c032b9af45fd679ddff6e0 after BUG-2016 main sync)`",
+    "validation-receipt: id=773fededb8ffda7e commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/routers/hmm_training.py backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py` result=`passed (0 blocking at final HEAD after BUG-2016 main sync)`",
+    "validation-receipt: id=ca2e8e98c5579011 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (reuse 8 passed at e33692bac29bdefe46e9a09f2c9bcc05f47e02dd; registry/catalog sources unchanged by subsequent main sync; not rerun)`",
+    "validation-receipt: id=9ebbac570cbec7cb commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=ruff plan=direct status=passed command=`ruff check, python -m py_compile four changed Python files and git diff --check` result=`passed (fresh-process task-root imports also passed; production database/network poison attempts=0)`",
+    "User restart 2026-10-20: canonical identity/business receipt PASS. Real unique 72-date 2026-05-20..2026-08-28 registry/file SHA256=7aced80ed253e05b7851270da2469e7d139c15d29d2aaac84916b3ada8ff2127, bytes=623309, PIT stocks=4921, date gaps=0, canonical window_payload bytes exact. Primary 73-date SHA256=2e79e8919380aaa2db7f7db2be8383ee5f65db9f9383a8d49a6a2a66b276ca0d unchanged. Fresh-process actual production-root shared P10/P11 HMM consumer PASS active v18 manifest f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b. Original 2024 request fail-closed. No full QE compose/launch. Post-fetch DB/network/subprocess poison attempts=0, fit=0, agent DB writes=0, process control=false."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -218,6 +218,30 @@ class InMemoryLedger:
             )
         self.fills.append(fill)
 
+    def restore_order_fee_state(
+        self, *, order_id: str, symbol: str, side: OrderSide,
+        cumulative_notional: Decimal, charged_fee: Decimal,
+    ) -> None:
+        """Restore actual charged fees without replaying any economic effects."""
+        notional = _money(cumulative_notional, field_name="restored_order_notional")
+        fee = _money(charged_fee, field_name="restored_order_fee")
+        if not order_id or not symbol or not isinstance(side, OrderSide) or notional <= 0 or fee < 0:
+            _raise_value_error(
+                "restored order fee facts are invalid",
+                reason_code="LOCAL_SIM_ORDER_FEE_HISTORY_INVALID",
+                context={"order_id": order_id, "symbol": symbol, "notional": str(notional), "fee": str(fee)},
+            )
+        key = order_id, symbol, side
+        restored = _OrderFeeState(symbol, side, notional, fee)
+        existing = self._order_fee_state.get(key)
+        if existing is not None and existing != restored:
+            _raise_value_error(
+                "restored order fee facts conflict with in-process history",
+                reason_code="LOCAL_SIM_ORDER_FEE_HISTORY_CONFLICT",
+                context={"order_id": order_id, "symbol": symbol},
+            )
+        self._order_fee_state[key] = restored
+
     def settle_trade_date(self, settlement_date: date) -> None:
         """Unlock T+1 shares bought before settlement_date."""
 

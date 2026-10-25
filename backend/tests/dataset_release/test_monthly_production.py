@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import date
 import hashlib
 from pathlib import Path
 from typing import Any, Mapping
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,3 +112,42 @@ def test_production_settings_reject_repository_owned_authority(tmp_path: Path) -
             profile_path=profile,
             hmm_authority_path=authority,
         )
+
+
+def test_default_registry_installs_private_executor_and_shares_formal_wsl_scope(tmp_path, monkeypatch):
+    import backend.services.dataset_release.monthly_production as module
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_preparation_composition import MonthlyPrivatePreparationExecutor
+
+    artifact = tmp_path / "control"
+    ControlStore.initialize(artifact)
+    catalog = tmp_path / "candidates"
+    catalog.mkdir()
+    script = tmp_path / "scripts/precompute_hmm_coefficients.py"
+    script.parent.mkdir()
+    script.write_text("# unused composition test boundary\n", encoding="utf-8")
+    profile = SimpleNamespace(
+        profile=module.CANONICAL_PROFILE_ID, candidate_root=catalog, control_root=artifact,
+        semantic_profile_digest="a" * 64,
+        qlib_toolchain=SimpleNamespace(build_verified=lambda _root: object()),
+    )
+    monkeypatch.setattr(module, "load_dataset_profile", lambda _path: profile)
+    # These are composition boundaries only. Actual writers and fresh WSL
+    # dump/recovery have their own real-file tests; no provider is opened here.
+    for name in ("ResourceSupervisedMonthlyBuildScopeFactory", "MatureMonthlyPhysicalBuildRunner",
+                 "SealedMonthlyBuildExecutor", "MonthlyHMMCoefficientExecutor", "WSLPythonHMMCoefficientProcess"):
+        monkeypatch.setattr(module, name, lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(module, "load_monthly_hmm_authority", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(module.shutil, "which", lambda _name: str(Path(__file__).resolve()))
+    monkeypatch.setattr(module, "build_monthly_worker_registry", lambda **kwargs: kwargs["executors"])
+    result = module.build_monthly_production_registry(
+        runtime=SimpleNamespace(controller_release_root=catalog, artifact_root=artifact),
+        nodes=SimpleNamespace(wsl_distro="test-unused", wsl_python="test-unused"),
+        production=SimpleNamespace(profile_path=tmp_path / "unused", project_root=tmp_path,
+                                   hmm_authority_path=tmp_path / "unused-authority",
+                                   sector_membership_start=date(2024, 7, 1)),
+    )
+    private = result.source.adapter.preparation_executor
+    assert isinstance(private, MonthlyPrivatePreparationExecutor)
+    assert private.execution_scope_factory is result.build.runner.execution_scope_factory
+    assert private.cas.root == artifact
