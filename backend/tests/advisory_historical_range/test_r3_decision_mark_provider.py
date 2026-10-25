@@ -4,6 +4,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.decision_mark_provider import (
@@ -27,10 +29,15 @@ from backend.services.canonical_equity_pit import (
 from backend.services.strategy_package.models import StrategyPackageCanonicalPitBindingV2
 from backend.services.advisory_historical_range.source_roles import DECISION_MARK_SOURCE_ROLES_V1
 from backend.tests.advisory_historical_range.conftest import artifact_ref, digest, frozen_program, research_spec
+from backend.tests.advisory_historical_range.test_task_input_sources import authority as authority, _task
 
 
-def _member(role: str) -> HistoricalRangeSourceRevisionMemberV1:
-    parameters = {"trade_date": "2026-06-03", "role": role}
+def _member(
+    role: str, *, universe_key: str | None = None, parameter_date: str = "2026-06-03",
+) -> HistoricalRangeSourceRevisionMemberV1:
+    parameters = {"trade_date": parameter_date, "role": role}
+    if universe_key is not None:
+        parameters["universe_key"] = universe_key
     return HistoricalRangeSourceRevisionMemberV1(
         requirement_id=f"requirement_{role}",
         source_role=role,
@@ -49,7 +56,9 @@ def _member(role: str) -> HistoricalRangeSourceRevisionMemberV1:
     )
 
 
-def _catalog() -> HistoricalRangeSourceRevisionCatalogV1:
+def _catalog(
+    *, universe_key: str | None = None, state_parameter_date: str = "2026-06-03",
+) -> HistoricalRangeSourceRevisionCatalogV1:
     return HistoricalRangeSourceRevisionCatalogV1(
         requirement_plan_hash=digest("plan"),
         catalog_generation=1,
@@ -59,7 +68,7 @@ def _catalog() -> HistoricalRangeSourceRevisionCatalogV1:
             _member("pit_universe"),
             _member("market_history"),
             _member("decision_mark_daily_market"),
-            _member("decision_mark_market_state"),
+            _member("decision_mark_market_state", universe_key=universe_key, parameter_date=state_parameter_date),
         ),
     )
 
@@ -259,3 +268,84 @@ def test_legal_no_quote_uses_previous_raw_mark_with_current_adjustment_factor() 
     assert mark.availability == "MARKET_STATE_NO_QUOTE"
     assert mark.mark_quality == "SUSPENDED_CARRY_FORWARD"
     assert mark.normalized_reference_mark == Decimal("13.0")
+
+
+def _planned_mark_program() -> HistoricalRangeFrozenProgramV1:
+    from backend.services.advisory_historical_range.task_input_sources import freeze_program_input_sources
+
+    request, program, dates = _task("DATABASE_ONLY", dates=("2026-06-03",))
+    result, = freeze_program_input_sources(request=request, date_plan=dates, frozen_programs=(program,))
+    return result
+
+
+def _produce_planned_marks(provider, program, catalog):
+    return provider.produce(
+        resolved_request_hash=digest("planned-request"), catalog=catalog, program=program,
+        range_run_id="planned_range", day_run_id="planned_day",
+        decision_trade_date=date(2026, 6, 3),
+        request_ref=artifact_ref(HistoricalRangeArtifactKind.REQUEST, "planned-request"),
+        included_symbols={"000001.SZ", "000002.SZ"}, previous_marks_by_symbol={},
+        predecessor_day_receipt_ref=None, decision_cutoff=datetime(2026, 6, 3, 15, tzinfo=UTC),
+    )
+
+
+def test_planned_marks_use_frozen_native_pit_and_keep_outside_quotes(tmp_path, monkeypatch, authority):
+    from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver
+
+    program = _planned_mark_program()
+    before = program.model_dump(mode="json")
+    key = program.selection_input_source_plan["native_policy"]["universe_key"]
+    catalog = _catalog(universe_key=key)
+    verifier = _Verifier(catalog)
+
+    class Reader:
+        def read(self, *, decision_trade_date, universe_key):
+            assert decision_trade_date == date(2026, 6, 3)
+            assert universe_key == key == "aistock_equity_pit_canonical_v2"
+            return (
+                {symbol: {"ts_code": symbol, "close_li": 10000, "adj_factor": "1.2"}
+                 for symbol in ("000001.SZ", "000002.SZ")},
+                {"000001.SZ": {"pit_eligible": True}, "000002.SZ": {"pit_eligible": False}},
+                datetime(2026, 7, 22, tzinfo=UTC),
+            )
+
+    monkeypatch.setattr(CanonicalPitAuthorityResolver, "resolve_live_binding",
+                        lambda _: pytest.fail("mark restore resolved the active PIT pointer"))
+    provider = HistoricalRangeDecisionMarkProvider(
+        reader=Reader(), source_verifier=verifier,
+        artifact_store=HistoricalRangeArtifactStore(root=tmp_path / "marks"),
+    )
+    result = _produce_planned_marks(provider, program, catalog)
+    marks = {mark.symbol: mark for mark in result.mark_set.marks}
+    assert marks["000001.SZ"].tradability_status == "TRADABLE"
+    assert marks["000002.SZ"].tradability_status == "OUTSIDE_PIT_UNIVERSE_WITH_QUOTE"
+    assert all(mark.normalized_reference_mark == Decimal("12.0") for mark in marks.values())
+    assert verifier.calls == 2
+    assert program.model_dump(mode="json") == before
+
+
+@pytest.mark.parametrize("sealed_key,sealed_date", [
+    (None, "2026-06-03"),
+    ("shsz_st_pit_active_v1", "2026-06-03"),
+    ("aistock_equity_pit_canonical_v2", "2026-06-02"),
+])
+def test_planned_marks_reject_wrong_sealed_pit_or_date_before_read_or_write(
+    tmp_path, authority, sealed_key, sealed_date,
+):
+    program = _planned_mark_program()
+    catalog = _catalog(universe_key=sealed_key, state_parameter_date=sealed_date)
+    before = catalog.model_dump(mode="json")
+
+    class NoReader:
+        def read(self, **kwargs):
+            pytest.fail("a mismatched frozen catalog reached the mark reader")
+
+    root = tmp_path / "marks"
+    provider = HistoricalRangeDecisionMarkProvider(
+        reader=NoReader(), source_verifier=_Verifier(catalog),
+        artifact_store=HistoricalRangeArtifactStore(root=root),
+    )
+    with pytest.raises(ValueError, match="differs from the sealed market-state source"):
+        _produce_planned_marks(provider, program, catalog)
+    assert not list(root.rglob("*.json"))
+    assert catalog.model_dump(mode="json") == before

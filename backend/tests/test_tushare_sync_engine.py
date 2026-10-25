@@ -518,15 +518,24 @@ def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monk
     assert audit_rows[1][12] == "empty_valid"
 
 
-def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
+def test_stock_st_events_success_hook_preserves_published_state_and_ensures(monkeypatch):
     calls = []
 
     class _FakePitService:
-        def mark_dirty(self, **kwargs):
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only is True
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": True}
+
+        def mark_canonical_dirty(self, **kwargs):
             calls.append(("mark_dirty", kwargs))
             return {"dirty": True}
 
-        def ensure_st_pit_universe(self, **kwargs):
+        def ensure_canonical_pit_universe(self, **kwargs):
             calls.append(("ensure", kwargs))
             return {"status": "ready", "rebuilt": False}
 
@@ -535,20 +544,28 @@ def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
     result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st_events")
 
     assert result["ok"] is True
-    assert calls[0][0] == "mark_dirty"
-    assert calls[0][1]["source_dataset"] == "stock_st_events"
-    assert calls[1] == ("ensure", {"strict": False, "refresh_policy": "source_fingerprint"})
+    assert calls == [("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})]
+    assert result["published_state_preserved_during_build"] is True
 
 
 def test_stock_basic_success_hook_also_ensures(monkeypatch):
     calls = []
 
     class _FakePitService:
-        def mark_dirty(self, **kwargs):
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only is True
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": True}
+
+        def mark_canonical_dirty(self, **kwargs):
             calls.append(("mark_dirty", kwargs))
             return {"dirty": True}
 
-        def ensure_st_pit_universe(self, **kwargs):
+        def ensure_canonical_pit_universe(self, **kwargs):
             calls.append(("ensure", kwargs))
             return {"status": "ready", "rebuilt": True}
 
@@ -557,9 +574,49 @@ def test_stock_basic_success_hook_also_ensures(monkeypatch):
     result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_basic")
 
     assert result["ok"] is True
-    assert calls[0][0] == "mark_dirty"
-    assert calls[0][1]["source_dataset"] == "stock_basic"
-    assert calls[1] == ("ensure", {"strict": False, "refresh_policy": "source_fingerprint"})
+    assert calls == [("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})]
+
+
+@pytest.mark.parametrize("status", ["failed", "stale", "building"])
+def test_pit_hook_never_reports_nonready_derived_state_as_success(monkeypatch, status):
+    class Service:
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only is True
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": True}
+
+        def mark_canonical_dirty(self, **kwargs):
+            return {"dirty": True}
+
+        def ensure_canonical_pit_universe(self, **kwargs):
+            return {"status": status, "error": "derived update incomplete"}
+
+    monkeypatch.setattr(pit_service, "StockUniversePitService", Service)
+    result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st")
+    assert result["ok"] is False
+    assert result["ensure"]["status"] == status
+
+
+def test_repeated_source_success_does_not_dirty_or_rebuild_current_canonical_pit(monkeypatch):
+    class Service:
+        def __init__(self, *, existing_schema_only):
+            assert existing_schema_only
+
+        def resolve_default_end_date(self):
+            return dt.date(2026, 10, 19)
+
+        def plan_canonical_pit_universe(self, **kwargs):
+            return {"needs_rebuild": False, "coverage_satisfied": True}
+
+        def mark_canonical_dirty(self, **kwargs):
+            raise AssertionError("unchanged facts must not trigger a rebuild")
+
+    monkeypatch.setattr(pit_service, "StockUniversePitService", Service)
+    assert TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st")["ok"] is True
 
 
 class _RowsCursor(_FakeCursor):

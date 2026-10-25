@@ -5,6 +5,11 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Callable
 
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CanonicalPitRuntimeError,
+    freeze_canonical_pit_runtime_binding,
+)
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
@@ -49,10 +54,12 @@ class LocalSimControlPlaneService:
         repository: LocalSimSuccessorRepositoryProtocol,
         package_lifecycle_reader: Any | None = None,
         clock: Clock = _utc_now,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository
         self.package_lifecycle_reader = package_lifecycle_reader
         self.clock = clock
+        self.pit_authority_resolver = pit_authority_resolver
 
     def create_account(
         self,
@@ -585,9 +592,22 @@ class LocalSimControlPlaneService:
             from .localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
 
             profile = LocalSimRuntimeProfileConfigV1.model_validate(release_metadata["localsim_runtime_profile_config"])
+            selection = selection_config_from_localsim_profile(
+                profile, manifest_sha256=account.manifest_sha256,
+                pit_lease=release_metadata.get(CANONICAL_PIT_RUNTIME_LEASE_KEY),
+            )
+            if profile.canonical_pit_authority_profile is not None:
+                if effective_from is None:
+                    raise CanonicalPitRuntimeError("canonical LocalSIM admission requires effective_from")
+                selection, lease = freeze_canonical_pit_runtime_binding(
+                    selection, trade_date=effective_from, authority_resolver=self.pit_authority_resolver,
+                )
+                if effective_to is not None:
+                    lease.require_trade_date(effective_to)
+                release_metadata = {**release_metadata, CANONICAL_PIT_RUNTIME_LEASE_KEY: lease.as_dict()}
             release_metadata = {
                 **release_metadata,
-                "selection_runtime_config": selection_config_from_localsim_profile(profile, manifest_sha256=account.manifest_sha256),
+                "selection_runtime_config": selection,
             }
         service = StrategyRuntimeReleaseService(
             repository=staging,
