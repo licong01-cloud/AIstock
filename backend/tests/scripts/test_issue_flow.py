@@ -1356,7 +1356,8 @@ def test_ci_frontend_quality_uses_verified_direct_entrypoints_without_bin_shims(
 
     assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_run
     assert "node node_modules/next/dist/bin/next lint" in frontend_run
-    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_run
+    assert 'node node_modules/@playwright/test/cli.js test "${other_test_targets[@]}"' in frontend_run
+    assert 'node node_modules/@playwright/test/cli.js test --config=tests/advisory-mocked.config.ts' in frontend_run
     assert "node_modules/.bin" not in frontend_run
     assert "npm run" not in frontend_run
 

@@ -1411,6 +1411,137 @@ def _validate_hmm_daily_coefficient_jobs(payload: Any, *, url: str) -> tuple[str
     return "passed", None, facts
 
 
+def _validate_hmm_coefficient_extension(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one completed frozen-file extension, not mere enrollment or HTTP liveness.
+
+    An optional job_id pins a job when multiple current-policy jobs are returned.
+    Database-daily/old-policy history is not proof for this extension. This pure
+    contract checks durable readback; it never opens model/artifact files or DBs.
+    Pre-PR only requires registration, not a new job or runtime success.
+    """
+    facts: dict[str, Any] = {}
+
+    def require(condition: bool, reason: str) -> None:
+        if not condition:
+            raise ValueError(reason)
+
+    def sha(value: Any) -> bool:
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+    def day(value: Any):
+        require(isinstance(value, str), "extension date must be an ISO date")
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+        require(parsed.isoformat() == value, "extension date must be canonical")
+        return parsed
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        match = re.fullmatch(r"/api/v1/hmm-training/configs/([^/]+)/coefficient-extension", parsed.path)
+        require(match is not None and isinstance(payload, dict), "extension requires a config-owned object")
+        config_id = urllib.parse.unquote(match[1])
+        require(bool(config_id.strip()) and payload.get("config_id") == config_id, "extension config identity mismatch")
+        policy, jobs = payload.get("policy"), payload.get("jobs")
+        require(isinstance(policy, dict) and policy.get("schema_version") == "hmm_coefficient_extension_policy_v1",
+                "extension requires the registered policy schema")
+        require(policy.get("enabled") is True and isinstance(policy.get("snapshot_id"), str) and bool(policy["snapshot_id"].strip()),
+                "extension requires an enabled fixed-snapshot policy")
+        require(all(sha(policy.get(k)) for k in ("model_sha256", "config_sha256")), "extension policy hashes are invalid")
+        presets = policy.get("signal_presets")
+        require(isinstance(presets, list) and bool(presets) and all(isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in presets),
+                "extension presets are invalid")
+        require(presets == sorted(set(presets)), "extension presets must be unique and canonical")
+        start = day(policy.get("coefficient_start"))
+        require(isinstance(jobs, list) and bool(jobs) and all(isinstance(j, dict) for j in jobs), "extension requires non-empty job readback")
+        ids = [j.get("job_id") for j in jobs]
+        require(all(isinstance(v, str) and v.strip() for v in ids) and len(set(ids)) == len(ids), "extension job identities are missing or duplicated")
+        require(all(j.get("config_id") == config_id for j in jobs), "extension job config ownership mismatch")
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        pinned = query.get("job_id")
+        require(pinned is None or (len(pinned) == 1 and bool(pinned[0].strip())), "extension job_id must be unique and non-empty")
+        candidates = [j for j in jobs if j.get("job_id") == pinned[0]] if pinned else [
+            j for j in jobs if j.get("generation_mode") == "frozen_window_extension_v1"
+            and isinstance(j.get("plan_json"), dict) and j["plan_json"].get("policy") == policy]
+        require(len(candidates) == 1, "extension requires one current-policy job; pin job_id if ambiguous")
+        job = candidates[0]
+        facts.update(config_id=config_id, job_id=job["job_id"], acceptance_scope="one_registered_frozen_extension")
+        require(job.get("status") == "COMPLETED" and not job.get("error_message") and not job.get("error_context"),
+                "extension job must be COMPLETED without errors")
+        plan, result = job.get("plan_json"), job.get("result_json")
+        require(isinstance(plan, dict) and isinstance(result, dict), "extension requires durable plan and result")
+        require(plan.get("policy") == policy and plan.get("source_mode") == "qe_frozen_file", "extension frozen policy/source mismatch")
+        require(job.get("generation_mode") == plan.get("generation_mode") == "frozen_window_extension_v1", "extension generation mode mismatch")
+        require(job.get("result_status") == result.get("status") == "REGISTERED" and result.get("training_performed") is False,
+                "extension result must be REGISTERED with no training")
+        preset = job.get("signal_preset")
+        require(preset in presets and plan.get("signal_preset") == preset, "extension preset mismatch")
+        require(job.get("snapshot_id") == plan.get("snapshot_id") == policy["snapshot_id"] and plan.get("config_id") == config_id,
+                "extension frozen snapshot/config mismatch")
+        require(plan.get("model_sha256") == result.get("model_sha256") == policy["model_sha256"], "extension model identity mismatch")
+        require(sha(plan.get("generator_sha256")) and plan["generator_sha256"] == result.get("generator_sha256"), "extension generator identity mismatch")
+        end = day(plan.get("backtest_end"))
+        require(plan.get("test_start") == policy["coefficient_start"] and start <= end, "extension window does not match policy")
+        require(all(obj.get(k) == plan["backtest_end"] for obj in (job, plan) for k in ("as_of_trade_date", "effective_trade_date"))
+                and all(obj.get("input_data_max_dates") == {"frozen_release": plan["backtest_end"]} for obj in (job, plan)),
+                "extension row dates must match the frozen release window")
+        origin = plan.get("model_inference_origin")
+        require(isinstance(origin, dict) and origin.get("origin_authority") == "snapshot_metrics_original_precompute_origin_v1",
+                "extension requires frozen snapshot temporal authority")
+        ts, te, vs, ve = (day(origin.get(k)) for k in ("train_start", "train_end", "validation_start", "validation_end"))
+        # Existing precompute history origin: validation_start - (3*365 + 30).
+        require(ts <= te < vs <= ve < start and origin.get("history_start") == (vs - timedelta(days=1125)).isoformat(),
+                "extension window must follow frozen training/semantic calibration")
+        completed = datetime.fromisoformat(job.get("completed_at", ""))
+        require(completed.utcoffset() is not None and completed <= datetime.now(timezone.utc)
+                and end <= completed.astimezone(timezone(timedelta(hours=8))).date(), "extension completion time is invalid")
+        identity = plan.get("dataset_identity")
+        require(isinstance(identity, dict) and identity == result.get("dataset_identity"), "extension dataset identity mismatch")
+        require(all(isinstance(identity.get(k), str) and identity[k].strip() for k in ("generation", "release_id"))
+                and all(sha(identity.get(k)) for k in ("dataset_manifest_sha256", "dataset_manifest_file_sha256", "active_profile_sha256")),
+                "extension dataset pins are incomplete")
+        reader_sha = plan.get("extension_reader_sha256")
+        require(sha(reader_sha), "extension reader identity must be a lowercase SHA-256")
+        key = dict(policy=policy, preset=preset, preset_coeffs=plan.get("preset_coeffs"), model_inference_origin=origin,
+                   input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256=plan["generator_sha256"],
+                   extension_reader_sha256=reader_sha)
+        require(isinstance(key["preset_coeffs"], dict) and bool(key["preset_coeffs"]), "extension preset coefficients are missing")
+        encoded = (json.dumps(key, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+        require(sha(plan.get("extension_key")) and hashlib.sha256(encoded).hexdigest() == plan["extension_key"] == result.get("extension_key"),
+                "extension key does not bind frozen model/config/input/window identity")
+        windows = result.get("windows")
+        require(isinstance(windows, list) and bool(windows) and all(isinstance(w, dict) for w in windows), "extension registered windows are missing")
+        seen, primary = set(), []
+        for window in windows:
+            lo, hi = day(window.get("test_start")), day(window.get("backtest_end"))
+            require(start <= lo <= hi <= end and (lo, hi) not in seen, "extension window is duplicated or outside frozen plan")
+            seen.add((lo, hi))
+            require(window.get("strict_no_leakage") is True and window.get("role") == "automatic_frozen_model_extension",
+                    "extension window lacks strict frozen-model provenance")
+            expected = dict(config_id=config_id, snapshot_id=policy["snapshot_id"], preset=preset, model_sha256=policy["model_sha256"],
+                            extension_key=plan["extension_key"], generator_sha256=plan["generator_sha256"], extension_reader_sha256=reader_sha,
+                            dataset_generation=identity["generation"],
+                            release_id=identity["release_id"], dataset_manifest_identity=identity["dataset_manifest_sha256"],
+                            dataset_manifest_file_sha256=identity["dataset_manifest_file_sha256"], active_profile_sha256=identity["active_profile_sha256"])
+            require(all(window.get(k) == v for k, v in expected.items()), "extension window identity mismatch")
+            require(sha(window.get("coefficient_sha256")) and type(window.get("coefficient_bytes")) is int and window["coefficient_bytes"] > 0,
+                    "extension window artifact evidence is incomplete")
+            filename = f"coefficients_{preset}_{lo.isoformat()}_{hi.isoformat()}__auto_{plan['extension_key'][:16]}__{window['coefficient_sha256'][:16]}.json"
+            require(window.get("coefficient_filename") == filename, "extension artifact filename identity mismatch")
+            if lo == start and hi == end:
+                primary.append(window)
+        require(isinstance(plan.get("windows"), list) and plan["windows"] == [list(w) for w in sorted(
+            (lo.isoformat(), hi.isoformat()) for lo, hi in seen)], "extension registered windows differ from frozen plan")
+        require(len(primary) == 1 and job.get("artifact_sha256") == result.get("artifact_sha256") == primary[0]["coefficient_sha256"],
+                "extension primary artifact hash mismatch")
+        output = result.get("output_path")
+        require(isinstance(output, str) and job.get("output_path") == output
+                and output.replace("\\", "/").rsplit("/", 1)[-1] == primary[0]["coefficient_filename"], "extension primary artifact path mismatch")
+        facts.update(snapshot_id=policy["snapshot_id"], extension_key=plan["extension_key"], artifact_sha256=job["artifact_sha256"],
+                     frozen_plan_boundary_validated=True, training_performed=False, artifact_bytes_verified=False)
+        return "passed", None, facts
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return "failed", str(exc), facts
+
+
 def _validate_hmm_workers(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
     """Read one explicitly identified worker; never infer a reload from controller health."""
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
@@ -1912,6 +2043,18 @@ _LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
     "paper_v2.run",
     "paper_v2.intraday_snapshots",
 })
+
+
+def _validate_localsim_replay_recovery(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    from backend.services.simulation_runtime.localsim_replay_recovery import validate_replay_recovery_check
+
+    return validate_replay_recovery_check(payload)
+
+
+def _validate_localsim_workbench(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    from backend.services.simulation_runtime.localsim_workbench_metrics import validate_workbench_overview
+
+    return validate_workbench_overview(payload)
 
 
 def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:

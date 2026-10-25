@@ -366,6 +366,61 @@ def test_file_constructor_supplies_approved_frozen_binding_without_active_or_fit
     assert not (tmp_path / "work").exists()
 
 
+def test_bounded_l2_constructor_passes_verified_suspension_to_quote_spool(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA
+
+    day, symbol, code = subject.SOURCE_START, "601028.SH", "801011.SI"
+    root = tmp_path / "dataset"
+    root.mkdir()
+    fact = root / "fact"
+    fact.write_bytes(b"frozen")
+    assets = {
+        "release_root": root,
+        "qlib_root": root,
+        "release_cutoff": date(2026, 9, 30),
+        "universe_key": "aistock_equity_pit_canonical_v2",
+        "instrument_universe_path": fact,
+        "files": {k: fact for k in ("security_identity", "provider_absence", "suspend_data", "suspend_manifest")},
+        "inventory": {"qlib": {"calendar_sha256": CALENDAR_SHA}},
+    }
+    authority = SimpleNamespace(evidence=lambda: {"manifest_sha256": "a" * 64})
+    monkeypatch.setattr(reader, "load_rotation_l1_direct_v2_source_assets", lambda *_a, **_kw: assets)
+    monkeypatch.setattr(reader, "_load_qlib_calendar", lambda _: (day,))
+    monkeypatch.setattr(reader, "_read_json_object", lambda _: {})
+    monkeypatch.setattr(subject, "load_security_source_identity_manifest", lambda *_a, **_kw: authority)
+    monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_a, **_kw: authority)
+    monkeypatch.setattr(reader, "_SecurityResolutionIndex", lambda value: value)
+    monkeypatch.setattr(reader, "_industry_adapter", lambda *_a, **_kw: object())
+    monkeypatch.setattr(reader, "_IndustryProjectionIndex", lambda *_a, **_kw: object())
+    monkeypatch.setattr(reader, "_canonical_sector_codes", lambda _: ((), (code,)))
+    spans, suspended = {symbol: ((day, day),)}, frozenset({(day, symbol)})
+    monkeypatch.setattr(reader, "_parse_instrument_spans", lambda _: spans)
+    monkeypatch.setattr(reader, "_load_suspend_keys", lambda *_a, **_kw: suspended)
+
+    class SpoolReached(Exception):
+        pass
+
+    def spool(*_a, **kwargs):
+        assert kwargs["suspension_keys"] is suspended
+        assert kwargs["spans"] is spans
+        assert kwargs["window_start"] == kwargs["window_end"] == day
+        raise SpoolReached
+
+    monkeypatch.setattr(reader, "_spool_qlib_months", spool)
+    frozen = {
+        "industry_authority": {},
+        "catalog": [code],
+        "security_identity_sha256": "a" * 64,
+        "provider_absence_sha256": "a" * 64,
+    }
+    source = {k: str(root) for k in ("candidate_root", "security_identity_manifest", "provider_absence_manifest")}
+    source["work_parent"] = str(tmp_path / "work")
+    with pytest.raises(SpoolReached):
+        subject._bounded_l2_stock_facts(frozen, source, start=day, end=day)
+
+
 @pytest.mark.parametrize("fault", [None, "duplicate", "sector_missing", "calendar_missing", "nine_dimensions"])
 def test_full_feature_frame_closes_calendar_and_sector_denominator(fault):
     calendar = ["2024-07-01", "2024-07-02"]

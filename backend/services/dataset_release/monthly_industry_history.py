@@ -507,7 +507,37 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
         raise
 
 
-def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, Any], expected_projection: str):
+def _factor_successor_matches(name, signature, record, cas):
+    """Recognize an already committed correction, not an arbitrary newer file."""
+    if cas is None:
+        return False
+    from .monthly_build_resume import load_sealed_build_json
+    from .monthly_fact_correction import SCHEMA, _name
+
+    authority_ref = record["steps"].get("fact-correction")
+    if authority_ref is None:
+        return False
+    authority = load_sealed_build_json(cas, authority_ref)
+    prepared = load_sealed_build_json(cas, record["steps"]["prepare"])
+    nested = load_sealed_build_json(cas, prepared["prepare_receipt_ref"])
+    factor = load_sealed_build_json(cas, nested["refs"]["factor_receipt"])
+    if (authority.get("schema_version") != SCHEMA
+            or authority.get("target_cutoff") != record["binding"]["target_cutoff"]
+            or factor.get("fact_correction_ref") != authority_ref):
+        return False
+    originals = [row for row in authority["files"]
+                 if row.get("relative_path") == f"factor_bundle/{name}"]
+    pins = [row for row in factor["files"] if _name(row["dataset"]) == name]
+    if len(originals) != 1 or len(pins) != 1:
+        return False
+    original, pin = originals[0], pins[0]
+    return (original["dataset"] == pin["dataset"] and original["sha256"] == pin["sha256"]
+            and original["size"] == pin["size"] == signature[2]
+            and pin.get("target_signature") == signature
+            and pin.get("fact_correction_ref") == authority_ref)
+
+
+def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, Any], expected_projection: str, cas=None):
     """Finish one previously verified two-file publication after interruption.
 
     Keep original exports outside the release, and publish the new journal only
@@ -535,16 +565,36 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     changed = {f"factor_bundle/{name}" for name in files}
     completion_ref = proposed["steps"].get("industry-history")
     completed = completion_ref is not None and record["steps"].get("industry-history") == completion_ref
+    if any(proposed["files"][f"factor_bundle/{name}"] != entry["target_signature"] for name, entry in files.items()):
+        raise MonthlyBuildResumeError("industry commit journal does not identify verified outputs")
     if completed:
-        # The durable journal can already contain later quote/prev_close
-        # amendments. Verify this transaction's exact completion and owned
-        # outputs, but never replay its obsolete whole-journal proposal.
-        if any(
-            record["files"].get(f"factor_bundle/{name}") != entry["target_signature"]
-            or list(_signature(root / "factor_bundle" / name)) != entry["target_signature"]
-            for name, entry in files.items()
-        ):
-            raise MonthlyBuildResumeError("completed industry commit identity or output changed")
+        # Old workers left this intent after committing the journal. A later
+        # factor correction may legitimately supersede these two outputs.
+        # Validate its own CAS pins; never replay the obsolete journal/files.
+        from .cas_store import CASStoreError
+        for name, entry in files.items():
+            signature = record["files"].get(f"factor_bundle/{name}")
+            if list(_signature(root / "factor_bundle" / name)) != signature:
+                raise MonthlyBuildResumeError("completed industry commit output changed")
+            if signature != entry["target_signature"]:
+                try:
+                    accepted = _factor_successor_matches(name, signature, record, cas)
+                except (CASStoreError, KeyError, TypeError, ValueError) as exc:
+                    raise MonthlyBuildResumeError("completed industry successor proof is invalid") from exc
+                if not accepted:
+                    raise MonthlyBuildResumeError("completed industry commit has no pinned successor")
+            source = root.parent / _relative(entry["scratch_relative_path"])
+            context_sha = entry.get("context_sha256")
+            if context_sha is not None:
+                ensure_sha256(context_sha, field="industry context digest")
+            if source.parent not in _history_scratch_paths(root, expected_projection, context_sha) or source.name != name:
+                raise MonthlyBuildResumeError("industry commit source escaped its private outputs")
+            backup = source.with_name(name + ".before")
+            _plain_chain(backup)
+            if list(_signature(backup)) != entry["original_signature"]:
+                raise MonthlyBuildResumeError("industry commit original export changed after publication")
+        pending.unlink()
+        return record
     elif any(record["files"].get(f"factor_bundle/{name}") != entry["original_signature"] for name, entry in files.items()):
         raise MonthlyBuildResumeError("industry commit lost original writer provenance")
     elif set(proposed["files"]) != set(record["files"]) or any(
@@ -552,8 +602,6 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     ) or any(proposed["steps"].get(key) != original for key, original in record["steps"].items()
              if key not in {"prepare", "industry-history"}) or set(proposed["steps"]) != set(record["steps"]) | {"industry-history"}:
         raise MonthlyBuildResumeError("industry commit changed unrelated writer provenance")
-    if any(proposed["files"][f"factor_bundle/{name}"] != entry["target_signature"] for name, entry in files.items()):
-        raise MonthlyBuildResumeError("industry commit journal does not identify verified outputs")
     for name, entry in files.items():
         target = root / "factor_bundle" / name
         source = root.parent / _relative(entry["scratch_relative_path"])
@@ -584,9 +632,8 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
         if list(_signature(source)) != entry["target_signature"]:
             raise MonthlyBuildResumeError("industry commit verified output changed")
         source.rename(target)
-    if completed:
-        return record
     _atomic(journal, proposed)
+    pending.unlink()
     return proposed
 
 
@@ -626,34 +673,43 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
         if prior["projection_sha256"] != projection.sha256:
             raise MonthlyBuildResumeError("retained industry projection differs from frozen authority")
         if prior.get("industry_context_contract") == CONTRACT:
+            refresh_quote_context = False
             source = load_frozen_industry_quote_source(cas, context_plan=context.plan,
                 build_inputs=compiled.physical_plan.get("build_inputs", {}), projection=projection)
             if source is not None and not prior.get("historical_projection_reused"):
                 expected = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
                 if prior.get("context_identity", {}).get("quote_source_sha256") != expected:
-                    raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
-            if prior.get("static_sector_join_contract") == STATIC_SECTOR_CONTRACT:
+                    binding = context.plan.get("monthly_industry_quote_source") or {}
+                    previous = prior.get("context_identity", {}).get("quote_source_sha256")
+                    if (not isinstance(previous, str) or len(previous) != 64 or
+                            previous not in {binding.get("supersedes_quote_source_sha256"), binding.get("rebuild_from_quote_source_sha256")}):
+                        raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
+                    # Explicit additive SOURCE refresh only: rematerialize the
+                    # two industry-bearing files, never completed price exports.
+                    refresh_quote_context = True
+            if not refresh_quote_context and prior.get("static_sector_join_contract") == STATIC_SECTOR_CONTRACT:
                 return prepare
             # Upgrade the old writer's month only. Retain the already verified
             # historical projection, sector H5, source snapshot and price bins.
-            nested = copy.deepcopy(load_sealed_build_json(cas, prepare["prepare_receipt_ref"]))
-            factor = copy.deepcopy(load_sealed_build_json(cas, nested["refs"]["factor_receipt"]))
-            entries = factor_file_receipts(factor)
-            from .monthly_build_resume import _signature
-            for name in ("sector_data.h5", "static_factors.parquet"):
-                if entries[name].get("target_signature") != _signature(resume.root / "factor_bundle" / name):
-                    raise MonthlyBuildResumeError("static sector repair lost its pinned inputs")
-            cutoff = date.fromisoformat(context.plan["target_cutoff"])
-            after = (cutoff.replace(day=1) - date.resolution).isoformat()
-            identity = {"contract": STATIC_SECTOR_CONTRACT, "after": after,
-                        "sector_sha256": entries["sector_data.h5"]["sha256"],
-                        "static_sha256": entries["static_factors.parquet"]["sha256"]}
-            tail = _materialize_static_tail(resume.root, projection=projection, context_identity=identity,
-                after=after, checkpoint=context.checkpoint, progress=context.progress)
-            result = {**prior, "files": tail["files"], "static_sector_join_contract": STATIC_SECTOR_CONTRACT,
-                      "static_sector_tail": {key: value for key, value in tail.items() if key != "files"}}
-            return _commit_history_result(resume, result=result, projection=projection, nested=nested,
-                                          factor=factor, entries=entries, prepare=prepare, cas=cas)
+            if not refresh_quote_context:
+                nested = copy.deepcopy(load_sealed_build_json(cas, prepare["prepare_receipt_ref"]))
+                factor = copy.deepcopy(load_sealed_build_json(cas, nested["refs"]["factor_receipt"]))
+                entries = factor_file_receipts(factor)
+                from .monthly_build_resume import _signature
+                for name in ("sector_data.h5", "static_factors.parquet"):
+                    if entries[name].get("target_signature") != _signature(resume.root / "factor_bundle" / name):
+                        raise MonthlyBuildResumeError("static sector repair lost its pinned inputs")
+                cutoff = date.fromisoformat(context.plan["target_cutoff"])
+                after = (cutoff.replace(day=1) - date.resolution).isoformat()
+                identity = {"contract": STATIC_SECTOR_CONTRACT, "after": after,
+                            "sector_sha256": entries["sector_data.h5"]["sha256"],
+                            "static_sha256": entries["static_factors.parquet"]["sha256"]}
+                tail = _materialize_static_tail(resume.root, projection=projection, context_identity=identity,
+                    after=after, checkpoint=context.checkpoint, progress=context.progress)
+                result = {**prior, "files": tail["files"], "static_sector_join_contract": STATIC_SECTOR_CONTRACT,
+                          "static_sector_tail": {key: value for key, value in tail.items() if key != "files"}}
+                return _commit_history_result(resume, result=result, projection=projection, nested=nested,
+                                              factor=factor, entries=entries, prepare=prepare, cas=cas)
         # An earlier verified ID-only repair is retained as an input. Replace
         # only sector/static context under new pins, never re-export prices.
     if resume.path is None:
@@ -764,5 +820,5 @@ def _commit_history_result(resume, *, result, projection, nested, factor, entrie
     _atomic(pending, {"binding_digest": record["binding_digest"], "projection_sha256": projection.sha256,
                       "record": record, "files": files})
     resume.record = dict(recover_history_commit(root=resume.root, journal=resume.path, record=resume.record,
-                                               expected_projection=projection.sha256))
+                                               expected_projection=projection.sha256, cas=cas))
     return prepared

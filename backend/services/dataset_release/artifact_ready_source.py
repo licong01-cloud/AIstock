@@ -1987,7 +1987,9 @@ class ArtifactReadySourceBuilder:
         )
         if not descriptors:
             raise ArtifactReadyCoverageIncomplete("sealed adj_factor partitions are missing")
-        codes = sorted({span.ts_code for span in snapshot.pit_snapshot.spans})
+        codes = sorted({span.ts_code for span in snapshot.pit_snapshot.spans}.union(
+            code for code, _ in self._monthly_quote_days(view, checkpoint=checkpoint)
+        ))
         entries: list[Mapping[str, Any]] = []
         provider_refs: list[CASRef] = []
         derived_refs: list[CASRef] = []
@@ -2012,8 +2014,10 @@ class ArtifactReadySourceBuilder:
             with _managed_partition_rows(view, seed_descriptors[0]) as rows:
                 for raw in rows:
                     row = _normalize_adj_factor_row(raw, source="database")
-                    if row["ts_code"] not in series_hashers or row["trade_date"] > snapshot.official_cutoff:
+                    if row["trade_date"] > snapshot.official_cutoff:
                         raise ArtifactReadyCoverageIncomplete("QFQ construction fact escapes PIT/cutoff")
+                    if row["ts_code"] not in series_hashers:
+                        continue
                     seed_rows.append(row)
             seen = set()
             for row in sorted(seed_rows, key=lambda value: (value["ts_code"], value["trade_date"])):
@@ -2479,6 +2483,30 @@ class ArtifactReadySourceBuilder:
         total["pit_excluded_rows"] += excluded["pit_excluded_rows"]
         return coverage_by_key, gaps_by_code, excluded
 
+    def _monthly_quote_days(self, view: ArtifactSourceView, *, checkpoint: Callable[[], None]) -> tuple[tuple[str, date], ...]:
+        if self.month_start is None:
+            return ()
+        from .monthly_quote_population import observed_quote_days
+
+        def rows():
+            for descriptor in view.descriptors("kline_daily_raw"):
+                match = _DATE_PARTITION.fullmatch(str(descriptor.get("partition_key", "")))
+                if match is None:
+                    raise ArtifactReadyCoverageIncomplete("monthly daily partition identity is invalid")
+                if (date.fromisoformat(match.group("end")) < self.month_start
+                        or date.fromisoformat(match.group("start")) > end):
+                    continue
+                with _managed_partition_rows(view, descriptor) as values:
+                    yield from values
+                checkpoint()
+
+        # Only sealed, observed dates are added, never listing-to-cutoff spans.
+        # The trading calendar remains independently frozen/validated below.
+        end = date(self.month_start.year + self.month_start.month // 12,
+                   self.month_start.month % 12 + 1, 1) - date.resolution
+        days = tuple(self.month_start + date.resolution * i for i in range((end - self.month_start).days + 1))
+        return observed_quote_days(rows(), trading_days=days)
+
     def _minute_entries(
         self,
         view: ArtifactSourceView,
@@ -2515,6 +2543,12 @@ class ArtifactReadySourceBuilder:
             bucket_count=self.profile.minute_code_bucket_count,
         )
         frozen_trading_dates = frozenset(trading_dates)
+        quote_days = self._monthly_quote_days(view, checkpoint=checkpoint)
+        quotes_by_bucket: dict[int, list[tuple[str, date]]] = {}
+        for code, day in quote_days:
+            if day not in frozen_trading_dates:
+                raise ArtifactReadyCoverageIncomplete("observed quote date escapes frozen trading calendar")
+            quotes_by_bucket.setdefault(_minute_bucket(code, self.profile.minute_code_bucket_count), []).append((code, day))
         suspension_daily_rows = self._suspended_daily_facts(
             view, suspended=suspended, trading_dates=trading_dates, checkpoint=checkpoint,
         )
@@ -2525,13 +2559,13 @@ class ArtifactReadySourceBuilder:
             start = date.fromisoformat(match.group("start"))
             end = date.fromisoformat(match.group("end"))
             bucket = int(match.group("bucket"))
-            expected = tuple(
+            expected = tuple(sorted(set(
                 eligibility.iter_expected(
                     bucket=bucket,
                     start=start,
                     end=end,
                 )
-            )
+            ).union(key for key in quotes_by_bucket.get(bucket, ()) if start <= key[1] <= end)))
             coverage_by_key, gaps_by_code, excluded = self._scan_minute_database_partition(
                 view,
                 descriptor,
@@ -2540,7 +2574,9 @@ class ArtifactReadySourceBuilder:
                 suspension_daily_rows=suspension_daily_rows,
                 total=total,
                 derived_refs=derived_refs,
-                allowed_codes=frozenset(eligibility.bucket_codes.get(bucket, ())),
+                allowed_codes=frozenset(eligibility.bucket_codes.get(bucket, ())).union(
+                    code for code, _ in quotes_by_bucket.get(bucket, ())
+                ),
                 trading_dates=frozen_trading_dates,
                 partition_start=start,
                 partition_end=end,

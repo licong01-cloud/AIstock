@@ -53,7 +53,9 @@ from .services.advisory_historical_range.inference_session import (
 )
 from .services.advisory_historical_range.inference_inputs import InferenceInputSession, frame_identity
 from .services.advisory_historical_range.inference_features import InferenceFeatureSession
-from .services.canonical_equity_pit import CanonicalPitAuthorityResolver, PitAuthorityStatus
+from .services.canonical_equity_pit import (
+    CanonicalPitAuthorityResolver, PitAuthorityStatus, require_canonical_new_task_binding,
+)
 from .services.canonical_pit_inference_boundary import (
     CanonicalPitInferenceBoundaryError,
     InferencePitIdentity,
@@ -82,7 +84,10 @@ def _resolve_inference_pit_identity_for_run(
     declared = pit_identity is not None or manifest_inference_pit_identity(manifest) is not None
     live_binding = None
     if not declared:
-        live_binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
+        live_binding = require_canonical_new_task_binding(
+            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding(),
+            consumer="inference",
+        )
     return resolve_inference_pit_identity(
         pit_identity,
         manifest=manifest,
@@ -745,6 +750,13 @@ class InferenceEngine:
 
     def _get_latest_available_trade_date(self, target_date: datetime) -> datetime:
         """从数据库查询小于等于 target_date 的最近一个交易日"""
+        dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        if dataset is not None:
+            days = [day for day in dataset.calendar if day <= target_date.date()]
+            if not days or target_date.date() > dataset.calendar[-1]:
+                raise ValueError("inference date is outside the frozen file calendar")
+            dataset.assert_unchanged()
+            return datetime.combine(days[-1], datetime.min.time())
         sql = "SELECT cal_date FROM market.trading_calendar WHERE cal_date <= %s AND is_trading = TRUE ORDER BY cal_date DESC LIMIT 1"
         try:
             with get_conn() as conn:
@@ -772,6 +784,14 @@ class InferenceEngine:
         required_trading_days = required_window + buffer_days
         if required_trading_days <= 0:
             raise ValueError("required_window + buffer_days must be positive")
+
+        dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        if dataset is not None:
+            days = [day for day in dataset.calendar if day <= actual_date.date()]
+            if len(days) < required_trading_days:
+                raise ValueError("frozen file calendar cannot cover the native inference window")
+            dataset.assert_unchanged()
+            return datetime.combine(days[-required_trading_days], datetime.min.time()), "frozen_file_calendar"
 
         sql = """
             SELECT cal_date
@@ -909,6 +929,17 @@ class InferenceEngine:
                     f"detached PIT universe is bound to {pit_identity.universe_as_of}, not {effective_date}"
                 )
             return list(pit_identity.universe_codes)
+        reader = getattr(getattr(self, "input_session", None), "universe_reader", None)
+        if reader is not None:
+            if self.input_session.file_dataset.rule_version != pit_identity.binding.rule_version:
+                from .data_service.frozen_dataset import FrozenDatasetError
+                raise FrozenDatasetError("file universe does not match the native PIT rule version",
+                    reason_code="FROZEN_DATASET_PIT_IDENTITY_MISMATCH",
+                    native_rule_version=pit_identity.binding.rule_version,
+                    file_rule_version=self.input_session.file_dataset.rule_version,
+                    native_universe_key=pit_identity.binding.universe_key,
+                    file_universe_key=self.input_session.file_dataset.universe_key)
+            return reader(effective_date, pit_identity.binding.universe_key)
         from .services.stock_universe_pit_service import StockUniversePitService
 
         service = StockUniversePitService()
@@ -1566,7 +1597,7 @@ class InferenceEngine:
         diagnostic_path = Path(
             diagnostic_output_path or "f:/Dev/AIstock/debug_tools/qe_diagnosis.txt"
         )
-        if receipt_admissibility not in {"PROSPECTIVE_FIRST_OBSERVED", "RETROSPECTIVE_DB_CONTENT_HASH"}:
+        if receipt_admissibility not in {"PROSPECTIVE_FIRST_OBSERVED", "RETROSPECTIVE_DB_CONTENT_HASH", "RETROSPECTIVE_FILE_CONTENT_HASH"}:
             raise ValueError(f"unsupported inference receipt admissibility: {receipt_admissibility}")
         observed_at = datetime.now(timezone.utc)
         target_date = trade_date
@@ -1601,6 +1632,11 @@ class InferenceEngine:
                 raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
             task_dir = self.assets_root / task_id
 
+        source_route = getattr(self.input_session, "source_plan_route", None)
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import session_pit_identity
+            pit_identity = session_pit_identity(self.input_session, request_identity=pit_identity,
+                                                manifest_identity=manifest_inference_pit_identity(manifest))
         resolved_pit_identity = _resolve_inference_pit_identity_for_run(
             manifest=manifest,
             pit_identity=pit_identity,
@@ -1707,6 +1743,10 @@ class InferenceEngine:
         start_date, start_date_source = self._resolve_inference_start_date(
             actual_date, required_window, buffer_days=5
         )
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import validate_native_window
+            validate_native_window(source_route, start=start_date.date(), cutoff=actual_date.date(),
+                                   decision=requested_trade_date.date(), pit_binding=resolved_pit_identity.binding)
 
         logger.info(
             "因子所需数据窗口: %s交易日 + 5日安全余量, start_date=%s, source=%s",
@@ -2269,6 +2309,13 @@ class InferenceEngine:
             "calendar_version": "market.trading_calendar.v1",
             "calendar_source": "market.trading_calendar",
         }
+        file_dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        if file_dataset is not None:
+            file_dataset.assert_unchanged()
+            calendar_identity_payload = {
+                "dataset_id": "dataset_files.day_calendar", "effective_trade_date": actual_date.date().isoformat(),
+                "calendar_version": file_dataset.identity, "calendar_source": "FROZEN_DATASET_FILES",
+            }
         calendar_identity_hash = _inference_receipt_sha256(calendar_identity_payload)
         calendar_payload = {
             "calendar_identity_hash": calendar_identity_hash,
@@ -2385,6 +2432,22 @@ class InferenceEngine:
             },
         }
 
+        if file_dataset is not None:
+            context = self.last_inference_receipt["input_context"]
+            context.update(calendar_version=file_dataset.identity, calendar_source="FROZEN_DATASET_FILES",
+                           frozen_file_binding_hash=file_dataset.identity)
+            names = {"pit_universe": "day_selection_universe", "market_history": "daily_pv",
+                     "fundamental_moneyflow": "static_factor_h5", "trading_calendar": "day_calendar"}
+            for receipt in self.last_inference_receipt["source_read_receipts"]:
+                receipt["dataset_id"] = "dataset_files." + names[receipt["source_role"]]
+                receipt["query_template_id"] = "FrozenDataset." + names[receipt["source_role"]]
+                receipt["query_template_version"] = "frozen_market_dataset_files_v1"
+                receipt["parameter_hash"] = _inference_receipt_sha256({
+                    "native_parameters": receipt["parameter_hash"], "file_binding_hash": file_dataset.identity})
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import input_receipt
+            self.last_inference_receipt["input_context"]["source_plan_receipt"] = input_receipt(
+                source_route, self.last_inference_receipt)
         timings.mark("source_receipts")
         # 保存信号到数据库（使用提取的模块级函数）
         if persist_signals:

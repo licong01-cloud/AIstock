@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime
 import os
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
+from types import SimpleNamespace
 
 import pytest
 
@@ -69,12 +71,14 @@ def _profile(**changes) -> LocalSimRuntimeProfileConfigV1:
     return LocalSimRuntimeProfileConfigV1.model_validate(payload)
 
 
-def _bundle(profile=None):
+def _bundle(profile=None, *, pit_authority_resolver=None):
     repo = InMemoryLocalSimSuccessorRepository()
     manifest = _manifest()
     profile = profile or _profile()
     policy = local_sim_twap_only_policy_snapshot()
-    account, scope, release, binding = LocalSimControlPlaneService(repository=repo).create_account(
+    account, scope, release, binding = LocalSimControlPlaneService(
+        repository=repo, pit_authority_resolver=pit_authority_resolver,
+    ).create_account(
         account_name="Native replay 5m", package_id=manifest.package_id,
         manifest_sha256=manifest.manifest_sha256, admission_receipt_id="admission_native",
         initial_capital=5_000_000,
@@ -87,6 +91,81 @@ def _bundle(profile=None):
         effective_from=HISTORICAL_DATE, effective_to=date(2026, 10, 12), created_by="test",
     )
     return repo, manifest, profile, account, scope, release, binding
+
+
+def _canonical_profile():
+    from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_POINTER_PROFILE_SCHEMA
+
+    return _profile(
+        risk_policy={"enabled": True, "providers": ["st_pit"]},
+        canonical_pit_authority_profile={
+            "schema_version": CANONICAL_PIT_POINTER_PROFILE_SCHEMA, "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+        },
+    )
+
+
+def _canonical_resolver(**changes):
+    from backend.tests.selection_center.test_canonical_pit_runtime import _binding
+
+    resolver = SimpleNamespace(calls=0, binding=replace(
+        _binding(generation=1, active=True), **{"coverage_end": date(2026, 10, 19), **changes},
+    ))
+    def resolve():
+        resolver.calls += 1
+        return resolver.binding
+    resolver.resolve_live_binding = resolve
+    return resolver
+
+
+def test_new_canonical_release_freezes_authority_once_and_reads_without_refreezing():
+    from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
+
+    resolver = _canonical_resolver()
+    profile = _canonical_profile()
+    original = profile.model_dump(mode="json")
+    _repo, _manifest_value, _profile_value, _account, _scope, release, _binding_value = _bundle(
+        profile, pit_authority_resolver=resolver,
+    )
+    metadata = release.release_config_json["metadata"]
+    expected = SelectionPitRuntimeLease.from_binding(resolver.binding).as_dict()
+    assert metadata["canonical_pit_authority"] == expected
+    assert metadata["selection_runtime_config"]["canonical_pit_authority"] == expected
+    assert metadata["selection_runtime_config"]["canonical_pit_authority_profile"] == original["canonical_pit_authority_profile"]
+    assert frozen_localsim_profile(release).model_dump(mode="json") == original
+    assert profile.model_dump(mode="json") == original
+    assert resolver.calls == 1
+
+
+@pytest.mark.parametrize("changes", [
+    {"coverage_start": date(2026, 1, 6)},
+    {"coverage_end": date(2026, 10, 9)},
+])
+def test_canonical_release_rejects_incomplete_range_before_any_commit(changes, monkeypatch):
+    from backend.services.selection_center.canonical_pit_runtime import CanonicalPitRuntimeError
+
+    commits = []
+    monkeypatch.setattr(InMemoryLocalSimSuccessorRepository, "create_account_bundle", lambda *a, **kw: commits.append(kw))
+    with pytest.raises(CanonicalPitRuntimeError) as caught:
+        _bundle(_canonical_profile(), pit_authority_resolver=_canonical_resolver(**changes))
+    assert "cover" in str(caught.value.__cause__ or caught.value)
+    assert commits == []
+
+
+def test_canonical_release_missing_or_replaced_frozen_lease_fails_closed():
+    resolver = _canonical_resolver()
+    _repo, _manifest_value, _profile_value, _account, _scope, release, _binding_value = _bundle(
+        _canonical_profile(), pit_authority_resolver=resolver,
+    )
+    for change in (None, {"activation_generation": 2}):
+        config = deepcopy(release.release_config_json)
+        if change is None:
+            config["metadata"].pop("canonical_pit_authority")
+        else:
+            config["metadata"]["canonical_pit_authority"].update(change)
+        altered = release.model_copy(update={"release_config_json": config})
+        with pytest.raises(RuntimeConfigInvalidError):
+            frozen_localsim_profile(altered)
 
 
 def test_native_account_context_uses_real_successor_authority_without_paper_portfolio():

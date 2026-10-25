@@ -10,6 +10,9 @@
 > 对照蓝图：`F:/Dev/AIstock_worktrees/stock-timing-strategy-blueprint-20260831/docs/architecture/stock_timing_strategy_system_blueprint_f2_20260831.md`
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
+> 2026-10-23 日内辅助设计入口：[分钟级交易时机建议与 LocalSIM 执行适配蓝图](position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)。这是基于既定交易计划的新增设计分支，仅面向 LocalSIM 分钟模拟与荐股人工提醒，不适配 MiniQMT/Tick/实盘，不改写本版历史实验、日频方向或费用合同；基础交付与模型研究分离。新分支当前未实施，LocalSIM 现行 TWAP-only 的扩展由其窗口另行更新上位设计和代码，本链接不改变该限制。
+> 同日已进入[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)：先交付本模块核心/API/提醒/决策回放，可调用基础能力就绪后再转交LocalSIM与荐股窗口；本次只完成设计，不表示相关功能已实现或收益已确认。
+
 ## 0. 外部研究评审说明（2026-09-21；可独立阅读）
 
 本节为不熟悉 AIstock、不能访问本地代码和 artifact 的评审者提供完整研究上下文。请先读本节，再按需要读§9.27～9.32；后面的旧版进度和公司行动契约属于有日期的历史记录，不是要求重新建设这些能力。**本版只更新文档和研究优先级，没有修复程序、训练模型、启动新实验或发布在线能力。**
