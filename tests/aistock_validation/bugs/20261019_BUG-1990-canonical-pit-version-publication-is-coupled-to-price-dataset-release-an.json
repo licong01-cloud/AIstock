@@ -1,0 +1,220 @@
+{
+  "actual": "Global canonical v2 is active, but main has no independent immutable PIT version capture/list/verify entry. Old PR #6373 cannot be merged as-is without policy drift.",
+  "allowed_write_scope": [
+    "backend/services/canonical_pit_release.py",
+    "scripts/manage_canonical_pit_release.py",
+    "backend/tests/test_canonical_pit_release.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+    "backend/services/canonical_equity_pit.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1990",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T14:29:10.083761Z",
+  "description": "Independent PIT version publication is missing from main; the old unmerged PR #6373 mixed the publisher with a v2-to-v3 default migration. Preserve current active canonical v2 and immutable task/data bindings. Later merged BUG-2005/#6409 and BUG-2050/#6540 already cover lifecycle-based exclusions and global activation; salvage only the independent read-only capture/file publisher. Also accept an explicit independently sealed PIT binding by policy identity instead of confusing fact-catalog storage names with eligibility policy. Preserve the existing strict legacy path for profiles without an explicit binding.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-5b3955168afc",
+      "timestamp": "2026-10-19T14:29:10.083761Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "One global new-task PIT default; independent immutable PIT versions; fact datasets reference policy snapshots without controlling quote visibility; no monthly rebuild prerequisite.",
+  "first_seen_at": "2026-10-19T14:29:10.083761Z",
+  "fix_branch": null,
+  "fixed_at": null,
+  "github_issue_number": 6371,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
+  "last_seen_at": "2026-10-19T14:29:10.083761Z",
+  "module": "local_data",
+  "non_goals": [
+    "No database DDL/DML, PIT rebuild, activation, dataset/profile mutation, consumer/model changes, service/process control or experiments.",
+    "Do not change active v2 policy to v3 or rewrite prior frozen identities."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Canonical PIT version publication is coupled to price dataset release and physical provider keys",
+  "trigger_condition": {
+    "fingerprint": "5b3955168afc50df7a0f330e",
+    "source_event_id": "FE-20261019-5b3955168afc"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data",
+        "platform_api"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data",
+          "platform_api"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "prior_unmerged_implementation": {
+    "pr": 6373,
+    "head": "7cd29d994676604c926deb9bcc2943cbfcd63a32",
+    "disposition": "Retained until replacement source is reviewed/merged; stale v3 policy and consumer changes are not adopted."
+  },
+  "root_cause": "Independent publisher remained only in unmerged mixed-policy PR #6373. Shared publication validation also compared physical fact-catalog names instead of an explicit immutable policy binding.",
+  "fix_summary": "Preserve active canonical v2, add read-only capture/list/offline verify of immutable PIT observations, reuse existing frozen snapshot/binding contracts and singleton; compare an explicit frozen binding by policy and cutoff, keep strict legacy behavior without one. No v3 default or consumer changes.",
+  "runtime_contract": {
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "backend",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "backend_restart_required": true,
+    "backend_restart_owner": "user",
+    "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "noop:no_database_change",
+    "post_restart_effective_gate": "pending_user_restart",
+    "fresh_process_evidence": [
+      "New process: 53 direct canonical policy/release/frozen consumer tests passed; actual DEV read-only capture verified 5343 securities/5662 spans through 2026-09-30, DEV live legacy generation zero unchanged. Production/active dataset/PIT writes and process control remain false."
+    ],
+    "inference_basis": "actual_changed_files",
+    "provisional": false
+  },
+  "design_compliance_001": {
+    "no_unapproved_simplification": "Independent version files plus actual DB readback and real contract tests; no private/module PIT or v3 migration.",
+    "no_silent_failure": "Reject changed digests, sample bindings, cutoff mismatch, malformed versions and unsafe DB sessions; publish atomically/create-exclusively.",
+    "no_business_logic_change": "Canonical v2 rule/digest/default and saved task identities unchanged. Fact catalogs remain facts, selection remains independent PIT.",
+    "no_new_approval": "Reuse existing file snapshots, singleton and validation/publishing workflow. No new runtime/approval or data gate.",
+    "remaining_gaps": "Shared policy comparison requires one user-owned backend restart and read-only verification after source merge; no production migration/activation is requested."
+  },
+  "validation_evidence": [
+    "RED missing independent module; RED explicit policy binding rejected with physical-catalog mismatch. GREEN 53 related contract tests; Ruff and existing registry/catalog/changed-file checks passed.",
+    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states."
+  ]
+}

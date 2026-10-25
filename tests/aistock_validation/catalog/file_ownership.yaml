@@ -1281,6 +1281,9 @@ rules:
     priority: 96
     include:
       - backend/services/canonical_equity_pit.py
+      - backend/services/canonical_pit_release.py
+      - backend/tests/test_canonical_pit_release.py
+      - scripts/manage_canonical_pit_release.py
       - backend/services/dataset_release/**
       - backend/routers/dataset_releases.py
       - backend/routers/monthly_dataset_releases.py
