@@ -84,8 +84,8 @@
   },
   "first_seen_at": "2026-10-20T11:49:52.235231Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ba9a8f9b7d1cf645a17cf72bcd4722487b7e415f",
+  "fixed_at": "2026-10-20T12:06:39Z",
   "github_issue_number": 6493,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6493",
   "last_seen_at": "2026-10-20T11:49:52.235231Z",
@@ -93,6 +93,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6494",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -119,6 +120,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -130,7 +132,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -139,6 +141,9 @@
     "fingerprint": "eeeaf2a5858478127fe77f09",
     "source_event_id": "FE-20261020-eeeaf2a58584"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. Isolated interpreter imported summarize_sector_context and verified factual_members implementation; database_access=false. Targeted RED 4 failures -> GREEN 4 passed; final related matrix 78 passed.; Isolated interpreter loaded summarize_sector_context factual_members implementation; database_access=false"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
