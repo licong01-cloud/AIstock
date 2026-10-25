@@ -173,7 +173,7 @@ plans:
     writes_artifacts: false
     writes_business_state: false
     runner_enabled: true
-    max_duration_seconds: 900
+    max_duration_seconds: 180
     evidence_kinds: [pytest]
   - plan_key: advisory_dev_input_onboarding_backend
     title: Advisory DEV input onboarding backend regressions
@@ -691,7 +691,7 @@ plans:
     writes_business_state: false
     runner_enabled: true
     execution_scope: nightly
-    max_duration_seconds: 3600
+    max_duration_seconds: 1800
     evidence_kinds: [pytest, coverage, junit]
     coverage_required: true
     subsumes: [hmm_risk_pr_slice]

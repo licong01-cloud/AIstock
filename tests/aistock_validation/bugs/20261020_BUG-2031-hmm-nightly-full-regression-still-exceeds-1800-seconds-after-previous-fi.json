@@ -3,9 +3,11 @@
   "allowed_write_scope": [
     "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
-    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "codex-nightly-repair-20261025",
   "bug_id": "BUG-2031",
   "closed_at": null,
   "closure_requirements": [
@@ -263,7 +265,7 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "scope_expansion_reason": "Full coverage suite reaches80percent at1800s after prior fixture optimization; exact fresh-child node passes. Calibrate finite full-suite budget to3600s, retaining70percent branch coverage, real fresh child processes, numeric limits, and overall Nightly6300s cap. Complete Nightly receipt required for closure.",
+  "scope_expansion_reason": "Resume authorized Nightly repair: deduplicate workflow test setup; run all offline Advisory/HMM tests in bounded file shards, combine HMM branch coverage once, retain original 180s/1800s budgets. No service control, database writes or business source changes.",
   "nightly_followup_evidence": {
     "run_id": "39837282906",
     "completed_progress_percent": 80,
@@ -274,9 +276,19 @@
     "acceptance": "Full coverage and real child processes retained; full completed session receipt still required"
   },
   "design_compliance_review": {
-    "scope": "Full-suite budget calibration only; full Nightly receipt pending",
-    "failure_semantics": "Finite3600s budget; coverage and failure exits retained",
-    "business_semantics": "No business source or fit thresholds changed",
+    "scope": "All offline regression files retained; at most four isolated pytest processes, with module fixtures kept together. Workflow tests share setup without dropping cases.",
+    "failure_semantics": "Original 180s Advisory / 1800s HMM limits, 6300s Nightly cap and combined 70 percent branch coverage retained; any shard failure or missing coverage fails the plan.",
+    "business_semantics": "No business source, model contract, training job, service control or database change. Retired miniQMT SIM remains excluded; LocalSIM retained.",
     "new_gates": "None"
+  },
+  "nightly_repair_20261025": {
+    "source_run": "40123820570",
+    "status": "validation_pending",
+    "changes": [
+      "bounded file shards for complete offline regression",
+      "combine coverage and JUnit after every shard passes",
+      "independent worker diagnostics and metrics",
+      "workflow test setup deduplication; ratio threshold 0.30 retained"
+    ]
   }
 }
