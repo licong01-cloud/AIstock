@@ -194,7 +194,8 @@
   },
   "validation_evidence": [
     "nox -s l0 -- backend/services/dataset_release/monthly_unified.py backend/tests/dataset_release/test_monthly_unified_v2.py -> passed zero findings",
-    "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py --lf -q -> 4 passed; PR6368 latest HEAD CI green"
+    "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py --lf -q -> 4 passed; PR6368 latest HEAD CI green",
+    "Source PR current merge identity and source CI SUCCESS independently verified. Isolated AIstock python -B loaded persistent MonthlyReleaseService.activate and verified canonical policy readback before CAS and after consumer verification; no DB or service access."
   ],
   "verification_budget": {
     "budget": "standard",
