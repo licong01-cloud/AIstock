@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack, contextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -127,12 +130,13 @@ def ready(service: str, expected: str | None = None) -> str:
 def commands(service: str) -> tuple[list[str], Path, dict]:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # Popen's decoding does not change the child's encoding for redirected stdout.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     if service == "backend":
         return [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"], ROOT, env
-    if service == "tdx":
-        env["TDX_HTTP_PORT"] = "19080"
-        return [sys.executable, str(ROOT / "scripts/start_tdx_go_backend.py"), "--database-target", "production",
-                "--env-file", str(ROOT / ".env")], ROOT, env
+    if service != "frontend":
+        raise ValueError(f"No generic command for service: {service}")
     node = shutil.which("node.exe")
     if not node or not (ROOT / "frontend/node_modules/next/dist/bin/next").is_file():
         raise RuntimeError("Existing Node/Next.js dependencies missing; this launcher never installs dependencies")
@@ -141,30 +145,41 @@ def commands(service: str) -> tuple[list[str], Path, dict]:
     return [node, str(ROOT / "frontend/scripts/next-dev-isolated.mjs"), "--port", "3000"], ROOT / "frontend", env
 
 
-def tdx_build(directory: Path) -> str:
-    command, cwd, env = commands("tdx")
-    log = directory / "tdx-build.log"
-    with log.open("w", encoding="utf-8") as output:
-        process = subprocess.Popen([*command, "--build-only"], cwd=cwd, env=env,
-                                   stdout=output, stderr=subprocess.STDOUT)
-        try:
-            code = process.wait(timeout=180)
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"TDX build still running; not killed or retried. Details: {log}") from exc
-    if code:
-        raise RuntimeError(f"TDX build failed ({code}); details: {log}")
-    receipt = json.loads(log.read_text(encoding="utf-8").strip().splitlines()[-1])
-    revision = receipt.get("source_revision", "")
-    if not re.fullmatch(r"[0-9a-f]{40}", revision):
-        raise RuntimeError("TDX build did not return a verified source revision")
-    return revision
+def load_tdx_launcher():
+    spec = importlib.util.spec_from_file_location("tdx_launcher", ROOT / "scripts/start_tdx_go_backend.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("TDX launcher module is unavailable")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    return helper
+
+
+def cached_tdx_command(directory: Path) -> tuple[list[str], Path, dict]:
+    """Reuse the fixed EXE; build offline only on first use or changed inputs."""
+    helper = load_tdx_launcher()
+    command, env = helper.prepare_launch(ROOT / ".env", "production")
+    receipt = helper.cached_build(Path(command[0]), helper.build_fingerprint(env))
+    if receipt is None:
+        print("TDX fixed EXE missing or source changed; preparing one offline build (other services do not wait)",
+              flush=True)
+        env["AISTOCK_TDX_ENV_FILE"] = str((ROOT / ".env").resolve())
+        receipt = helper.ensure_binary(Path(command[0]), env)
+    else:
+        receipt = {**receipt, "build_action": "reused"}
+    pending = directory / "tdx-executable.next.json"
+    pending.write_text(json.dumps(receipt), encoding="utf-8")
+    os.replace(pending, directory / "tdx-executable.json")
+    print(f"TDX verified fixed EXE {receipt['build_action']}: {command[0]}", flush=True)
+    return command, ROOT / "tdx-api-main/web", env
 
 
 @contextmanager
-def startup_lock():
+def startup_lock(service: str = "all"):
     import msvcrt
     RUNTIME.mkdir(parents=True, exist_ok=True)
-    with (RUNTIME / "startup.lock").open("a+b") as lock:
+    if service not in (*PORTS, "all"):
+        raise ValueError("Invalid startup lock service")
+    with (RUNTIME / f"startup-{service}.lock").open("a+b") as lock:
         if lock.tell() == 0:
             lock.write(b"0")
             lock.flush()
@@ -180,18 +195,24 @@ def startup_lock():
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def launch(service: str, directory: Path) -> None:
-    # One implementation, independent of Windows Terminal availability.
-    command = [sys.executable, str(Path(__file__).resolve()), "--child", service, "--log-dir", str(directory)]
-    console = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    subprocess.Popen(f'"{console}" /d /k "{subprocess.list2cmdline(command)}"',
-                     cwd=ROOT, creationflags=subprocess.CREATE_NEW_CONSOLE)
+def launch(service: str, directory: Path) -> subprocess.Popen:
+    # The BAT entry already created this service's tab. Keep its child attached;
+    # never resolve MRU again or create a second window from this delayed stage.
+    command = [sys.executable, "-X", "utf8", str(Path(__file__).resolve()),
+               "--child", service, "--log-dir", str(directory)]
+    return subprocess.Popen(command, cwd=ROOT)
 
 
 def child(service: str, directory: Path) -> int:
     if directory.resolve().parent != RUNTIME.resolve() or not directory.is_dir():
         raise RuntimeError("Invalid startup log directory")
-    command, cwd, env = commands(service)
+    # Also protect direct --child invocation under a legacy GBK host.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    if service == "tdx":
+        os.environ["TDX_HTTP_PORT"] = "19080"
+    command, cwd, env = cached_tdx_command(directory) if service == "tdx" else commands(service)
     with (directory / f"{service}.log").open("a", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
@@ -199,30 +220,61 @@ def child(service: str, directory: Path) -> int:
         for line in process.stdout:
             log.write(line)
             log.flush()
-            print(line, end="", flush=True)
+            print(f"[{service}] {line}", end="", flush=True)
         code = process.wait()
     (directory / f"{service}.exit.json").write_text(json.dumps({"exit_code": code}), encoding="utf-8")
     print(f"{service} exited ({code}); log: {directory / (service + '.log')}", flush=True)
     return code
 
 
-def wait_ready(service: str, expected: str | None, directory: Path, timeout: float = 120) -> str:
-    deadline, last = time.monotonic() + timeout, "not listening"
+def wait_ready(service: str, expected: str | Path | None, directory: Path, timeout: float = 120) -> str:
+    started = time.monotonic()
+    deadline, next_progress, last = started + timeout, started, "not listening"
     while time.monotonic() < deadline:
+        if time.monotonic() >= next_progress:
+            print(f"{service}: waiting for readiness ({int(time.monotonic() - started)}s/{timeout:g}s); "
+                  f"{last}; logs: {directory}", flush=True)
+            next_progress = time.monotonic() + 5
         exit_file = directory / f"{service}.exit.json"
         if exit_file.exists():
             raise RuntimeError(f"{service} exited before ready: {exit_file.read_text(encoding='utf-8')}; logs: {directory}")
-        current = state(service, inventory())
-        if current == "listening":
+        revision_hint = expected
+        if isinstance(expected, Path):
+            if not expected.exists():
+                last = "waiting for TDX fixed EXE verification/build receipt"
+                time.sleep(0.5)
+                continue
+            receipt = json.loads(expected.read_text(encoding="utf-8"))
+            if not isinstance(receipt, dict):
+                raise RuntimeError("TDX cached executable receipt is invalid")
+            revision_hint = receipt.get("source_revision", "")
+            if (receipt.get("schema_version") != "aistock_tdx_build_v1"
+                    or not re.fullmatch(r"[0-9a-f]{40}", str(revision_hint))):
+                raise RuntimeError("TDX cached executable receipt is invalid")
+        # Avoid starting PowerShell/CIM for every failed readiness poll. A TCP
+        # connection is only a cheap hint, never ownership or readiness evidence.
+        try:
+            with socket.create_connection(("127.0.0.1", PORTS[service]), timeout=0.2):
+                listening = True
+        except OSError:
+            listening = False
+        if listening:
             try:
-                return ready(service, expected)
+                revision = ready(service, revision_hint)
             except (OSError, ValueError, RuntimeError) as exc:
                 if isinstance(exc, RuntimeError) and "old/different source" in str(exc):
                     raise
                 last = str(exc)
+            else:
+                # Re-read the PID/ancestry at acceptance; never trust a socket
+                # opening or an HTTP 200 from an unknown replacement listener.
+                if state(service, inventory()) == "listening":
+                    print(f"{service}: ready ({time.monotonic() - started:.1f}s)", flush=True)
+                    return revision
+                last = "listener disappeared before ownership verification"
         else:
-            last = current
-        time.sleep(2)
+            last = "not listening"
+        time.sleep(0.5)
     raise RuntimeError(f"{service} readiness timeout: {last}; logs: {directory}. No processes were killed or retried")
 
 
@@ -237,57 +289,109 @@ def settle(service: str, timeout: float = 120) -> str:
         time.sleep(2)
 
 
-def start(check: bool = False) -> dict:
+def start(check: bool = False, children: list | None = None, service: str | None = None) -> dict:
+    if service is not None and service not in PORTS:
+        raise ValueError("Invalid startup service")
+    services = [service] if service is not None else list(PORTS)
+    if not check:
+        print("Checking source and startup prerequisites...", flush=True)
     head = git_head()
     if not (ROOT / ".env").is_file():
         raise RuntimeError("Missing .env; no services started")
-    for service in PORTS:
-        commands(service)
-    snapshot = inventory()
-    states = {service: state(service, snapshot) for service in PORTS}
     if check:
+        for service in ("backend", "frontend"):
+            commands(service)
+        snapshot = inventory()
+        states = {service: state(service, snapshot) for service in services}
         return {"check_only": True, "head": head, "states": states, "services_started": False}
-    with startup_lock():
+    with ExitStack() as locks:
+        # Tabs run independently; only duplicate launches of the same service
+        # contend. A direct all-service invocation acquires the same three locks.
+        for selected in services:
+            locks.enter_context(startup_lock(selected))
         directory = RUNTIME / (time.strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8])
         directory.mkdir()
         print(f"Startup logs: {directory}", flush=True)
         result = {"logs": str(directory), "business_acceptance": "not_evaluated", "services": {}}
-        for service in PORTS:
-            current = settle(service)
-            expected = head if service == "backend" else None
-            if current == "absent":
-                if service == "tdx":
-                    expected = tdx_build(directory)
-                if state(service, inventory()) != "absent":
-                    raise RuntimeError(f"{service} appeared during preparation; rerun after inspection")
-                launch(service, directory)
-            revision = wait_ready(service, expected, directory)
+        print(f"Checking service ports and process ownership: {', '.join(services)}...", flush=True)
+        snapshot = inventory()
+        states = {service: state(service, snapshot) for service in services}
+        expected_revisions, errors = {}, []
+        # Old processes may need to settle; never delay the other absent services.
+        order = sorted(services, key=lambda service: states[service] not in ("absent", "listening"))
+        for service in order:
             if git_head() != head:
-                raise RuntimeError("Source HEAD changed during startup; readiness cannot be attributed to this start")
-            result["services"][service] = {"prior_state": current, "observed_identity": revision}
+                raise RuntimeError("Source HEAD changed during startup; no further services started")
+            result["services"][service] = {"prior_state": states[service]}
+            try:
+                current = states[service]
+                if current not in ("absent", "listening"):
+                    current = settle(service)
+                expected = head if service == "backend" else None
+                if current == "absent":
+                    print(f"{service}: starting in this console", flush=True)
+                    process = launch(service, directory)
+                    if children is not None:
+                        children.append(process)
+                    if service == "tdx":
+                        expected = directory / "tdx-executable.json"
+                expected_revisions[service] = expected
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                errors.append(f"{service}: {exc}")
+                result["services"][service]["error"] = str(exc)
+        # One shared readiness interval, not three serial 120-second waits.
+        with ThreadPoolExecutor(max_workers=len(services)) as pool:
+            waits = {pool.submit(wait_ready, service, expected, directory): service
+                     for service, expected in expected_revisions.items()}
+            for completed in as_completed(waits):
+                service = waits[completed]
+                try:
+                    result["services"][service]["observed_identity"] = completed.result()
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                    print(f"{service}: FAILED: {exc}", file=sys.stderr, flush=True)
+                    errors.append(f"{service}: {exc}")
+                    result["services"][service]["error"] = str(exc)
+        if git_head() != head:
+            errors.append("Source HEAD changed during startup; readiness cannot be attributed to this start")
+        result["errors"] = errors
         (directory / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if errors:
+            raise RuntimeError("; ".join(errors) + f"; summary: {directory / 'summary.json'}")
         return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Read-only prerequisite/port check; no build or startup")
+    parser.add_argument("--service", choices=PORTS, help="Start only the service assigned to this tab")
     parser.add_argument("--child", choices=PORTS, help=argparse.SUPPRESS)
     parser.add_argument("--log-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    children: list[subprocess.Popen] = []
+    code = 0
     try:
         if args.child:
-            if args.check or args.log_dir is None:
+            if args.check or args.service or args.log_dir is None:
                 raise RuntimeError("Child launch requires only its assigned log directory")
             return child(args.child, args.log_dir)
-        print(json.dumps(start(args.check), ensure_ascii=False, indent=2))
-        return 0
+        if args.log_dir is not None:
+            raise RuntimeError("Log directory is valid only for an internal child")
+        result = start(args.check, children, args.service) if args.service else start(args.check, children)
+        print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         if args.child and args.log_dir and args.log_dir.resolve().parent == RUNTIME.resolve() and args.log_dir.is_dir():
             (args.log_dir / f"{args.child}.exit.json").write_text(
                 json.dumps({"exit_code": 1, "error": str(exc)}), encoding="utf-8")
         print(f"ERROR: {exc}", file=sys.stderr, flush=True)
-        return 1
+        code = 1
+    if children:
+        print("Service processes remain attached to this tab; logs are in the startup log directory.",
+              flush=True)
+        # Keep the tab foreground while its child runs. Never kill/restart it.
+        for process in children:
+            if process.wait() != 0:
+                code = 1
+    return code
 
 
 if __name__ == "__main__":

@@ -1948,11 +1948,9 @@ class TushareSyncEngine:
             if plan.get("coverage_satisfied") is True and plan.get("needs_rebuild") is False:
                 return {"ok": True, "ensure": {"status": "ready", "rebuilt": False,
                                                 "reason": "canonical_already_current"}}
-            marked = service.mark_canonical_dirty(
-                reason="tushare_source_sync_success",
-                source_dataset=dataset,
-            )
-            result: Dict[str, Any] = {"marked_dirty": marked}
+            # The builder now commits spans and ready state atomically. Do not
+            # invalidate the published view before the replacement is validated.
+            result: Dict[str, Any] = {"published_state_preserved_during_build": True}
             result["ensure"] = service.ensure_canonical_pit_universe(
                 start_date=DEFAULT_ST_PIT_START_DATE,
                 strict=False,

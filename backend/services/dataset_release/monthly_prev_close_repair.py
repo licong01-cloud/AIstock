@@ -322,6 +322,12 @@ def correction_pins(materialization, *, provider, cas):
             if later["original_sha256"] != ref["sha256"]:
                 raise MonthlyBuildResumeError("minute/prev_close correction lineage differs")
             ref = later["target_ref"]
+        quote = next((r for r in materialization.get("quote_fact_correction", {}).get("files", [])
+                      if r["relative_path"] == relative), None)
+        if quote is not None:
+            if quote["original_sha256"] != ref["sha256"]:
+                raise MonthlyBuildResumeError("quote/prev_close correction lineage differs")
+            ref = quote["target_ref"]
         if hashlib.sha256(raw).hexdigest() != ref["sha256"] or len(raw) != ref["size"] or _signature(path) != before:
             raise MonthlyBuildResumeError("prev_close corrected bytes differ")
         result[path] = {"target_sha256": ref["sha256"], "target_size": ref["size"], "target_signature": list(before)}

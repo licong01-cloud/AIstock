@@ -1250,6 +1250,18 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
     if dataset not in {"kline_minute_raw", "kline_daily_raw_go"}:
         raise HTTPException(status_code=400, detail="unsupported dataset for init")
     options = dict(payload.options or {})
+    try:
+        population_start = dt.date.fromisoformat(str(options.get("start_date") or "1990-01-01"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid start_date for Go init")
+    population_end = _latest_trading_day_on_or_before()
+    if population_end is None:
+        raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+    codes = scheduler._go_provider_codes(
+        population_start, population_end, requested_codes=options.get("codes") or None,
+    )
+    if not codes:
+        raise HTTPException(status_code=400, detail="no non-B-share TDX provider codes requested")
     summary = {"datasets": [dataset], **options}
     job_id = _create_init_job(summary)
 
@@ -1268,7 +1280,6 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
         workers = int(options.get("workers") or 1)
         truncate_before = bool(options.get("truncate"))
         max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
 
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
@@ -1351,7 +1362,6 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
         workers = int(options.get("workers") or 1)
         truncate_before = bool(options.get("truncate"))
         max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
 
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
@@ -2990,6 +3000,9 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         latest_trading_date = latest
     
     workers = payload.workers if payload.workers and payload.workers > 0 else 1
+    codes = scheduler._go_provider_codes(start_date, latest_trading_date)
+    if not codes:
+        raise HTTPException(status_code=400, detail="no non-B-share TDX provider codes requested")
     
     summary: Dict[str, Any] = {
         "data_kind": data_kind,
@@ -3009,7 +3022,7 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
-            "codes": [],
+            "codes": codes,
             "start_time": start_dt.isoformat(),
             "workers": workers,
             "options": {
@@ -3023,7 +3036,7 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload = {
             "job_id": str(job_id),
-            "codes": [],
+            "codes": codes,
             "start_time": start_dt.isoformat(),
             "workers": workers,
             "options": {

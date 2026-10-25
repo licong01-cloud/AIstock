@@ -42,7 +42,7 @@ from backend.data_service.security_source_identity import (
 from .canonical import digest_named_fields, ensure_sha256
 from .canonical_stock_transformer import QfqDenominatorAuthority
 from .errors import DatasetReleaseError
-from .pit import FrozenPitSnapshot, filter_frame_to_pit_spans
+from .pit import FrozenPitSnapshot
 from .source_fact_history import SOURCE_HISTORY_CONTRACT, filter_source_fact_history
 from .streaming_artifacts import (
     ArtifactChunkTooLarge,
@@ -364,7 +364,7 @@ class FactorPartitionProducerSpec:
             self.qfq_denominator_authority.cutoff != self.pit_snapshot.cutoff
             or self.qfq_denominator_authority.pit_spans_sha256 != self.pit_snapshot.spans_sha256
             or set(self.qfq_denominator_authority.by_code) != set(
-                self.fact_stock_codes or (span.ts_code for span in self.pit_snapshot.spans)
+                self.fact_stock_codes or self.qfq_denominator_authority.by_code
             )
         ):
             raise FactorMaterializationError("factor QFQ authority differs from PIT/cutoff")
@@ -636,9 +636,8 @@ class FactorPartitionProductionReceipt:
 
 
 def _filter_producer_population(frame, spec, partition):
-    if not spec.fact_stock_codes:
-        return filter_frame_to_pit_spans(frame, spec.pit_snapshot)
-    facts = filter_source_fact_history(frame, codes=spec.fact_stock_codes,
+    codes = spec.fact_stock_codes or tuple(spec.qfq_denominator_authority.by_code)
+    facts = filter_source_fact_history(frame, codes=codes,
                                       start=partition.start, end=partition.end)
     return facts, {"population_policy": "observed_facts_independent_of_pit_v1",
                    "source_rows": len(frame), "retained_rows": len(facts),
@@ -924,7 +923,7 @@ class FactorPartitionProducer:
             frame = _normalize_aux_frame(raw_frame, dataset=dataset)
             source_history = (
                 filter_source_fact_history(
-                    frame, codes=spec.fact_stock_codes or (span.ts_code for span in spec.pit_snapshot.spans),
+                    frame, codes=spec.fact_stock_codes or spec.qfq_denominator_authority.by_code,
                     start=partition.start, end=partition.end,
                 ) if dataset == "daily_basic" else None
             )
