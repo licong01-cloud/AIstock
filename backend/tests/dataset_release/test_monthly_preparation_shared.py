@@ -104,6 +104,45 @@ def run(shared, component):
     )
 
 
+@pytest.mark.parametrize("buy_codes", [("000001.SZ",), ("000002.SZ",)])
+def test_membership_keeps_classified_facts_independently_of_buy_pit(shared, buy_codes):
+    snapshot = shared[1]
+    snapshot.pit_snapshot.spans = tuple(
+        span for span in snapshot.pit_snapshot.spans if span.ts_code in buy_codes
+    )
+    selected_before = snapshot.pit_snapshot.spans
+    result = run(shared, "sector_context")
+    membership = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    assert set(membership.instrument) == {"000001.SZ", "000002.SZ"}
+    assert membership.start_date.eq(date(2026, 9, 29)).all()
+    assert membership.end_date.eq(date(2026, 9, 30)).all()
+    assert snapshot.pit_snapshot.spans == selected_before
+    assert result["domain_counts"]["factual_classification_stock_day_count"] == 4
+    assert result["domain_counts"]["selection_required_stock_day_count"] == len(buy_codes) * 2
+
+
+def test_nonbuy_factual_membership_does_not_bridge_missing_date(shared):
+    shared[1].pit_snapshot.spans = shared[1].pit_snapshot.spans[:1]
+    shared[5][:] = [row for row in shared[5]
+                    if not (row["ts_code"] == "000002.SZ" and row["trade_date"] == "2026-09-30")]
+    run(shared, "sector_context")
+    membership = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    stock = membership.loc[membership.instrument == "000002.SZ"]
+    assert len(stock) == 1
+    assert stock.iloc[0].start_date == stock.iloc[0].end_date == date(2026, 9, 29)
+
+
+def test_unknown_nonbuy_classification_is_reported_not_assigned(shared):
+    shared[1].pit_snapshot.spans = shared[1].pit_snapshot.spans[:1]
+    for row in shared[5]:
+        if row["ts_code"] == "000002.SZ":
+            row["l2_code_id"] = -1
+    result = run(shared, "sector_context")
+    membership = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    assert set(membership.instrument) == {"000001.SZ"}
+    assert result["domain_counts"]["unclassified_factual_stock_day_count"] == 2
+
+
 def test_quote_gap_error_identifies_stock_day_code_and_fields(shared):
     for row in shared[5]:
         if row["ts_code"] == "000001.SZ":

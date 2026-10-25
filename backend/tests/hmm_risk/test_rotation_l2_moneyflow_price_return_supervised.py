@@ -19,11 +19,12 @@ from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.services.hmm_risk.formal_state_executor import read_json, write_once
 from backend.tests.hmm_risk import test_rotation_l2_moneyflow_price_supervised as previous
 
-panel, completed, reference_assets, price_panel = (
+panel, completed, reference_assets, price_panel, price_panel_cache = (
     previous.panel,
     previous.completed,
     previous.reference_assets,
     previous.price_panel,
+    previous.price_panel_cache,
 )
 
 

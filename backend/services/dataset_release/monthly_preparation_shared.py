@@ -168,6 +168,8 @@ def shared_preparation_identity(
             {
                 "semantic_profile": profile.semantic_profile_digest,
                 "sector_membership_start": sector_membership_start.isoformat(),
+                **({"fact_population_contract": "all_frozen_shsz_suspension_facts_v1"}
+                   if component == "suspend" else {}),
             },
         ),
         validation_policy_sha256=digest_named_fields(
@@ -457,6 +459,7 @@ def summarize_sector_context(
     spans = []
     markets = []
     frozen_days = authority_resolved_days = required_quotes = 0
+    factual_days = selection_days = unclassified_factual_days = 0
     used_ids = set()
 
     def close(symbol):
@@ -529,11 +532,21 @@ def summarize_sector_context(
                         raise ComponentPreparationError("private sector quote volume conflicts")
                 if np.isfinite([row.sw2_pct_change, row.sw2_vol, row.sw2_amount]).all():
                     finite.add(sector_id)
-            active = {
+            required_members = {
                 symbol
                 for symbol, intervals in by_symbol.items()
                 if day >= start and any(left <= day <= right for left, right in intervals)
             }
+            # This is a shared fact sidecar, not a buy-eligibility snapshot.
+            # Preserve every already-frozen classified stock-date, including
+            # after a stock leaves the selectable universe. Missing dates and
+            # unknown classifications do not acquire an inferred assignment.
+            factual_members = {symbol for symbol, id_ in assignments.items() if id_ >= 0} if day >= start else set()
+            active = required_members | factual_members
+            factual_days += len(factual_members)
+            selection_days += len(required_members)
+            if day >= start:
+                unclassified_factual_days += sum(id_ < 0 for id_ in assignments.values())
             for symbol in set(states) - active:
                 close(symbol)
             needed = set()
@@ -585,6 +598,9 @@ def summarize_sector_context(
         "membership_span_count": len(spans),
         "frozen_stock_trading_day_count": frozen_days,
         "member_gap_fill_stock_trading_day_count": authority_resolved_days,
+        "factual_classification_stock_day_count": factual_days,
+        "selection_required_stock_day_count": selection_days,
+        "unclassified_factual_stock_day_count": unclassified_factual_days,
         "quote_required_sector_date_count": required_quotes,
         "quote_gap_count": 0,
         "membership_gap_count": 0,

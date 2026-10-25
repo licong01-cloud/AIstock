@@ -58,6 +58,8 @@ class LocalSimInferenceScope:
     source_universes: list[dict[str, Any]] = field(default_factory=list)
     completed_prefix: list[dict[str, Any]] = field(default_factory=list)
     stage: str = "native_policy_preparation"
+    source_plan: dict | None = None
+    source_plan_inputs: list[dict] = field(default_factory=list)
 
 
 LOCALSIM_INFERENCE_SCOPE: ContextVar[LocalSimInferenceScope | None] = ContextVar("localsim_inference_scope", default=None)
@@ -197,7 +199,7 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
             lease = require_canonical_pit_runtime_binding(config, trade_date=clocks.decision_date)
             lease.require_trade_date(clocks.data_cutoff)
             lease.require_trade_date(clocks.target_trade_date)
-            if lease.authority_status is PitAuthorityStatus.ACTIVE_CANONICAL:
+            if lease.authority_status is PitAuthorityStatus.ACTIVE_CANONICAL and own_scope().source_plan is None:
                 if pit_identity is not None:
                     declared = resolve_inference_pit_identity(
                         pit_identity, version_tag="localsim", allow_active_canonical_pointer=False,
@@ -205,6 +207,23 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
                     if declared.mode is not InferencePitMode.ROLLING_RUNTIME or SelectionPitRuntimeLease.from_binding(declared.binding) != lease:
                         raise ValueError("LocalSIM inference declaration differs from its frozen PIT lease")
                 pit_identity = {"mode": InferencePitMode.ROLLING_RUNTIME.value, **lease.as_dict()}
+        if own_scope().source_plan is not None:
+            from backend.services.advisory_historical_range import input_source_plan as source_plans
+            plan = own_scope().source_plan
+            route = source_plans.resolve_day_source(plan, own_scope().clocks)
+            # The public plan owns the physical native envelope. An explicit
+            # per-request declaration is still checked by that same helper.
+            session = source_plans.create_input_session(plan, own_scope().clocks,
+                consumer_scope="LOCALSIM", run_id=plan["run_id"], max_bytes=1024 * 1024)
+            try:
+                pit_identity = source_plans.session_pit_identity(session,
+                    request_identity=artifact_config.get("pit_identity"), manifest_identity=context["pit_identity"])
+            finally:
+                session.close()
+            if route["source"] == "DATABASE" and SelectionPitRuntimeLease.from_binding(
+                    resolve_inference_pit_identity(pit_identity, version_tag="localsim",
+                        allow_active_canonical_pointer=False).binding) != lease:
+                raise ValueError("LocalSIM source plan PIT identity differs from its release")
         order = self._build_factor_order(source=source, conf_path=self._resolve_conf_path(source))
         factor_files = self._resolve_factor_files(root / "factors", order.dynamic_factors)
         weight = self._blob(model)
@@ -238,16 +257,28 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
         )
 
 
-def _require_native_pit_receipt(payload, lease_payload, clocks, *, file_binding_hash=None):
+def _require_native_pit_receipt(payload, lease_payload, clocks, *, file_binding_hash=None, planned_identity=None):
     """Bind the shared engine's authoritative input receipt to this daily lease."""
     lease = SelectionPitRuntimeLease.from_mapping(lease_payload)
     context = payload.get("input_context", {})
+    # Native receipts deliberately omit universe_codes. Compare their compact
+    # projection against the full request; never resolve a receipt as a request
+    # or fetch online members to complete it.
     identity = resolve_inference_pit_identity(
-        context.get("pit_identity"), version_tag="localsim", allow_active_canonical_pointer=False,
-    )
-    if (identity.mode is not InferencePitMode.ROLLING_RUNTIME
-            or context.get("pit_mode") != identity.receipt_mode
-            or SelectionPitRuntimeLease.from_binding(identity.binding) != lease):
+        planned_identity if planned_identity is not None else context.get("pit_identity"),
+        version_tag="localsim", allow_active_canonical_pointer=False)
+    if planned_identity is not None and context.get("pit_identity") != identity.as_dict():
+        raise ValueError("LocalSIM planned PIT receipt differs from its complete native request")
+    if identity.mode is InferencePitMode.FROZEN_CANDIDATE and planned_identity is not None and file_binding_hash:
+        members = payload.get("metadata", {}).get("universe_members")
+        if (not isinstance(members, list) or tuple(sorted(members)) != identity.universe_codes
+                or len(members) != payload["universe_count"] or identity.universe_as_of != clocks.data_cutoff
+                or any(getattr(identity.binding, key) != getattr(lease, key) for key in
+                       ("authority_id", "rule_version", "rule_parameters_digest"))):
+            raise ValueError("LocalSIM frozen native population differs from its planned file input")
+    elif identity.mode is not InferencePitMode.ROLLING_RUNTIME or SelectionPitRuntimeLease.from_binding(identity.binding) != lease:
+        raise ValueError("LocalSIM node population differs from the native daily PIT lease")
+    if context.get("pit_mode") != identity.receipt_mode:
         raise ValueError("LocalSIM node population differs from the native daily PIT lease")
     if context.get("frozen_file_binding_hash") != file_binding_hash:
         raise ValueError("LocalSIM PIT receipt differs from its explicit daily input source")
@@ -327,7 +358,17 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
                      "--run-id", scope.run_id, "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]
         from .localsim_file_inputs import current_file_dataset
         dataset = current_file_dataset()
-        if dataset is not None:
+        node_run_id = scope.run_id
+        if scope.source_plan is not None:
+            node_run_id = scope.source_plan["run_id"]
+            arguments[arguments.index("--run-id") + 1] = node_run_id
+            source_path = root / "source-plan.json"
+            _atomic_json(source_path, scope.source_plan)
+            arguments.extend(["--source-plan-file", win_to_wsl_path(str(source_path)),
+                              "--input-revision", scope.source_plan["plan_hash"]])
+            if dataset is not None:
+                arguments.extend(["--dataset-root", win_to_wsl_path(str(dataset.root))])
+        elif dataset is not None:
             binding_path = root / "dataset-binding.json"
             _atomic_json(binding_path, dataset.binding)
             # The shared CLI opens this exact locator and verifies pinned content
@@ -362,7 +403,7 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
             raise DataUnavailableError("LocalSIM node did not publish its own index", context={
                 "reason_code": "LOCALSIM_NODE_INDEX_MISSING", "returncode": completed.returncode, "run_id": scope.run_id})
         index = json.loads(output.read_text(encoding="utf-8"))
-        if (index.get("consumer_scope") != "LOCALSIM" or index.get("run_id") != scope.run_id
+        if (index.get("consumer_scope") != "LOCALSIM" or index.get("run_id") != node_run_id
                 or index.get("status") != "COMPLETE" or index.get("ok") is not True or completed.returncode != 0
                 or len(index.get("results", [])) != 1):
             raise DataUnavailableError("LocalSIM node computation failed", context={
@@ -377,11 +418,29 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
             raise ValueError("LocalSIM shared node returned a different frozen file input identity")
         metadata = payload.get("metadata", {})
         if (payload.get("ok") is not True or metadata.get("consumer_scope") != "LOCALSIM"
-                or metadata.get("run_id") != scope.run_id or metadata.get("clocks") != clocks.to_dict()
+                or metadata.get("run_id") != node_run_id or metadata.get("clocks") != clocks.to_dict()
                 or metadata.get("binding") != index.get("binding")):
             raise ValueError("LocalSIM node consumer/run/clock binding mismatch")
         native_manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
-        if native_manifest.get("canonical_pit_runtime_lease") is not None:
+        if scope.source_plan is not None:
+            from .localsim_input_source_plan import validate_payload
+            receipt = validate_payload(scope.source_plan, clocks, payload)
+            _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks,
+                file_binding_hash=dataset.identity if dataset is not None else None,
+                planned_identity=native_manifest["pit_identity"])
+            from backend.services.advisory_historical_range import input_source_plan as source_plans
+            leg_key = canonical_json_sha256({"factor_order": workspace.factor_order,
+                "weight": str(workspace.model_params_path), "processor": str(workspace.dataset_processor_path)})
+            pending = scope.root.parent / "source-inputs" / (leg_key + ".json")
+            if pending.exists():
+                source_plans.verify_retry_inputs(json.loads(pending.read_text(encoding="utf-8")), payload)
+            else:
+                _atomic_json(pending, payload)
+            scope.source_plan_inputs.append({"leg_key": leg_key, "source_plan_receipt": receipt,
+                "input_context": payload["input_context"], "source_read_receipts": payload["source_read_receipts"]})
+            metadata["selection_native_input_context"] = payload["input_context"]
+            metadata["localsim_source_plan"] = {"run_id": node_run_id, "plan_hash": scope.source_plan["plan_hash"]}
+        elif native_manifest.get("canonical_pit_runtime_lease") is not None:
             _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks,
                                         file_binding_hash=dataset.identity if dataset is not None else None)
         metadata.update(inference_backend="wsl", inference_wall_seconds=time.perf_counter() - started,

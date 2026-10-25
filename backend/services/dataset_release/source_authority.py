@@ -1781,6 +1781,7 @@ class MonthlySourceAuthority:
         mvcc_reuse_capability: bool = MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED,
         sector_source_policy: str = P3A_SECTOR_SOURCE_POLICY,
         monthly_sector_mapping: Mapping[str, Any] | None = None,
+        fact_stock_codes: tuple[str, ...] = (),
     ) -> None:
         if sector_source_policy not in {P3A_SECTOR_SOURCE_POLICY, MONTHLY_SECTOR_SOURCE_POLICY}:
             raise ValueError("unsupported sector source policy")
@@ -1790,6 +1791,14 @@ class MonthlySourceAuthority:
         self._mvcc_reuse_capability = bool(mvcc_reuse_capability)
         self._sector_source_policy = sector_source_policy
         self._monthly_sector_mapping = monthly_sector_mapping
+        if (fact_stock_codes != tuple(sorted(set(fact_stock_codes)))
+                or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in fact_stock_codes)):
+            raise SourceProviderContractError("source fact population must contain sorted unique SH/SZ codes")
+        self._fact_stock_codes = fact_stock_codes
+
+    def _stock_source_codes(self, pit_snapshot: FrozenPitSnapshot) -> tuple[str, ...]:
+        # PIT is a consumption policy, not a filter on authoritative facts.
+        return tuple(sorted(set(self._fact_stock_codes).union(span.ts_code for span in pit_snapshot.spans)))
 
     @property
     def uses_p3a_sector_source(self) -> bool:
@@ -2926,10 +2935,10 @@ class MonthlySourceAuthority:
                 {item.daily_code: item.required_from.isoformat() for item in self.profile.indices}
             ).decode("utf-8")
         elif query.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}:
-            pit_codes = tuple(sorted({span.ts_code for span in pit_snapshot.spans}))
-            codes = list(selected_stock_codes or pit_codes)
-            if not set(codes).issubset(pit_codes):
-                raise SourceProviderContractError("source sample instruments escape the frozen PIT snapshot")
+            source_codes = self._stock_source_codes(pit_snapshot)
+            codes = list(selected_stock_codes or source_codes)
+            if not set(codes).issubset(source_codes):
+                raise SourceProviderContractError("source sample instruments escape the frozen fact population")
             if not codes:
                 raise SourceRequiredDatasetEmpty("frozen PIT has no stock instruments")
         if query.start_policy == "timeless":

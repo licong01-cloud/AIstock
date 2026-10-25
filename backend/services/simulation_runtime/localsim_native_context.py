@@ -112,6 +112,13 @@ def frozen_localsim_profile(release: Any) -> LocalSimRuntimeProfileConfigV1 | No
             context={"reason_code": "LOCALSIM_FROZEN_DAILY_IDENTITY_MISMATCH"},
         )
     pit_lease = metadata.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
+    from .localsim_pit_migration import POLICY_KEY, require_migrated_selection_projection
+
+    if POLICY_KEY in metadata:
+        require_migrated_selection_projection(
+            selection_config_from_localsim_profile(config, manifest_sha256=release.manifest_sha256), metadata,
+        )
+        return config
     if config.canonical_pit_authority_profile is not None and pit_lease is None:
         raise CanonicalPitRuntimeError("canonical LocalSIM release is missing its frozen PIT lease")
     selection = selection_config_from_localsim_profile(
