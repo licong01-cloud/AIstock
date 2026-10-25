@@ -8,10 +8,11 @@ import re
 
 import yaml
 
+from scripts.qe_l2_risk_admission import APPROVED_RISK_SHA256 as APPROVED_RISK_SHA256, validate_admission
+
 CONTRACT = "QE-L2-RISK-ENTRY-GATE-D1..D7"
 MANIFEST_FILE = "qe_l2_risk_manifest.json"
 STUDY_PARAM = "qe_l2_study_manifest"
-APPROVED_RISK_SHA256 = "5e6a2784a304b2a34cb8cbf6859aab0a9c154a29ba5fac246ff35eebcd9ca0e5"
 
 
 def bind_execution_metadata(params, conf):
@@ -56,8 +57,7 @@ def extract_study(custom_params):
         raise ValueError("QE_L2_POLICY_INVALID")
     if not {"risk", "mapping", "mapping_receipt", "authority", "prediction", "calendar", "pit"}.issubset(manifest.get("assets", {})):
         raise ValueError("QE_L2_ASSETS_MISSING")
-    if manifest["assets"]["risk"].get("sha256") != APPROVED_RISK_SHA256:
-        raise ValueError("QE_L2_UNAPPROVED_RISK_ASSET")
+    validate_admission(manifest)
     return params, {"enabled": enabled, "manifest": deepcopy(manifest)}
 
 
@@ -106,7 +106,7 @@ def apply_study(result, study, *, scripts_dir):
         strategy["kwargs"].update({"qe_l2_risk_enabled": True, "qe_l2_manifest_file": MANIFEST_FILE})
     files["conf.yaml"] = yaml.safe_dump(conf, sort_keys=False, allow_unicode=True)
     files[MANIFEST_FILE] = json.dumps(study["manifest"], ensure_ascii=False, sort_keys=True, indent=2)
-    for name in ("qe_l2_risk_consumer.py", "qe_terminal_interval_executor.py"):
+    for name in ("qe_l2_risk_consumer.py", "qe_l2_risk_admission.py", "qe_terminal_interval_executor.py"):
         files[name] = (Path(scripts_dir) / name).read_text(encoding="utf-8")
     for key in ("wsl_command", "wsl_command_core"):
         command = result.get(key)
