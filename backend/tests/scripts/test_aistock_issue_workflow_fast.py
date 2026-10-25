@@ -16,6 +16,27 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("path", ["schedules", "targets"])
+@pytest.mark.parametrize("payload,expected", [
+    ({"data": {"items": []}}, "passed"),
+    ({"status": "success", "data": {"items": [{"status": "failed"}]}}, "passed"),
+    ({"status": "failed", "data": {"items": []}}, "failed"),
+    ({"ok": False, "data": {"items": []}}, "failed"),
+    ({"status": "success", "data": {"ok": False, "items": []}}, "failed"),
+    ({"status": "success", "data": {"status": "error", "items": []}}, "failed"),
+    ({"status": "success", "data": {"items": "not-an-array"}}, "failed"),
+    ({"status": "success", "data": {"status": "success", "items": "bad"}}, "failed"),
+    ({"data": {}}, "failed"),
+])
+def test_local_data_collection_smoke_accepts_real_envelope_not_error(path, payload, expected):
+    _, verdict = workflow._evaluate_business_smoke_semantics(
+        f"http://127.0.0.1:8001/api/v1/local-data/{path}",
+        json.dumps(payload), response_sha256="a" * 64,
+    )
+    assert verdict["contract_id"] == "collection"
+    assert verdict["verdict"] == expected
+
+
 @pytest.mark.parametrize('case,expected', [('partial', 'passed'), ('empty', 'failed'), ('fake-zero', 'failed'), ('empty-available', 'failed'), ('no-proof', 'failed'), ('loading', 'pending')])
 def test_pipeline_overview_probe_validates_partial_observation_contract(case, expected):
     source = {'state': 'loading', 'data': None, 'collected_at': None, 'stale': False, 'refreshing': True}
@@ -1459,7 +1480,7 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
 
 
-@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py"])
+@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py", "component_artifact_manifest.py", "component_manifest_producer.py", "factor_materializer.py", "source_fact_history.py"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -1503,6 +1524,17 @@ def test_monthly_build_probe_does_not_accept_legacy_or_unknown_mixed_sources(oth
         target, runtime_files=["backend/services/dataset_release/build_stage.py", other],
     )
     assert error and "mix routed and non-routed" in error
+
+
+@pytest.mark.parametrize("shared", ["component_artifact_manifest", "component_manifest_producer",
+                                    "factor_materializer", "source_fact_history"])
+def test_shared_helpers_with_actual_legacy_entry_keep_legacy_probe(shared):
+    target = workflow._load_runtime_target_catalog()["targets"]["worker-scheduler"]
+    selected, error = workflow._select_runtime_probe_route(target, runtime_files=[
+        f"backend/services/dataset_release/{shared}.py", "scripts/dataset_release_worker.py",
+    ])
+    assert error is None
+    assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
 
 
 @pytest.mark.parametrize("worker_count", [1, 2])
