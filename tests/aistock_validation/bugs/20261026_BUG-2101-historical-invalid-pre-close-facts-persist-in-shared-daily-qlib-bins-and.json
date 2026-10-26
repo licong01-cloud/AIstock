@@ -32,19 +32,19 @@
   "expected": "Authoritative same-day finite reference facts are retained, missing values remain explicit until source-backed repair, and shared corrections reach daily frozen files without replacing unaffected components.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json",
       "backend/services/tushare_dataset_specs.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "scripts/repair_stk_limit_pre_close.py"
+      "scripts/repair_stk_limit_pre_close.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json",
       "backend/services/tushare_dataset_specs.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "scripts/repair_stk_limit_pre_close.py"
+      "scripts/repair_stk_limit_pre_close.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -106,8 +106,8 @@
   },
   "first_seen_at": "2026-10-26T18:10:47.754014Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "00bc5a2149f74e2eb97245a373358aff5795a3f2",
+  "fixed_at": "2026-10-26T18:43:10Z",
   "github_issue_number": 6750,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6750",
   "last_seen_at": "2026-10-26T18:10:47.754014Z",
@@ -115,6 +115,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6753",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,7 +137,8 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -148,7 +150,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2101",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7528ad20291d696d",
+    "recorded_at": "2026-10-26T18:43:46.859774Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5c688740f6707bcbe04f563d036fa9fe4d73f6b9",
+    "source_merge_commit": "00bc5a2149f74e2eb97245a373358aff5795a3f2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6753",
+    "validation_evidence": [
+      "pytest backend/tests/test_tushare_sync_engine.py -q -k stk_limit -> passed (40)",
+      "python -m nox -s l0 -- backend/services/tushare_dataset_specs.py backend/services/tushare_sync_engine.py scripts/repair_stk_limit_pre_close.py backend/tests/test_tushare_sync_engine.py -> passed"
+    ],
+    "validation_evidence_digest": "8511503dce23cf7f10ee87d8048d0f7b0ae8bc300beaf74b938608b79bcb7e31"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -157,6 +181,10 @@
     "fingerprint": "1712f73b8ef0b4f96c4466f4",
     "source_event_id": "FE-20261026-1712f73b8ef0"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py -q -k stk_limit -> passed (40)",
+    "python -m nox -s l0 -- backend/services/tushare_dataset_specs.py backend/services/tushare_sync_engine.py scripts/repair_stk_limit_pre_close.py backend/tests/test_tushare_sync_engine.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
