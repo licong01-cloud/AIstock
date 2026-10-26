@@ -5,6 +5,8 @@
 上位：simulation_platform_unified_authoritative_blueprint_20260715.md、localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md。
 消费合同：position_timing_intraday_advice_localsim_blueprint_f2_20261023.md、position_timing_intraday_phase1_f2_detailed_design_20261023.md、position_timing_intraday_research_f2_detailed_design_20261023.md。
 
+> 2026-10-26补充边界：本设计已验收的三规则×四延迟属于原生离线择时能力，构造会话时建立OMS父订单，随后按delay判断成交资格；不宣称具有跨股票单人操作配额或人工延迟提交。用户要求在保留这些能力的基础上新增模拟人工，与原生模式比较，详见[localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)。新设计只增量冻结权威，不覆盖本设计的验收矩阵、源码、旧12账户、原288场景或经济结论。新增人工队列形成独立request/policy/release，当前未实现、未运行或激活。
+
 ## Background / Scope / Non-goals
 
 现有 LocalSIM 的 planner/backend 显式拒绝非 TWAP。择时交接没有覆盖该限制；本任务按用户授权，在自身上位合同增加显式 opt-in 的 `localsim_position_timing_v1 / POSITION_TIMING_INTRADAY_V1`，旧 `localsim_twap_only_v1 / TWAP` 及其默认、参数、历史 release 和现有账户不变。

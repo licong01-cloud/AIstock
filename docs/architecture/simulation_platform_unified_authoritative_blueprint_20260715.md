@@ -6,7 +6,7 @@
 >
 > MiniQMT execution-kernel进度（2026-08-16 current snapshot）：K1/K2/K3/K4/K5 overall=`implemented_verified + merged`；K6-A/C0/C1/B/D source 与 production successor DDL 已合入并完成 readback。BUG-1019 / PR #3298 和 BUG-1079 / PR #3438 已完成 source merge、production DDL、用户 restart 与 runtime gate，生产 route 已选择 KERNEL_V2，startup schema recovery 已生效。K6 overall仍=`implementation_in_progress`，因为当前非交易日/断开 QMT 状态不能替代正常交易日 callback、order/trade、EOD 与容量验收；不得把 source/runtime gate 通过写成完整产品验收完成。
 >
-> 2026-08-08 的112项audit是历史快照；2026-08-12扩展为121项，2026-08-16增加 `F-122..F-125`，2026-08-21增加 `F-126..F-129`，2026-08-26增加 `F-130..F-132`，2026-08-30增加 `F-133..F-148`，现为148项。`F-126..F-129` 的既有source/DEV/merge/runtime证据作为V1冻结与热路径历史事实保留，但共同 `market.stk_limit` 权威只适用于既有V1 carrier；新计划的broker-specific authority、V2兼容和故障隔离由`F-130..F-132`约束。`F-133..F-148`进一步要求LocalSIM彻底退出旧Paper day/session/replay/auto-run产品线，把数据、信号、执行和runtime编排分为单向依赖的物理模块，补齐统一control plane与隔离replay，完成一次原子产品切流后物理删除旧业务代码。设计合入只冻结实施权威，不代表上述源码、DDL、用户重启、runtime或cleanup已完成。凡旧条目依赖durable TICK、per-wait event、NO_FILL append、unbounded history、每cadence静态行情loader或minute adapter隐式派生limit，其历史`implemented_verified`只保留审计记录，不再代表满足当前目标。凡旧条目把V25描述为LocalSIM/MiniQMT当前可执行算法，其结论同样只保留为历史审计记录，不再代表当前runtime authority。
+> 2026-08-08 的112项audit是历史快照；2026-08-12扩展为121项，2026-08-16增加 `F-122..F-125`，2026-08-21增加 `F-126..F-129`，2026-08-26增加 `F-130..F-132`，2026-08-30增加 `F-133..F-148`，截至该历史修订为148项；2026-10-26增加 `F-149..F-164` 的双模式设计条目，当前为164项。`F-126..F-129` 的既有source/DEV/merge/runtime证据作为V1冻结与热路径历史事实保留，但共同 `market.stk_limit` 权威只适用于既有V1 carrier；新计划的broker-specific authority、V2兼容和故障隔离由`F-130..F-132`约束。`F-133..F-148`进一步要求LocalSIM彻底退出旧Paper day/session/replay/auto-run产品线，把数据、信号、执行和runtime编排分为单向依赖的物理模块，补齐统一control plane与隔离replay，完成一次原子产品切流后物理删除旧业务代码。设计合入只冻结实施权威，不代表上述源码、DDL、用户重启、runtime或cleanup已完成。凡旧条目依赖durable TICK、per-wait event、NO_FILL append、unbounded history、每cadence静态行情loader或minute adapter隐式派生limit，其历史`implemented_verified`只保留审计记录，不再代表满足当前目标。凡旧条目把V25描述为LocalSIM/MiniQMT当前可执行算法，其结论同样只保留为历史审计记录，不再代表当前runtime authority。
 >
 > 2026-08-12 runtime blocking audit（历史根因，现已修复）：生产 `ck_miniqmt_event_type/source` 与 `ck_miniqmt_k2_event_composite` 的冲突曾使合法 `SESSION + EXCHANGE_SESSION_CLOCK` callback 重复进入数据库读取、失败 INSERT 和 rollback。BUG-1019 / Issue #3274 / PR #3298 已完成 source merge、production DDL=`applied_and_verified`、用户 restart 与 runtime gate；正常交易日 quote/order/trade/EOD 证据仍按独立平台验收项记录，不能由 BUG closure 替代。
 >
@@ -34,6 +34,8 @@
 
 > 连续离线研究在这一显式身份内允许单一账户同时管理多个股票父订单，并复用原生目标、调仓和 T+1 结算；三规则与四档延迟使用12个独立账户。恢复边界是原子提交的完整交易日，不能用提醒或未确认机会推进账本。全年价格偏好输入缺失时保持研究阻断，不修改原 TWAP 账户配置。
 
+> 2026-10-26 用户要求的 LocalSIM 双模式增量设计：保留现有原生执行、TWAP 默认、旧账户、release、历史/实时模拟与来源接续能力，新增显式选择的 `operation_mode=HUMAN_SIM`，与 `NATIVE` 原生模式并存。模拟人工只在独立新配置中增加账户级响应/串行操作队列，派发后才提交既有 OMS，不复制选股、择时、撮合或账本。当前仅更新设计，源码、UI、历史验证和运行态均未实现/未激活；原12账户及288场景保持不可变。详细合同见 [localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)，验收为 `F-149..F-164`。设计合入不自动修改任何账户或启动回放。
+
 ## 0. 权威声明与执行红线
 
 ### 0.1 唯一权威关系
@@ -58,6 +60,7 @@
 | `localsim_strategy_package_single_admission_f2_design_20260714.md` | 下位专项契约 | 策略包唯一一次准入和 package type 兼容 |
 | `simulation_daily_market_context_freeze_f2_detailed_design_20260821.md` | 下位 F2 实施级详细设计 | `F-126..F-132`：V1历史冻结、broker-specific limit authority、V2兼容/隔离、LocalSIM TDX-only hot path 与 MiniQMT 有界异常 |
 | `localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md` | 下位 F2 实施级详细设计 | `F-133..F-148`：LocalSIM data/signal/execution物理隔离、统一control plane、隔离replay、原子切流、旧产品代码与schema退役 |
+| `localsim_human_operation_dual_mode_f2_detailed_design_20261026.md` | 下位 F2 增量详细设计 | `F-149..F-164`：保留原生执行，增加模拟人工操作及双模式比较；本轮只冻结设计 |
 | `miniqmt_adaptive_is_phase0_tca_design.md` | 下位专项契约 | Phase 0A TCA 事实面 |
 | `miniqmt_adaptive_is_phase1_quote_contract_design.md` | 下位专项契约 | `B0_QUOTE_V2` quote/control/evidence 契约 |
 | `miniqmt_intraday_execution_strategy_analysis_20260710.md` | 下位算法域蓝图 | `ADAPTIVE_IS_L1` 目标算法，不拥有平台执行路径 |
@@ -89,6 +92,8 @@
 合法数据、连接或配置恢复后，SIM 生命周期必须自动继续或在下一调度 tick 重试；不能等待人工点击解除。
 
 ### 0.4 TWAP-only 与 V25 execution-algorithm 退役权威
+
+2026-10-26阅读边界：本节既有条款继续约束默认生产与历史原生路径；2026-10-24冻结文件离线择时opt-in按本文前述修订保留。新增人工操作设计不使非TWAP生产入口立即可用，也不改变退役算法禁令；新模式只有在正式实现、release及独立运行验收后才能显式选择。
 
 本节只约束执行算法语义字段中的 `V25_TWO_STAGE`、`V25_1_SMALL_CAP`，不按字符串匹配误伤同名历史报告、模型、股票池、universe 或只读 artifact。当前 runtime authority 与后续退役分为两层：
 
@@ -1325,6 +1330,22 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `F-146` | DEV PostgreSQL、六个月replay、capacity、用户重启和正常交易日LocalSIM证据分别闭合，source/merge/DDL/runtime/cleanup状态不混写 |
 | `F-147` | rollout按`SIM-LR-A..D`四个可验收阶段、最多六个源PR forward-only实施；LR编号是工作包而非逐项PR；切流后不恢复旧产品route，失败不改写经济事实或私增人工门禁 |
 | `F-148` | DESIGN-COMPLIANCE-001四项逐条通过；设计PR不冒充实现，后续只有全部删除和运行证据闭合才能宣布LocalSIM legacy retirement完成 |
+| `F-149` | 双模式opt-in，旧TWAP默认、release、离线择时研究及账户事实不变 |
+| `F-150` | 唯一共享选股/择时及原生交易账本；人工派发后才创建OMS订单 |
+| `F-151` | 操作模式与执行策略分离，完整冻结政策、组合校验与旧schema只读兼容 |
+| `F-152` | 账户级单人跨股票共用动作间隔、ready排序、机会去重与休市规则 |
+| `F-153` | 可见输入/反馈、响应/排队/dispatch、strict-after隔离；不看未来bar或双重delay |
+| `F-154` | 部分成交、计划修订/撤销、取消竞态、硬期限及尾单；不隐去待撤单欠账 |
+| `F-155` | 原生资金、可卖量、板块数量/T+1、价格/限停牌和父订单费用不漂移 |
+| `F-156` | 冻结PIT、C/D/T、来源计划、价格UNKNOWN和模型合法区间，不静默迁移或切源 |
+| `F-157` | 新账户1000万元，双账户基础组及13账户完整组；旧12账户与288产物不变 |
+| `F-158` | 整流程对照、人工matched规则和冻结机会响应诊断分开；native TWAP不是matched B0 |
+| `F-159` | 队列/动作/反馈与原生事务共同恢复，失败前缀及exact retry无重复成交收费 |
+| `F-160` | 全人口和可回读receipt、source inspect先于收益；估值/MDD/公司行为及归因限制明确 |
+| `F-161` | 保留左侧导航和原账户详情；增量中文模式比较，正常UI无机器编码或JSON |
+| `F-162` | 旧行为等价、因果/费用/限制、短窗/多日/增量/恢复、端到端性能及复杂度验证 |
+| `F-163` | 离线/展示/在线分阶段，沿用既有scheduler；数据库/数据集/进程/生产授权分开 |
+| `F-164` | 精确范围及四项符合性；设计、功能、历史、运行和经济证据分离 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1478,6 +1499,22 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `F-146` | §10.5/§10.7；legacy-retirement detailed §7.6、LR-9 | artifact: future commit-bound DEV/replay/capacity/restart/normal-day validation receipts | design_ready + explicitly approved production-state separation | all runtime evidence pending implementation |
 | `F-147` | §11；legacy-retirement detailed §6/§8 | artifact: future `SIM-LR-A..D` source/merge/DDL/runtime/cleanup receipts | design_ready + explicitly approved four-stage implementation | no rollback to legacy route |
 | `F-148` | §0.2、§16；legacy-retirement detailed §13–§15 | artifact: `docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md` and feature-validator receipt | design_ready + explicitly approved design-only scope | implementation completion is not claimed |
+| `F-149` | 下位双模式设计；双模式opt-in，旧TWAP默认、release、离线择时研究及账户事实不变 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-150` | 下位双模式设计；唯一共享选股/择时及原生交易账本；人工派发后才创建OMS订单 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-151` | 下位双模式设计；操作模式与执行策略分离，完整冻结政策、组合校验与旧schema只读兼容 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-152` | 下位双模式设计；账户级单人跨股票共用动作间隔、ready排序、机会去重与休市规则 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-153` | 下位双模式设计；可见输入/反馈、响应/排队/dispatch、strict-after隔离；不看未来bar或双重delay | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-154` | 下位双模式设计；部分成交、计划修订/撤销、取消竞态、硬期限及尾单；不隐去待撤单欠账 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-155` | 下位双模式设计；原生资金、可卖量、板块数量/T+1、价格/限停牌和父订单费用不漂移 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-156` | 下位双模式设计；冻结PIT、C/D/T、来源计划、价格UNKNOWN和模型合法区间，不静默迁移或切源 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-157` | 下位双模式设计；新账户1000万元，双账户基础组及13账户完整组；旧12账户与288产物不变 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-158` | 下位双模式设计；整流程对照、人工matched规则和冻结机会响应诊断分开；native TWAP不是matched B0 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-159` | 下位双模式设计；队列/动作/反馈与原生事务共同恢复，失败前缀及exact retry无重复成交收费 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-160` | 下位双模式设计；全人口和可回读receipt、source inspect先于收益；估值/MDD/公司行为及归因限制明确 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-161` | 下位双模式设计；保留左侧导航和原账户详情；增量中文模式比较，正常UI无机器编码或JSON | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-162` | 下位双模式设计；旧行为等价、因果/费用/限制、短窗/多日/增量/恢复、端到端性能及复杂度验证 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-163` | 下位双模式设计；离线/展示/在线分阶段，沿用既有scheduler；数据库/数据集/进程/生产授权分开 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-164` | 下位双模式设计；精确范围及四项符合性；设计、功能、历史、运行和经济证据分离 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
@@ -1563,6 +1600,12 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `SIM-P-071` | `F-007,F-009,F-012,F-014` | BUG-984 修复 LocalSIM durable continuation 与 EOD terminal closure：`broker_called` 仅为观察事实，不再拥有 active minute-loop lifecycle；active continuation 必须从 frozen plan、完整 per-intent states、explicit non-terminal persistence、PROJECTED outbox、economic/projection receipts 与 Paper facts strict readback 获得唯一 authority。首次 source/restart 后只读证据进一步确认历史目标 run 已被旧进程写成 `FAILED_TERMINAL` 且仍有 246 个 ACTIVE states；续修把该精确矛盾 incarnation 纳入跨日扫描，在 original trade-date 15:00 exchange time 下复用既有 LocalSIM minute loop，保持 parent/order identity，不重放 predecessor projection。合法终态历史不重复处理；missing/malformed/identity/hash drift 逐 run typed fail loud；same binding/trade-date 继续使用既有 single-flight owner | 初始 source RED/GREEN 与 `simulation_core_l2=411 passed` 保留；continuation RED=`1 failed`（历史 `FAILED_TERMINAL` active generation 未进入恢复）；最终 direct authority matrix=`8 passed`，覆盖 malformed outbox fail-loud、single-flight、EOD terminal closure、合法 terminal history 与重复 cadence 零 order/fill replay；changed-code line/branch=`85.00%/77.27%`；`simulation_core_l2=481 passed,1 skipped`；L0 blocking=0；registry=8 passed/14-of-14 mapped；classifier仅`simulation_core_l2`且unmapped=[]；F2=`112/112` warnings=0；PR #3213 required CI 全绿并合入 | BUG_984_CONTINUATION_SOURCE_MERGED_RUNTIME_PENDING_USER_RESTART | GitHub Issue #3158 保持 OPEN；first source merge=`merged_pr_3161@ab2ab67e8cd8b3ef06e5cd3ba64c5f0dd31a0169`；continuation source merge=`merged_pr_3213@446910d18751cb1eb8c827f4da8842ff63b5c883`；`close_sync=pending_user_restart_identity_and_business_readback`；下一次 `post_restart_effective_gate=pending_user_restart`；production DDL/DML/dependency/config/binding/broker/service-control 全部 `noop` |
 
 `SIM-P-068` 的 PR #2978 initial required CI run `30630489853` 在 Linux/Python 3.12 显式拒绝了 Windows/Python 3.13 生成的 K5 binding。根因不是算法或 route，而是 K4 AST hash 依赖 Python minor-version 的 empty-field 默认值，且 source executor signature 绑定绝对 checkout 路径与 `WindowsPath/PosixPath`。复审补修将 AST 固定为 Python 3.12 full-field canonical shape，将 executor signature 固定为 repo-relative structured payload；Windows/Python 3.13 K5 direct=`12 passed`，Linux/Python 3.12 exact authority=`3 passed`且 fresh binding相同，final required CI run `30640380170`全绿。该补修不改变 Iceberg/Stop、signal/target/side/quantity、B0、OMS/Gateway、K2 shadow 或产品 route，也不新增 gate/审批；source merge已通过PR #2978 / merge `4bf54cf2`闭合。
+
+### 15.0 2026-10-26 LocalSIM 双模式设计增量
+
+| Progress ID | Acceptance IDs | 设计状态 | 源码 / 历史实验 | 运行态 / 生产 | 证据 |
+|---|---|---|---|---|---|
+| `SIM-P-087` | `F-149..F-164` | `DESIGN_ONLY`：保留原生LocalSIM，增加模拟人工及双模式比较 | `IMPLEMENTATION_NOT_STARTED / NOT_RUN`；原12账户/288产物保持 | `NOT_ACTIVATED`；无数据库、数据集、账户或服务操作 | [localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)；本轮设计复核及结构检查，不作为功能或收益证明 |
 
 ### 15.1 运行阻断修复增量账本
 
