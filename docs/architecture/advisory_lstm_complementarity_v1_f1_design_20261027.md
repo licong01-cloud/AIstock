@@ -1,6 +1,6 @@
 # P18 父包—重排互补性与LSTM定向验证（F1）
 
-版本v1.0，2026-10-27，Advisory/model_first。用户明确要求继续研究模型间关联，并验证能否用于LSTM包。P17“不全包推广”不等于关闭包专属研究；本次在原结论之外新增一个事前声明、零fit的定向验证，不直接选择正包上线。
+版本v1.1，2026-10-27，Advisory/model_first。用户明确要求继续研究模型间关联，并验证能否用于LSTM包。P17“不全包推广”不等于关闭包专属研究；本次在原结论之外新增一个事前声明、零fit的定向验证，不直接选择正包上线。研究与独立算术复核已完成，当前固定组合分类为`STRESS_NOT_SUPPORTED_CURRENT_PAIR`；详见[结果报告](../analysis/advisory_lstm_complementarity_20261027.md)。
 
 ## Background / Goal / Feature Card
 
@@ -24,7 +24,7 @@
 
 不以低分数相关等同互补。对四包各D保留50行，报告父分数与重排分数Spearman相关、两者与5TD净值RankIC，以及**控制父评分秩后的偏RankIC**：先将父分数、重排分数、净值做平均秩，去中心后分别从后两者减去对父评分秩的单变量投影，再计算残差相关。该投影只描述已知结果，不形成预测系数/新策略；每个完整组两次统计投影单列计数，模型fit仍0。
 
-条件相关及秩误差相关只在全部50个原成员有成熟已知估值且分数完整的组计算；其它D保留typed缺失，不改变任何预测/经济人口。零方差为UNKNOWN，不填0。报告完整组分母和包/折统计，区间仅描述性；秩误差共享真实秩，相关不能当独立模型误差证明。
+条件相关及秩误差相关只在全部50个原成员有成熟已知估值且分数完整的组计算；其它D保留typed缺失，不改变任何预测/经济人口。零方差为UNKNOWN，不填0。报告完整组分母和包/折统计，区间仅描述性；这里只消除父评分秩的线性项，不证明完整条件独立或新增独立信息源。秩误差共享真实秩，相关不能当独立模型误差证明。
 
 固定JSON的16维线性贡献按六股票量价字段及两父分数/rank字段（含各自missing bit）分解，合计必须等于原decision_score。报告组内标准差和相关，不按贡献删字段、换系数或评价消融策略。互补证据必须同时看条件信息、实际换股收益及跨时段经济结果，不能由一个相关系数直接生产晋升。
 
@@ -60,12 +60,22 @@ R1：源身份/父训练期/两模型目标/原人口及统计公式、窗口消
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-551 | 本文Scope / Model | metadata/package_model_identity.json / parent_model_code.json | PENDING | pending validation |
-| F-552 | lstm_complementarity_v1.py | direct tests / relation report | PENDING | pending validation |
-| F-553 | lstm_complementarity_v1.py | protocol / trained stage | PENDING | pending validation |
-| F-554 | 本文Evaluation | study/evaluated/report.json | PENDING | pending validation |
-| F-555 | 本文Scope / Evaluation | research_audit_receipt.json | PENDING | pending validation |
-| F-556 | 本文Verification Plan | validation_receipt.json / review_receipt.md | PENDING | pending validation |
+| F-551 | 本文Scope / Model；结果报告父模型表 | artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/metadata/package_model_identity.json; metadata/parent_model_code.json | VERIFIED_SOURCE_IDENTITY_NOT_ARCHITECTURE_CAUSALITY | none |
+| F-552 | backend/services/advisory_model_first/lstm_complementarity_v1.py | backend/tests/advisory_model_first/test_lstm_complementarity_v1.py; artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/research_audit_receipt.json | VERIFIED_504_DEVELOPMENT_ROWS_502_COMPLETE_GROUPS_AUDITED | none |
+| F-553 | backend/services/advisory_model_first/lstm_complementarity_v1.py；本文Scope | artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/protocol.json; study/trained/receipt.json | VERIFIED_5900_PREDICTIONS_ZERO_FIT_BEFORE_TARGET_FINANCE | none |
+| F-554 | 本文Evaluation；结果报告压力检验 | artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/study/evaluated/report.json | COMPLETE_STRESS_NOT_SUPPORTED_CURRENT_PAIR | none |
+| F-555 | 本文Scope / Evaluation；结果报告审核与证据 | artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/research_audit_receipt.json | VERIFIED_CONSUMED_DEVELOPMENT_1004_PROJECTIONS_NO_OOS_OR_PRODUCTION | none |
+| F-556 | 本文Verification Plan | backend/tests/advisory_model_first/test_lstm_complementarity_v1.py; artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/review_receipt.md | VERIFIED_DIRECT_TESTS_AND_MULTIPLE_SELF_REVIEWS | none |
+
+## 实际执行与设计符合性
+
+producer `4809683aeb54a9ed8726e4fb1207185e2fd326d1`，protocol SHA `5e8813d19b8f16abbca0a98993fbc081dccbd18d2feb366c2358bcce9458a4ac`。四阶段一次完成，0新模型fit；397开发完整组＋105目标完整组的1,004次统计投影单列。独立进程复核5,900预测、原106共同D净值、10,000次时间块区间以及502组偏秩相关，原P17经济panel逐值一致。
+
+规模/连接审核：开发固定25,200行、目标5,900行，分组每组50行；两次明细连接使用完整KEY，一次组统计连接使用package_id/decision_date，均validate=one_to_one并校验原人口，不允许多对多行膨胀。编码/分数矩阵向量化，统计逐50行组处理，非全市场笛卡尔计算；本次阶段实测约7.48秒/310.77MiB，低于2GiB/30分钟限额。L0三个P2连接规模提示已据此评审，P0/P1为0；不为消除静态提示修改已冻结producer。
+
+LSTM开发偏RankIC +0.073085，三折均正；四包共同80D仍最高，但其它包也有条件信息，不能声称仅LSTM可互补。现有最终模型目标窗118D/113成熟D/106共同D，相对原生−117.757457bps/5TD，描述性区间[−213.653621,−22.406272]；目标偏RankIC −0.007815。保留开发支持与后续负结果，不将已消费窗口或NON_VINTAGE升格独立确认。
+
+多轮自审覆盖身份/窗口、统计与真实算术、经济解释及逐项交付。研究范围完整交付，不把研究完成当模型可上线；未知与缺失保留；未改原经济目标/原生业务语义；无新包门禁或人工确认流程。下一提案为同一SPO+仅改LSTM训练人口、单候选最多三折3fit，需另冻结执行合同，本轮尚未执行。源码CI/合入状态见交付收据，不以文档预记通过。
 
 ## Non-goals / Risks / Production Gates
 
