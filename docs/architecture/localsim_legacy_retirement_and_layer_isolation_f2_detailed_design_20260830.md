@@ -180,6 +180,8 @@ LocalSIM 旧账户、默认生产入口与历史 release 的算法继续为 `loc
 
 新增连续离线消费者可以在同一原生账户中执行多个父订单，按日提交经济事实并恢复已完成前缀；数量继续由 TargetPositionEngine 和 RebalanceIntentService 产生。该能力不改变生产 scheduler 注册、TWAP 路由或现有账户，不能把合成功能场景当作全年真实账户验证。
 
+2026-10-26双模式设计增量：保留以上原生执行、TWAP默认、旧release、独立回放与统一control plane；新增独立选择的模拟人工模式及其政策归属，见[localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)及父蓝图新增验收条目。人工队列属于LocalSIM execution owner，不改变data/signal/execution单向依赖，不增加第二账本或scheduler。首版只规划冻结文件离线实现；本轮只有设计，无生产模式字段启用、账户迁移、回放或服务操作。本节其余same-package validated TWAP约束继续约束现有生产创建路径；新人工生产路径未来必须通过明确schema/profile/release修订，不能借此绕过当前校验。
+
 ### 4.1.1 `SimulationAccountV1`
 
 LocalSIM账户不再以`PaperPortfolio`/session作为运行身份。新control plane建立逻辑`SimulationAccountV1`，至少冻结：
