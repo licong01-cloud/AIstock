@@ -1,6 +1,6 @@
 # LocalSIM 分钟择时最小接入与冻结历史账户验证 F2 详细设计
 
-日期：2026-10-24；状态：DESIGN_FROZEN_IMPLEMENTING；Feature tier：F2。
+日期：2026-10-24；状态：OFFLINE_VERIFIED_PENDING_FINAL_DELIVERY；Feature tier：F2。
 源码基线：9c8db2c420875b1076ea8f2f5ba78e3a9c35e2a2。
 上位：simulation_platform_unified_authoritative_blueprint_20260715.md、localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md。
 消费合同：position_timing_intraday_advice_localsim_blueprint_f2_20261023.md、position_timing_intraday_phase1_f2_detailed_design_20261023.md、position_timing_intraday_research_f2_detailed_design_20261023.md。
@@ -97,9 +97,9 @@ candidate/费用/执行合同从 consumption.json 读取，不覆盖旧 artifact
 |---|---|---|
 | P1 | 核验最新 main、已有原生选股及择时合同；冻结价格偏好消费 schema，形成外部 owner 的精确输入要求 | 已完成：四个冻结文件SHA、原生双端inspect和审计UNKNOWN兼容通过 |
 | P2 | 复用 TargetPositionEngine、RebalanceIntentService 和既有 LocalSIM 账本/OMS；实现多股票、跨日账户执行、共同计划和日事务恢复 | 实现及78个直接节点通过；实际948个账户日原生账本复核通过 |
-| P3 | 合法价格计划返回后，冻结最新 LightGBM＋12 因子、12 个 1000 万元账户，运行 01-05 至 09-30 的连续研究 | 停牌数据修复及受控后继绑定通过，原12账户接续中；10-26 03:11北京时间快照82个完整日、990/2172账户日，人口不变 |
-| P4 | 比较同延迟 B0、费用/最低额、收益/回撤/等待/未成交；验证完整人口、前缀恢复和 exact retry | 原288比较/重试与948日前缀复核通过；年度完整经济比较待合法输入接续 |
-| P5 | 多轮审核修复、直接回归、L0、F2 和最终 HEAD CI 全部通过；更新原 PR、合入、只清理本任务 | 修正版23a589b7的CI1551通过、22跳过；F-010/F-013待真实完整回放及重试，保留草稿/工作树 |
+| P3 | 合法价格计划返回后，冻结最新 LightGBM＋12 因子、12 个 1000 万元账户，运行 01-05 至 09-30 的连续研究 | 完成181日/2172账户日，9050个选股目标及原288不变；完整结果SHA acdea8ab... |
+| P4 | 比较同延迟 B0、费用/最低额、收益/回撤/等待/未成交；验证完整人口、前缀恢复和 exact retry | 2172账户日独立原生账本/目标核验及36组比较通过；exact retry ALREADY_MATERIALIZED且结果SHA不变 |
+| P5 | 多轮审核修复、直接回归、L0、F2 和最终 HEAD CI 全部通过；更新原 PR、合入、只清理本任务 | 源码CI1551通过/22跳过；完整设计证据13项齐全，最终F2/文档HEAD CI/合入与清理由交付收据分别记录 |
 
 P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 P3 已完成。年初连续研究明确采用 `CONFIRMED_FEEDBACK_CLOSED_LOOP`，不是原 288 场景的冻结机会流纯延迟实验。日计划的数量和跨日持仓由 LocalSIM 负责；择时 owner 不负责创建账户、撮合、数量计算或资金管理。
 
@@ -127,7 +127,7 @@ P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 
 
 原固定研究为288个独立场景，每个场景最多240根分钟线，按场景顺序执行，没有跨股票join。连续研究固定12账户、181日、每天50个目标，181日合计9050目标及615个不同股票；单日行情只装载当日目标与实际持仓的并集，12账户共用只读日行情。以D日、A账户、P日内父订单、C决策时点、B分钟前缀计，保守计算量为O(D×A×P×C×B)，不构造多日股票笛卡尔积；终态父订单不再调用核心。按日提交限制未提交状态，历史摘要和NAV轨迹仍随D增长。
 
-组合日只保存一份账户快照和coordinator现金事实；父订单保留 `localsim_timing_parent_audit_v1`，不在每个父订单重复全组合持仓和现金明细，也不能用该审计片段恢复单账户。旧单计划完整receipt和恢复语义不变。四处P2复杂度提示已逐项审查；真实连续运行至05-08阻断实测14,569.20秒、峰值1,585,472KiB；已提交79日/948账户日前缀为2,526,595,722字节。该实测不等于181日总性能；完整年度经济比较尚未生成。
+组合日只保存一份账户快照和coordinator现金事实；父订单保留 `localsim_timing_parent_audit_v1`，不在每个父订单重复全组合持仓和现金明细，也不能用该审计片段恢复单账户。旧单计划完整receipt和恢复语义不变。四处P2复杂度提示已逐项审查；原79日/948账户日前缀至05-08阻断实测14,569.20秒、峰值1,585,472KiB、2,526,595,722字节。后继102日正式接续实测25,463.15秒、峰值2,470,624KiB；完整181日结果及36组经济比较已封存，最终run目录6,564,992,048字节。分阶段计时不冒充无中断全年单次基准；独立核验及exact retry性能见验收报告第11.5节。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -180,9 +180,11 @@ database_read/write=false；dataset_mutation=false；live_market_network=false�
 | F-007 | localsim/timing_store.py/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/recovery-proof-r1.json；retry-metrics-r3.json：原288行SHA不变 | PASS | - |
 | F-008 | localsim/timing_research.py及现有只读比较器 | artifact: X:/AIstock_temp/localsim-position-timing/compare-metrics-r1.json；36组matched B0，先inspect后读结果 | PASS | - |
 | F-009 | WSL离线验证及审计钩子 | artifact: X:/AIstock_temp/localsim-position-timing/native-quantity-validation-r2.json；数据库/数据集/行情/服务操作均false | PASS | - |
-| F-010 | localsim/timing_campaign.py；验收报告第7/10节 | artifact: X:/AIstock_temp/localsim-position-timing/successor-adopt-r11.json；正式后继绑定通过、948账户日前缀保留，已跨过05-08与05-11 | BLOCKED | 原12账户接续运行中；完整181日、2172账户日独立核对及经济比较尚未完成，尚不能合入结项 |
+| F-010 | localsim/timing_campaign.py；验收报告第11节 | artifact: X:/AIstock_temp/localsim-position-timing/continuous-validation-r16.json；181日/2172账户日、9050原生选股目标、36组比较；全部日独立核对通过 | PASS | - |
 | F-011 | localsim/timing_campaign.py/timing_portfolio.py/runtime.py | artifact: X:/AIstock_temp/localsim-position-timing/direct-validation-r5.json；78个直接节点，12账户×2日恢复；real-prefix-validation-r6.json独立复核948日原生账本 | PASS | - |
 | F-012 | localsim/timing_campaign.py/timing_portfolio.py | pytest backend/tests/simulation_execution/test_localsim_timing_campaign.py -q；artifact: X:/AIstock_temp/localsim-position-timing/shared-price-inspection-r4.json：真实181日/73997事件及14 UNKNOWN整批通过 | PASS | - |
-| F-013 | localsim/timing_continuation.py/timing_campaign.py | artifact: X:/AIstock_temp/localsim-position-timing/successor-adopt-r11.json；正式adopt通过；ci-successor-r11.json：当前源码CI1551项通过、22跳过 | PENDING | 正式adopt及05-08/05-11真实接续已通过；待完整运行、2172日独立核对及后继exact retry |
+| F-013 | localsim/timing_continuation.py/timing_campaign.py | artifact: X:/AIstock_temp/localsim-position-timing/offline-completion-r17.json；948日前缀保留、完整2172日核验、后继exact retry ALREADY_MATERIALIZED；结果SHA不变 | PASS | - |
 
-F-011只验收消费能力、功能不变量与原生数量规划，不代替F-010真实历史模拟。F2完整范围仍不满足合入条件，PR保留草稿。源码、离线研究、运行激活和经济效果必须分别报告。
+F-011验收消费能力及功能不变量；F-010由181日真实研究单独验证，F-013由真实后继及exact retry验证，13项设计证据均齐全。源码、离线研究、生产运行激活与经济效果分别报告；年度三规则×四延迟结果不支持宣称择时稳定优于简单执行。最终F2门禁、文档HEAD CI、合入和清理由交付收据记录，不把离线通过当作生产激活。
+
+2026-10-26最终离线验收：`continuous_results.json`完整SHA为`acdea8aba2f7ef3ad4ee26bc3ef4a2b0d389d303b62510b2f0d5d5e351d4f9ba`；年度模型和全部36行指标/状态/初始账户SHA见验收报告第11节。此后续结论覆盖本设计中先前的进展和历史阻断记录；不改写旧产物。原生trade/fee/raw mark模型未新增公司行为现金/数量事件，不据此声称真实全收益或统计超额收益。
