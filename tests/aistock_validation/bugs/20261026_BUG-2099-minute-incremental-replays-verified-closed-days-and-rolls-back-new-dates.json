@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2099",
-  "closed_at": null,
+  "closed_at": "2026-10-26T16:01:43.914091Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,6 +32,7 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "tests/aistock_validation/bugs/20261026_BUG-2099-minute-incremental-replays-verified-closed-days-and-rolls-back-new-dates.json"
     ],
@@ -40,6 +41,7 @@
     ],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "tests/aistock_validation/bugs/20261026_BUG-2099-minute-incremental-replays-verified-closed-days-and-rolls-back-new-dates.json"
     ],
@@ -100,8 +102,8 @@
   },
   "first_seen_at": "2026-10-26T14:47:42.094979Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f38cdac433691a8ece115f2566191abff8ed0a30",
+  "fixed_at": "2026-10-26T15:45:21Z",
   "github_issue_number": 6739,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6739",
   "last_seen_at": "2026-10-26T14:47:42.094979Z",
@@ -109,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6742",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,9 +136,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\october-audit-20261026\\postrestart-BUG-2099.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2099",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "f38cdac433691a8ece115f2566191abff8ed0a30",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-26T16:01:02.027171Z",
+      "mode": "read_only",
+      "observed_identity": "bc7b963f5da2f6a3d582fa8b8927e6354f45bb29",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4ad08882e61472a1d22180f4f1bf723a840898fc2881f4f5c0bc77202ec5509e",
+      "receipt_sha256": "49249c74204dd7b9b4ffa31d4e5818728f074699b5a059f5447b3de3e6d887e9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a4400415a868a272c45aef8eb4018d22e7041b5b994d45973bd75d88055cef27",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -145,7 +171,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2099",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b47e0a777a1bf952",
+    "recorded_at": "2026-10-26T15:45:53.532185Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dc8335a5fccd2be16d9fef739ba53f126a9a7168",
+    "source_merge_commit": "f38cdac433691a8ece115f2566191abff8ed0a30",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6742",
+    "validation_evidence": [
+      "validation-receipt: id=adf03286a6c3e06b commit=dc8335a5fccd2be16d9fef739ba53f126a9a7168 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`127 passed, 1 skipped`",
+      "validation-receipt: id=ae51c841b09e5fb1 commit=dc8335a5fccd2be16d9fef739ba53f126a9a7168 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_daily_sync_recovery.py` result=`62 passed`",
+      "validation-receipt: id=3f8b0205093d1a81 commit=dc8335a5fccd2be16d9fef739ba53f126a9a7168 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`"
+    ],
+    "validation_evidence_digest": "2192af0947a709293b774aa20ec879b525a0877e813cd44f382fb2c05bb7bfe0"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -154,6 +203,12 @@
     "fingerprint": "b6ac4d41c051ae682fdec199",
     "source_event_id": "FE-20261026-b6ac4d41c051"
   },
+  "validation_evidence": [
+    "validation-receipt: id=adf03286a6c3e06b commit=dc8335a5fccd2be16d9fef739ba53f126a9a7168 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`127 passed, 1 skipped`",
+    "validation-receipt: id=ae51c841b09e5fb1 commit=dc8335a5fccd2be16d9fef739ba53f126a9a7168 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_daily_sync_recovery.py` result=`62 passed`",
+    "validation-receipt: id=3f8b0205093d1a81 commit=dc8335a5fccd2be16d9fef739ba53f126a9a7168 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "post-restart-verify backend-main on bc7b963f5da2f6a3d582fa8b8927e6354f45bb29 -> passed; existing DEV and merged CI receipts retained; production data repair remains separately authorized"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
