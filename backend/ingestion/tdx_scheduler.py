@@ -3874,9 +3874,37 @@ class TDXScheduler:
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
         daily_rows = self._fetchall(
-            "SELECT ts_code,volume_hand,volume_shares FROM market.kline_daily_raw WHERE trade_date=%s",
+            """SELECT ts_code,volume_hand,volume_shares,
+                (open_li IS NULL OR high_li IS NULL OR low_li IS NULL OR close_li IS NULL
+                 OR volume_hand IS NULL OR amount_li IS NULL OR open_li<=0 OR low_li<=0
+                 OR high_li<low_li OR open_li NOT BETWEEN low_li AND high_li
+                 OR close_li NOT BETWEEN low_li AND high_li OR volume_hand<0 OR amount_li<0
+                 OR volume_shares<0) AS invalid_fact
+                FROM market.kline_daily_raw WHERE trade_date=%s AND adjust_type='none'""",
             (trade_date,),
         )
+        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
+        if dataset == "kline_daily_raw":
+            # Daily runs before minute collection. A minute-derived denominator
+            # is empty then, and falsely rejects an otherwise complete daily day.
+            # Use the same date-valid provider directory as dispatch, never the
+            # PIT buy pool. Only unambiguous full-day suspension can excuse an
+            # absent quote; missing/invalid traded facts remain incomplete.
+            population = {code for code in self._go_provider_codes(trade_date, trade_date)
+                          if not is_b_share_ts_code(code)}
+            suspended = {str(row["ts_code"]).strip() for row in self._fetchall(
+                """SELECT s.ts_code FROM market.suspend_d s
+                    WHERE s.trade_date=%s GROUP BY s.ts_code
+                    HAVING BOOL_AND(s.suspend_type='S' AND
+                      NULLIF(BTRIM(COALESCE(s.suspend_timing,'')),'') IS NULL)""", (trade_date,),
+            )}
+            expected = population - suspended
+            incomplete = len(expected.difference(daily)) + sum(
+                bool(row["invalid_fact"]) for row in daily_rows
+            )
+            return len(daily_rows), None, {"expected_symbols": len(expected),
+                                           "incomplete_symbols": incomplete}
         day_start = dt.datetime.combine(trade_date, dt.time.min, tzinfo=_CN_TZ)
         minute_rows = self._fetchall(
             """SELECT ts_code,freq,COUNT(*) AS bars,MAX(trade_time) AS data_max_at,
@@ -3892,26 +3920,15 @@ class TDXScheduler:
         )
         # Old B-share facts remain stored, but must not re-enter the completion
         # population after their collection has been disabled.
-        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
         minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
-        daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
-        if dataset == "kline_daily_raw":
-            population = {str(row["ts_code"]).strip() for row in self._fetchall(
-                "SELECT ts_code FROM market.stock_basic WHERE list_date<=%s "
-                "AND (delist_date IS NULL OR delist_date>=%s)", (trade_date, trade_date),
-            )}
-            expected = {code for code, row in minute.items() if row["traded"] and code in population}
-            incomplete = len(expected.difference(daily))
-            row_count, data_max_at = len(daily_rows), None
-        else:
-            expected = {code for code, row in daily.items()
-                        if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
-            incomplete = sum(code not in minute or minute[code]["bars"] != 240
-                             or minute[code]["bad_bars"] > 0 for code in expected)
-            row_count = sum(int(row["bars"]) for row in minute_rows)
-            data_max_at = max((row["data_max_at"] for row in minute_rows
-                               if row["data_max_at"] is not None), default=None)
+        expected = {code for code, row in daily.items()
+                    if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
+        incomplete = sum(code not in minute or minute[code]["bars"] != 240
+                         or minute[code]["bad_bars"] > 0 for code in expected)
+        row_count = sum(int(row["bars"]) for row in minute_rows)
+        data_max_at = max((row["data_max_at"] for row in minute_rows
+                           if row["data_max_at"] is not None), default=None)
         return row_count, data_max_at, {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
 
     def _retry_range_for_health_failure(
