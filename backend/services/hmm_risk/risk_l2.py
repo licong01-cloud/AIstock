@@ -301,7 +301,34 @@ def fit_predict(panel: Mapping[str, Any]) -> dict[str, Any]:
                 ],
             }
         )
+    parameters, fit_stats = fit_parameters(fit_rows)
+    predictions, inactive_changed = predictions_from_parameters(panel["rows"], plan["dev"], codes, parameters)
+    return receipt(
+        {
+            "schema_version": VERSION + "_sealed",
+            "contract": CONTRACT,
+            "status": "PREDICTIONS_SEALED",
+            "feature_sha256": panel["receipt_sha256"],
+            "input_identity": panel["input_identity"],
+            "parameters": parameters,
+            "model_sha256": canonical_sha256(parameters),
+            **fit_stats,
+            "inactive_changed_rows": inactive_changed,
+            "predictions": predictions,
+            "fits": 1,
+            "target_accessed": False,
+            "tail_accessed": False,
+        }
+    )
+
+
+def fit_parameters(fit_rows):
+    """Shared unchanged estimator; callers supply only mature training rows."""
+    if not fit_rows or {r[3] for r in fit_rows} != {0, 1}:
+        raise fail("training requires both event classes", "train_label_evidence_insufficient")
     x = np.asarray([r[2] for r in fit_rows], dtype=np.float64)
+    if x.ndim != 2 or x.shape[1] != len(ALL_CORE_FEATURES) or not np.isfinite(x).all():
+        raise fail("training requires finite original 20D", "fit_failed")
     y = np.asarray([r[3] for r in fit_rows], dtype=np.int64)
     mean, scale = x.mean(axis=0), x.std(axis=0, ddof=0)
     # Exact constant columns can acquire tiny std from mean summation rounding.
@@ -334,26 +361,11 @@ def fit_predict(panel: Mapping[str, Any]) -> dict[str, Any]:
         "classes": model.classes_.tolist(),
         "iterations": model.n_iter_.tolist(),
     }
-    predictions, inactive_changed = predictions_from_parameters(panel["rows"], plan["dev"], codes, parameters)
-    return receipt(
-        {
-            "schema_version": VERSION + "_sealed",
-            "contract": CONTRACT,
-            "status": "PREDICTIONS_SEALED",
-            "feature_sha256": panel["receipt_sha256"],
-            "input_identity": panel["input_identity"],
-            "parameters": parameters,
-            "model_sha256": canonical_sha256(parameters),
-            "fit_rows": len(fit_rows),
-            "fit_dates": len(dates),
-            "sample_weight_sum": float(weights.sum()),
-            "inactive_changed_rows": inactive_changed,
-            "predictions": predictions,
-            "fits": 1,
-            "target_accessed": False,
-            "tail_accessed": False,
-        }
-    )
+    return parameters, {
+        "fit_rows": len(fit_rows),
+        "fit_dates": len(dates),
+        "sample_weight_sum": float(weights.sum()),
+    }
 
 
 def predictions_from_parameters(rows, days, codes, parameters):

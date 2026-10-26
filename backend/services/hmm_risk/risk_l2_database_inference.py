@@ -72,10 +72,7 @@ def validate_request(request):
     require(
         isinstance(source, dict) and set(source) == SOURCE_FIELDS, "database source fields differ; no release fallback"
     )
-    require(
-        isinstance(assets, dict) and set(assets) == {"source_request_path", "sealed_path", "acceptance_path"},
-        "model locators differ",
-    )
+    locators = core.model_locators(assets)
     target = source["database_target"]
     require(
         isinstance(target, dict)
@@ -116,7 +113,7 @@ def validate_request(request):
     )
     for key in ("security_identity_sha256", "provider_absence_sha256"):
         core.reader._require_sha256(source[key], key)
-    for value in [*assets.values(), source["security_identity_manifest"], source["provider_absence_manifest"]]:
+    for value in [*locators, source["security_identity_manifest"], source["provider_absence_manifest"]]:
         require(isinstance(value, str) and Path(value).is_absolute(), "explicit absolute authority locator required")
         require(
             not any(core.inputs.reader._is_link(p) for p in (Path(value), *Path(value).parents)),
