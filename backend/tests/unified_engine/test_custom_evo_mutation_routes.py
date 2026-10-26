@@ -495,9 +495,10 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
 
     req = qe.CustomEvolutionCreateRequest(
         task_name="clone task",
+        node_allocation="explicit",
         target_desc="clone",
         loops=[_loop("clone-a", node_id="node-a"), _loop("clone-b", node_id="node-b")],
-        node_parallelism={"node-a": 2, "node-b": 3},
+        node_parallelism={"node-a": 2, "node-b": 1},
         clone_from_task_id="source-task",
         consumer_id="advisory",
     )
@@ -509,13 +510,85 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
         {"loop_index": 1, "node_id": "node-a"},
         {"loop_index": 2, "node_id": "node-b"},
     ]
-    assert result["node_parallelism"] == {"node-a": 2, "node-b": 3}
+    assert result["node_parallelism"] == {"node-a": 2, "node-b": 1}
     assert dummy.calls[0][0] == "create"
     assert dummy.calls[0][1]["clone_from_task_id"] == "source-task"
     assert dummy.calls[0][1]["consumer_id"] == "advisory"
     loops_config = dummy.calls[0][1]["loops_config"]
     assert all(loop["strategy_params"]["risk_policy"]["enabled"] is True for loop in loops_config)
     assert all("force_exit" in loop["strategy_params"]["risk_policy"]["hard_actions"] for loop in loops_config)
+
+
+@pytest.mark.parametrize("prefilled_node", [None, "rdagent-node1"])
+def test_new_batch_automatically_uses_two_active_nodes_with_versioned_policy(monkeypatch, prefilled_node):
+    from types import SimpleNamespace
+    from backend.services.quantevolver import qe_active_dataset_profile as profiles
+    from backend.services.quantevolver import qe_batch_execution_policy as policy
+
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    profile = SimpleNamespace(raw={"node_bindings": {"rdagent-node1": {}, "wsl2-5080": {}}})
+    monkeypatch.setattr(profiles, "load_active_qe_profile", lambda: profile)
+    monkeypatch.setattr(profiles, "resolve_and_apply_active_qe_dataset", lambda **kwargs: (
+        {"test_start": "2026-04-01", "test_end": "2026-09-30"}, {}, {"release_id": "same-release"},
+    ))
+    identities_checked = []
+
+    async def verify(same_profile, nodes):
+        assert same_profile is profile
+        identities_checked.extend(nodes)
+        return {"dataset_manifest_sha256": "a" * 64}
+
+    monkeypatch.setattr(policy, "verify_batch_dataset_nodes", verify)
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="automatic batch", auto_start=False,
+        node_id="rdagent-node1",
+        loops=[_loop(arm, random_seed=seed, node_id=prefilled_node) for seed in (42, 2024, 2026) for arm in ("B", "R8", "R7")],
+    )
+    result = asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert result["node_parallelism"] == {"rdagent-node1": 2, "wsl2-5080": 2}
+    assert {item["node_id"] for item in result["node_assignments"]} == set(identities_checked)
+    assert len(identities_checked) == 2
+    assert result["execution_policy"]["version"] == policy.QE_BATCH_EXECUTION_POLICY
+    assert result["execution_policy"]["placement"] == "balanced"
+    assert dummy.calls[0][1]["auto_start"] is False
+
+
+def test_new_full_fit_batch_rejects_four_before_creating_any_task(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="unsafe fit", loops=[_loop(node_id="rdagent-node1")],
+        node_allocation="explicit",
+        node_parallelism={"rdagent-node1": 4},
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error_code"] == "QE_BATCH_WORKLOAD_CAPACITY_EXCEEDED"
+    assert dummy.calls == []
+
+
+def test_execution_policy_readback_is_code_owned_and_side_effect_free(monkeypatch):
+    monkeypatch.setattr(qe, "get_conn", lambda: pytest.fail("readback must not write or require DB"))
+    policy = qe.get_batch_execution_policy()
+    assert policy["version"] == "qe_balanced_workload_v1"
+    assert policy["default_node_allocation"] == "balanced"
+    assert policy["per_node_workload_limits"] == {"full_fit_loop": 2, "pure_backtest_loop": 4}
+
+
+def test_balanced_batch_rejects_missing_active_profile_instead_of_falling_back(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    req = qe.CustomEvolutionCreateRequest(task_name="no active binding", loops=[_loop(), _loop()])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert exc.value.status_code == 503
+    assert "QE_BATCH_ACTIVE_PROFILE_REQUIRED" in exc.value.detail
+    assert dummy.calls == []
 
 
 def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
@@ -530,6 +603,7 @@ def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
 
     req = qe.CustomEvolutionCreateRequest(
         task_name="ltr task",
+        node_allocation="explicit",
         target_desc="preserve model params",
         loops=[
             _loop(

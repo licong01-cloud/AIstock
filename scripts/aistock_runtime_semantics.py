@@ -1807,6 +1807,27 @@ def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[st
     return "passed", None, {**required, "universe_count": len(pool_ids)}
 
 
+def _validate_qe_batch_execution_policy(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Prove the loaded QE default placement and workload limits, not just HTTP."""
+    expected = {
+        "version": "qe_balanced_workload_v1",
+        "default_node_allocation": "balanced",
+        "per_node_workload_limits": {"full_fit_loop": 2, "pure_backtest_loop": 4},
+        "slot_lifetime": "whole_loop",
+        "stricter_model_and_global_capacity_guards": "preserved",
+        "existing_task_bindings": "immutable",
+    }
+    if not isinstance(payload, dict):
+        return "failed", "QE execution policy must be a JSON object", {}
+    limits = payload.get("per_node_workload_limits")
+    if not isinstance(limits, dict) or any(type(limits.get(key)) is not int for key in ("full_fit_loop", "pure_backtest_loop")):
+        return "failed", "QE execution policy limits must be integers", {}
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            return "failed", f"QE execution policy mismatch: {field}", {}
+    return "passed", None, expected
+
+
 def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """The OpenAPI document smoke must prove the app serves its route schema."""
     if not isinstance(payload, dict):
