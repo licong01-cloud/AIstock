@@ -28,12 +28,18 @@
   ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2102-monthly-pre-close-correction-reader-rejects-validated-same-day-daily-ref.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_prev_close_repair.py",
-      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2102-monthly-pre-close-correction-reader-rejects-validated-same-day-daily-ref.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_prev_close_repair.py",
@@ -111,12 +117,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["X:/AIstock_dataset_candidates/data_repair_staging/hmm-prev-close-five-20261027-r1/monthly-fresh-readback.json"],
+    "fresh_process_evidence": [
+      "X:/AIstock_dataset_candidates/data_repair_staging/hmm-prev-close-five-20261027-r1/monthly-fresh-readback.json"
+    ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
