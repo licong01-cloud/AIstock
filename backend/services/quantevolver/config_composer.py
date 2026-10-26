@@ -5089,8 +5089,8 @@ class ConfigComposer:
             return {}
         raw = custom_params["feature_processing"]
         prefix = "qe_feature_processing_invalid: "
-        if not isinstance(raw, dict) or set(raw) - {"exclude_from_model", "clip_outlier"}:
-            raise ValueError(prefix + "expected exclude_from_model/clip_outlier object")
+        if not isinstance(raw, dict) or set(raw) - {"exclude_from_model", "clip_outlier", "raw_state_controls"}:
+            raise ValueError(prefix + "expected exclude_from_model/clip_outlier/raw_state_controls object")
         if custom_params.get("disable_alpha158") is not True or not factor_names:
             raise ValueError(prefix + "requires custom factors and disable_alpha158=true")
         excluded = raw.get("exclude_from_model", [])
@@ -5104,15 +5104,47 @@ class ConfigComposer:
             or set(excluded) - set(factor_names)
         ):
             raise ValueError(prefix + "exclude_from_model must name unique computed factors")
+        controls = None
+        if "raw_state_controls" in raw:
+            controls = raw["raw_state_controls"]
+            if (
+                not isinstance(controls, dict)
+                or set(controls) != {"schema_version", "source_factor", "valid_column", "zero_column"}
+                or controls.get("schema_version") != "qe_raw_state_controls_v1"
+            ):
+                raise ValueError(prefix + "expected complete qe_raw_state_controls_v1 declaration")
+            source = controls["source_factor"]
+            outputs = [controls["valid_column"], controls["zero_column"]]
+            if not isinstance(source, str) or source not in factor_names:
+                raise ValueError(prefix + "raw_state_controls source must be a computed factor")
+            if (
+                any(not isinstance(name, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None for name in outputs)
+                or len(set(outputs)) != 2
+                or set(outputs) & set(factor_names)
+                or len(set(factor_names)) != len(factor_names)
+            ):
+                raise ValueError(prefix + "raw_state_controls outputs must be distinct noncolliding identifiers")
+            controls = dict(controls)
         selected = [name for name in factor_names if name not in excluded]
+        if controls is not None:
+            # Keep shared AF/Z columns in the same order in both arms; append F last.
+            source_selected = controls["source_factor"] in selected
+            selected = [name for name in selected if name != controls["source_factor"]]
+            selected.extend([controls["valid_column"], controls["zero_column"]])
+            if source_selected:
+                selected.append(controls["source_factor"])
         if not selected:
             raise ValueError(prefix + "cannot exclude all model features")
-        return {
+        normalized = {
             "computed_factor_names": list(factor_names),
             "model_feature_names": selected,
             "exclude_from_model": list(excluded),
             "clip_outlier": clip,
         }
+        if controls is not None:
+            normalized["raw_state_controls"] = controls
+            normalized["derived_control_names"] = [controls["valid_column"], controls["zero_column"]]
+        return normalized
 
     @staticmethod
     def _normalize_observation_panel_contract(
@@ -5801,6 +5833,11 @@ class ConfigComposer:
         lines.append("def _select_factor_results(factor_names, factor_results):")
         lines.append("    if QE_OBSERVATION_PANEL_CONTRACT" + (" or QE_FEATURE_PROCESSING:" if feature_processing else ":"))
         lines.append("        _require_factor_results(factor_names, factor_results)")
+        if feature_processing.get("raw_state_controls"):
+            lines.append("        for name in factor_names:")
+            lines.append("            frame = factor_results[name]")
+            lines.append("            if not frame.index.is_unique or list(frame.columns) != [name]:")
+            lines.append("                raise ValueError('qe_raw_state_controls_invalid: nonunique index or ambiguous factor columns: ' + name)")
         lines.append("        return [factor_results[name] for name in factor_names]")
         lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
         lines.append("    # omitted while the remaining successful factors still form the outer union.")
@@ -5845,6 +5882,33 @@ class ConfigComposer:
         lines.append("    return filtered")
         lines.append("")
         lines.append("")
+        if feature_processing.get("raw_state_controls"):
+            lines.extend('''def _derive_raw_state_controls(combined):
+    contract = QE_FEATURE_PROCESSING['raw_state_controls']
+    prefix = 'qe_raw_state_controls_invalid: '
+    if not combined.index.is_unique or not combined.columns.is_unique:
+        raise ValueError(prefix + 'expected unique index and columns')
+    source = contract['source_factor']
+    outputs = [contract['valid_column'], contract['zero_column']]
+    if source not in combined.columns or any(name in combined.columns for name in outputs):
+        raise ValueError(prefix + 'source missing or output collision')
+    raw = combined[source]
+    if (
+        not pd.api.types.is_numeric_dtype(raw.dtype)
+        or pd.api.types.is_bool_dtype(raw.dtype)
+        or pd.api.types.is_complex_dtype(raw.dtype)
+    ):
+        raise ValueError(prefix + 'source must be real numeric, nonpositive or NA')
+    values = raw.to_numpy(dtype=float, na_value=np.nan)
+    if np.isinf(values).any() or (values > 0).any():
+        raise ValueError(prefix + 'source must be nonpositive or NA; do not guess direction')
+    result = combined.copy()
+    result[outputs[0]] = np.isfinite(values).astype('int8')
+    result[outputs[1]] = (values == 0).astype('int8')
+    return result
+
+
+'''.splitlines())
         lines.append("def main():")
         lines.append("    script_dir = os.path.dirname(os.path.abspath(__file__))")
         lines.append("    os.chdir(script_dir)")
@@ -5907,6 +5971,8 @@ class ConfigComposer:
         lines.append("        combined = combined.sort_index()")
         lines.append("")
         lines.append("    combined = _apply_observation_panel(combined)")
+        if feature_processing.get("raw_state_controls"):
+            lines.append("    combined = _derive_raw_state_controls(combined)")
         if feature_processing:
             lines.append("    # Project only the run-local model input, after the unchanged reference mask.")
             lines.append("    combined = combined.loc[:, QE_FEATURE_PROCESSING['model_feature_names']].copy()")
