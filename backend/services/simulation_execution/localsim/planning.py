@@ -67,6 +67,13 @@ class LocalSimPlanner:
             raise malformed("execution_policy algo_code is missing or blank")
         if algo_code == "TWAP":
             return
+        from .timing import ALGO_CODE, require_timing_policy
+
+        if algo_code == ALGO_CODE:
+            require_timing_policy({"policy_version_id": plan_policy_id,
+                                   "policy_sha256": payload.get("policy_sha256"),
+                                   "policy_json": policy_json})
+            return
         raise RuntimeConfigInvalidError(
             "LocalSIM existing execution plan is not eligible under the TWAP-only runtime policy",
             context={
