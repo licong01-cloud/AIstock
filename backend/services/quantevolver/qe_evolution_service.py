@@ -6380,6 +6380,10 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             node_id,
         )
+        from .qe_batch_execution_policy import bind_batch_model_nodes
+        loops_config = bind_batch_model_nodes(
+            loops_config, available_nodes=sorted(selected_node_ids), balanced=False,
+        )
         node_parallelism = batch_node_parallelism(loops_config, node_parallelism)
         for loop_cfg in loops_config:
             loop_cfg.setdefault(POLICY_KEY, {
@@ -7096,6 +7100,14 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             task_node_id,
         )
+        policies = [cfg.get(POLICY_KEY) for cfg in loops_config if cfg.get(POLICY_KEY)]
+        if any(p.get("version") == QE_BATCH_EXECUTION_POLICY for p in policies):
+            from .qe_batch_execution_policy import bind_batch_model_nodes
+            loops_config = bind_batch_model_nodes(
+                loops_config, available_nodes=sorted(selected_node_ids), balanced=False,
+            )
+            for cfg in loops_config:
+                cfg.setdefault(POLICY_KEY, dict(policies[0]))
         node_parallelism = strategy_node_parallelism(loops_config, raw_node_parallelism)
         return loops_config, loop1_node_id, node_parallelism
 
@@ -7811,6 +7823,14 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         effective_node_id = loop_config.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
+        if (loop_config.get(POLICY_KEY) or {}).get("version") == QE_BATCH_EXECUTION_POLICY:
+            from .qe_batch_execution_policy import bind_batch_model_nodes
+            validation_config = {**loop_config, "node_id": effective_node_id}
+            if force_full_train:
+                validation_config.update(backtest_only=False, prediction_replay=False)
+            bind_batch_model_nodes(
+                [validation_config], available_nodes=[effective_node_id], balanced=False,
+            )
         submission_source_execution_id, submission_source_claim_id = (
             self._custom_evo_submission_identity(
                 loop_config,

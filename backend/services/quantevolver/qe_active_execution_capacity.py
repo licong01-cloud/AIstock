@@ -1138,9 +1138,10 @@ class QEWorkspaceSubmissionCoordinator:
             backtest_only=same_task_backtest_cohort or durable_replay_cohort,
             parallel_training=same_task_parallel_training_cohort,
         )
-        # Whole-loop admission also covers retry/force-full-train: a replay
-        # task configured for four must never admit four simultaneous fits.
-        if source.source_kind == "qe_evolution_loop" and not source.backtest_only:
+        # WSL GPU training keeps its tighter cap, including replay-to-fit retry.
+        # Remote CPU models retain their established four-Loop capacity.
+        if (source.source_kind == "qe_evolution_loop" and not source.backtest_only
+                and self._capacity_service.is_wsl_node(source.node_id)):
             physical_capacity = min(physical_capacity, QE_TRAINING_LOOP_CAPACITY)
         capacity = self._effective_consumer_capacity(
             physical_capacity,
