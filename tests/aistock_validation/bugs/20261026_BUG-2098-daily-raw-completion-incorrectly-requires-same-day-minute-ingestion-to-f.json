@@ -31,12 +31,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "tests/aistock_validation/bugs/20261026_BUG-2098-daily-raw-completion-incorrectly-requires-same-day-minute-ingestion-to-f.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "tests/aistock_validation/bugs/20261026_BUG-2098-daily-raw-completion-incorrectly-requires-same-day-minute-ingestion-to-f.json"
     ],
@@ -97,8 +99,8 @@
   },
   "first_seen_at": "2026-10-26T14:31:30.629979Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6c2c46865223ba02fe49bf428493d409c4dcd243",
+  "fixed_at": "2026-10-26T15:44:10Z",
   "github_issue_number": 6737,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6737",
   "last_seen_at": "2026-10-26T14:31:30.629979Z",
@@ -106,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6741",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,6 +134,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -142,7 +146,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2098",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3598c257cf4275d9",
+    "recorded_at": "2026-10-26T15:44:54.888426Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f1e001aefd31c570476ca8dca0cabb5743ba1eba",
+    "source_merge_commit": "6c2c46865223ba02fe49bf428493d409c4dcd243",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6741",
+    "validation_evidence": [
+      "validation-receipt: id=5c29c06adecb34ea commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`118 passed, 1 skipped`",
+      "validation-receipt: id=ce1086385b188e06 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_daily_sync_recovery.py` result=`62 passed`",
+      "validation-receipt: id=e4fec219bc598134 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`"
+    ],
+    "validation_evidence_digest": "ae7e367b85cb3ba533cd937abbc185f8204dda03af252353c0229146f5e67427"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -151,6 +178,11 @@
     "fingerprint": "b66919efc69e3489bae86baf",
     "source_event_id": "FE-20261026-b66919efc69e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5c29c06adecb34ea commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`118 passed, 1 skipped`",
+    "validation-receipt: id=ce1086385b188e06 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_daily_sync_recovery.py` result=`62 passed`",
+    "validation-receipt: id=e4fec219bc598134 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
