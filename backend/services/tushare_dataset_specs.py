@@ -28,6 +28,76 @@ def stk_limit_prices_valid(row: Any) -> bool:
         return False
 
 
+def complete_stk_limit_daily_references(rows, daily_rows, trade_date):
+    """Supplement only invalid references with the same day's official daily fact.
+
+    This is NOT a shifted close: daily.pre_close already contains the provider's
+    ex-right reference. Keep finite original references and every limit intact.
+    The proof is shared by ingestion, bounded repair and frozen corrections.
+    """
+    day = str(trade_date).replace("-", "")
+
+    def positive(value):
+        try:
+            number = Decimal(str(value))
+            return not isinstance(value, bool) and number.is_finite() and number > 0
+        except (InvalidOperation, ValueError, TypeError):
+            return False
+
+    def number(value):
+        return None if value is None else format(Decimal(str(value)).normalize(), "f")
+
+    def keyed(items):
+        result = {}
+        for row in items:
+            code = row.get("ts_code")
+            if (not isinstance(code, str) or not code or code in result
+                    or str(row.get("trade_date")).replace("-", "") != day
+                    or "pre_close" not in row):
+                raise ValueError("same-day reference source key/date differs or is duplicated")
+            result[code] = row
+        return result
+
+    source, references = keyed(rows), keyed(daily_rows)
+    output, facts = [], []
+    for code, original in source.items():
+        row = dict(original)
+        daily = references.get(code)
+        if not positive(original.get("pre_close")) and daily is not None:
+            candidate = {**original, "pre_close": daily["pre_close"]}
+            if positive(daily["pre_close"]) and stk_limit_prices_valid(candidate):
+                row["pre_close"] = daily["pre_close"]
+                facts.append({"ts_code": code, "trade_date": day,
+                              "original_pre_close": number(original.get("pre_close")),
+                              "pre_close": number(daily["pre_close"]),
+                              "up_limit": number(row["up_limit"]), "down_limit": number(row["down_limit"])})
+        output.append(row)
+    return output, {"schema_version": "stk_limit_daily_reference_enrichment_v1",
+                    "trade_date": str(trade_date), "source_api": "tushare.daily",
+                    "source_field": "pre_close", "filled_reference_count": len(facts),
+                    "unresolved_reference_count": sum(not positive(row.get("pre_close")) for row in output),
+                    "facts": sorted(facts, key=lambda row: row["ts_code"])}
+
+
+def validate_stk_limit_daily_reference_proof(proof, source_rows, trade_date):
+    """Reproduce a mixed-source repair instead of relabeling it as stk_limit."""
+    if (not isinstance(proof, dict) or proof.get("schema_version") != "stk_limit_daily_reference_enrichment_v1"
+            or proof.get("source_api") != "tushare.daily" or proof.get("source_field") != "pre_close"
+            or proof.get("trade_date") != str(trade_date) or not proof.get("facts")):
+        raise ValueError("daily reference enrichment proof differs")
+    facts = proof["facts"]
+    original = [{**row, "pre_close": row["original_pre_close"]} for row in facts]
+    merged, repeated = complete_stk_limit_daily_references(original, facts, trade_date)
+    if repeated["facts"] != facts or repeated["filled_reference_count"] != proof.get("filled_reference_count"):
+        raise ValueError("daily reference enrichment facts do not reproduce")
+    by_key = {(row["ts_code"], row["trade_date"]): row for row in source_rows}
+    for row in merged:
+        published = by_key.get((row["ts_code"], row["trade_date"]))
+        if published is None or any(Decimal(str(row[key])) != Decimal(str(published[key]))
+                                    for key in ("pre_close", "up_limit", "down_limit")):
+            raise ValueError("daily reference enrichment differs from published facts")
+
+
 class QueryMode(str, Enum):
     """How the engine iterates over the Tushare API."""
     BY_DATE = "by_date"            # one API call per trade_date

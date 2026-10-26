@@ -14,7 +14,7 @@ import os
 import time
 import uuid
 from zoneinfo import ZoneInfo
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
@@ -33,7 +33,9 @@ from .data_sync_targets import (
     publication_target_date,
 )
 from .tushare_rate_limiter import get_limiter
-from .tushare_dataset_specs import DAILY_BASIC, DatasetSpec, QueryMode, stk_limit_prices_valid
+from .tushare_dataset_specs import (
+    DAILY_BASIC, DatasetSpec, QueryMode, complete_stk_limit_daily_references, stk_limit_prices_valid,
+)
 
 PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
 FINANCIAL_EVENT_RAW_DATASETS = {
@@ -698,14 +700,32 @@ class TushareSyncEngine:
             "provider may ignore offset or return more data than expected"
         )
 
-    def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
+    def _complete_stk_limit_references(self, spec, rows, trade_date):
+        if all(_is_finite_number(row.get("pre_close")) and not isinstance(row.get("pre_close"), bool)
+               and float(row["pre_close"]) > 0 for row in rows):
+            return rows, None
+        reference = replace(spec, name="stk_limit_daily_reference", tushare_api="daily",
+                            columns={"ts_code": "text", "trade_date": "date", "pre_close": "numeric"},
+                            api_field_map={})
+        daily_rows = self._fetch_from_tushare(reference, {"trade_date": trade_date.strftime("%Y%m%d")})
+        return complete_stk_limit_daily_references(rows, daily_rows, trade_date)
+
+    def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, reference_fill_only_codes=()) -> int:
+        if reference_fill_only_codes:
+            if spec.name != "stk_limit":
+                raise ValueError("reference-only supplement is restricted to stk_limit")
+            codes = set(reference_fill_only_codes)
+            original = [row for row in rows if row["ts_code"] not in codes]
+            supplemented = [row for row in rows if row["ts_code"] in codes]
+            return (self._upsert_plain_batch(conn, spec, original)
+                    + self._upsert_plain_batch(conn, spec, supplemented, fill_only_reference=True))
         if spec.name == "sw_index_member":
             from .sw_industry_history_store import store_member_refresh
 
             return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
         return self._upsert_plain_batch(conn, spec, rows)
 
-    def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
+    def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, fill_only_reference=False) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
         if not rows:
             return 0
@@ -720,6 +740,10 @@ class TushareSyncEngine:
         # retain their own restatement contracts.
         table = spec.target_table.rsplit(".", 1)[1]
         update_set = ", ".join(
+            "pre_close=CASE WHEN stk_limit.pre_close IS NULL OR stk_limit.pre_close<=0 "
+            "OR stk_limit.pre_close::text IN ('NaN','Infinity','-Infinity') "
+            "THEN EXCLUDED.pre_close ELSE stk_limit.pre_close END"
+            if fill_only_reference and c == "pre_close" else
             f"{c}=COALESCE(EXCLUDED.{c}, {table}.{c})"
             if spec.name in LATE_PUBLICATION_TAIL_DAYS else f"{c}=EXCLUDED.{c}"
             for c in non_pk
@@ -1385,6 +1409,9 @@ class TushareSyncEngine:
             try:
                 rows = self._fetch_from_tushare(spec, {spec.date_param_name: ymd})
                 self._validate_rows_for_date(spec, rows, d)
+                reference_enrichment = None
+                if spec.name == "stk_limit" and rows:
+                    rows, reference_enrichment = self._complete_stk_limit_references(spec, rows, d)
                 if spec.row_limit > 0 and len(rows) >= spec.row_limit and not spec.fetch_params.get("limit"):
                     raise RuntimeError(
                         f"{spec.name} {spec.date_param_name}={ymd} returned {len(rows)} rows; "
@@ -1396,6 +1423,9 @@ class TushareSyncEngine:
                     self._validate_rows_for_date(spec, rows, d)
                 if spec.replace_existing_dates:
                     inserted = self._replace_date_batch(conn, spec, d, rows)
+                elif reference_enrichment is not None and reference_enrichment["filled_reference_count"]:
+                    inserted = self._upsert_batch(conn, spec, rows,
+                        reference_fill_only_codes=[row["ts_code"] for row in reference_enrichment["facts"]])
                 else:
                     inserted = self._upsert_batch(conn, spec, rows)
                 if inserted == 0 and spec.name not in ZERO_ROW_VALID_DATASETS:
@@ -1421,6 +1451,13 @@ class TushareSyncEngine:
                     publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
                     audit_metadata["publication_quality"] = publication_quality
                 if spec.name == "stk_limit":
+                    if reference_enrichment is not None:
+                        from .dataset_release.canonical import canonical_json_bytes
+                        import hashlib
+                        audit_metadata["reference_enrichment"] = {
+                            key: value for key, value in reference_enrichment.items() if key != "facts"}
+                        audit_metadata["reference_enrichment"]["facts_sha256"] = hashlib.sha256(
+                            canonical_json_bytes(reference_enrichment["facts"])).hexdigest()
                     publication_quality, field_quality = _stk_limit_publication_quality(rows)
                     audit_metadata["publication_quality"] = publication_quality
                     # Do not downgrade an existing partial-row coverage failure

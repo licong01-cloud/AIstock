@@ -3,6 +3,9 @@
   "allowed_write_scope": [
     "scripts/repair_stk_limit_pre_close.py",
     "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+    "backend/services/tushare_dataset_specs.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
     "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json"
   ],
   "assigned_agent": null,
@@ -14,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-26T18:10:47.754014Z",
-  "description": "Production reference facts and frozen daily bins both miss the same five keys; HMM fails before training.",
+  "description": "Live exact source probe confirms four 2024-07-23 stk_limit NULL references still exist upstream while the same-date daily API returns authoritative ex-right references 16.90,8.02,8.52,2.25; 600705.SH/2024-07-24 now has 2.23 in both APIs. Native ingestion and bounded repair lacked a same-date daily-reference supplement, the historical keys were outside the rolling retry tail and prior fourteen-key repair, and the inherited frozen prev_close bins kept NULL. Add shared typed enrichment, keep primary finite values and SQL-protect database finite references, retain exact source provenance; no yesterday-close inference. Monthly reader integration is separate BUG-2102 due its distinct worker runtime target. Five exact DEV repairs and repeat/fresh readback PASS; production DML and active/candidate publication remain pending separately.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +31,22 @@
   ],
   "expected": "Authoritative same-day finite reference facts are retained, missing values remain explicit until source-backed repair, and shared corrections reach daily frozen files without replacing unaffected components.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/repair_stk_limit_pre_close.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/repair_stk_limit_pre_close.py",
-      "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
+      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/repair_stk_limit_pre_close.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/repair_stk_limit_pre_close.py",
@@ -114,15 +127,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "X:/AIstock_dataset_candidates/data_repair_staging/hmm-prev-close-five-20261027-r1/dev-independent-readback.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
