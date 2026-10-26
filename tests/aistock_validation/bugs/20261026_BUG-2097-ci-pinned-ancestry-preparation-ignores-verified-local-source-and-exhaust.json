@@ -7,6 +7,57 @@
   ],
   "assigned_agent": "codex-pipeline-20261026",
   "bug_id": "BUG-2097",
+  "ci_ancestry_repair_20261026": {
+    "blocked_pr": "https://github.com/licong01-cloud/AIstock/pull/6732",
+    "design_compliance_review": {
+      "business_semantics_unchanged": true,
+      "no_new_approval_gate": true,
+      "no_partial_delivery": true,
+      "no_silent_success": true
+    },
+    "diagnosis": "Verified mirror lacks event base and PR parent b4781a186010236c7882efceb126cb7fd73dd1dd; canonical local source has both. Remote-only ancestry preparation times out before business tests.",
+    "direct_tests": {
+      "file": "backend/tests/scripts/test_ci_changed_files.py",
+      "passed": 27
+    },
+    "event_base": "f57d64cb71aec95f6f3f47bf79f5cb7cd75e9a07",
+    "failure_run": "https://github.com/licong01-cloud/AIstock/actions/runs/40323434899",
+    "hmm_continuation": "Source merge after real new-head CI; full-file prepare; bounded 4-fit comparison; file/database dual-entry zero-fit verification and effects analysis; separate QE and advisory/LocalSIM owner handoffs. Reuse existing worktree and completed artifacts.",
+    "isolated_pinned_probe": {
+      "changed_files_count": 9,
+      "elapsed_seconds": 8.64,
+      "fetch_attempts": 1,
+      "kind": "synthetic merge using real event base/source SHA, not a real CI pass",
+      "local_source_status": "proven",
+      "receipt": "tmp/validation/BUG-2097/pr-6732-ancestry-receipt.json",
+      "remote_fetch_attempts": 0
+    },
+    "observed_mirror_main": "8dc2606733067115d026220fc37533e8e284e1b2",
+    "production_gates": {
+      "database": "untouched",
+      "formal_fit_count": 0,
+      "hmm_worktree": "untouched",
+      "services": "untouched"
+    },
+    "review_rounds": [
+      {
+        "result": "Only CI changed-file tooling and its direct tests; no HMM source/model/data changes.",
+        "round": 1,
+        "scope": "Root cause and ownership"
+      },
+      {
+        "result": "Configured local repository identity, exact immutable base/source, shallow source rejection, unavailable origin, source ref stability, invalid identity and bounded remote fallback covered. Total local plus remote fetch attempts remain at most 3; 150-second budget and 3-minute CI step unchanged.",
+        "round": 2,
+        "scope": "Identity and fail-closed budget"
+      },
+      {
+        "result": "Real PR event identities proven in isolated shallow Git fixture; exact 9-file source diff. HMM PR must sync main and pass new-head CI before merge and research.",
+        "round": 3,
+        "scope": "Real pinned ancestry and delivery boundary"
+      }
+    ],
+    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d"
+  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -28,12 +79,18 @@
   ],
   "expected": "Exact base and source ancestry is proven within the existing budget from verified local objects when available; missing or mismatched identity fails closed and remote fallback remains bounded.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "scripts/ci_changed_files.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2097-ci-pinned-ancestry-preparation-ignores-verified-local-source-and-exhaust.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_ci_changed_files.py",
       "scripts/ci_changed_files.py",
-      "backend/tests/scripts/test_ci_changed_files.py"
+      "tests/aistock_validation/bugs/20261026_BUG-2097-ci-pinned-ancestry-preparation-ignores-verified-local-source-and-exhaust.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ci_changed_files.py",
@@ -112,10 +169,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -232,56 +291,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "ci_ancestry_repair_20261026": {
-    "blocked_pr": "https://github.com/licong01-cloud/AIstock/pull/6732",
-    "failure_run": "https://github.com/licong01-cloud/AIstock/actions/runs/40323434899",
-    "event_base": "f57d64cb71aec95f6f3f47bf79f5cb7cd75e9a07",
-    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d",
-    "observed_mirror_main": "8dc2606733067115d026220fc37533e8e284e1b2",
-    "diagnosis": "Verified mirror lacks event base and PR parent b4781a186010236c7882efceb126cb7fd73dd1dd; canonical local source has both. Remote-only ancestry preparation times out before business tests.",
-    "direct_tests": {
-      "passed": 27,
-      "file": "backend/tests/scripts/test_ci_changed_files.py"
-    },
-    "isolated_pinned_probe": {
-      "elapsed_seconds": 8.64,
-      "local_source_status": "proven",
-      "fetch_attempts": 1,
-      "remote_fetch_attempts": 0,
-      "changed_files_count": 9,
-      "kind": "synthetic merge using real event base/source SHA, not a real CI pass",
-      "receipt": "tmp/validation/BUG-2097/pr-6732-ancestry-receipt.json"
-    },
-    "review_rounds": [
-      {
-        "round": 1,
-        "scope": "Root cause and ownership",
-        "result": "Only CI changed-file tooling and its direct tests; no HMM source/model/data changes."
-      },
-      {
-        "round": 2,
-        "scope": "Identity and fail-closed budget",
-        "result": "Configured local repository identity, exact immutable base/source, shallow source rejection, unavailable origin, source ref stability, invalid identity and bounded remote fallback covered. Total local plus remote fetch attempts remain at most 3; 150-second budget and 3-minute CI step unchanged."
-      },
-      {
-        "round": 3,
-        "scope": "Real pinned ancestry and delivery boundary",
-        "result": "Real PR event identities proven in isolated shallow Git fixture; exact 9-file source diff. HMM PR must sync main and pass new-head CI before merge and research."
-      }
-    ],
-    "design_compliance_review": {
-      "no_partial_delivery": true,
-      "no_silent_success": true,
-      "business_semantics_unchanged": true,
-      "no_new_approval_gate": true
-    },
-    "production_gates": {
-      "services": "untouched",
-      "database": "untouched",
-      "hmm_worktree": "untouched",
-      "formal_fit_count": 0
-    },
-    "hmm_continuation": "Source merge after real new-head CI; full-file prepare; bounded 4-fit comparison; file/database dual-entry zero-fit verification and effects analysis; separate QE and advisory/LocalSIM owner handoffs. Reuse existing worktree and completed artifacts."
   }
 }
