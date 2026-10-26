@@ -254,6 +254,93 @@ def test_git_timeout_and_fetch_budget_remain_fail_closed(tmp_path: Path, monkeyp
         changed_files_module._git(tmp_path, "rev-parse", timeout=0.01)
 
 
+def test_stale_mirror_and_missing_pr_parents_use_exact_verified_local_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, old_base, event_base, feature = _repo_with_stale_pr_base(tmp_path)
+    _git(source, "branch", "old-main", old_base)
+    mirror = tmp_path / "mirror.git"
+    _git(tmp_path, "clone", "--bare", "--single-branch", "--branch", "old-main", source.as_uri(), str(mirror))
+    _git(mirror, "update-ref", "refs/heads/main", old_base)
+    _git(mirror, "config", "aistock.repository", "licong01-cloud/AIstock")
+    Path(str(mirror) + ".aistock-mirror.json").write_text(json.dumps({
+        "schema_version": "aistock_git_object_mirror_v1", "repository": "licong01-cloud/AIstock",
+        "main_sha": old_base, "mirror_root": str(mirror), "object_directory": str(mirror / "objects")}), encoding="utf-8")
+    _git(source, "checkout", "feature")
+    for index in range(4):
+        _write(source, "docs/hmm.md", f"change {index}\n")
+        feature = _commit(source, "feature advances")
+    _git(source, "checkout", "main")
+    _git(source, "merge", "--no-ff", "feature", "-m", "integration")
+    workspace = tmp_path / "workspace"
+    _git(tmp_path, "clone", "--depth=2", source.as_uri(), str(workspace))
+    _git(workspace, "remote", "set-url", "origin", str(tmp_path / "unavailable-origin"))
+    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
+    before = _git(source, "show-ref")
+    monkeypatch.setenv("AISTOCK_SELF_HOSTED_SOURCE", str(source))
+    monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(mirror / "objects"))
+    receipt = prepare_pr_merge_base(repo_root=workspace, base_ref="main", base_sha=event_base,
+        checkout_ref="refs/pull/6732/merge", source_head_sha=feature)
+    assert receipt["local_mirror_ancestry"]["status"] == "warning"
+    assert receipt["local_source_ancestry"] == {"status": "proven"}
+    assert receipt["fetch_used"] is True and receipt["fetch_attempts"] == 1
+    assert receipt["remote_fetch_attempts"] == 0
+    assert receipt["source_head_commit"] == feature and receipt["base_commit"] == event_base
+    assert receipt["merge_base"] == old_base
+    assert _git(source, "show-ref") == before
+    assert build_changed_files(repo_root=workspace, base_ref="main", base_sha=event_base, head_sha=feature)[0] == [
+        "docs/hmm.md", "tests/aistock_validation/bugs/BUG.json"]
+
+
+@pytest.mark.parametrize("invalid", ["repository", "missing_source", "shallow", "relative"])
+def test_local_source_rejects_unverified_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str) -> None:
+    source, base, _, feature = _repo_with_stale_pr_base(tmp_path)
+    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/" + ("other.git" if invalid == "repository" else "AIstock.git"))
+    if invalid == "missing_source":
+        feature = "f" * 40
+    if invalid == "shallow":
+        (source / ".git/shallow").write_text(base + "\n", encoding="ascii")
+    monkeypatch.setenv("AISTOCK_SELF_HOSTED_SOURCE", "relative" if invalid == "relative" else str(source))
+    assert changed_files_module._verified_local_source(tmp_path, base, feature) is None
+
+
+@pytest.mark.parametrize("remote_ok", [False, True])
+def test_local_source_failure_preserves_bounded_remote_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote_ok: bool) -> None:
+    source, base, _, feature = _repo_with_stale_pr_base(tmp_path)
+    _git(source, "checkout", "feature")
+    real_git = changed_files_module._git
+    calls = []
+    fetched = False
+
+    def git(root: Path, *args: str, **kwargs: object) -> str:
+        nonlocal fetched
+        if args[0] == "fetch":
+            calls.append((args, kwargs["timeout"]))
+            if args[4] != "origin":
+                raise ChangedFilesError("local source unavailable")
+            if not remote_ok:
+                raise ChangedFilesError("origin unavailable")
+            fetched = True
+            return ""
+        if args[0] == "merge-base" and not fetched:
+            raise ChangedFilesError("shallow history")
+        return real_git(root, *args, **kwargs)
+
+    monkeypatch.setattr(changed_files_module, "_git", git)
+    monkeypatch.setattr(changed_files_module, "_restore_local_mirror_ancestry", lambda *args: {"status": "not_required"})
+    monkeypatch.setattr(changed_files_module, "_verified_local_source", lambda *args: tmp_path)
+    if not remote_ok:
+        monkeypatch.setattr(changed_files_module.time, "sleep", lambda seconds: None)
+        with pytest.raises(ChangedFilesError, match="history preparation failed"):
+            prepare_pr_merge_base(repo_root=source, base_ref="main", base_sha=base,
+                checkout_ref="refs/heads/feature", source_head_sha=feature)
+        assert len(calls) == 3 and all(0 < timeout <= 45 for _, timeout in calls)
+        return
+    receipt = prepare_pr_merge_base(repo_root=source, base_ref="main", base_sha=base,
+        checkout_ref="refs/heads/feature", source_head_sha=feature)
+    assert receipt["local_source_ancestry"] == {"status": "failed"}
+    assert receipt["remote_fetch_attempts"] == 1 and receipt["fetch_attempts"] == 2
+    assert len(calls) == 2 and 0 < calls[0][1] <= 20 and 0 < calls[1][1] <= 45
+
+
 @pytest.mark.parametrize("exhausted", [False, True])
 def test_failed_history_fetch_is_capped_without_weakening_ancestry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exhausted: bool) -> None:
     calls: list[object] = []
