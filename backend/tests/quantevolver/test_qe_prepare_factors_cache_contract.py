@@ -739,7 +739,13 @@ def test_feature_processing_public_request_and_retry_snapshot_are_request_local(
     from tests.fixtures.sample_configs import CUSTOM_EVO_LOOP_MINIMAL, CUSTOM_EVO_TASK
 
     original = copy.deepcopy(CUSTOM_EVO_LOOP_MINIMAL)
-    for options in (None, {"exclude_from_model": ["Alpha001"]}, {"clip_outlier": False}, None):
+    diagnostic = {
+        "raw_state_controls": {
+            "schema_version": "qe_raw_state_controls_v1", "source_factor": "Alpha001",
+            "valid_column": "r8_input_is_valid", "zero_column": "r8_input_is_reported_zero",
+        },
+    }
+    for options in (None, {"exclude_from_model": ["Alpha001"]}, {"clip_outlier": False}, diagnostic, None):
         request = CustomEvoLoopConfig(**{
             **original, "disable_alpha158": True,
             **({"feature_processing": options} if options is not None else {}),
@@ -769,3 +775,209 @@ def test_feature_processing_cannot_silently_skip_training(mode):
             **CUSTOM_EVO_LOOP_MINIMAL, **mode, "disable_alpha158": True,
             "feature_processing": {"clip_outlier": False},
         }, CUSTOM_EVO_TASK)
+
+
+RAW_STATE_SOURCE = "research_reported_short_inventory_to_float"
+RAW_STATE_COLUMNS = ["r8_input_is_valid", "r8_input_is_reported_zero"]
+
+
+def _raw_state_options(*, include_value=False):
+    return {
+        "raw_state_controls": {
+            "schema_version": "qe_raw_state_controls_v1",
+            "source_factor": RAW_STATE_SOURCE,
+            "valid_column": RAW_STATE_COLUMNS[0],
+            "zero_column": RAW_STATE_COLUMNS[1],
+        },
+        "exclude_from_model": ["PDH"] + ([] if include_value else [RAW_STATE_SOURCE]),
+        "clip_outlier": True,
+    }
+
+
+@pytest.mark.parametrize("change", [
+    {"schema_version": "v2"}, {"source_factor": "unknown"}, {"source_factor": []},
+    {"valid_column": "AF0"}, {"zero_column": RAW_STATE_COLUMNS[0]},
+    {"valid_column": "bad name"}, {"valid_column": None}, {"formula": "F.shift(1)"},
+])
+def test_raw_state_controls_reject_invalid_declarations(change):
+    options = _raw_state_options()
+    options["raw_state_controls"].update(change)
+    with pytest.raises(ValueError, match="qe_feature_processing_invalid"):
+        ConfigComposer._normalize_feature_processing(
+            {"disable_alpha158": True, "feature_processing": options}, ["AF0", "PDH", RAW_STATE_SOURCE],
+        )
+
+
+@pytest.mark.parametrize("declaration", [None, [], {}, {"schema_version": "qe_raw_state_controls_v1"}])
+def test_raw_state_controls_require_complete_declaration(declaration):
+    options = _raw_state_options()
+    options["raw_state_controls"] = declaration
+    with pytest.raises(ValueError, match="qe_feature_processing_invalid"):
+        ConfigComposer._normalize_feature_processing(
+            {"disable_alpha158": True, "feature_processing": options}, ["AF0", "PDH", RAW_STATE_SOURCE],
+        )
+
+
+@pytest.mark.parametrize("values", [
+    [0., .01], [0., float("inf")], [0., -float("inf")],
+    ["0", "-1"], [True, False], [0j, -1j],
+])
+def test_raw_state_controls_reject_invalid_source(monkeypatch, values):
+    ns = {}
+    exec(_panel_script(
+        monkeypatch, factor_names=["AF0", "PDH", RAW_STATE_SOURCE],
+        reference_factor_names=["AF0"], feature_processing=_raw_state_options(),
+    ), ns)
+    with pytest.raises(ValueError, match="qe_raw_state_controls_invalid"):
+        ns["_derive_raw_state_controls"](pd.DataFrame({RAW_STATE_SOURCE: values}))
+
+
+def test_raw_state_controls_three_states_and_ambiguous_input_fail_closed(monkeypatch):
+    ns = {}
+    exec(_panel_script(
+        monkeypatch, factor_names=["AF0", "PDH", RAW_STATE_SOURCE],
+        reference_factor_names=["AF0"], feature_processing=_raw_state_options(),
+    ), ns)
+    original = pd.DataFrame({RAW_STATE_SOURCE: pd.array([pd.NA, 0., -.002, -0.], dtype="Float64")})
+    before = original.copy(deep=True)
+    out = ns["_derive_raw_state_controls"](original)
+    pd.testing.assert_frame_equal(original, before)
+    pd.testing.assert_series_equal(out[RAW_STATE_SOURCE], original[RAW_STATE_SOURCE])
+    assert out[RAW_STATE_COLUMNS].values.tolist() == [[0, 0], [1, 1], [1, 0], [1, 1]]
+    assert out[RAW_STATE_COLUMNS].dtypes.tolist() == ["int8", "int8"]
+    for bad in (original.loc[[0, 0]], out, original.rename(columns={RAW_STATE_SOURCE: "unknown"})):
+        with pytest.raises(ValueError, match="qe_raw_state_controls_invalid"):
+            ns["_derive_raw_state_controls"](bad)
+    # Reject ambiguity before concat's historical duplicate-column removal can hide it.
+    factors = {name: pd.DataFrame({name: [0.]}) for name in ["AF0", "PDH", RAW_STATE_SOURCE]}
+    for bad in (factors[RAW_STATE_SOURCE].loc[[0, 0]], factors[RAW_STATE_SOURCE].assign(AF0=0.)):
+        with pytest.raises(ValueError, match="qe_raw_state_controls_invalid"):
+            ns["_select_factor_results"](list(factors), {**factors, RAW_STATE_SOURCE: bad})
+
+
+def test_raw_state_controls_fresh_process_two_arms_cache_and_projection(monkeypatch, tmp_path):
+    """Run the emitted script unchanged, including identity validation and cache reads."""
+    import os
+    import subprocess
+    import sys
+
+    import pyarrow.parquet as pq
+
+    names = [f"AF{i}" for i in range(11)] + ["PDH", RAW_STATE_SOURCE]
+    cache_root = tmp_path / "factor_values"
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    monkeypatch.setenv("FACTOR_CACHE_DIR", str(cache_root))
+    monkeypatch.setenv("RDAGENT_FACTOR_DATA_DIR", str(data_dir))
+    scripts = [_panel_script(
+        monkeypatch, factor_names=names, reference_factor_names=["AF0", "PDH"],
+        feature_processing=_raw_state_options(include_value=include),
+    ) for include in (False, True)]
+    ns = {}
+    exec(scripts[0], ns)
+    (data_dir / "meta.json").write_text(json.dumps(ns["QE_DATASET_EXPECTED_META"]), encoding="utf-8")
+    index = pd.MultiIndex.from_product(
+        [[pd.Timestamp(ns["TRAIN_START"]), pd.Timestamp(ns["TEST_END"])], ["000001.SZ", "000002.SZ", "000003.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    original = pd.DataFrame({name: [1., 2., 3., 4., 5., 6.] for name in names}, index=index)
+    original[RAW_STATE_SOURCE] = [float("nan"), 0., -.002, -.1, 0., float("nan")]
+    original.loc[index[-1], "PDH"] = float("nan")  # only the original reference mask removes this row
+    for name in names:
+        code = f"def calculate_{name}(instruments, start_date, end_date):\n    return None\n"
+        with ns["_exclusive_cache_lock"]("factor:" + name):
+            ns["_write_cache"](name, code, original[[name]])
+    paths = list((cache_root / "single").glob("*.parquet")) + [cache_root / "_meta.json", data_dir / "meta.json"]
+    hashes = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    outputs = []
+    for include, script in zip((False, True), scripts):
+        work = tmp_path / ("ZF" if include else "Z")
+        (work / "factors").mkdir(parents=True)
+        for name in names:
+            (work / "factors" / f"{name}.py").write_text(
+                f"def calculate_{name}(instruments, start_date, end_date):\n    return None\n", encoding="utf-8",
+            )
+        (work / "prepare_factors.py").write_text(script, encoding="utf-8")
+        (work / "conf.yaml").write_text(
+            "data_handler_config:\n  data_loader:\n    class: DynamicFactorsOnlyLoader\n", encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, str(work / "prepare_factors.py")], cwd=work,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}, capture_output=True, text=True, encoding="utf-8", timeout=45,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stderr.count("CACHE HIT (") == 13
+        out_path = work / "combined_factors_df.parquet"
+        output = pd.read_parquet(out_path)["feature"]
+        expected_columns = names[:11] + RAW_STATE_COLUMNS + ([RAW_STATE_SOURCE] if include else [])
+        assert output.columns.tolist() == expected_columns
+        assert output.index.equals(original.index[:-1])
+        pd.testing.assert_frame_equal(output[names[:11]], original.loc[output.index, names[:11]])
+        assert output[RAW_STATE_COLUMNS].values.tolist() == [[0, 0], [1, 1], [1, 0], [1, 0], [1, 1]]
+        assert output[RAW_STATE_COLUMNS].dtypes.tolist() == ["int8", "int8"]
+        if include:
+            pd.testing.assert_series_equal(output[RAW_STATE_SOURCE], original.loc[output.index, RAW_STATE_SOURCE])
+        identity = json.loads(pq.read_schema(out_path).metadata[b"qe_feature_processing"])
+        assert identity["computed_factor_names"] == names
+        assert identity["derived_control_names"] == RAW_STATE_COLUMNS
+        assert identity["model_feature_names"] == expected_columns
+        assert (work / ".factor_env").read_text().strip() == f"export num_features={14 if include else 13}"
+        outputs.append(output)
+    pd.testing.assert_frame_equal(outputs[0], outputs[1].drop(columns=RAW_STATE_SOURCE))
+    assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths} == hashes
+
+
+def test_raw_state_controls_compose_isolation_and_real_normalizer(panel_composer, monkeypatch):
+    import copy
+    import sys
+
+    import yaml
+
+    composer = panel_composer
+    names = ["BaseA", "BaseB", "Candidate"]
+    options = _raw_state_options(include_value=True)
+    options["exclude_from_model"] = ["BaseB"]
+    options["raw_state_controls"]["source_factor"] = "Candidate"
+    configs = []
+    for processing in (None, options, None):
+        params = {"disable_alpha158": True, "observation_panel": _observation_panel(["BaseA"])}
+        if processing is not None:
+            params["feature_processing"] = processing
+        before = copy.deepcopy(params)
+        result = composer.compose_experiment_in_memory(
+            factor_names=names, model_id=None, strategy_id="score_weighted_topk_v2",
+            data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT), custom_params=params, skip_db_save=True, execution_algo="TWAP",
+        )
+        assert params == before
+        configs.append(yaml.safe_load(result["experiment_files"]["conf.yaml"]))
+        if processing is None:
+            assert "_derive_raw_state_controls" not in result["experiment_files"]["prepare_factors.py"]
+        else:
+            ns = {}
+            exec(result["experiment_files"]["prepare_factors.py"], ns)
+    assert configs[0] == configs[1] == configs[2]  # full model/label/fit/strategy/fees configuration
+    pytest.importorskip("qlib", reason="Real processor contract requires the existing Qlib worker/test environment")
+    from qlib.data.dataset.handler import DataHandlerLP
+    from qlib.data.dataset.loader import StaticDataLoader
+    from backend.services.quantevolver import qe_custom_loaders
+
+    monkeypatch.setitem(sys.modules, "qe_custom_loaders", qe_custom_loaders)
+    index = pd.MultiIndex.from_product(
+        [pd.bdate_range(RDAGENT_DEFAULT_DATA_SPLIT["train_start"], RDAGENT_DEFAULT_DATA_SPLIT["test_end"]), ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    raw = pd.DataFrame({name: [float(i % 3) * -.01 for i in range(len(index))] for name in names}, index=index)
+    raw.loc[index[::3], "Candidate"] = float("nan")
+    derived = ns["_derive_raw_state_controls"](raw).loc[:, ns["QE_FEATURE_PROCESSING"]["model_feature_names"]]
+    derived.columns = pd.MultiIndex.from_product([["feature"], derived.columns])
+    derived[("label", "LABEL0")] = 1.
+    handler = DataHandlerLP(
+        instruments=None, data_loader=StaticDataLoader(derived),
+        infer_processors=configs[1]["data_handler_config"]["infer_processors"],
+        learn_processors=configs[1]["data_handler_config"]["learn_processors"],
+    )
+    training = handler.fetch(col_set="feature", data_key=DataHandlerLP.DK_L)
+    inference = handler.fetch(col_set="feature", data_key=DataHandlerLP.DK_I)
+    pd.testing.assert_frame_equal(training, inference.loc[training.index])
+    assert set(RAW_STATE_COLUMNS).issubset(training.columns)
+    assert training.notna().all().all()

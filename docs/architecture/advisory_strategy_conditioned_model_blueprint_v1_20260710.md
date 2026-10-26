@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.49
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.50
 
 > 初始日期：2026-07-10
-> 修订日期：2026-10-26
+> 修订日期：2026-10-27
 
-> 2026-10-26最新断点：P16[SPO+决策损失F1](advisory_spo_top10_5td_v1_f1_design_20261026.md)完成实现、19直接验证、一次7fit及11阶段审计。原两包Top50→Top10/5TD、八字段及开发窗不变；100共同D对原生+16.570982bps、三折均正，INNER_SUPPORTED，最终探索模型已冻结。对同信息MSE+7.921422bps；两个95%区间均跨零，LSTM正/TCN负，尚未确认盈利或上线资格。累计244fit＋1旧index；下一步仅本冻结候选独立确认设计，现有确认输入未就绪。旧P15保留、研报/现金流暂缓，无生产激活或服务任务。
+> 2026-10-27最新断点：P17[全部启用包验证F1](advisory_spo_all_packages_validation_v1_f1_design_20261027.md)完成5包输入核查、4包零fit适用性评价与差异归因。四包共同95D对原生−10.427423bps/5TD，95%区间跨零，LSTM正而TCN/LGB/multi负；旧单Alpha原2025评分缺源，NOT_EVALUABLE。当前SPO+停止全包推广和大规模确认排期，先准备统一前向输入，再设计单一包适用性假设，不挑好包上线。P16 INNER_SUPPORTED及最终探索模型保留、累计244fit＋1旧index不变；0独立确认/激活。研报/现金流继续暂停，无服务任务。
 
 > 2026-10-23 P9历史断点：用户另行授权的P9[分钟级留一同群同步F1](advisory_intraday_peer_synchrony_top10_5td_v1_f1_design_20261023.md)完成一次六fit内层研究。305D/30,500原行保留，30,417可算；100共同D相对原生+15.682701bps、描述性95%[-22.066937,51.997402]、两折正，按事前产品门INNER_SUPPORTED；相对matched−2.223706bps，不证明同步特征本身增值。累计225实际研究fit＋1旧index，0经济确认/激活/outer。当时report_rc全方向DEFERRED_BY_USER，数据窗口完成不自动恢复；本次用户批准的有限恢复见§6.3.29，P9结果及停止边界不改。
 
@@ -1518,7 +1518,15 @@ clean producer `f17dd87bd256749865e9d0a644e16e7f5a06373a`，implementation SHA `
 
 原305D/30,500输入逐字段一致，原126评价D/12,600行保留、111成熟D/100共同D，主增量+16.570982bps、95%[-27.102135,53.497117]，三折+3.830020/+6.309883/+34.879004bps；matched+7.921422bps、区间跨零。LSTM+54.033435、TCN−20.891471bps，两包异向不择包；111成熟D全干预，覆盖90.0901%、尾部改善110.233129bps。原规则INNER_SUPPORTED，条件final一次完成，累计244实际fit＋1旧index。最终27,350成熟完整训练行、模型文件SHA `79299027fd4158bb92316ceb83364e752f80872cc4668742e5f8364074249ac0`，100行新进程探针一致，11阶段/7开始与结束claims及第二算术复核PASS。
 
-实验`advspotop10_3d3ab33104b1ccfeb86139a7`，证据根`X:/AIstock_temp/ADVISORY/p16-spo-top10-20261026`。EXPLORATORY_SCREEN/NAVIGATION_ONLY，原父历史PIT未补证；模型冻结不等于独立确认/业务接入。下一步只设计本冻结候选的独立确认，需原两包全Top50新未消费人口与来源时钟、预测先冻结证据；当前输入未就绪，不复用旧outer冒称独立，不自动新增实验或择包上线。研报/现金流继续暂停，0outer/sealed读取、生产写入/激活/QE及服务控制。
+实验`advspotop10_3d3ab33104b1ccfeb86139a7`，证据根`X:/AIstock_temp/ADVISORY/p16-spo-top10-20261026`。EXPLORATORY_SCREEN/NAVIGATION_ONLY，原父历史PIT未补证；模型冻结不等于独立确认/业务接入。当时下一步为本冻结候选独立确认设计；用户随后授权先核查所有启用包，最新调整见§6.3.37，不复用旧outer冒称独立，不自动新增实验或择包上线。研报/现金流继续暂停，0outer/sealed读取、生产写入/激活/QE及服务控制。
+
+### 6.3.37 P17全部启用包零fit适用性验证（2026-10-27）
+
+[F1](advisory_spo_all_packages_validation_v1_f1_design_20261027.md)及[完整报告](../analysis/advisory_spo_all_packages_validation_20261027.md)：5个ENABLED对应5包，DRAFT重复父包不计；LSTM/TCN复用P16，LGB/multi原评分SHA绑定后新增12,600原Top50行。原三折模型同权重/编码用于各自训练截止后的126D，先冻结25,200两臂预测，再按原5TD/费用/UNKNOWN评价；最终模型不做训练期自测。旧单包候选→原实验身份查清，但登记预测工件不可读、同版本存量selection仅2026年，保留NOT_EVALUABLE，不恢复QE或重建人口。
+
+四包共同95D主增量分别LSTM+60.425208、TCN−27.743502、LGB−40.810762、multi−33.580636bps；四包先包后日等权−10.427423bps，描述性95%[−45.072984,21.504028]，全五包均值不计算。每包各自共同D为101/105/104/107，三包三折均负；原P16共同100D结果及INNER_SUPPORTED不改。平均换股4.91～6.54只/成熟D，尾部改善而三包错失盈利更多，非无干预；不临时改为风险目标或挑LSTM上线。
+
+4阶段与25,200预测第二算术路径核查、1,743个重叠stock-D六输入容差一致，0新fit、累计244＋1。当前四single包已有D=10-26的完整评分数量元数据，multi仍止于D=10-08；原binding市场文件止于8月，当前前向特征/时钟交付未完成。现SPO+停止全包推广和大规模确认排期；后续先准备全五包固定人口前向输入，缺包显式保留，再以已完成差异归因为依据提出一个事前包适用性假设。没有独立确认、生产接入或新候选拟合；原生业务名单继续原流程，历史PIT不升级。
 
 ## 7. 荐股产品行为
 
@@ -2264,6 +2272,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-299 | P15现金流交付接续：精确manifest/raw-panel/原人口核验，数值前冻结版本/时钟/单位/1TD事件规则，完整UNKNOWN支持及二次算术复核；文件PASS与探索NOT_READY分态，0收益标签/fit，不自动续接开发或重采 |
 | F-300 | P15方法收口：纠正1TD解释而不覆写旧证据；区分事件/状态/填补和共同尺度要求；有限确认元数据核对并复用P5，单候选决策为0，未来确认方案与当前不可执行分态，0fit/标签/业务变更 |
 | F-301 | P16单一SPO+目标：原八字段/人口和5TD，同线性类/正则/监督支持，两臂只改损失；有证书求解、六折内fit及条件一次冻结、原生主端点与完整停止分支 |
+| F-302 | P17全部启用五包冻结核查：原三折模型零fit扩包、缺源包保留，原P16复用，逐包经济/风险/UNKNOWN、先预测后评价及前向缺口与方向调整 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2447,6 +2456,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-299 | §6.3.34/§16.0、`docs/analysis/advisory_p15_cashflow_input_acceptance_20261026.md` | artifact: X:/AIstock_temp/ADVISORY/p15-cashflow-input-support-20261026/input_review_receipt.json; input_audit_receipt.json | FILE_PASS_INPUT_REVIEW_COMPLETE_NOT_READY_NO_F1 | none |
 | F-300 | §6.3.35/§16.0、`docs/analysis/advisory_p15_method_and_confirmation_decision_20261026.md` | artifact: X:/AIstock_temp/ADVISORY/p15-method-confirmation-20261026/evidence_receipt.json; method_contract.json; review_receipt.md | METHOD_DECISION_COMPLETE_NO_CANDIDATE_CONFIRMATION_NOT_EXECUTABLE | none |
 | F-301 | §6.3.36/§16.0、`docs/architecture/advisory_spo_top10_5td_v1_f1_design_20261026.md` | backend/tests/advisory_model_first/test_spo_top10_5td_v1.py; artifact: X:/AIstock_temp/ADVISORY/p16-spo-top10-20261026/research_audit_receipt.json | COMPLETE_INNER_SUPPORTED_MODEL_FROZEN_NOT_CONFIRMED | none |
+| F-302 | §6.3.37/§16.0、`docs/architecture/advisory_spo_all_packages_validation_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_spo_all_packages_validation_v1.py; artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/research_audit_receipt.json | COMPLETE_FIVE_INPUT_REVIEWS_FOUR_EVALUATED_NO_UNIVERSAL_PROMOTION | none |
 
 
 ## 12. Verification Plan
@@ -2743,9 +2753,9 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-10-26 接续）
+### 16.0 当前唯一任务队列与真实断点（2026-10-27 接续）
 
-本节是2026-10-26唯一队列。P16单一SPO+研究已完成，§6.3.36/F1的6+条件1预算用完，INNER_SUPPORTED及最终探索模型冻结，累计244实际fit＋1旧index。下一步只推进这一冻结候选的独立确认设计，不开启新损失/信息源；需落实原两包全Top50的新未消费人口/时钟及预测先冻结证据，当前确认仍不可执行。原两包Top50→Top10、T开盘至T+4收盘及原费用后增量不变，原生日频业务不变。P11/P14停止、P4/P9原分类不改，P15方法收口保留、财务状态与研报暂停。0经济确认/激活，不读旧outer/封存救结果、不择包或追加fit。
+本节是2026-10-27唯一队列。P17按用户要求核查所有5个启用包，4包完成冻结模型经济比较，旧单包原2025评分缺源保留NOT_EVALUABLE。四包共同95D−10.427423bps且三包三折均负，当前SPO+不推进统一替换及大规模确认；原P16 INNER_SUPPORTED、最终模型及累计244实际fit＋1旧index保留。下一步先准备五包统一前向Top50/特征/时钟输入（缺包不丢），再基于本轮已完成差异归因提出单一事前适用性假设，不按本表挑LSTM、改权重/阈值或自动fit。原50→10/5TD/费用与原生日频业务不变；P11/P14停止、P4/P9原分类不改，财务状态与研报暂停。独立确认、业务接入仍未完成，不读旧outer/封存救结果，无服务任务。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |
 |---|---|---|
@@ -2779,7 +2789,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 | P14 / 完整实现与一次六fit结束 | §6.3.32/F1 v1.1；28直接项、30,500跨节点输入核对、十stage及六claims审计；101共同D原生+1.101690、matched−0.535244bps | INNER_INCONCLUSIVE，仅一折正、两包异向；累计237＋1，0outer/确认/激活。本候选预算终止，不变窗/择包/加fit或自动切换研报支线 |
 | P15 / 交付验收和输入评审完成，不立F1 | §6.3.33历史查重复用；§6.3.34现金流8文件/26,102源行及30,500开发人口完整，14合成断言和第二实现通过 | FILE_PASS / INPUT_NOT_READY；单位未知，事件支持上限也不足；NON_VINTAGE、经济未测，新增0fit/收益标签。精确候选不推进，不重采同版/拼值/改有效期或自动接续其它方向 |
 | P15方法/确认决策 / 已完成停止分支 | §6.3.35及方法报告；13指定文件hash、事件/状态/单位解释复核和有限确认元数据核查，三轮自审 | NO_CANDIDATE_NOMINATED / CONFIRMATION_NOT_EXECUTABLE；保留旧结果，财务状态暂缓，无新TTL或覆盖试算；未来方案字段与终止分支已明示，无自动执行任务 |
-| P16 / 实现与一次7fit研究完成 | §6.3.36/F1；19直接项、11阶段/7claims审计、全部预测及算术复核；100共同D原生+16.570982bps/三折正，matched+7.921422bps | INNER_SUPPORTED；最终探索模型冻结，区间跨零且两包异向，累计244＋1。下一步仅该模型独立确认设计，当前输入未就绪，0生产接入/激活，不追加研究或择包 |
+| P16 / 实现与一次7fit研究完成 | §6.3.36/F1；19直接项、11阶段/7claims审计、全部预测及算术复核；100共同D原生+16.570982bps/三折正，matched+7.921422bps | INNER_SUPPORTED保留；最终探索模型冻结，累计244＋1。用户后续先授权P17扩包，不把本内层结果当全包有效 |
+| P17 / 五包输入核查、四包评价与差异分析完成 | §6.3.37/F1；新增0fit，12,600新原行/25,200预测；四包95共同D−10.427423bps，全部区间跨零；旧单缺历史源 | 当前SPO+停止全包推广和大规模确认排期；先补前向输入和缺包交付，再提出单一事前适用性假设。0激活，不择好包/改阈值/追加fit，multi日频缺口交原owner |
 | B4 / 本候选不启动 | 仅未来确实值得确认的新candidate才冻结并一次读取真正未消费历史 | 本轮sealed收益未读；禁止将已消费outer改称确认，不等待自然天数抢救当前失败 |
 | B5 / 本候选不启动 | 仅确认通过的新角色才做最小集成，再逐项研究价格条件集合/退出价值 | 不先造多角色平台；LocalSIM由其owner实施、重启用户所有；未配置角色不阻原包日频 |
 | 条件辅线 | 直接影响日频基线或本次研究的正确性BUG/可复现性能阻塞 | 仅本模块精确修复；共享三模式生产行为若业务需要再按已有接口验证，不为已加载源码重复重启，不代LocalSIM操作 |
