@@ -29,13 +29,20 @@
   ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2099-minute-incremental-replays-verified-closed-days-and-rolls-back-new-dates.json"
+    ],
     "added_files": [
       "backend/tests/ingestion/test_tdx_scheduler_committed_cursor.py"
     ],
     "changed_files": [
-      "backend/ingestion/tdx_scheduler.py"
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2099-minute-incremental-replays-verified-closed-days-and-rolls-back-new-dates.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -113,17 +120,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "X:/AIstock_temp/DATA_PREPARATION/october-audit-20261026/minute-fix-dev-production-plan.json: isolated Python loaded tracked scheduler; real committed Oct23 audit advanced cursor to Oct26, failed DEV receipt preserved replay; 12000 real source minutes inserted DEV, second apply0, exact readback12000"
     ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "not_required",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
