@@ -200,6 +200,32 @@ def test_cash_and_sellable_limits_do_not_turn_opportunity_into_a_fill():
     assert result["account"]["parents"][0]["status"] in {"NO_FILL", "UNAVAILABLE"}
 
 
+def test_unexpected_core_input_conflict_fails_day_instead_of_publishing_unavailable_success():
+    plan, market = inputs()
+    market = market.model_copy(update={"day_facts":market.day_facts.model_copy(update={"reference_price":None})})
+    with pytest.raises(ValueError, match="LOCALSIM_HUMAN_CORE_UNAVAILABLE:TRADABILITY_UNKNOWN"):
+        human_day(plan, market)
+
+
+@pytest.mark.parametrize("delay,partial", [(0,False),(60,True)])
+def test_cancel_race_keeps_partial_fill_and_does_not_use_invisible_filled_status_to_save_action(delay,partial):
+    plan, market = inputs()
+    if partial:
+        market = market.model_copy(update={"bars":tuple(b.model_copy(update={"volume_shares":Decimal("300")}) for b in market.bars)})
+    revision = plan.model_copy(update={"revision":2,"source_revision":"2"})
+    backend, result = human_day(plan,market,delay=delay,events=[
+        PlanEvent(available_at=plan.valid_from,plan=plan),PlanEvent(available_at=at("09:32:30"),plan=revision)])
+    cancels = [a for a in result["account"]["human_operation_state"]["actions"] if a["kind"] == "CANCEL"]
+    assert len(cancels) == 1 and cancels[0]["status"] == "COMPLETED"
+    assert cancels[0]["outcome"]["cancellation_race"] is True
+    assert result["account"]["human_operation_metrics"]["cancellation_races"] == 1
+    assert sum(f.quantity for f in backend._ledger.fills) == 1000
+    assert len(backend._records) == (2 if partial else 1)
+    if partial:
+        assert cancels[0]["outcome"]["filled_quantity_at_request"] == 0
+        assert cancels[0]["outcome"]["filled_quantity_at_cancel"] == 300
+
+
 def test_concurrent_partial_fills_follow_native_cash_fact_replay_order(tmp_path):
     from backend.services.simulation_execution.localsim.timing_research import backend_for
     from backend.services.simulation_execution.localsim.timing_portfolio import commit_portfolio_day, validate_day_ledger

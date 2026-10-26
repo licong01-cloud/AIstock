@@ -76,6 +76,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
     heapq.heapify(clocks)
     scheduled, proposals = set(clocks), {}
     capacity_debt, cancellation_races = 0, 0
+    cancel_requested_quantities = {}
 
     def schedule(clock):
         if start <= clock <= terminal and clock not in scheduled:
@@ -113,12 +114,19 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
 
     def add_cancel(proposal, clock, reason):
         execution = proposal.active
-        if execution is None or execution.order.status in TERMINAL:
+        if execution is None:
+            return
+        if (execution.order.status in TERMINAL and not (
+                execution.order.status == OrderStatus.FILLED and execution.facade.last_feedback_at is not None
+                and execution.facade.last_feedback_at > clock)):
             return
         action = queue.enqueue(plan_id=execution.facade.plan.plan_id, revision=execution.facade.plan.revision,
                                opportunity_id="cancel:" + execution.order.order_id,
                                symbol=execution.order.symbol, side=execution.order.side.value, kind="CANCEL",
                                visible_at=clock, valid_until=terminal)
+        # Audit-only native fact. It cannot cancel an action merely because
+        # a fill has happened but its acknowledgement is still invisible.
+        cancel_requested_quantities.setdefault(action.action_id, execution.order.filled_quantity)
         proposal.reasons.add(reason)
         schedule(action.ready_at)
 
@@ -194,10 +202,14 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                 execution = next((e for e in proposal.executions if e.facade.plan.revision == action.revision), None)
                 if execution is None:
                     raise ValueError("LOCALSIM_HUMAN_CANCEL_ORDER_MISSING")
-                if execution.order.status == OrderStatus.FILLED:
+                requested_quantity = cancel_requested_quantities[action.action_id]
+                race = execution.order.status == OrderStatus.FILLED or execution.order.filled_quantity > requested_quantity
+                if race:
                     cancellation_races += 1
                 execution.cancel("HUMAN_CANCEL_CONFIRMED")
-                outcome = {"status": execution.order.status.value, "order_id": execution.order.order_id}
+                outcome = {"status": execution.order.status.value, "order_id": execution.order.order_id,
+                           "filled_quantity_at_request":requested_quantity,
+                           "filled_quantity_at_cancel":execution.order.filled_quantity, "cancellation_race":race}
             else:
                 plan, facade = proposal.plan, proposal.facade
                 decision = facade.decision
