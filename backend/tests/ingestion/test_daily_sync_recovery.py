@@ -202,6 +202,8 @@ def test_go_watcher_timeout_preserves_async_job_identity(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     actions = []
     def fetch(sql, _params=()):
+        if "dataset_date_refresh_audit" in sql:
+            return []
         if "trading_calendar" in sql:
             return [{"latest": dt.date(2026, 10, 13)}]
         if "stock_basic" in sql:
@@ -272,8 +274,10 @@ def test_raw_audit_reuses_bounded_observation_without_range_rescan(monkeypatch, 
     day = dt.date(2026, 10, 16)
     latest = dt.datetime(2026, 10, 16, 15, 5, tzinfo=dt.timezone(dt.timedelta(hours=8)))
     scheduler._recent_trading_floor = lambda _n: day
+    scheduler._go_provider_codes = lambda *_: ([] if defect == "no_expected"
+                                               else ["000001.SZ", "600000.SH"])
     calls, recorded = [], []
-    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000}
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000, "invalid_fact": False}
              for code in ["000001.SZ", "600000.SH"]]
     minute = [{"ts_code": row["ts_code"], "freq": "1m", "bars": 240,
                "bad_bars": int(defect == "bad_bars" and i == 1),
@@ -298,6 +302,8 @@ def test_raw_audit_reuses_bounded_observation_without_range_rescan(monkeypatch, 
             return [{"cal_date": day}]
         if "market.stock_basic" in sql:
             return [{"ts_code": code} for code in ["000001.SZ", "600000.SH"]]
+        if "market.suspend_d" in sql:
+            return []
         if "market.kline_daily_raw" in sql:
             assert "trade_date=%s" in sql
             return daily
@@ -327,7 +333,7 @@ def test_raw_audit_reuses_bounded_observation_without_range_rescan(monkeypatch, 
     if passed:
         assert receipt["row_count"] == count
         assert receipt["data_max_at"] == (latest if dataset == "kline_minute_raw" else None)
-    assert sum("market.kline_minute_raw" in sql for sql, _ in calls) == 1
+    assert sum("market.kline_minute_raw" in sql for sql, _ in calls) == int(dataset == "kline_minute_raw")
     assert sum("market.kline_daily_raw" in sql for sql, _ in calls) == 1
 
 

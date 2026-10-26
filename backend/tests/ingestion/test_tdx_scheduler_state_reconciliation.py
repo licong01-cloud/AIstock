@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import datetime as dt
 import json
 import os
@@ -732,7 +733,7 @@ def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested(
 def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset, missing_a):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     latest = dt.datetime(2026, 10, 20, 15)
-    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000}
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000, "invalid_fact": False}
              for code in ["000001.SZ", "200706.SZ"]]
     minute = [{"ts_code": code, "freq": "1m", "bars": 240, "bad_bars": 0,
                "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH"]]
@@ -740,6 +741,10 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
         (daily if dataset == "kline_daily_raw" else minute).pop(0)
 
     def fetch(sql, _params=()):
+        if "suspend_d" in sql:
+            return []
+        if "WITH bounds" in sql:
+            return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH"]]
         if "kline_daily_raw" in sql:
             return daily
         if "kline_minute_raw" in sql:
@@ -750,6 +755,32 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
     count, _, coverage = scheduler._raw_date_observation(dataset, dt.date(2026, 10, 20))
     assert count == (0 if missing_a else 1 if dataset == "kline_daily_raw" else 240)
     assert coverage == {"expected_symbols": 1, "incomplete_symbols": int(missing_a)}
+
+
+@pytest.mark.parametrize("missing,invalid,suspended", [(False,False,False), (True,False,False), (False,True,False), (True,False,True)])
+def test_daily_completion_does_not_depend_on_minute_schedule(missing, invalid, suspended):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 10, 26)
+    scheduler._go_provider_codes = lambda start, end: ["000001.SZ", "200706.SZ"]
+    minute_reads = []
+
+    def fetch(sql, params=()):
+        if "kline_minute_raw" in sql:
+            minute_reads.append(sql)
+            return []
+        if "suspend_d" in sql:
+            return [{"ts_code": "000001.SZ"}] if suspended else []
+        if "kline_daily_raw" in sql:
+            return [] if missing else [{"ts_code": "000001.SZ", "volume_hand": 10,
+                                        "volume_shares": 1000, "invalid_fact": invalid}]
+        return [{"ts_code": "000001.SZ"}, {"ts_code": "200706.SZ"}]
+
+    scheduler._fetchall = fetch
+    count, maximum, coverage = scheduler._raw_date_observation("kline_daily_raw", day)
+    assert minute_reads == [], "daily completion must not scan or wait for minute input"
+    assert maximum is None and count == int(not missing)
+    assert coverage == {"expected_symbols": int(not suspended),
+                        "incomplete_symbols": int((missing or invalid) and not suspended)}
 
 
 @pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
@@ -2127,6 +2158,8 @@ def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_c
             }]
         if "INTERVAL '45 days'" in sql:
             return [{"mx": dt.date(2026, 7, 10)}]
+        if "dataset_date_refresh_audit" in sql:
+            return []
         raise AssertionError(f"unexpected query: {sql}")
 
     scheduler._fetchall = _fetchall
@@ -2137,7 +2170,7 @@ def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_c
         dt.date(2026, 7, 10),
         dt.date(2026, 7, 13),
     )
-    assert not any("MAX(trade_time)" in sql or "dataset_date_refresh_audit" in sql for sql in queries)
+    assert not any("MAX(trade_time)" in sql for sql in queries)
     probe = next(sql for sql in queries if "FROM market.kline_minute_raw" in sql)
     assert "ORDER BY trade_time DESC" in probe and "LIMIT 1" in probe
     assert "AT TIME ZONE 'Asia/Shanghai'" in probe
@@ -2876,3 +2909,92 @@ def test_refresh_schedules_uses_shared_dispatch_after_existing_work(completion_o
     scheduler.refresh_schedules()
     assert order[-2:] == ["_reconcile_due_data_sync_targets", "completion_dispatch"]
     assert "existing_jobs" in order
+# Complete-day cursor regression uses the existing scheduled-sync CI lane.
+COMMITTED_DAY = dt.date(2026, 10, 23)
+NEXT_COMMITTED_DAY = dt.date(2026, 10, 26)
+COMMITTED_PROOF = {
+    'status': 'success', 'quality_status': 'ok', 'row_count': 480,
+    'data_max_at': dt.datetime(2026, 10, 23, 15, tzinfo=dt.timezone(dt.timedelta(hours=8))),
+    'metadata': {'audit_from_target_table': True, 'table': 'market.kline_minute_raw',
+                 'raw_date_completeness': {'expected_symbols': 2, 'incomplete_symbols': 0}},
+}
+
+
+def _committed_cursor_scheduler(proof, latest=NEXT_COMMITTED_DAY):
+    obj = TDXScheduler.__new__(TDXScheduler)
+    obj._minute_replay_start = lambda: COMMITTED_DAY
+    obj._next_trading_day = lambda day: NEXT_COMMITTED_DAY
+    obj._latest_completed_trading_day = lambda: latest
+    queries = []
+
+    def fetch(sql, params=()):
+        queries.append((sql, params))
+        if 'data_stats_config' in sql:
+            return [{'table_name': 'market.kline_minute_raw', 'date_column': 'trade_time', 'extra_info': {}}]
+        assert 'dataset_date_refresh_audit' in sql
+        assert 'ORDER BY refreshed_at DESC' in sql
+        assert 'LIMIT 1' in sql
+        assert params == (COMMITTED_DAY,)
+        return [proof] if proof is not None else []
+
+    obj._fetchall = fetch
+    return obj, queries
+
+
+def test_complete_physical_day_advances_to_new_date():
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF))
+    assert obj._compute_auto_range('kline_minute_raw') == (NEXT_COMMITTED_DAY, NEXT_COMMITTED_DAY)
+
+
+@pytest.mark.parametrize('mutation', [
+    {'status': 'failed'}, {'quality_status': 'low_coverage'}, {'row_count': 479},
+    {'data_max_at': dt.datetime(2026, 10, 23, 14, 59)},
+    {'data_max_at': dt.datetime(2026, 10, 22, 15)},
+    {'metadata': {}}, {'metadata': {'audit_from_target_table': 'true'}},
+    {'metadata': {'audit_from_target_table': True, 'table': 'market.kline_minute_raw',
+                  'raw_date_completeness': {'expected_symbols': 2, 'incomplete_symbols': 1}}},
+])
+def test_legacy_partial_or_latest_failed_receipt_cannot_skip_day(mutation):
+    proof = {**deepcopy(COMMITTED_PROOF), **mutation}
+    obj, _ = _committed_cursor_scheduler(proof)
+    assert obj._compute_auto_range('kline_minute_raw') == (COMMITTED_DAY, NEXT_COMMITTED_DAY)
+
+
+def test_absent_proof_replays_and_complete_current_day_is_noop():
+    obj, _ = _committed_cursor_scheduler(None)
+    assert obj._compute_auto_range('kline_minute_raw') == (COMMITTED_DAY, NEXT_COMMITTED_DAY)
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF), latest=COMMITTED_DAY)
+    assert obj._compute_auto_range('kline_minute_raw') == (None, None)
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_dispatch_uses_proven_cursor_but_explicit_repair_preserves_exact_window(monkeypatch, explicit):
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF))
+    posted, logs = [], []
+    obj._execute = lambda *_: None
+    obj._log_ingestion_run = lambda *args, **kwargs: logs.append(args)
+    obj._go_provider_codes = lambda *_a, **_kw: ['000001.SZ']
+    obj._record_refresh_audit_from_table_range = lambda **_kw: True
+    monkeypatch.setattr(scheduler_module.time, 'sleep', lambda *_: None)
+    monkeypatch.setattr(scheduler_module.requests, 'post', lambda _url, **kw: posted.append(kw['json']) or SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {'code': 0, 'data': {'task_id': str(uuid.uuid4())}}))
+    monkeypatch.setattr(scheduler_module.requests, 'get', lambda *_a, **_kw: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {'code': 0, 'data': {'status': 'done'}}))
+    options = {'start_date': str(COMMITTED_DAY), 'end_date': str(NEXT_COMMITTED_DAY)} if explicit else {}
+    obj._run_go_incremental(uuid.uuid4(), None, 'kline_minute_raw', 'unit', options)
+    assert len(posted) == 1
+    assert posted[0]['start_time'][:10] == str(COMMITTED_DAY if explicit else NEXT_COMMITTED_DAY)
+    assert posted[0]['end_time'] == str(NEXT_COMMITTED_DAY)
+    assert not any(r[4] == 'failed' for r in logs)
+
+
+def test_completed_current_day_noop_does_not_submit_go_or_fake_new_source_job(monkeypatch):
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF), latest=COMMITTED_DAY)
+    logs, updates = [], []
+    obj._execute = lambda *args: updates.append(args)
+    obj._log_ingestion_run = lambda *args, **_kw: logs.append(args)
+    monkeypatch.setattr(scheduler_module.requests, 'post', lambda *_a, **_kw: pytest.fail('complete day must not be re-ingested'))
+    obj._run_go_incremental(uuid.uuid4(), None, 'kline_minute_raw', 'unit', {'job_id': str(uuid.uuid4())})
+    assert logs[-1][4] == 'success'
+    assert logs[-1][5]['already_complete'] is True
+    assert not any('INSERT' in sql for sql, _ in updates)

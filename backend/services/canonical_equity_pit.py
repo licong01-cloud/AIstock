@@ -404,6 +404,12 @@ def activate_canonical_pit_authority(
                 raise CanonicalPitContractError("activation target state disappeared after preflight")
             _require_canonical_ready_state(dict(locked_target), target=target)
             cur.execute(
+                "SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans "
+                "WHERE universe_key=%s AND rule_version=%s FOR SHARE",
+                (before["current_rolling_key"], before["current_rule_version"]),
+            )
+            previous_sector_population = [dict(row) for row in cur.fetchall()]
+            cur.execute(
                 """
                 UPDATE market.stock_universe_pit_authority_versions
                    SET status = 'SESSION_PINNED_DRAINING', updated_at = NOW()
@@ -460,6 +466,18 @@ def activate_canonical_pit_authority(
             )
             if cur.rowcount != 1:
                 raise CanonicalPitContractError("activation pointer CAS affected a non-unit row count")
+            cur.execute(
+                "SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans "
+                "WHERE universe_key=%s AND rule_version=%s FOR SHARE",
+                (target.target_rolling_key, target.target_rule_version),
+            )
+            from .sector_data_repair import mark_pit_revision
+
+            # The producer follows the global pointer. Switching it changes the
+            # historical aggregation population even without a span-table write.
+            # Queue the exact interval difference atomically with this CAS;
+            # unchanged identities do not trigger a historical facts scan.
+            mark_pit_revision(conn, previous_sector_population, [dict(row) for row in cur.fetchall()])
             cur.execute(
                 """
                 INSERT INTO market.stock_universe_pit_authority_events (

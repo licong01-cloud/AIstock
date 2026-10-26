@@ -1728,6 +1728,47 @@ class TDXScheduler:
             raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
         return value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
 
+    def _minute_incremental_start(self, latest_date: dt.date) -> dt.date:
+        """Skip only a closed day with a complete, committed target-table audit.
+
+        The physical maximum alone remains a replay cursor. Legacy successes,
+        partial audits and a newer failure cannot justify skipping that day.
+        Explicit user/repair windows do not call this automatic cursor.
+        """
+        observed = self._minute_replay_start()
+        if observed > latest_date:
+            raise RuntimeError("TDX source maximum date is beyond latest trading date")
+        rows = self._fetchall(
+            """SELECT status, quality_status, row_count, data_max_at, metadata
+                 FROM market.dataset_date_refresh_audit
+                WHERE dataset='kline_minute_raw' AND trade_date=%s
+                ORDER BY refreshed_at DESC LIMIT 1""",
+            (observed,),
+        )
+        if not rows:
+            return observed
+        row = rows[0]
+        metadata = row.get("metadata")
+        if not isinstance(metadata, dict):
+            return observed
+        completeness = metadata.get("raw_date_completeness")
+        maximum = row.get("data_max_at")
+        if not isinstance(completeness, dict) or not isinstance(maximum, dt.datetime):
+            return observed
+        expected = completeness.get("expected_symbols")
+        if (row.get("status") != "success" or row.get("quality_status") != "ok"
+                or metadata.get("audit_from_target_table") is not True
+                or metadata.get("table") != "market.kline_minute_raw"
+                or type(expected) is not int or expected <= 0
+                or completeness.get("incomplete_symbols") != 0
+                or row.get("row_count") != expected * 240):
+            return observed
+        local_maximum = (maximum.replace(tzinfo=_CN_TZ) if maximum.tzinfo is None
+                         else maximum.astimezone(_CN_TZ))
+        if local_maximum.date() != observed or local_maximum.time() != dt.time(15):
+            return observed
+        return self._next_trading_day(observed)
+
     def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
         """Return (start_date, end_date) for incremental catch-up.
 
@@ -1769,9 +1810,9 @@ class TDXScheduler:
             latest_date = self._latest_completed_trading_day()
             if latest_date is None:
                 return None, None
-            start_date = self._minute_replay_start()
+            start_date = self._minute_incremental_start(latest_date)
             if start_date > latest_date:
-                raise RuntimeError("TDX source maximum date is beyond latest trading date")
+                return None, None
             return start_date, latest_date
 
         current_max: Optional[dt.date] = None
@@ -3874,9 +3915,37 @@ class TDXScheduler:
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
         daily_rows = self._fetchall(
-            "SELECT ts_code,volume_hand,volume_shares FROM market.kline_daily_raw WHERE trade_date=%s",
+            """SELECT ts_code,volume_hand,volume_shares,
+                (open_li IS NULL OR high_li IS NULL OR low_li IS NULL OR close_li IS NULL
+                 OR volume_hand IS NULL OR amount_li IS NULL OR open_li<=0 OR low_li<=0
+                 OR high_li<low_li OR open_li NOT BETWEEN low_li AND high_li
+                 OR close_li NOT BETWEEN low_li AND high_li OR volume_hand<0 OR amount_li<0
+                 OR volume_shares<0) AS invalid_fact
+                FROM market.kline_daily_raw WHERE trade_date=%s AND adjust_type='none'""",
             (trade_date,),
         )
+        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
+        if dataset == "kline_daily_raw":
+            # Daily runs before minute collection. A minute-derived denominator
+            # is empty then, and falsely rejects an otherwise complete daily day.
+            # Use the same date-valid provider directory as dispatch, never the
+            # PIT buy pool. Only unambiguous full-day suspension can excuse an
+            # absent quote; missing/invalid traded facts remain incomplete.
+            population = {code for code in self._go_provider_codes(trade_date, trade_date)
+                          if not is_b_share_ts_code(code)}
+            suspended = {str(row["ts_code"]).strip() for row in self._fetchall(
+                """SELECT s.ts_code FROM market.suspend_d s
+                    WHERE s.trade_date=%s GROUP BY s.ts_code
+                    HAVING BOOL_AND(s.suspend_type='S' AND
+                      NULLIF(BTRIM(COALESCE(s.suspend_timing,'')),'') IS NULL)""", (trade_date,),
+            )}
+            expected = population - suspended
+            incomplete = len(expected.difference(daily)) + sum(
+                bool(row["invalid_fact"]) for row in daily_rows
+            )
+            return len(daily_rows), None, {"expected_symbols": len(expected),
+                                           "incomplete_symbols": incomplete}
         day_start = dt.datetime.combine(trade_date, dt.time.min, tzinfo=_CN_TZ)
         minute_rows = self._fetchall(
             """SELECT ts_code,freq,COUNT(*) AS bars,MAX(trade_time) AS data_max_at,
@@ -3892,26 +3961,15 @@ class TDXScheduler:
         )
         # Old B-share facts remain stored, but must not re-enter the completion
         # population after their collection has been disabled.
-        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
         minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
-        daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
-        if dataset == "kline_daily_raw":
-            population = {str(row["ts_code"]).strip() for row in self._fetchall(
-                "SELECT ts_code FROM market.stock_basic WHERE list_date<=%s "
-                "AND (delist_date IS NULL OR delist_date>=%s)", (trade_date, trade_date),
-            )}
-            expected = {code for code, row in minute.items() if row["traded"] and code in population}
-            incomplete = len(expected.difference(daily))
-            row_count, data_max_at = len(daily_rows), None
-        else:
-            expected = {code for code, row in daily.items()
-                        if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
-            incomplete = sum(code not in minute or minute[code]["bars"] != 240
-                             or minute[code]["bad_bars"] > 0 for code in expected)
-            row_count = sum(int(row["bars"]) for row in minute_rows)
-            data_max_at = max((row["data_max_at"] for row in minute_rows
-                               if row["data_max_at"] is not None), default=None)
+        expected = {code for code, row in daily.items()
+                    if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
+        incomplete = sum(code not in minute or minute[code]["bars"] != 240
+                         or minute[code]["bad_bars"] > 0 for code in expected)
+        row_count = sum(int(row["bars"]) for row in minute_rows)
+        data_max_at = max((row["data_max_at"] for row in minute_rows
+                           if row["data_max_at"] is not None), default=None)
         return row_count, data_max_at, {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
 
     def _retry_range_for_health_failure(
@@ -5158,7 +5216,7 @@ class TDXScheduler:
                     raise RuntimeError("explicit TDX date window is invalid")
             else:
                 if dataset == "kline_minute_raw":
-                    current_max = self._minute_replay_start()
+                    current_max = self._minute_incremental_start(latest_trading)
                 else:
                     max_rows = self._fetchall(
                         f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']} "
@@ -5167,14 +5225,25 @@ class TDXScheduler:
                     current_max = max_rows[0]["mx"] if max_rows else None
                     if current_max is None:
                         raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
-                # A MAX timestamp proves neither a complete day nor all symbols.
-                # Re-read the latest observed day; Go inserts identical keys
-                # idempotently and rejects conflicting existing raw facts.
+                # Unproven/partial boundary dates are replayed. Only the strict
+                # minute target-table receipt above advances to the next day.
                 start_date = (current_max if isinstance(current_max, dt.date)
                               else dt.date.fromisoformat(str(current_max)))
                 end_date = latest_trading
 
             if start_date > latest_trading:
+                if dataset == "kline_minute_raw" and not requested_start:
+                    status = "success"
+                    summary.update({"already_complete": True, "end_date": latest_trading.isoformat(),
+                                    "via": "committed_target_table_audit"})
+                    if job_id is not None:
+                        self._execute(
+                            "UPDATE market.ingestion_jobs SET status='success', finished_at=NOW(), summary=%s WHERE job_id=%s",
+                            (json.dumps(summary, ensure_ascii=False), job_id),
+                        )
+                    self._log_ingestion_run(job_id or run_id, schedule_id, triggered_by, start_ts,
+                                            status, summary, {"phase": "already_complete"}, [])
+                    return
                 raise RuntimeError("TDX source maximum date is beyond latest trading date")
 
             # 2) create job record (or reuse one from _scheduled_ingestion_run)
