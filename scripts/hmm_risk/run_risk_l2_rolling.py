@@ -165,12 +165,17 @@ def main():
                 rolling.core.inputs._asset(str(path), model["receipt_sha256"]) == model, "model readback differs"
             )
         for arm in ("M0", "M1"):
+            input_model = accepted["model_bundles"][0]
             prediction = receipt(
                 dict(
                     schema_version=rolling.VERSION + "_predictions",
                     arm=arm,
                     source_commit=head,
                     prepared_sha256=prepared["receipt_sha256"],
+                    feature_sha256=input_model["feature_sha256"],
+                    release_binding=input_model["training_release_binding"],
+                    input_identity=input_model["training_input_identity"],
+                    classification_basis="stable_taxonomy_backcast",
                     contract=rolling.CONTRACT,
                     model_bundles=accepted["model_bundles"] if arm == "M1" else [],
                     predictions=accepted["evaluation"][arm + "_predictions"],
