@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.47
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.48
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-26
 
-> 2026-10-26最新断点：P15[现金流交付验收与输入支持](../analysis/advisory_p15_cashflow_input_acceptance_20261026.md)已完成。delivery-v2的26,102条源记录/2,182股票文件消费PASS，原30,500开发行保留；先冻结版本、时钟、单位和1TD事件有效期，再做无标签支持审查。414行匹配事件，225行有限且版本无歧义的一般工商业金额对仍因单位未知不可算；合法输入0，探索NOT_READY。仅补单位也不能使各段数量达标，不立F1。NON_VINTAGE不证明PIT，新增0fit/收益标签，累计237＋1旧index；无自动训练/重采/生产/服务任务。
+> 2026-10-26最新断点：P15[方法收口与单一确认决策](../analysis/advisory_p15_method_and_confirmation_decision_20261026.md)已完成。纠正“不前填必然推出1TD”的解释：旧事件合同和FILE_PASS/INPUT_NOT_READY收据保留，财务状态用途暂缓，未改TTL或重算覆盖。13指定文件身份及有限登记元数据核对，无新合格确认交付，复用P5；P4/P9原分类不变，不凭旧点值选赢家。当前NO_CANDIDATE_NOMINATED/确认NOT_EXECUTABLE，新增0fit/收益标签、累计237＋1旧index；原两包Top50→Top10/5TD及日频基线不变，无自动研究/采集/回放/服务任务。
 
 > 2026-10-23 P9历史断点：用户另行授权的P9[分钟级留一同群同步F1](advisory_intraday_peer_synchrony_top10_5td_v1_f1_design_20261023.md)完成一次六fit内层研究。305D/30,500原行保留，30,417可算；100共同D相对原生+15.682701bps、描述性95%[-22.066937,51.997402]、两折正，按事前产品门INNER_SUPPORTED；相对matched−2.223706bps，不证明同步特征本身增值。累计225实际研究fit＋1旧index，0经济确认/激活/outer。当时report_rc全方向DEFERRED_BY_USER，数据窗口完成不自动恢复；本次用户批准的有限恢复见§6.3.29，P9结果及停止边界不改。
 
@@ -17,7 +17,7 @@
 
 > 现行方向（2026-10-24）：唯一主线仍为原两包Top50→Top10、T开盘至T+4收盘及原费用后的原生Top10增量。P11 EPS精确候选停止；P12盘点/P13设计之后，P14频率代理一次六fit已完成但证据不足。低覆盖/低相关、工程PASS或正点估计不证明Alpha；不默认进入新表示→六fit循环，不把两个候选的结果外推为全部研报无价值。NON_VINTAGE仅探索；评级、正文、目标价、价格/Exit/仓位、公告、QE/HMM不并行。
 
-> 当前进展：P15 FILE_PASS / INPUT_REVIEW_COMPLETE_NOT_READY / NO_F1，现金兑现源已交付，单位证据和事件日支持不足；不是经济阴性。P14 INNER_INCONCLUSIVE及P4～P11历史结论保留，累计237＋1旧index。精确候选不推进，不重采同版、延长有效期或换候选救结果；用户本轮未授权拟合、收益标签或QE启动。0生产写库、数据切换、激活或服务控制，本轮文档无需重启。
+> 当前进展：P15方法与确认决策完成，NO_CANDIDATE_NOMINATED / CONFIRMATION_NOT_EXECUTABLE。原FILE_PASS / INPUT_NOT_READY事件证据不改；1TD解释已勘误，状态用途暂缓而非经济否定。P14及P4～P11历史分类保留，累计237＋1旧index。没有新F1、拟合、收益标签或QE任务；0生产写库、数据切换、激活或服务控制，本轮文档无需重启。
 
 > 2026-10-19用户调整：#6330、公告标题设计#6341已合入并清理；[公告标题方向](advisory_announcement_title_value_v1_f1_design_20261019.md)改为`DEFERRED_BY_USER / 待执行`，不作为主线前置、不继续补采或等待。随后完成[独立Top50→Top10同日中心化排序](advisory_group_centered_rank_5td_v1_f1_design_20261019.md)：只读已有两包文件，固定五会话、两Ridge对照，检验去除日期共同项是否改善原Top10；不预测买价或决定弃权。旧M1/M5/P0-I已做过排名，此次是不同人口/政策下的明确学习合同测试，不冒称全新信息或独立OOS。该精确候选已停止，源码/真实研究/经济确认分态，结果见§6.3.12/§16.0。
 
@@ -117,7 +117,7 @@
 
 M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。自2026-09-02起，所有工作必须先归入以下四类，只有第一类默认获得研发和算力：
 
-1. **主动业务主线**：稳定日频基线继续运行；两新包回放/成熟统计已完成。固定Top50→Top10/5TD目标不变；§16.0的B0～B3及后续各有界候选已结束，P15现金流文件已验收PASS，但冻结事件日合同的单位与输入支持不足，未立F1，不重新启动B0训练或自动接续其它来源。输入评审与经济评价分别记账，有可信排序增量后才形成经济价格区间。不为旧未达标模型补跑确认，不等待QE新训练或自然20日才开发。历史全量复验、多seed、LOO、因子/模型组合Alpha审计和新组合搜索由QE统一规划，Advisory不建立平行Alpha实验线；QE已交付策略包直接消费，不重训上游、不设置包二次准入。
+1. **主动业务主线**：日频基线业务逻辑保持，本轮不核验运行健康；两新包回放/成熟统计的既有成果保留。固定Top50→Top10/5TD目标不变；§16.0的B0～B3及后续各有界候选已结束，P15方法收口完成，事件合同NOT_READY、状态用途暂缓。无新合格确认交付，候选提名0、确认不可执行，不重新启动B0训练或自动接续其它来源。输入评审与经济评价分别记账，有可信排序增量后才形成经济价格区间。不为旧未达标模型补跑确认，不等待QE新训练或自然20日来制造确认资格。历史全量复验、多seed、LOO、因子/模型组合Alpha审计和新组合搜索由QE统一规划，Advisory不建立平行Alpha实验线；QE已交付策略包直接消费，不重训上游、不设置包二次准入。
 2. **被动业务观察**：每日自然 forward observation/outcome 按现有调度形成，不回填、不等待、不派生独立开发项目。
 3. **条件性阻塞修复**：只修直接阻碍主动主线或每日荐股正确性的 BUG；H0 只有满足该条件时才执行最小范围。
 4. **零工作约束与历史事实**：研究族冻结、已完成实验、已消费窗口、trial registry 身份和旧 artifact 只防止重复犯错，不构成待办；历史分析、证据固化、归档和旧任务清理分配零主动工时。
@@ -268,7 +268,7 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow；历史M4实现开盘分布参考而非盈利区间，当前Program未配置该角色 |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `P15_FILE_PASS / INPUT_REVIEW_COMPLETE_NOT_READY / ECONOMIC_CONFIRMED_0` | §6.3.34实际消费现金流交付，单位全未知、事件支持稀疏，合法输入0/30,500；无新F1/收益标签/fit。累计237＋1，无生产接入依据 |
+| 新路线实现状态 | `P15_METHOD_DECISION_COMPLETE / NO_CANDIDATE_NOMINATED / ECONOMIC_CONFIRMED_0` | §6.3.35完成解释勘误、有限确认事实核查和单一方案停止分支；原§6.3.34事件输入NOT_READY不改，状态用途暂缓。无新F1/收益标签/fit，累计237＋1，无生产接入依据 |
 | 研报文件与信号准备 | `FILE_PASS / P12_ARRIVAL_INPUT_SUPPORTED / NON_VINTAGE` | §6.3.31 P12机构日频率3,773/30,500可算，18检查通过；P10 EPS输入与P11结果保留，不是历史PIT或经济确认 |
 | 固定5TD日频交付 | `SOURCE_MERGED_ROUTE_RESTART_VERIFIED / PRODUCTION_COMPUTED_NOT_VERIFIED` | #5722只读DB来源与#5732 API已合入；43合同、原次日EOD及两个Program本地ASGI真实DB读回完成，用户重启后health/identity与路由200通过。生产接口仍为NOT_CONFIGURED、无DB读，未宣称生产COMPUTED或盈利；仅路由验收不等于模型已启用 |
 | 已有模型的可用价值 | `ENGINEERING_AND_DIAGNOSTIC_VALUE / NO_CONFIRMED_PROFIT_MODEL` | 基线选股、通用输入/回放/API可以复用；OPEN_DISTRIBUTION仅为价格分布参考，liability相关性仅为负担诊断。没有确认的Advisory盈利型模型，不等于所有QE包无Alpha，也不等于源码和统计诊断毫无价值 |
@@ -357,7 +357,7 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 
 ### 1.4 方向一致性复核
 
-2026-10-26现行复核：P15现金流delivery-v2文件消费PASS，原30,500行完整；不前填的1TD事件合同下合法可用0行，单位证据缺失。单位前有限事件上限225行，两个包首窗54/55行、第二折0/1行，单补单位也不足。当前精确候选不立F1，不重采/拼值/改窗/换方向；NON_VINTAGE与无收益标签限制保持。输入期限是事件日，评价目标仍5TD；结论不外推为全部现金流无价值。
+2026-10-26现行复核：§6.3.35方法和确认决策已完成。1TD是执行者选择的事件规则，不能由“不前填”必然推出；原delivery-v2文件PASS和事件合同NOT_READY证据保留，未改TTL或重算。状态引用概念上可成立，当前没有新状态合同；单位和历史时钟缺口仍在。有限登记入口没有新合格确认交付，复用P5，候选提名0/确认不可执行；不重采、拼值、拟合或改窗，原Top50/5TD保持，不否定现金流整个方向。
 
 2026-10-25历史复核：P15完成三族元数据盘点及一个条件输入问题评审。当时版本化源面板在限定范围未定位，覆盖/支持/重排未评价；来源状态已由§6.3.34的真实交付更新。父包/历史机制查重仍复用，融资旧frontier和质押不重做。
 
@@ -1496,11 +1496,21 @@ clean producer `f17dd87bd256749865e9d0a644e16e7f5a06373a`，implementation SHA `
 
 [验收报告](../analysis/advisory_p15_cashflow_input_acceptance_20261026.md)实际消费用户指定delivery-v2，manifest SHA `4760b806e953d0f6293745a74405b82ca565db84b1488b12e35f3a75d899d48f`。8文件hash及26,102原始/标准化行逐项一致，2,182股票有源记录；原52,400身份hash及30,500开发行顺序完整，0收益标签/父分数/价格解码。
 
-先冻结合同SHA `a849431ca9088434e9ad63351a63a34d50a76b9109626f22eac00cd3b208e52c`：只消费同一类型1合并YTD源行，明确NON_VINTAGE；不以4/5或旧期补缺，不用update_flag选赢家；两公告日较晚日期后首个交易日假设可得，按用户不前填要求仅当天有效、下一交易日失效。1TD是输入有效期，原5TD目标不变。单位和币种无来源证据均UNKNOWN，不凭无量纲比值或数量级推断同口径。
+先冻结合同SHA `a849431ca9088434e9ad63351a63a34d50a76b9109626f22eac00cd3b208e52c`：只消费同一类型1合并YTD源行，明确NON_VINTAGE；不以4/5或旧期补缺，不用update_flag选赢家；两公告日较晚日期后首个交易日假设可得，执行者选择仅当天有效、下一交易日失效的保守事件规则。1TD是输入有效期，原5TD目标不变；不是用户指定期限，也不能由“不前填”必然推出，后续解释勘误见§6.3.35。单位和币种无来源证据均UNKNOWN，不凭无量纲比值或数量级推断同口径。
 
 源端14,825行有限金额对，19内容差异/8金额冲突发生项保留，季度净利润大量缺失。30,500开发行中414匹配事件，单位前有限/无版本歧义/一般工商业225行；全体单位未知使合法可用0行。两个包首窗数量上限54/55、三折14/13、0/1、48/40，均低于冻结200/100最低行数，仅补单位也不能通过。文件PASS、探索NOT_READY、历史PIT未证明、经济NOT_TESTED分别报告，不将输入不足当经济阴性。
 
 14合成断言与第二PyArrow/纯Python实现全行复核通过，原rank不变，无真实特征计算、F1或fit；累计237＋1。证据根`X:/AIstock_temp/ADVISORY/p15-cashflow-input-support-20261026`，input receipt SHA `bb1687b946f5c44c87c441936cb14b8cb9be69c2c1cb0e27508e8e6d29dad103`、audit SHA `55469768dbd5515d6b1f7d044159c2e27e742ab1b8800df2d6f60a911f3673d0`。同窗口两轮自审，不冒称独立OOS/外审；不为此重采同版、拼补季报、扩大有效期或启动第二候选。当前只完成输入评审，后续开发/训练和生产不由文件交付授权。
+
+### 6.3.35 P15方法收口与单一确认决策（2026-10-26）
+
+[完整报告](../analysis/advisory_p15_method_and_confirmation_decision_20261026.md)区分缺值填补、公告事件与完整报表状态引用。旧1TD合同及数量结论仅适用于原事件问题，状态引用概念上可成立但本轮未批准/执行；未选择新TTL、未重算覆盖。原比值只需有证据的共同正尺度和可比币种，不必知道共同尺度绝对名称；目前证据仍缺，UNKNOWN保持。NON_VINTAGE不升级为历史PIT，长期盈利持续性文献不直接证明A股5TD增量。
+
+指定13文件hash和有限目录/日频元数据核对完成，父计划、消费registry、原inputs及日历身份未变，复用P5而不重算。旧五包Top20发布/结算状态收据不能证明原两包Top50完整新确认交付；没有核验当前运行健康，不作全项目无数据断言。P4/P9原INNER_SUPPORTED保留，matched只作归因，不增加新产品硬门或因P9旧点值较高就选它。
+
+终态`METHOD_AND_CONFIRMATION_DECISION_COMPLETE / NO_CANDIDATE_NOMINATED / NOT_EXECUTABLE`：现金流事件停止、状态用途暂缓；未来单一候选必须填实冻结模型/人口/时钟/未消费窗口/样本资源和唯一揭盲安排，当前相关字段显式null。原生主终点、原费用、5TD及旧外层参考保持，不把方案当可运行F1，不启动采集/观察服务或第二候选。重新进入只由具体新事实驱动，不反复轮询、重做旧评审或延长历史抢救候选。
+
+证据根`X:/AIstock_temp/ADVISORY/p15-method-confirmation-20261026`；evidence receipt SHA `39d581ae2342cd2ee519fe46b831ec967d9d0d6bf9342ad418e43cfcc2ea15e2`。本窗口多轮自审，0新fit/收益标签数组/金额或覆盖重算/SQL/QE与服务控制；累计237实际fit＋1旧index。方法决策已完成，模型开发、经济确认与生产均未完成，无需后端重启。
 
 ## 7. 荐股产品行为
 
@@ -2244,6 +2254,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-297 | 页首/§1.2/1.4/16.0一致记录P11停止、P12/P13完成、P14证据不足；累计237fit，NON_VINTAGE/生产与服务边界不扩张 |
 | F-298 | P15三族元数据盘点、唯一现金兑现条件问题、50份父动态源码与52,400原身份核验；未定位源面板则NOT_READY/无F1，数值未测与经济未测分报，不自动采集或换候选 |
 | F-299 | P15现金流交付接续：精确manifest/raw-panel/原人口核验，数值前冻结版本/时钟/单位/1TD事件规则，完整UNKNOWN支持及二次算术复核；文件PASS与探索NOT_READY分态，0收益标签/fit，不自动续接开发或重采 |
+| F-300 | P15方法收口：纠正1TD解释而不覆写旧证据；区分事件/状态/填补和共同尺度要求；有限确认元数据核对并复用P5，单候选决策为0，未来确认方案与当前不可执行分态，0fit/标签/业务变更 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2425,6 +2436,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-297 | 页首/§1.2/1.4/16.0、F1 Scope/Production Gates | artifact: X:/AIstock_temp/ADVISORY/p14-report-arrival-20261024/review_receipt.md | EXECUTION_BOUNDARIES_VERIFIED | none |
 | F-298 | §6.3.33/§16.0、`docs/analysis/advisory_p15_new_information_review_20261025.md` | artifact: X:/AIstock_temp/ADVISORY/p15-new-information-review-20261025/input_audit_receipt.json; source_catalog_review.json | REVIEW_COMPLETE_INPUT_SOURCE_NOT_READY_NO_F1 | none |
 | F-299 | §6.3.34/§16.0、`docs/analysis/advisory_p15_cashflow_input_acceptance_20261026.md` | artifact: X:/AIstock_temp/ADVISORY/p15-cashflow-input-support-20261026/input_review_receipt.json; input_audit_receipt.json | FILE_PASS_INPUT_REVIEW_COMPLETE_NOT_READY_NO_F1 | none |
+| F-300 | §6.3.35/§16.0、`docs/analysis/advisory_p15_method_and_confirmation_decision_20261026.md` | artifact: X:/AIstock_temp/ADVISORY/p15-method-confirmation-20261026/evidence_receipt.json; method_contract.json; review_receipt.md | METHOD_DECISION_COMPLETE_NO_CANDIDATE_CONFIRMATION_NOT_EXECUTABLE | none |
 
 
 ## 12. Verification Plan
@@ -2723,7 +2735,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ### 16.0 当前唯一任务队列与真实断点（2026-10-26 接续）
 
-本节是2026-10-26唯一队列。原两包Top50→Top10、T开盘至T+4收盘及原费用后增量固定。P11 EPS阴性和P14 INNER_INCONCLUSIVE保持停止；P15现金流文件已验收PASS，冻结事件合同下单位未知且输入稀疏，探索NOT_READY，无新F1。当前累计237实际fit＋1旧index、0经济确认/激活。输入评审任务完成，当前精确候选不推进；不重采同版、不改有效期、不拼值，也没有自动排队的开发、拟合、第二候选或历史补证任务。用户本轮明确不授权收益标签、拟合或QE启动；文件PASS不等于PIT或经济通过。
+本节是2026-10-26唯一队列。原两包Top50→Top10、T开盘至T+4收盘及原费用后增量固定。P11/P14继续停止，P4/P9原内层分类不改；P15文件PASS、原事件合同INPUT_NOT_READY。§6.3.35方法收口已完成：1TD不是“不前填”的必然要求，旧证据保留，财务状态用途暂缓且未重算。有限登记入口未出现合格新确认交付，复用P5；本轮没有提名候选、没有可执行确认F1。当前累计237实际fit＋1旧index、0经济确认/激活，无自动排队的开发、拟合、采集、观察、第二候选或历史补证。只由具体新事实接续，不循环重审；原生日频业务不变。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |
 |---|---|---|
@@ -2756,6 +2768,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 | P13 / 设计完成并合入 | §6.3.31/report_arrival F1，PR #6673；固定30/90自然日计数、同支持8/9字段、三折最多六fit、UNKNOWN原槽与native主终点 | 设计时0fit；后继P14已执行，设计预算不重复计数 |
 | P14 / 完整实现与一次六fit结束 | §6.3.32/F1 v1.1；28直接项、30,500跨节点输入核对、十stage及六claims审计；101共同D原生+1.101690、matched−0.535244bps | INNER_INCONCLUSIVE，仅一折正、两包异向；累计237＋1，0outer/确认/激活。本候选预算终止，不变窗/择包/加fit或自动切换研报支线 |
 | P15 / 交付验收和输入评审完成，不立F1 | §6.3.33历史查重复用；§6.3.34现金流8文件/26,102源行及30,500开发人口完整，14合成断言和第二实现通过 | FILE_PASS / INPUT_NOT_READY；单位未知，事件支持上限也不足；NON_VINTAGE、经济未测，新增0fit/收益标签。精确候选不推进，不重采同版/拼值/改有效期或自动接续其它方向 |
+| P15方法/确认决策 / 已完成停止分支 | §6.3.35及方法报告；13指定文件hash、事件/状态/单位解释复核和有限确认元数据核查，三轮自审 | NO_CANDIDATE_NOMINATED / CONFIRMATION_NOT_EXECUTABLE；保留旧结果，财务状态暂缓，无新TTL或覆盖试算；未来方案字段与终止分支已明示，无自动执行任务 |
 | B4 / 本候选不启动 | 仅未来确实值得确认的新candidate才冻结并一次读取真正未消费历史 | 本轮sealed收益未读；禁止将已消费outer改称确认，不等待自然天数抢救当前失败 |
 | B5 / 本候选不启动 | 仅确认通过的新角色才做最小集成，再逐项研究价格条件集合/退出价值 | 不先造多角色平台；LocalSIM由其owner实施、重启用户所有；未配置角色不阻原包日频 |
 | 条件辅线 | 直接影响日频基线或本次研究的正确性BUG/可复现性能阻塞 | 仅本模块精确修复；共享三模式生产行为若业务需要再按已有接口验证，不为已加载源码重复重启，不代LocalSIM操作 |
