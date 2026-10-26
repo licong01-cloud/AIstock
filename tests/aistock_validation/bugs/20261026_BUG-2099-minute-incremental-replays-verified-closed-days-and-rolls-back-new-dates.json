@@ -2,6 +2,7 @@
   "actual": "2026-10-26 minute job 72eaa268-43e9-4274-a7d3-4ed363d7c177 requested Oct23..Oct26 although Oct23 has a table-backed complete-day audit. 50 symbols encounter 1886 historical Oct23 source differences; symbol-wide transaction rolls back all 12000 valid Oct26 new bars. Actual October audit confirms all 50 missing symbol-days are Oct26; other October dates complete. Respect only strict committed physical completeness receipts for advancing past a closed day; retain replay for partial/legacy/unproven days and exact explicit repair windows. Do not overwrite old facts or hide historical conflicts.",
   "allowed_write_scope": [
     "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "backend/tests/ingestion/test_tdx_scheduler_committed_cursor.py",
     "tests/aistock_validation/bugs/20261026_BUG-2099-minute-incremental-replays-verified-closed-days-and-rolls-back-new-dates.json"
   ],
@@ -112,7 +113,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/DATA_PREPARATION/october-audit-20261026/minute-fix-dev-production-plan.json: isolated Python loaded tracked scheduler; real committed Oct23 audit advanced cursor to Oct26, failed DEV receipt preserved replay; 12000 real source minutes inserted DEV, second apply0, exact readback12000"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
