@@ -38,12 +38,24 @@ RESULT_SCHEMA = "localsim_dual_mode_results_v1"
 
 def implementation_identity():
     root = Path(__file__).resolve().parents[4]
-    names = ["human_operation.py", "human_portfolio.py", "native_research.py", "dual_mode_research.py", "timing_portfolio.py"]
+    names = ["human_operation.py", "human_portfolio.py", "native_research.py", "dual_mode_research.py",
+             "timing_portfolio.py", "timing_campaign.py", "timing_continuation.py"]
     files = {"native": source_identity(), "dual_mode": {
         name: hashlib.sha256((root / "backend/services/simulation_execution/localsim" / name)
                             .read_bytes().replace(b"\r\n", b"\n")).hexdigest() for name in names}}
     files["native_execution"] = {name: hashlib.sha256((root / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
                                   for name in ("backend/execution_algos/twap_algo.py", "backend/services/strategy_package/execution_policy.py")}
+    # The producer commit binds the repository; the executable fingerprint
+    # must also notice an owner-only upgrade when an old day prefix resumes.
+    shared = {p for directory in ("backend/services/position_timing/intraday", "backend/services/trading_core")
+              for p in (root / directory).glob("*.py")}
+    shared.update(root / name for name in (
+        "backend/services/strategy_package/runtime.py", "backend/services/strategy_package/models.py",
+        "backend/services/strategy_package/manifest.py", "backend/services/selection_center/models.py",
+        "backend/services/simulation_runtime/decision.py", "backend/execution_algos/base_algo.py",
+        "backend/execution_algos/registry.py"))
+    files["shared_authorities"] = {p.relative_to(root).as_posix():hashlib.sha256(
+        p.read_bytes().replace(b"\r\n",b"\n")).hexdigest() for p in sorted(shared)}
     return files
 
 

@@ -13,7 +13,8 @@ import re
 from backend.services.position_timing.intraday.contracts import digest
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.ledger import InMemoryLedger
-from backend.services.trading_core.models import PositionLot
+from backend.services.trading_core.models import Order, PositionLot
+from .economic import local_sim_fact_payload
 
 
 RULE_LABELS = {"LOCALSIM_NATIVE_TWAP": "原生分时执行", "FIRST_OBSERVABLE_V1": "简单执行",
@@ -247,6 +248,18 @@ class DualModeReadService:
                     or record["outbox"]["projection_payload"] != record["checkpoint"]):
                 raise DataUnavailableError("账户日收据身份不一致")
             facts = record["facts"]
+            order_audits = {}
+            if view == "orders":
+                for parent in day["parents"]:
+                    audits = ([parent["session"]] if "session" in parent else parent.get("sessions", []))
+                    for audit in audits:
+                        order = Order.model_validate(audit["order"])
+                        if (order.order_id in order_audits
+                                or local_sim_fact_payload(order, fact_type="order") != facts["orders"].get(order.order_id)):
+                            raise DataUnavailableError("委托审计与原生经济事实不一致")
+                        order_audits[order.order_id] = order
+                if set(order_audits) != set(facts["orders"]):
+                    raise DataUnavailableError("委托的真实提交时间审计不完整")
             names = {r["symbol"]: r.get("stock_name") or r.get("name") for r in day["native_quantity_evidence"]["targets"]}
             projection = self._ref(day["native_quantity_evidence"]["projection"], inside=False)
             names.update({r["symbol"]:r.get("stock_name") or r.get("name")
@@ -276,13 +289,15 @@ class DualModeReadService:
                                  "side": "买入" if fill["side"] == "BUY" else "卖出", "quantity": fill["quantity"],
                                  "price": str(fill["price"]), "fees": str(fee)})
             elif view == "orders":
-                for order in facts["orders"].values():
-                    rows.append({"key": order["order_id"], "name": security_name(order["symbol"]), "time": order["created_at"],
+                for order in sorted(facts["orders"].values(),key=lambda o:(order_audits[o["order_id"]].created_at,o["symbol"],o["order_id"])):
+                    rows.append({"key": order["order_id"], "name": security_name(order["symbol"]), "time": order_audits[order["order_id"]].created_at.isoformat(),
                                  "side": "买入" if order["side"] == "BUY" else "卖出", "quantity": order["quantity"],
                                  "filled": order["filled_quantity"], "status": STATUS_LABELS.get(order["status"], "状态待核验")})
             else:
                 for action in day.get("human_operation_state", {}).get("actions", []):
                     rows.append({"key": action["action_id"], "name": security_name(action["symbol"]), "time": action["dispatch_at"] or action["visible_at"],
+                                 "visible_time":action["visible_at"], "ready_time":action["ready_at"],
+                                 "dispatch_time":action["dispatch_at"], "deadline_time":action["valid_until"],
                                  "kind": "下单尝试" if action["kind"] == "SUBMIT" else "撤单尝试",
                                  "status": STATUS_LABELS[action["status"]],
                                  "waiting_seconds": str((datetime.fromisoformat(action["dispatch_at"].replace("Z", "+00:00")) -

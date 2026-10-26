@@ -127,3 +127,18 @@ def test_invalid_economic_day_fails_before_any_journal_is_committed(tmp_path, mo
     root = Path(request.path).parent
     assert not list((root / "journals").glob("*/generations/*.json"))
     assert not (root / "results.json").exists()
+
+
+def test_shared_owner_only_code_upgrade_cannot_resume_old_account_prefix(tmp_path,monkeypatch):
+    request, _ = dual_fixture(tmp_path,monkeypatch,two_days=False,matrix="BASIC_2")
+    original_read = Path.read_bytes
+    def upgraded(path):
+        original = original_read(path)
+        return original + b"\n# different owner implementation\n" if path.as_posix().endswith(
+            "/position_timing/intraday/core.py") else original
+    monkeypatch.setattr(Path,"read_bytes",upgraded)
+    with pytest.raises(ValueError,match="REQUEST_IDENTITY_CONFLICT"):
+        dual.run_study(request)
+    root=Path(request.path).parent
+    assert not (root/"source_inspection.json").exists()
+    assert not list((root/"journals").glob("*/generations/*.json"))

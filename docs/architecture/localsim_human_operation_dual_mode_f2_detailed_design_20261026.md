@@ -1,6 +1,6 @@
 # LocalSIM 原生执行与模拟人工操作双模式 F2 详细设计
 
-日期：2026-10-26。Feature tier：F2；风险分类：T3。状态：`IMPLEMENTATION_IN_PROGRESS`；用户已授权完成开发、审核、CI及合入，并停止在用户后端重启节点。
+日期：2026-10-26，2026-10-27完成离线实现验收。Feature tier：F2；风险分类：T3。状态：`OFFLINE_IMPLEMENTATION_VERIFIED`；源码合入及加载状态以交付回执为准，停止在用户要求的后端重启节点。
 
 本设计最初通过PR #6736交付文档，随后用户授权本任务完成离线双模式、恢复与产品读取面的完整开发。当前实现工作树从`9d16f2df70f3caab4b38658c88e728c41aa88b4d`建立，并同步后续main。用户要求保留现有LocalSIM，没有要求把旧账户转换为人工模式。在线模拟的正式profile/release与持久化属于§10第五阶段；本任务不以离线功能代替在线激活。实现及实测状态见[验收报告](../analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md)。
 
@@ -52,6 +52,7 @@ LocalSIM 的目标是自动验证策略包及配置，而不是接入真实资�
 - `backend/services/simulation_runtime/localsim_runtime_profile.py`
 - `backend/services/simulation_runtime/localsim_workbench.py`
 - `backend/services/simulation_runtime/localsim_workbench_models.py`
+- `backend/services/simulation_runtime/localsim_workbench_presentation.py`（仅补原生LGBModel的可读模型族名称，不修改账户语义）
 - `backend/routers/simulation_runtime.py`
 - `backend/tests/simulation_execution/test_localsim_human_operation.py`
 - `backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py`
@@ -284,9 +285,9 @@ LocalSIM 总览                         [全部模式 v] [策略包 v]
 | F-159 | 原生事务、队列与反馈恢复、失败前缀、提交未知读回、exact retry无重复成交收费 |
 | F-160 | 全人口结果与receipt可回读，先source inspect后收益；MDD/公司行为/不可归因项准确 |
 | F-161 | UI保留左侧导航、现有账户详情和独立收益，新增中文模式比较，正常页面无ID/JSON |
-| F-162 | 定向/原生不漂移/短窗/连续多日/增量/恢复验证及端到端性能和复杂度证据 |
+| F-162 | 定向/原生不漂移/短窗/连续多日/增量/恢复验证及端到端性能和复杂度证据  |
 | F-163 | 分阶段启用、旧账户不迁移、无新调度器；数据/数据库/进程/生产授权状态分开 |
-| F-164 | 四项设计符合性、精确写入范围、设计/功能/历史/运行/经济状态分别报告 |
+| F-164 | 四项设计符合性、精确写入范围、设计/功能/历史/运行/经济状态分别报告  |
 
 ## 9. Verification Plan / 验证方案与业务 oracle
 
@@ -343,22 +344,22 @@ LocalSIM 总览                         [全部模式 v] [策略包 v]
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-149 | backend/services/simulation_execution/localsim/runtime.py；human_operation.py | test: backend/tests/simulation_execution/test_localsim_native_nonregression.py；旧择时/TWAP回归 | implemented | 旧配置、release及生产账户不迁移 |
-| F-150 | human_portfolio.py:run_human_portfolio_day；timing.py:TimingExecution；native_research.py | test: test_two_stocks_share_one_operator_and_no_double_delay；test_native_twap_uses_existing_engine_without_calling_timing_core | implemented | 只在派发后建单，复用唯一撮合/费用/账本 |
-| F-151 | human_operation.py:validate_operation_configuration；dual_mode_research.py:inspect_study | test: test_legacy_shape_and_unknown_modes_fail_closed；test_source_change_and_rehashed_population_change_fail_before_outputs | implemented | 生产profile/release入口按§10第五阶段单列，不宣称已启用 |
-| F-152 | human_operation.py:HumanOperationQueue | test: test_account_capacity_rejections_cancellation_ready_and_exact_restore；持续机会与排队过期测试 | implemented | 确定性响应政策是研究假设 |
-| F-153 | human_portfolio.py:evaluate_proposal；timing.py:step | test: test_future_suffix_never_changes_earlier_human_dispatch；strict-after四档延迟；反馈起点为真实提交时刻 | implemented | 执行bar完整成交量只作为披露的事后容量代理 |
-| F-154 | human_portfolio.py修订/撤单/到期编排；HumanOperationQueue.invalidate_plan | test: test_partial_fill_multiple_revisions_cancel_once_then_only_confirmed_remaining；队列恢复负例 | implemented | 硬期限自动闭合与人工撤单欠账分开记录 |
-| F-155 | TimingExecution.step；既有OMS/MinuteExecutionEngine/InMemoryLedger | test: 资金/可卖量、T+1、部分成交、父单最低费及原生3次子成交精确现金oracle | implemented | 不修改交易、费用或账本权威 |
-| F-156 | dual_mode_research.py:_source_inspect；既有inspect_price_templates/inspect_successor_sources | test: 源码/人口变化在收益前拒绝；artifact: 冻结真实输入与完整SHA见实现验收报告 | implemented | 使用显式冻结后继，不追随可变active，不改旧run |
-| F-157 | dual_mode_research.py:profiles_for及独立账户生成 | test: test_thirteen_accounts_two_days_resume_native_journals_and_exact_retry；BASIC_2文件合同 | implemented | 1000万元纯现金；完整历史状态在验收报告单列 |
-| F-158 | dual_mode_research.py:summarize_accounts；execution_contract | test: 两比较family、异成交代理及quantity_matched=false；旧冻结288产物hash复核 | implemented | 原288是旧冻结机会诊断，不能当作新增人工队列或连续账户的纯延迟证据 |
-| F-159 | dual_mode_research.py单writer/日恢复；原生TimingFileRepository与economic coordinator | test: 2日恢复、exact retry零重算、摘要修复及test_single_writer_and_failure_preserve_only_committed_prefix | implemented | 完整日为离线恢复边界；在线minute CAS不由整日重算替代 |
-| F-160 | dual_mode_research.py全人口信封；dual_mode_projection.py只读核验 | test: 原生journal独立回放、收据篡改拒绝、分页隔离、所有状态保留；合法无目标日测试 | implemented | BUY/SELL净值与MDD归因保留null，不伪造因果归因 |
-| F-161 | backend/routers/simulation_runtime.py比较GET；dual-mode-comparison.tsx | test: frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts；旧workbench 11项回归 | implemented | 左侧导航不改，账户资产及盈亏独立；简称仅取冻结输入，不补造 |
-| F-162 | 定向回归与真实文件研究；实现验收报告性能/复杂度节 | artifact: X:/AIstock_temp/localsim-human-operation-implementation-20261026；239项回归、46项时钟补验、12项浏览器验证 | in_progress | 真实短窗及连续运行测量进行中，不用功能测试替代历史经济证据 |
-| F-163 | §10发布阶段；只读外部研究根配置 | test: test_unconfigured_research_does_not_touch_native_accounts；真实离线运行没有生产账户写入 | implemented | 后端重启和在线启用由用户执行，当前停在源码交付节点 |
-| F-164 | §2.2精确文件范围；实现验收报告与§14 | artifact: L0/ownership/CI选择回执、四项设计符合性复核 | in_progress | 最终当前HEAD CI和合入待完成 |
+| F-149 |backend/services/simulation_execution/localsim/runtime.py；human_operation.py; 旧配置、release及生产账户不迁移 |test: backend/tests/simulation_execution/test_localsim_native_nonregression.py；旧择时/TWAP回归; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-150 |human_portfolio.py:run_human_portfolio_day；timing.py:TimingExecution；native_research.py; 只在派发后建单，复用唯一撮合/费用/账本 |test: test_two_stocks_share_one_operator_and_no_double_delay；test_native_twap_uses_existing_engine_without_calling_timing_core; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-151 |human_operation.py:validate_operation_configuration；dual_mode_research.py:inspect_study; 生产profile/release入口按§10第五阶段单列，不宣称已启用 |test: test_legacy_shape_and_unknown_modes_fail_closed；test_source_change_and_rehashed_population_change_fail_before_outputs; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-152 |human_operation.py:HumanOperationQueue; 确定性响应政策是研究假设 |test: test_account_capacity_rejections_cancellation_ready_and_exact_restore；持续机会与排队过期测试; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-153 |human_portfolio.py:evaluate_proposal；timing.py:step; 执行bar完整成交量只作为披露的事后容量代理 |test: test_future_suffix_never_changes_earlier_human_dispatch；strict-after四档延迟；反馈起点为真实提交时刻; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-154 |human_portfolio.py修订/撤单/到期编排；HumanOperationQueue.invalidate_plan; 硬期限自动闭合与人工撤单欠账分开记录 |test: test_partial_fill_multiple_revisions_cancel_once_then_only_confirmed_remaining；队列恢复负例; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-155 |TimingExecution.step；既有OMS/MinuteExecutionEngine/InMemoryLedger; 不修改交易、费用或账本权威 |test: 资金/可卖量、T+1、部分成交、父单最低费及原生3次子成交精确现金oracle; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-156 |dual_mode_research.py:_source_inspect；既有inspect_price_templates/inspect_successor_sources; 使用显式冻结后继，不追随可变active，不改旧run |test: 源码/人口变化在收益前拒绝；artifact: 冻结真实输入与完整SHA见实现验收报告; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-157 |dual_mode_research.py:profiles_for及独立账户生成; 1000万元纯现金；完整历史状态在验收报告单列 |test: test_thirteen_accounts_two_days_resume_native_journals_and_exact_retry；BASIC_2文件合同; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-158 |dual_mode_research.py:summarize_accounts；execution_contract; 原288是旧冻结机会诊断，不能当作新增人工队列或连续账户的纯延迟证据 |test: 两比较family、异成交代理及quantity_matched=false；旧冻结288产物hash复核; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-159 |dual_mode_research.py单writer/日恢复；原生TimingFileRepository与economic coordinator; 完整日为离线恢复边界；在线minute CAS不由整日重算替代 |test: 2日恢复、exact retry零重算、摘要修复及test_single_writer_and_failure_preserve_only_committed_prefix; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-160 |dual_mode_research.py全人口信封；dual_mode_projection.py只读核验; BUY/SELL净值与MDD归因保留null，不伪造因果归因 |test: 原生journal独立回放、收据篡改拒绝、分页隔离、所有状态保留；合法无目标日测试; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-161 |backend/routers/simulation_runtime.py比较GET；dual-mode-comparison.tsx; 左侧导航不改，账户资产及盈亏独立；简称仅取冻结输入，不补造 |test: frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts；旧workbench 11项回归; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-162 |定向回归与真实文件研究；实现验收报告性能/复杂度节 |artifact: X:/AIstock_temp/localsim-human-operation-implementation-20261026；239项回归、46项时钟补验、12项浏览器验证; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-163 |§10发布阶段；只读外部研究根配置; 后端重启和在线启用由用户执行，当前停在源码交付节点 |test: test_unconfigured_research_does_not_touch_native_accounts；真实离线运行没有生产账户写入; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| F-164 |§2.2精确文件范围；实现验收报告与§14 |artifact: L0/ownership/CI选择回执、四项设计符合性复核; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
 
 ## 14. DESIGN-COMPLIANCE-001 / 设计复核记录
 

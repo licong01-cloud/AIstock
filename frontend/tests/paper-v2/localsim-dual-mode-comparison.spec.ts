@@ -14,7 +14,7 @@ test("two modes keep independent accounts, readable details, filters and read-on
    {key:human,mode:"模拟人工",rule:"简单执行",name:"简单执行 · 1分钟响应",delay_seconds:60,initial_cash:"10000000",nav:"10018000",pnl:"18000",cash:"9000000",holdings_value:"1018000",last_day_pnl:"-300",last_trade_date:"2026-09-30",return_pct:"0.18",max_drawdown_pct:"1",fees:"900",completion_pct:"60",operations:{action_count:123,expired_actions:10,pending_cancellation_at_deadline:0,cancellation_races:0},statuses:[{name:"未成交",count:10}],constraints:[{name:"响应或排队期间机会过期",count:10}],curve:[{date:"2026-01-05",nav_cny:"10000000"},{date:"2026-09-30",nav_cny:"10018000"}]}]};
   if(path.includes("/accounts/")){
    const view=url.searchParams.get("view")||"positions";
-   response={schema_version:"localsim_dual_mode_account_view_v1",view,items:view==='positions'?[{name:"浦发银行",quantity:1000,available:1000,cost:"10",price:"11",value:"11000",pnl:"1000"}]:view==='trades'?[{name:"浦发银行",side:"买入",quantity:1000,price:"10",fees:"5",time:"2026-09-21T09:35:00+08:00"}]:view==='actions'?[{name:"浦发银行",time:"2026-09-21T09:33:10+08:00",kind:"下单尝试",status:"操作已确认",waiting_seconds:"60"}]:[],total_count:1,next_cursor:null,snapshot_set:"private_snapshot_never_display"};
+   response={schema_version:"localsim_dual_mode_account_view_v1",view,items:view==='positions'?[{name:"浦发银行",quantity:1000,available:1000,cost:"10",price:"11",value:"11000",pnl:"1000"}]:view==='trades'?[{name:"浦发银行",side:"买入",quantity:1000,price:"10",fees:"5",time:"2026-09-21T09:35:00+08:00"}]:view==='actions'?[{name:"浦发银行",visible_time:"2026-09-21T09:32:10+08:00",ready_time:"2026-09-21T09:33:10+08:00",dispatch_time:"2026-09-21T09:33:10+08:00",deadline_time:"2026-09-21T14:57:00+08:00",kind:"下单尝试",status:"操作已确认",waiting_seconds:"60"}]:[],total_count:1,next_cursor:null,snapshot_set:"private_snapshot_never_display"};
   }
   await route.fulfill({contentType:"application/json",body:JSON.stringify(response)});
  });
@@ -29,6 +29,8 @@ test("two modes keep independent accounts, readable details, filters and read-on
  await page.getByText('计划中观察到的等待与执行约束',{exact:false}).click();
  await expect(page.getByText('响应或排队期间机会过期：10项',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'人工操作',exact:true}).click();
+ await expect(page.getByRole('columnheader',{name:'首次建议',exact:true})).toBeVisible();
+ await expect(page.getByRole('columnheader',{name:'实际操作',exact:true})).toBeVisible();
  await expect(page.getByText('下单尝试',{exact:true})).toBeVisible();
  await expect(page.getByText('操作完成不代表成交',{exact:false})).toBeVisible();
  await page.getByLabel('研究开始日期').fill('2026-09-01');

@@ -29,6 +29,12 @@ def test_readonly_router_complete_accounts_paging_and_corrupt_receipt(tmp_path, 
     following = service.account_view(key, account, view="trades", page_size=1, cursor=first["next_cursor"])
     assert first["snapshot_set"] == following["snapshot_set"]
     assert first["items"] != following["items"]
+    for a in details["accounts"]:
+        for view in ("positions", "trades", "orders", "actions", "pnl"):
+            result = service.account_view(key,a["key"],view=view,page_size=2)
+            assert len(result["items"]) <= 2
+            if view == "orders":
+                assert all(item["time"] for item in result["items"])  # From a hash-checked parent audit, not missing fact timestamps.
     with pytest.raises(RuntimeConfigInvalidError):
         service.account_view(key, details["accounts"][1]["key"], view="trades", cursor=first["next_cursor"])
     with pytest.raises(RuntimeConfigInvalidError):

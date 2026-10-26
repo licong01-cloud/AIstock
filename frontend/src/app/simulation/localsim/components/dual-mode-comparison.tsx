@@ -18,7 +18,7 @@ const columns:Record<string,[string,string,string][]>= {
  positions:[['name','证券','text'],['quantity','持仓数量','money'],['available','可卖数量','money'],['cost','成本价','money'],['price','估值价','money'],['value','持仓资产','money'],['pnl','浮动盈亏','profit']],
  trades:[['time','成交时间','time'],['name','证券','text'],['side','方向','text'],['quantity','数量','money'],['price','成交价','money'],['fees','实际费用','money']],
  orders:[['time','委托时间','time'],['name','证券','text'],['side','方向','text'],['quantity','委托数量','money'],['filled','成交数量','money'],['status','状态','text']],
- actions:[['time','发生时间','time'],['name','证券','text'],['kind','操作','text'],['status','状态','text'],['waiting_seconds','响应与排队秒数','money']],
+ actions:[['visible_time','首次建议','time'],['ready_time','最早可操作','time'],['dispatch_time','实际操作','time'],['deadline_time','有效截止','time'],['name','证券','text'],['kind','操作','text'],['status','状态','text'],['waiting_seconds','响应与排队秒数','money']],
  pnl:[['date','日期','date'],['opening_nav','期初资产','money'],['nav','期末资产','money'],['pnl','当日净盈亏','profit'],['fees','实际费用','money']]
 };
 

@@ -31,7 +31,7 @@ def market(symbol: str | None) -> str:
 MODEL_LABELS = {
     "LSTM": "LSTM长短期记忆", "TCN": "TCN时序卷积", "GRU": "GRU门控循环",
     "ALSTM": "ALSTM注意力记忆", "TRANSFORMER": "Transformer注意力",
-    "LIGHTGBM": "LightGBM梯度提升", "XGBOOST": "XGBoost梯度提升",
+    "LIGHTGBM": "LightGBM梯度提升", "LGBMODEL": "LightGBM梯度提升", "XGBOOST": "XGBoost梯度提升",
     "MLP": "MLP多层感知", "LINEAR": "线性模型", "CATBOOST": "CatBoost梯度提升",
 }
 
