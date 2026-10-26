@@ -19,6 +19,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import normalize_json
 
 from .node_execution import MAX_QE_NODE_PARALLELISM
+from .qe_batch_execution_policy import QE_TRAINING_LOOP_CAPACITY
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
@@ -1137,6 +1138,10 @@ class QEWorkspaceSubmissionCoordinator:
             backtest_only=same_task_backtest_cohort or durable_replay_cohort,
             parallel_training=same_task_parallel_training_cohort,
         )
+        # Whole-loop admission also covers retry/force-full-train: a replay
+        # task configured for four must never admit four simultaneous fits.
+        if source.source_kind == "qe_evolution_loop" and not source.backtest_only:
+            physical_capacity = min(physical_capacity, QE_TRAINING_LOOP_CAPACITY)
         capacity = self._effective_consumer_capacity(
             physical_capacity,
             source.consumer_id,

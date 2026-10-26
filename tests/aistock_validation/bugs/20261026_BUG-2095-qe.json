@@ -9,7 +9,9 @@
     "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
     "backend/services/quantevolver/qe_batch_execution_policy.py",
     "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
-    "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json"
+    "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2095",
@@ -21,6 +23,24 @@
   ],
   "created_at": "2026-10-26T07:41:59.710383Z",
   "description": "qe_20261026_130549_50d9全部9Loop绑定rdagent-node1且node_parallelism=2，local WSL空闲；代码已支持纯回测4但任务创建仍依赖手填节点及并行度。",
+  "design_compliance_review": {
+    "DESIGN-COMPLIANCE-001.1": {
+      "evidence": "??????????????????2/???4???????????????????DEV????????????API???????",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.2": {
+      "evidence": "???manifest/calendar/instruments/PIT??????????????????????????HTTP?????????",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.3": {
+      "evidence": "?????????????????????????????????????????????????/??????",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.4": {
+      "evidence": "????????????????????????????????????????",
+      "verdict": "passed_source"
+    }
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -34,19 +54,35 @@
   ],
   "expected": "新批次无需代理手填即可在已验证同一active数据身份的双节点间分配；同seed配对尽量同节点；全训练每节点最多2，纯回测最多4，已有更严格模型容量继续生效；最终分配和并行策略版本持久化并可读回，恢复和重试不得退化或绕过上限。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+    ],
     "added_files": [
       "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json",
       "backend/routers/quantevolver_evolution.py",
-      "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
-      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
-      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/quantevolver_evolution.py",
@@ -196,7 +232,9 @@
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
       "backend/services/quantevolver/qe_batch_execution_policy.py",
-      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -207,7 +245,9 @@
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
       "backend/services/quantevolver/qe_batch_execution_policy.py",
-      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py"
     ]
   },
   "first_seen_at": "2026-10-26T07:41:59.710383Z",
@@ -216,6 +256,11 @@
   "fixed_at": null,
   "github_issue_number": 6724,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6724",
+  "implementation_notes": [
+    "node_allocation=balanced??????????node_id??????Loop??????????????UI/???????Loop??????node_allocation=explicit???????",
+    "???whole-loop?????????????Loop?????2??????4??????????2???/?????????????????????",
+    "??????????????aistock_dev?JSON??????9/9???????????DML/DDL???????????"
+  ],
   "last_seen_at": "2026-10-26T07:41:59.710383Z",
   "module": "quantevolver",
   "non_goals": [
@@ -233,11 +278,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "python -X utf8 -B isolated verification -> passed; real two-node identity and existing DEV rollback 9/9 restore: tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json; ASGI HTTP policy semantic readback and source hashes: tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
+      "python -X utf8 -B isolated verification -> passed; two-node identity and DEV rollback 9/9 restore in tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json; ASGI HTTP semantic readback and source hashes in tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
+      "python isolated verification -> passed; tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json and tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "changed_file_catalog",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -246,6 +299,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_update_reason": "???QE???????????????????????????/HTTP???????????????",
   "severity": "P2",
   "status": "open",
   "suspected_modules": [

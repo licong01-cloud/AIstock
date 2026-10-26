@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -1536,7 +1536,7 @@ class CustomEvoLoopConfig(BaseModel):
     prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
     prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
     prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
-    node_id: Optional[str] = Field(None, description="Loop execution node; blank inherits Loop1")
+    node_id: Optional[str] = Field(None, description="Loop node; balanced new batches redistribute uniform node defaults; explicit allocation preserves pins")
 
     @model_validator(mode="after")
     def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
@@ -1554,8 +1554,11 @@ class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
     target_desc: str = Field("", description="任务描述")
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
-    node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
-    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
+    node_id: Optional[str] = Field(None, description="Preferred node for balanced placement; batch node when node_allocation=explicit")
+    node_allocation: Literal["balanced", "explicit"] = Field(
+        "balanced", description="New batches balance unpinned Loops across active nodes; explicit preserves batch-node inheritance",
+    )
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Defaults per node: full-fit Loops 2, pure-backtest Loops 4; explicit reductions allowed")
     phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
     resource_telemetry_enabled: bool = Field(
         False,
@@ -1712,6 +1715,8 @@ async def _prepare_custom_evo_loop_configs(
     persisted_loop_configs: Optional[Dict[int, Dict[str, Any]]] = None,
     required_profile_identity: Optional[Dict[str, str]] = None,
     existing_legacy_task: bool = False,
+    apply_batch_policy: bool = False,
+    balanced_batch_nodes: bool = True,
 ) -> tuple[List[Dict[str, Any]], str, Dict[str, int]]:
     """Validate custom_evo loop payloads and resolve execution nodes fail-fast."""
     if assigned_loop_indexes and len(assigned_loop_indexes) != len(loops):
@@ -1824,6 +1829,21 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
         loops_config.append(cfg_dict)
 
+    from ..services.quantevolver.qe_batch_execution_policy import (
+        POLICY_KEY, QE_BATCH_EXECUTION_POLICY, batch_node_parallelism,
+        place_batch_loops, verify_batch_dataset_nodes,
+    )
+    from ..services.quantevolver.qe_active_dataset_profile import load_active_qe_profile
+
+    placement_profile = load_active_qe_profile() if apply_batch_policy else None
+    automatic_placement = bool(placement_profile is not None and balanced_batch_nodes)
+    if automatic_placement:
+        loops_config = place_batch_loops(
+            loops_config,
+            available_nodes=list(placement_profile.raw["node_bindings"]),
+            preferred_node=request_node_id,
+            rebalance_single_node=True,
+        )
     try:
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
             loops_config,
@@ -1834,6 +1854,8 @@ async def _prepare_custom_evo_loop_configs(
             parallelism_scope,
             node_parallelism_payload,
         )
+        if apply_batch_policy:
+            node_parallelism = batch_node_parallelism(loops_config, node_parallelism_payload)
         node_rows = await preflight_qe_nodes(selected_node_ids)
     except QENodePreflightError as e:
         raise HTTPException(status_code=400, detail=e.to_detail()) from e
@@ -1849,6 +1871,9 @@ async def _prepare_custom_evo_loop_configs(
     unresolved: List[tuple[int, Dict[str, Any]]] = []
     persisted_by_index = persisted_loop_configs or {}
     for pos, cfg_dict in enumerate(loops_config, start=1):
+        old_loop = persisted_by_index.get(int(cfg_dict["loop_index"])) or {}
+        if old_loop.get(POLICY_KEY):
+            cfg_dict[POLICY_KEY] = dict(old_loop[POLICY_KEY])
         persisted = _persisted_qe_dataset_context(
             persisted_by_index.get(int(cfg_dict["loop_index"]))
         )
@@ -1879,7 +1904,7 @@ async def _prepare_custom_evo_loop_configs(
         cfg_dict["resolved_dataset"] = persisted["resolved_dataset"]
 
     try:
-        active_profile = load_active_qe_profile() if unresolved else None
+        active_profile = (placement_profile or load_active_qe_profile()) if unresolved else None
     except QEActiveDatasetProfileError as exc:
         raise HTTPException(
             status_code=503,
@@ -1991,6 +2016,20 @@ async def _prepare_custom_evo_loop_configs(
             _sync_stock_pool_to_remote(stock_pool, node)
             synced_stock_pool_keys.add(sync_key)
 
+    if apply_batch_policy:
+        identity = (
+            await verify_batch_dataset_nodes(active_profile, sorted(selected_node_ids))
+            if active_profile is not None else None
+        )
+        receipt = {
+            "version": QE_BATCH_EXECUTION_POLICY,
+            "placement": "balanced" if automatic_placement else "explicit_or_legacy",
+            "node_parallelism": node_parallelism,
+            "requested_node_parallelism": node_parallelism_payload,
+            "dataset_identity": identity,
+        }
+        for cfg_dict in loops_config:
+            cfg_dict[POLICY_KEY] = dict(receipt)
     return loops_config, loop1_node_id, node_parallelism
 
 
@@ -2032,6 +2071,25 @@ def _filter_node_parallelism_for_scope(
         )
     return filtered
 
+@router.get("/execution-policy", summary="Read the code-owned QE batch execution policy")
+def get_batch_execution_policy():
+    from ..services.quantevolver.qe_batch_execution_policy import (
+        QE_BATCH_EXECUTION_POLICY, QE_TRAINING_LOOP_CAPACITY, QE_BACKTEST_LOOP_CAPACITY,
+    )
+
+    return {
+        "version": QE_BATCH_EXECUTION_POLICY,
+        "default_node_allocation": "balanced",
+        "per_node_workload_limits": {
+            "full_fit_loop": QE_TRAINING_LOOP_CAPACITY,
+            "pure_backtest_loop": QE_BACKTEST_LOOP_CAPACITY,
+        },
+        "slot_lifetime": "whole_loop",
+        "stricter_model_and_global_capacity_guards": "preserved",
+        "existing_task_bindings": "immutable",
+    }
+
+
 @router.post("/custom-tasks", summary="Create custom evolution task")
 async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
     """Create a custom_evo task with explicit per-loop execution nodes."""
@@ -2060,6 +2118,8 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             req.loops,
             request_node_id=req.node_id,
             node_parallelism_payload=req.node_parallelism,
+            apply_batch_policy=True,
+            balanced_batch_nodes=req.node_allocation == "balanced",
         )
 
         new_task_id = await scheduler.create_custom_evo_task(
@@ -2090,6 +2150,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             ],
             "node_parallelism": node_parallelism,
             "message": f"Custom evolution task created with {len(loops_config)} loops.",
+            "execution_policy": loops_config[0].get("_qe_batch_execution_policy"),
         }
         if not req.auto_start:
             response.update({

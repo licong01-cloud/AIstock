@@ -54,10 +54,15 @@ from .qe_gpu_training_policy import (
     resolve_gpu_training_policy,
 )
 from .node_execution import (
-    normalize_node_parallelism,
     preflight_qe_node,
     resolve_custom_loop_nodes,
     resolve_default_qe_node_id,
+)
+from .qe_batch_execution_policy import (
+    POLICY_KEY,
+    QE_BATCH_EXECUTION_POLICY,
+    batch_node_parallelism,
+    strategy_node_parallelism,
 )
 from .results_only_retry import (
     ResultsOnlyRegistrationError,
@@ -6375,7 +6380,13 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             node_id,
         )
-        node_parallelism = normalize_node_parallelism(selected_node_ids, node_parallelism)
+        node_parallelism = batch_node_parallelism(loops_config, node_parallelism)
+        for loop_cfg in loops_config:
+            loop_cfg.setdefault(POLICY_KEY, {
+                "version": QE_BATCH_EXECUTION_POLICY,
+                "placement": "explicit",
+                "node_parallelism": node_parallelism,
+            })
 
         normalized_loops = []
         for idx, loop_cfg in enumerate(loops_config, start=1):
@@ -6487,7 +6498,8 @@ class AutoEvolutionScheduler:
                         "node_parallelism": node_parallelism,
                         "phase_pipeline_enabled": bool(phase_pipeline_enabled),
                         "resource_telemetry_enabled": bool(resource_telemetry_enabled),
-                        "node_resolution_policy": "loop1_inherit_v1",
+                        "node_resolution_policy": QE_BATCH_EXECUTION_POLICY,
+                        "execution_policy": loops_config[0][POLICY_KEY],
                         "clone_from_task_id": clone_from_task_id,
                     }),
                     first_label_horizon,
@@ -6751,6 +6763,7 @@ class AutoEvolutionScheduler:
             "execution_mode": "serial",  # deprecated: kept for frontend backward compat
             "engine_mode": strategy_config.get("engine_mode") or "unified",
             "node_parallelism": strategy_config.get("node_parallelism") or {},
+            "execution_policy": strategy_config.get("execution_policy"),
             "phase_pipeline_enabled": bool(strategy_config.get("phase_pipeline_enabled", False)),
             "resource_telemetry_enabled": False,
             "resource_monitoring_status": "removed",
@@ -6879,6 +6892,12 @@ class AutoEvolutionScheduler:
                             task.get("strategy_evo_config") or {}
                         ).get("clone_from_task_id") if isinstance(task.get("strategy_evo_config"), dict) else None,
                     }
+                    batch_policy = next((cfg[POLICY_KEY] for cfg in resolved_loops if cfg.get(POLICY_KEY)), None)
+                    if batch_policy:
+                        strategy_config["node_resolution_policy"] = QE_BATCH_EXECUTION_POLICY
+                        strategy_config["execution_policy"] = {
+                            **batch_policy, "node_parallelism": full_node_parallelism,
+                        }
                     if isinstance(task.get("strategy_evo_config"), str):
                         try:
                             old_cfg = json.loads(task.get("strategy_evo_config") or "{}")
@@ -7077,7 +7096,7 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             task_node_id,
         )
-        node_parallelism = normalize_node_parallelism(selected_node_ids, raw_node_parallelism)
+        node_parallelism = strategy_node_parallelism(loops_config, raw_node_parallelism)
         return loops_config, loop1_node_id, node_parallelism
 
     def _resolve_custom_evo_parallelism_slot(
@@ -7100,9 +7119,8 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in strategy_config["loops"]],
             task.get("node_id"),
         )
-        node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
-            strategy_config.get("node_parallelism"),
+        node_parallelism = strategy_node_parallelism(
+            loops_config, strategy_config.get("node_parallelism"),
         )
         selected_loop = next(
             (
@@ -7668,9 +7686,8 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in strategy_config["loops"]],
             task.get("node_id"),
         )
-        node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
-            strategy_config.get("node_parallelism"),
+        node_parallelism = strategy_node_parallelism(
+            loops_config, strategy_config.get("node_parallelism"),
         )
         selected_configs = [cfg for cfg in loops_config if int(cfg.get("loop_index") or 0) in selected_indexes]
         found_indexes = {int(cfg.get("loop_index") or 0) for cfg in selected_configs}
@@ -8286,13 +8303,13 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             task.get("node_id"),
         )
-        node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
-            custom_evo_config.get("node_parallelism"),
+        node_parallelism = strategy_node_parallelism(
+            loops_config, custom_evo_config.get("node_parallelism"),
         )
         custom_evo_config["loops"] = loops_config
         custom_evo_config["node_parallelism"] = node_parallelism
-        custom_evo_config["node_resolution_policy"] = "loop1_inherit_v1"
+        if any(loop.get(POLICY_KEY) for loop in loops_config):
+            custom_evo_config["node_resolution_policy"] = QE_BATCH_EXECUTION_POLICY
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(

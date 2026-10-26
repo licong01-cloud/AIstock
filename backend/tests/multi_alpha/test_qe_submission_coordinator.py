@@ -315,6 +315,24 @@ def test_wsl_submission_uses_execution_mode_not_durable_training_default(
     client.assert_not_called()
 
 
+@pytest.mark.parametrize("backtest,expected", [(False, 2), (True, 4)])
+def test_remote_retry_or_forced_fit_cannot_inherit_four_backtest_slots(backtest, expected):
+    repository = Mock(spec=QEExecutionReservationRepository)
+    repository.reserve_execution_and_claim_source.return_value = QEExecutionReservationAcquireResult(
+        acquired=False, duplicate_replay=False, active_count=expected,
+        node_capacity=expected, reservation=None, source_claim=None,
+    )
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+    result = asyncio.run(coordinator.submit(
+        client=Mock(),
+        source=_source(node_id="rdagent-node1", source_kind="qe_evolution_loop",
+                       backtest_only=backtest, requested_node_capacity=4),
+        payload=QEWorkspaceSubmissionPayload("remote_task", 1, {}, {}, "qrun"),
+    ))
+    assert result.waiting_capacity
+    assert repository.reserve_execution_and_claim_source.call_args.kwargs["node_capacity"] == expected
+
+
 @pytest.mark.parametrize("kind,backtest,capacity", [
     ("multi_alpha_durable_attempt", True, 4),
     ("multi_alpha_durable_attempt", False, 1),
