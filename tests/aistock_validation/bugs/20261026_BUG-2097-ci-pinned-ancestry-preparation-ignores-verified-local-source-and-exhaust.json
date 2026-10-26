@@ -9,6 +9,15 @@
   "bug_id": "BUG-2097",
   "ci_ancestry_repair_20261026": {
     "blocked_pr": "https://github.com/licong01-cloud/AIstock/pull/6732",
+    "ci_attempts": [
+      {
+        "ancestry_step": "passed in 8 seconds",
+        "direct_tests": "passed",
+        "result": "blocked by policy scanner literal retry-loop contract; not claimed as CI pass",
+        "run_id": 40338424473,
+        "source_head": "a773c18f472e0f7f6195411a7ab6436f7fba665c"
+      }
+    ],
     "design_compliance_review": {
       "business_semantics_unchanged": true,
       "no_new_approval_gate": true,
@@ -33,6 +42,11 @@
       "remote_fetch_attempts": 0
     },
     "observed_mirror_main": "8dc2606733067115d026220fc37533e8e284e1b2",
+    "policy_followup": {
+      "change": "Preserve original maximum-three-attempt loop; a local fetch consumes first slot. Policy scanner is unchanged.",
+      "focused_retry_tests_passed": 4,
+      "policy_scan": "pass, all contracts true, no findings"
+    },
     "production_gates": {
       "database": "untouched",
       "formal_fit_count": 0,
@@ -56,23 +70,9 @@
         "scope": "Real pinned ancestry and delivery boundary"
       }
     ],
-    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d",
-    "ci_attempts": [
-      {
-        "run_id": 40338424473,
-        "source_head": "a773c18f472e0f7f6195411a7ab6436f7fba665c",
-        "ancestry_step": "passed in 8 seconds",
-        "direct_tests": "passed",
-        "result": "blocked by policy scanner literal retry-loop contract; not claimed as CI pass"
-      }
-    ],
-    "policy_followup": {
-      "change": "Preserve original maximum-three-attempt loop; a local fetch consumes first slot. Policy scanner is unchanged.",
-      "focused_retry_tests_passed": 4,
-      "policy_scan": "pass, all contracts true, no findings"
-    }
+    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d"
   },
-  "closed_at": null,
+  "closed_at": "2026-10-26T14:24:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -161,8 +161,8 @@
   },
   "first_seen_at": "2026-10-26T14:09:32.904113Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f06c8b2f10cfb1ac33b0c997576880eebf7ac0eb",
+  "fixed_at": "2026-10-26T14:24:51Z",
   "github_issue_number": 6733,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6733",
   "last_seen_at": "2026-10-26T14:09:32.904113Z",
@@ -170,6 +170,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6734",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -187,6 +188,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -196,7 +198,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2097",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7b20b1e41fffca70",
+    "recorded_at": "2026-10-26T14:25:46.277288Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f29ba2fe4c281158cfbfa279d79aa4fe29c43896",
+    "source_merge_commit": "f06c8b2f10cfb1ac33b0c997576880eebf7ac0eb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6734",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed (3 changed files)",
+      "python -m pytest backend/tests/scripts/test_ci_changed_files.py -> passed (27 tests; exact-head CI 40339105366)",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "3823477c57d571106cf70f4837946cfa67a1addb788ecc5ffeda280609cfa147"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -205,6 +230,11 @@
     "fingerprint": "e0a471599970ca8a6ab5a7db",
     "source_event_id": "FE-20261026-e0a471599970"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed (3 changed files)",
+    "python -m pytest backend/tests/scripts/test_ci_changed_files.py -> passed (27 tests; exact-head CI 40339105366)",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
