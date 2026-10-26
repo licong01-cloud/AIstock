@@ -128,8 +128,8 @@
   },
   "first_seen_at": "2026-10-06T12:38:14.317050Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d23c26e8e8d8e3da46f63292f69709494e717d91",
+  "fixed_at": "2026-10-06T16:16:46Z",
   "github_issue_number": 5587,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5587",
   "last_seen_at": "2026-10-06T12:38:14.317050Z",
@@ -137,6 +137,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5615",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -163,6 +164,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -174,7 +176,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1765",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e4ee760318fe62b6",
+    "recorded_at": "2026-10-06T16:17:29.766919Z",
+    "runtime_contract_digest": "a5a85f52d582f5cfa50da9824df0307ab321afe7e04d8c44744d6acce0dcb163",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "636922eef505f98ce0a3f85dc07d01ca59662cfe",
+    "source_merge_commit": "d23c26e8e8d8e3da46f63292f69709494e717d91",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5615",
+    "validation_evidence": [
+      "rtk pytest backend/tests/research_pipeline/test_hmm_backtest_recorder.py backend/tests/research_pipeline/test_hmm_realtime_ingestion.py -q -p no:cacheprovider -> passed",
+      "rtk ruff check backend/services/research_pipeline/__init__.py backend/services/research_pipeline/hmm_backtest_recorder.py backend/services/research_pipeline/realtime_ingestion.py backend/tests/research_pipeline/test_hmm_backtest_recorder.py backend/tests/research_pipeline/test_hmm_realtime_ingestion.py -> passed",
+      "python -m py_compile backend/services/research_pipeline/__init__.py backend/services/research_pipeline/hmm_backtest_recorder.py backend/services/research_pipeline/realtime_ingestion.py -> passed",
+      "python -m nox -s l0 --no-install -db none -> passed",
+      "python -m nox -s validation_module_registry_l0 --no-install -db none -> passed",
+      "git diff --check origin/main...HEAD -> passed"
+    ],
+    "validation_evidence_digest": "0ed5c542f7516fc99f2e9738b5e4994bd1f6ff8d5898b0e67a484fc9c3a63644"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "research_pipeline"
   ],
@@ -183,6 +211,14 @@
     "fingerprint": "cbad6138978acddce8121f04",
     "source_event_id": "FE-20261006-cbad6138978a"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/research_pipeline/test_hmm_backtest_recorder.py backend/tests/research_pipeline/test_hmm_realtime_ingestion.py -q -p no:cacheprovider -> passed",
+    "rtk ruff check backend/services/research_pipeline/__init__.py backend/services/research_pipeline/hmm_backtest_recorder.py backend/services/research_pipeline/realtime_ingestion.py backend/tests/research_pipeline/test_hmm_backtest_recorder.py backend/tests/research_pipeline/test_hmm_realtime_ingestion.py -> passed",
+    "python -m py_compile backend/services/research_pipeline/__init__.py backend/services/research_pipeline/hmm_backtest_recorder.py backend/services/research_pipeline/realtime_ingestion.py -> passed",
+    "python -m nox -s l0 --no-install -db none -> passed",
+    "python -m nox -s validation_module_registry_l0 --no-install -db none -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
