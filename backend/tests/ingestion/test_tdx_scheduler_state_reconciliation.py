@@ -732,7 +732,7 @@ def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested(
 def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset, missing_a):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     latest = dt.datetime(2026, 10, 20, 15)
-    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000}
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000, "invalid_fact": False}
              for code in ["000001.SZ", "200706.SZ"]]
     minute = [{"ts_code": code, "freq": "1m", "bars": 240, "bad_bars": 0,
                "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH"]]
@@ -740,6 +740,10 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
         (daily if dataset == "kline_daily_raw" else minute).pop(0)
 
     def fetch(sql, _params=()):
+        if "suspend_d" in sql:
+            return []
+        if "WITH bounds" in sql:
+            return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH"]]
         if "kline_daily_raw" in sql:
             return daily
         if "kline_minute_raw" in sql:
@@ -750,6 +754,32 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
     count, _, coverage = scheduler._raw_date_observation(dataset, dt.date(2026, 10, 20))
     assert count == (0 if missing_a else 1 if dataset == "kline_daily_raw" else 240)
     assert coverage == {"expected_symbols": 1, "incomplete_symbols": int(missing_a)}
+
+
+@pytest.mark.parametrize("missing,invalid,suspended", [(False,False,False), (True,False,False), (False,True,False), (True,False,True)])
+def test_daily_completion_does_not_depend_on_minute_schedule(missing, invalid, suspended):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 10, 26)
+    scheduler._go_provider_codes = lambda start, end: ["000001.SZ", "200706.SZ"]
+    minute_reads = []
+
+    def fetch(sql, params=()):
+        if "kline_minute_raw" in sql:
+            minute_reads.append(sql)
+            return []
+        if "suspend_d" in sql:
+            return [{"ts_code": "000001.SZ"}] if suspended else []
+        if "kline_daily_raw" in sql:
+            return [] if missing else [{"ts_code": "000001.SZ", "volume_hand": 10,
+                                        "volume_shares": 1000, "invalid_fact": invalid}]
+        return [{"ts_code": "000001.SZ"}, {"ts_code": "200706.SZ"}]
+
+    scheduler._fetchall = fetch
+    count, maximum, coverage = scheduler._raw_date_observation("kline_daily_raw", day)
+    assert minute_reads == [], "daily completion must not scan or wait for minute input"
+    assert maximum is None and count == int(not missing)
+    assert coverage == {"expected_symbols": int(not suspended),
+                        "incomplete_symbols": int((missing or invalid) and not suspended)}
 
 
 @pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
