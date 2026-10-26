@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1990",
-  "closed_at": null,
+  "closed_at": "2026-10-26T03:34:05.377212Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -62,13 +62,24 @@
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1"
   },
   "first_seen_at": "2026-10-19T14:29:10.083761Z",
   "fix_branch": null,
+  "fix_commit": "c1a3ba28fc0b362f521103771340769c922f1d30",
   "fix_summary": "Preserve active canonical v2, add read-only capture/list/offline verify of immutable PIT observations, reuse existing frozen snapshot/binding contracts and singleton; compare an explicit frozen binding by policy and cutoff, keep strict legacy behavior without one. No v3 default or consumer changes.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-25T19:28:42Z",
   "github_issue_number": 6371,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
   "last_seen_at": "2026-10-19T14:29:10.083761Z",
@@ -77,6 +88,7 @@
     "No database DDL/DML, PIT rebuild, activation, dataset/profile mutation, consumer/model changes, service/process control or experiments.",
     "Do not change active v2 policy to v3 or rewrite prior frozen identities."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6719",
   "prior_unmerged_implementation": {
     "disposition": "Retained until replacement source is reviewed/merged; stale v3 policy and consumer changes are not adopted.",
     "head": "7cd29d994676604c926deb9bcc2943cbfcd63a32",
@@ -106,9 +118,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-1990-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1990",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "c1a3ba28fc0b362f521103771340769c922f1d30",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-26T03:30:48.439267Z",
+      "mode": "read_only",
+      "observed_identity": "c1a3ba28fc0b362f521103771340769c922f1d30",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2c640cc47c000c1ecba4eb552cc13afced13c3d50acdce3bf673940f96b88327",
+      "receipt_sha256": "89a22b704ee4adb1dc4e207f2307b219b46c56f0a379d306f8390e35a3f998f7",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "665b5b074a3d5ab80ff9b4e016b961ce0c7f1cc5ca88305b248e347af57deaae",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -118,7 +153,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -129,7 +164,8 @@
   },
   "validation_evidence": [
     "RED missing independent module; RED explicit policy binding rejected with physical-catalog mismatch. GREEN 53 related contract tests; Ruff and existing registry/catalog/changed-file checks passed.",
-    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states."
+    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states.",
+    "User restart completed; canonical-root official backend-main post-restart verification passed against source merge c1a3ba28fc0b362f521103771340769c922f1d30. Identity, health and business smoke passed; no DB, active profile, policy or process changes."
   ],
   "verification_budget": {
     "budget": "standard",
