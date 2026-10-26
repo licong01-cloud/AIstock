@@ -56,7 +56,21 @@
         "scope": "Real pinned ancestry and delivery boundary"
       }
     ],
-    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d"
+    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d",
+    "ci_attempts": [
+      {
+        "run_id": 40338424473,
+        "source_head": "a773c18f472e0f7f6195411a7ab6436f7fba665c",
+        "ancestry_step": "passed in 8 seconds",
+        "direct_tests": "passed",
+        "result": "blocked by policy scanner literal retry-loop contract; not claimed as CI pass"
+      }
+    ],
+    "policy_followup": {
+      "change": "Preserve original maximum-three-attempt loop; a local fetch consumes first slot. Policy scanner is unchanged.",
+      "focused_retry_tests_passed": 4,
+      "policy_scan": "pass, all contracts true, no findings"
+    }
   },
   "closed_at": null,
   "closure_requirements": [

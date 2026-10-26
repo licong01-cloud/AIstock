@@ -253,12 +253,15 @@ def prepare_pr_merge_base(
             f"+{source_ref}:refs/remotes/origin/aistock-pr-checkout",
         ]
         detail = "merge base remains unavailable"
-        remote_attempts = min(3, max(1, int(attempts))) - int(local_source_receipt["status"] != "not_used")
-        for index in range(remote_attempts):
+        local_fetch_attempts = int(local_source_receipt["status"] != "not_used")
+        for index in range(min(3, max(1, int(attempts)))):
+            # An attempted local fetch already consumed the first budget slot.
+            if index < local_fetch_attempts:
+                continue
             remaining = total_budget - (time.monotonic() - started)
             if remaining <= 0:
                 raise ChangedFilesError("pinned PR base/head history preparation failed: total fetch budget exhausted")
-            used_attempts = index + 1
+            used_attempts = index + 1 - local_fetch_attempts
             print(f"ci_pr_ancestry transport=origin attempt={used_attempts} timeout={min(fetch_timeout, remaining):g}",
                   file=sys.stderr, flush=True)
             try:
@@ -277,7 +280,7 @@ def prepare_pr_merge_base(
                     break
             except ChangedFilesError as exc:
                 detail = str(exc)
-            if index + 1 < remote_attempts:
+            if index + 1 < min(3, max(1, int(attempts))):
                 time.sleep(0.5 * (index + 1))
         else:
             raise ChangedFilesError(f"pinned PR base/head history preparation failed: {detail}")
