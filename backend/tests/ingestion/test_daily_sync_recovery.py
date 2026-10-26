@@ -202,6 +202,8 @@ def test_go_watcher_timeout_preserves_async_job_identity(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     actions = []
     def fetch(sql, _params=()):
+        if "dataset_date_refresh_audit" in sql:
+            return []
         if "trading_calendar" in sql:
             return [{"latest": dt.date(2026, 10, 13)}]
         if "stock_basic" in sql:

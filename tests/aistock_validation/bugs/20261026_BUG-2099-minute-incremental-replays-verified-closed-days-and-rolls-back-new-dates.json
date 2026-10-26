@@ -1,6 +1,7 @@
 {
   "actual": "2026-10-26 minute job 72eaa268-43e9-4274-a7d3-4ed363d7c177 requested Oct23..Oct26 although Oct23 has a table-backed complete-day audit. 50 symbols encounter 1886 historical Oct23 source differences; symbol-wide transaction rolls back all 12000 valid Oct26 new bars. Actual October audit confirms all 50 missing symbol-days are Oct26; other October dates complete. Respect only strict committed physical completeness receipts for advancing past a closed day; retain replay for partial/legacy/unproven days and exact explicit repair windows. Do not overwrite old facts or hide historical conflicts.",
   "allowed_write_scope": [
+    "backend/tests/ingestion/test_daily_sync_recovery.py",
     "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "backend/tests/ingestion/test_tdx_scheduler_committed_cursor.py",
