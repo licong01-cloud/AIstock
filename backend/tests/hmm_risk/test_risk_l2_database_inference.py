@@ -22,6 +22,18 @@ from backend.tests.hmm_risk.test_risk_l2_date_inference import case as file_case
 from scripts.hmm_risk import run_risk_l2_date_inference as cli
 
 
+def test_database_accepts_only_explicit_pinned_quarter_model(case, tmp_path):
+    request, *_ = case
+    assets = {
+        **request["model_assets"],
+        "model_bundle_path": str(tmp_path / "model.json"),
+        "model_bundle_sha256": "a" * 64,
+    }
+    db.validate_request(reseal({**request, "model_assets": assets}))
+    with pytest.raises(FormalStateError):
+        db.validate_request(reseal({**request, "model_assets": {**assets, "latest": True}}))
+
+
 class Connection:
     def __init__(self, calendar):
         self.calendar = calendar

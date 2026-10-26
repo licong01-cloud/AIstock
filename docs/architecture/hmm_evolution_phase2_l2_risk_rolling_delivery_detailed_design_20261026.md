@@ -103,3 +103,13 @@ F-011：滚动训练与同源M0/M1预测；F-012：模型版本双入口与因�
 
 设计第一轮审查：明确原训练目标t+1与H1消费评价锚点区别；保留原目标用于M0/M1，避免将锚点修改混入训练时效比较。季度训练与评价时序分离。
 设计第二轮审查：新模型identity不能替换旧训练pins；新bundle使用显式预期hash、严格生效范围。P1五臂是消费对照而非五个模型候选；不跨模块实施或提前声明READY。
+
+## 12. 源码交付进度（2026-10-26）
+
+实现原拟合核复用、两个固定季度的成熟标签训练、双fresh-process四fit编排、M0/M1封存后评价、显式模型bundle，以及文件/数据库双入口的模型版本认证。旧M0三locator路径不变；新模型训练身份与bootstrap身份分别记录。生产默认模型、数据库、active profile及QE业务未改变。
+
+第一轮作者审核（因果/数学）：修正M0也必须先封存再打开评价事实；Q2封存后才读取Q3训练标签；成熟标签与train-only scaler有定向测试。第二轮作者审核（接口/失败边界）：修正bootstrap训练身份继承、hash不能作为路径、输出失败回执不得写入候选、数值环境检查必须先于fit；无自动重训/调参。未声称第三方独立审核。
+
+本地直接矩阵90 passed；最后计数回执位置修订的定向回归1 passed；Ruff、compile、ownership（8/8、无歧义）、module-registry L0（8 passed）、L0、F2和fresh-process hmm_risk/health import通过。既有sklearn参数弃用与合法NA的numpy/pandas警告不作为模型结果。完整矩阵交CI/Nightly，不重复本地盲跑。
+
+源码runtime分类为backend、target_ids=[backend-main]、catalog_error=null，不能标成none。当前仅源码交付门禁通过：正式prepare/4-fit、真实新模型双入口读回、结果分析和QE交接尚未执行；上线加载仍需用户重启及后续只读验证。研究离线运行可使用最终干净源码继续，不等待运行服务切换。

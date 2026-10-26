@@ -41,6 +41,19 @@ SOURCE_FIELDS = {
     "industry_authority",
     "work_parent",
 }
+MODEL_FIELDS = {"source_request_path", "sealed_path", "acceptance_path"}
+
+
+def model_locators(assets):
+    """Accept original M0 or an explicitly pinned quarterly model, never latest."""
+    require(
+        isinstance(assets, dict)
+        and set(assets) in (MODEL_FIELDS, MODEL_FIELDS | {"model_bundle_path", "model_bundle_sha256"}),
+        "model locators differ",
+    )
+    if "model_bundle_sha256" in assets:
+        reader._require_sha256(assets["model_bundle_sha256"], "model bundle SHA256")
+    return [v for k, v in assets.items() if k != "model_bundle_sha256"]
 
 
 def require(condition, message, reason="date_inference_invalid"):
@@ -67,10 +80,7 @@ def validate_request(request):
         "explicit inference request fields/version differ",
     )
     model, source, days = request["model_assets"], request["source"], request["decision_dates"]
-    require(
-        isinstance(model, dict) and set(model) == {"source_request_path", "sealed_path", "acceptance_path"},
-        "model locators differ",
-    )
+    locators = model_locators(model)
     require(isinstance(source, dict) and set(source) == SOURCE_FIELDS, "source fields differ")
     binding = source["release_binding"]
     require(
@@ -93,7 +103,7 @@ def validate_request(request):
     for key in ("manifest_sha256", "manifest_file_sha256"):
         reader._require_sha256(binding[key], key)
     for locator in (
-        *model.values(),
+        *locators,
         *(source[k] for k in ("candidate_root", "security_identity_manifest", "provider_absence_manifest")),
     ):
         require(isinstance(locator, str) and Path(locator).is_absolute(), "explicit absolute locator required")
@@ -150,7 +160,13 @@ def model_source(request):
         "feature_definition_sha256": canonical_sha256(frozen["feature_definition"]),
         "eligibility_sha256": canonical_sha256(frozen["eligibility"]),
     }
-    return frozen, sealed["parameters"], identity
+    parameters = sealed["parameters"]
+    if "model_bundle_path" in assets:
+        from backend.services.hmm_risk import risk_l2_rolling
+
+        parameters, identity = risk_l2_rolling.load_model(assets, frozen, identity)
+        risk_l2_rolling.validate_model_dates(request, identity)
+    return frozen, parameters, identity
 
 
 def date_plan(request):

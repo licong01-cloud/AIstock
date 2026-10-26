@@ -138,6 +138,19 @@ def test_request_rejects_labels_unknown_fields_display_and_hash_drift(case):
         h.date_plan(reseal(changed))
 
 
+def test_explicit_quarterly_bundle_locator_is_not_a_path_hash_or_latest(case, tmp_path):
+    request, _ = case
+    assets = {
+        **request["model_assets"],
+        "model_bundle_path": str(tmp_path / "model.json"),
+        "model_bundle_sha256": "a" * 64,
+    }
+    h.validate_request(reseal({**request, "model_assets": assets}))
+    for changed in ({**assets, "latest": True}, {k: v for k, v in assets.items() if k != "model_bundle_sha256"}):
+        with pytest.raises(FormalStateError):
+            h.validate_request(reseal({**request, "model_assets": changed}))
+
+
 def test_release_locator_and_binding_can_change_without_model_or_source_change(case):
     request, bundle = case
     changed = deepcopy(request)
@@ -366,6 +379,18 @@ def test_model_bootstrap_needs_no_feature_or_label_asset(tmp_path, monkeypatch):
     }
     assert h.model_source(request)[1] == parameters
     assert not (tmp_path / "features.json").exists()
+    from backend.services.hmm_risk import risk_l2_rolling as rolling
+
+    quarterly = {"parameters": "loaded"}
+    monkeypatch.setattr(rolling, "load_model", lambda *args: (quarterly, {"vintage": rolling.VINTAGES[0]}))
+    extended = {
+        **request,
+        "model_assets": {**request["model_assets"], "model_bundle_path": "explicit"},
+        "decision_dates": ["2026-04-01"],
+    }
+    assert h.model_source(extended)[1] == quarterly
+    with pytest.raises(FormalStateError, match="effective interval"):
+        h.model_source({**extended, "decision_dates": ["2026-07-01"]})
     pins["model_hash"] = "0" * 64
     with pytest.raises(FormalStateError, match="linkage differs"):
         h.model_source(request)
