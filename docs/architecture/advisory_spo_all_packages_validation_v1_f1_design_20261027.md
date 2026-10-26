@@ -1,6 +1,6 @@
 # P17 全部启用策略包的冻结SPO+适用性验证（F1）
 
-版本v1.0，2026-10-27，Advisory/model_first。用户授权先验证目前荐股全部策略包，再接续前向确认建议；本轮0fit，研发累计244实际fit＋1旧index不变。
+版本v1.1，2026-10-27，Advisory/model_first。用户授权先验证目前荐股全部策略包，再接续前向确认建议；现已完成全部5包输入审查、可评价4包经济比较及后续差异归因/前向输入核查。旧单包历史效果未能评价，独立确认未启动；当前SPO+不推进全包推广。本轮0fit，研发累计244实际fit＋1旧index不变。
 
 ## Background / Goal / Feature Card
 
@@ -50,13 +50,21 @@ P16仅在LSTM、TCN两包上研究，共同100D平均增量+16.570982bps/5TD，�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-541 | 本文Scope / spo_all_packages_validation_v1.py | inventory.json / source_audit.json | PENDING | pending validation |
-| F-542 | spo_all_packages_validation_v1.py | source receipt / direct tests | PENDING | pending validation |
-| F-543 | spo_all_packages_validation_v1.py | model refs / direct tests | PENDING | pending validation |
-| F-544 | 本文Experiment | protocol.json / stage manifests | PENDING | pending validation |
-| F-545 | 本文Evaluation | report / research_audit_receipt.json | PENDING | pending validation |
-| F-546 | 本文Evaluation | analysis report / metadata | PENDING | pending validation |
-| F-547 | 本文Verification Plan | validation_receipt.json / review_receipt.md | PENDING | pending validation |
+| F-541 | 本文Scope / backend/services/advisory_model_first/spo_all_packages_validation_v1.py | artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/inventory.json | COMPLETE_FIVE_INPUT_REVIEWS | none |
+| F-542 | backend/services/advisory_model_first/spo_all_packages_validation_v1.py | backend/tests/advisory_model_first/test_spo_all_packages_validation_v1.py; artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/protocol.json | VERIFIED | none |
+| F-543 | backend/services/advisory_model_first/spo_all_packages_validation_v1.py | backend/tests/advisory_model_first/test_spo_all_packages_validation_v1.py; artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/research_audit_receipt.json | VERIFIED_ZERO_FIT | none |
+| F-544 | 本文Experiment / X盘run_once.py | artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/study/evaluated/manifest.json | VERIFIED_FOUR_IMMUTABLE_STAGES | none |
+| F-545 | 本文Evaluation / docs/analysis/advisory_spo_all_packages_validation_20261027.md | artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/research_audit_receipt.json | COMPLETE_FOUR_EVALUATED_ONE_UNAVAILABLE | none |
+| F-546 | docs/analysis/advisory_spo_all_packages_validation_20261027.md | artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/metadata/current_selection_coverage.json | VERIFIED_NOT_PRODUCTION_READY | none |
+| F-547 | 本文Verification Plan / 精确五文件范围 | backend/tests/advisory_model_first/test_spo_all_packages_validation_v1.py; artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/validation_receipt.json | VERIFIED | none |
+
+## 实际结果 / 完成状态
+
+协议SHA `4721ecc7808a97cf092811ad094ac7534a265437442e3665e6ee45e04754d668`，source producer `bd3063c`。4阶段一次执行，新增两包12,600输入行、25,200两臂预测，真实0fit；原两包报告及panel原样复用。四包95共同成熟D主增量−10.427423bps，95%[−45.072984,21.504028]；LSTM正、TCN/LGB/multi负。原P16的100共同D及INNER_SUPPORTED不回改。旧单包原2025评分未在已核对登记来源找到，NOT_EVALUABLE而非0收益。
+
+8个直接测试节点通过；第一轮仅因测试临时目录的父目录尚未创建发生6个setup错误，创建授权目录后只复跑这6项通过，另2项此前通过。研究前完成，真实研究无失败重试。第二算术路径核查25,200预测、固定十槽估值与1,743个重叠stock-D的六量价字段（容差1e-12），4阶段链及原两包复用一致。详细风险/UNKNOWN/逐折结果和下一步owner交付要求见[分析报告](../analysis/advisory_spo_all_packages_validation_20261027.md)。
+
+依据新结果，已执行后续零fit换股损益归因及前向输入核查；当前候选停止全包推广和大规模确认排期。四single包现有评分数量足够Top50，但前向D特征/binding/因果时钟尚未交付，multi当前日缺失；没有伪造影子运行。后续只先准备固定五包前向输入，再提出一个事前适用性假设，不择包/改阈值/追加fit。这是完整输入评审及可评价分支交付，未声称全五包经济效果、独立确认或业务接入完成。
 
 ## Non-goals / Risks / Production Gates
 
