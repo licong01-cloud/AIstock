@@ -1504,7 +1504,7 @@ class CustomEvoLoopConfig(BaseModel):
     model_id: str = Field(..., description="模型 ID")
     model_params: Optional[Dict[str, Any]] = Field(None, description="模型训练参数，如 ltr_loss_mode/topk_train_k 等")
     feature_processing: Optional[Dict[str, Any]] = Field(
-        None, description="Request-local model input exclusions and clip_outlier; not model hyperparameters",
+        None, description="Request-local input exclusions, clip_outlier and raw_state_controls v1 diagnostics before normalization; not model hyperparameters",
     )
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
