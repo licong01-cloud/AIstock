@@ -1836,6 +1836,11 @@ async def _prepare_custom_evo_loop_configs(
     from ..services.quantevolver.qe_active_dataset_profile import load_active_qe_profile
 
     placement_profile = load_active_qe_profile() if apply_batch_policy else None
+    if apply_batch_policy and balanced_batch_nodes and placement_profile is None:
+        raise HTTPException(
+            status_code=503,
+            detail="QE_BATCH_ACTIVE_PROFILE_REQUIRED: balanced placement requires active dataset node bindings",
+        )
     automatic_placement = bool(placement_profile is not None and balanced_batch_nodes)
     if automatic_placement:
         loops_config = place_batch_loops(
@@ -1914,6 +1919,10 @@ async def _prepare_custom_evo_loop_configs(
                 "context": exc.context,
             },
         ) from exc
+    batch_dataset_identity = (
+        await verify_batch_dataset_nodes(active_profile, sorted(selected_node_ids))
+        if apply_batch_policy and active_profile is not None else None
+    )
     if active_profile is not None and existing_legacy_task:
         raise HTTPException(
             status_code=409,
@@ -2017,16 +2026,12 @@ async def _prepare_custom_evo_loop_configs(
             synced_stock_pool_keys.add(sync_key)
 
     if apply_batch_policy:
-        identity = (
-            await verify_batch_dataset_nodes(active_profile, sorted(selected_node_ids))
-            if active_profile is not None else None
-        )
         receipt = {
             "version": QE_BATCH_EXECUTION_POLICY,
             "placement": "balanced" if automatic_placement else "explicit_or_legacy",
             "node_parallelism": node_parallelism,
             "requested_node_parallelism": node_parallelism_payload,
-            "dataset_identity": identity,
+            "dataset_identity": batch_dataset_identity,
         }
         for cfg_dict in loops_config:
             cfg_dict[POLICY_KEY] = dict(receipt)

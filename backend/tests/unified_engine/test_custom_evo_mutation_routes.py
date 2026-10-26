@@ -495,6 +495,7 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
 
     req = qe.CustomEvolutionCreateRequest(
         task_name="clone task",
+        node_allocation="explicit",
         target_desc="clone",
         loops=[_loop("clone-a", node_id="node-a"), _loop("clone-b", node_id="node-b")],
         node_parallelism={"node-a": 2, "node-b": 1},
@@ -560,6 +561,7 @@ def test_new_full_fit_batch_rejects_four_before_creating_any_task(monkeypatch):
     monkeypatch.setattr(qe, "scheduler", dummy)
     req = qe.CustomEvolutionCreateRequest(
         task_name="unsafe fit", loops=[_loop(node_id="rdagent-node1")],
+        node_allocation="explicit",
         node_parallelism={"rdagent-node1": 4},
     )
     with pytest.raises(HTTPException) as exc:
@@ -577,6 +579,18 @@ def test_execution_policy_readback_is_code_owned_and_side_effect_free(monkeypatc
     assert policy["per_node_workload_limits"] == {"full_fit_loop": 2, "pure_backtest_loop": 4}
 
 
+def test_balanced_batch_rejects_missing_active_profile_instead_of_falling_back(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    req = qe.CustomEvolutionCreateRequest(task_name="no active binding", loops=[_loop(), _loop()])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert exc.value.status_code == 503
+    assert "QE_BATCH_ACTIVE_PROFILE_REQUIRED" in exc.value.detail
+    assert dummy.calls == []
+
+
 def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
     _patch_non_qe_dependencies(monkeypatch)
     dummy = DummyScheduler()
@@ -589,6 +603,7 @@ def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
 
     req = qe.CustomEvolutionCreateRequest(
         task_name="ltr task",
+        node_allocation="explicit",
         target_desc="preserve model params",
         loops=[
             _loop(
