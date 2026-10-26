@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2098",
-  "closed_at": null,
+  "closed_at": "2026-10-26T16:01:33.124746Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -133,10 +133,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\october-audit-20261026\\postrestart-BUG-2098.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2098",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "6c2c46865223ba02fe49bf428493d409c4dcd243",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-26T16:01:02.248933Z",
+      "mode": "read_only",
+      "observed_identity": "bc7b963f5da2f6a3d582fa8b8927e6354f45bb29",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "877fc753836429c6ae762ed99384e085c94dc2ee748b447c49e73dc41dd62052",
+      "receipt_sha256": "5ff6ba460bdd5cb9e423cf160769338c3052a1471db04495bc12bb2f956f5013",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "81506ebc4c33796b1defd2627f8429133d91b29a71eabb165375d0380ede9161",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -169,7 +191,7 @@
     ],
     "validation_evidence_digest": "ae7e367b85cb3ba533cd937abbc185f8204dda03af252353c0229146f5e67427"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -181,7 +203,8 @@
   "validation_evidence": [
     "validation-receipt: id=5c29c06adecb34ea commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`118 passed, 1 skipped`",
     "validation-receipt: id=ce1086385b188e06 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/ingestion/test_daily_sync_recovery.py` result=`62 passed`",
-    "validation-receipt: id=e4fec219bc598134 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`"
+    "validation-receipt: id=e4fec219bc598134 commit=f1e001aefd31c570476ca8dca0cabb5743ba1eba kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "post-restart-verify backend-main on bc7b963f5da2f6a3d582fa8b8927e6354f45bb29 -> passed; existing DEV and merged CI receipts retained; production data repair remains separately authorized"
   ],
   "verification_budget": {
     "budget": "standard",
