@@ -191,8 +191,8 @@
   },
   "first_seen_at": "2026-09-30T07:15:20.934041Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4704fea74a4c307815857f6e3c3abf82ec99989e",
+  "fixed_at": "2026-09-30T19:13:03Z",
   "github_issue_number": 5145,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5145",
   "last_seen_at": "2026-09-30T07:15:20.934041Z",
@@ -200,6 +200,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5161",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -224,6 +225,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -235,7 +237,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1639",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "083670fd51631d69",
+    "recorded_at": "2026-09-30T19:14:10.994325Z",
+    "runtime_contract_digest": "9e574ada965ce3b6122a8aefa935fa0bcba7d319d2287943e476f9abe911b295",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d2e92b42fdc94290185bb492091352dae30bde95",
+    "source_merge_commit": "4704fea74a4c307815857f6e3c3abf82ec99989e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5161",
+    "validation_evidence": [
+      "https://github.com/licong01-cloud/AIstock/actions/runs/36694878307/job/109820341111 CI verdict SUCCESS head=d2e92b42fdc94290185bb492091352dae30bde95; real_lstm_frozen_replay_verified and design_compliance_multi_round_review recorded in BUG-1639 tracked events"
+    ],
+    "validation_evidence_digest": "58da878ab1d9e0c4e88351f3a1809eff967fb87c163770f1fa670cd846a50270"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -244,6 +267,9 @@
     "fingerprint": "ea97cc0cad8dbb4f0e6c1ce2",
     "source_event_id": "FE-20260930-ea97cc0cad8d"
   },
+  "validation_evidence": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/36694878307/job/109820341111 CI verdict SUCCESS head=d2e92b42fdc94290185bb492091352dae30bde95; real_lstm_frozen_replay_verified and design_compliance_multi_round_review recorded in BUG-1639 tracked events"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
