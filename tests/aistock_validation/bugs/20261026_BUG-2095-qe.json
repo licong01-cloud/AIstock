@@ -55,32 +55,32 @@
   "expected": "新批次无需代理手填即可在已验证同一active数据身份的双节点间分配；同seed配对尽量同节点；全训练每节点最多2，纯回测最多4，已有更严格模型容量继续生效；最终分配和并行策略版本持久化并可读回，恢复和重试不得退化或绕过上限。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/services/quantevolver/qe_batch_execution_policy.py",
-      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json"
     ],
     "added_files": [
       "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/services/quantevolver/qe_batch_execution_policy.py",
-      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -282,7 +282,8 @@
     "fresh_process_evidence": [
       "python -X utf8 -B isolated verification -> passed; real two-node identity and existing DEV rollback 9/9 restore: tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json; ASGI HTTP policy semantic readback and source hashes: tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
       "python -X utf8 -B isolated verification -> passed; two-node identity and DEV rollback 9/9 restore in tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json; ASGI HTTP semantic readback and source hashes in tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
-      "python isolated verification -> passed; tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json and tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json"
+      "python isolated verification -> passed; tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json and tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
+      "python isolated ASGI policy validation -> passed; tmp/issue_workflow/BUG-2095/fresh-policy-http-final.json; real two-node identity and DEV rollback 9/9 in tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "changed_file_catalog",
