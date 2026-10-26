@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 import copy
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
@@ -19,13 +20,42 @@ from .canonical import canonical_json_bytes
 from .monthly_build_resume import MonthlyBuildResumeError, _atomic, _plain, _signature, load_sealed_build_json
 from .monthly_quote_catalog import _replace
 from .qlib_bounded_update import read_calendar
+from ..tushare_dataset_specs import stk_limit_prices_valid
 
 SCHEMA = "aistock_monthly_prev_close_correction_v1"
 BINDING = "monthly_prev_close_repairs"
+DAILY_REFERENCE_PROVIDER = "tushare.daily.pre_close_with_stk_limit_bounds"
 SUPPLEMENT_KEYS = {BINDING, BINDING + "_ref", "monthly_industry_history", "monthly_industry_history_ref",
                    "monthly_industry_quote_source", "monthly_industry_quote_source_ref",
                    "monthly_suspension_authority", "monthly_suspension_authority_ref",
                    "monthly_minute_repairs", "monthly_minute_repairs_ref"}
+
+
+def _validate_daily_reference(source):
+    """Check frozen dual-source facts, never query DB or infer a reference."""
+    proof = source.get("reference_enrichment") or {}
+    facts = proof.get("facts")
+    if (proof.get("schema_version") != "stk_limit_daily_reference_enrichment_v1"
+            or proof.get("trade_date") != source["trade_date"] or proof.get("source_api") != "tushare.daily"
+            or proof.get("source_field") != "pre_close" or not isinstance(facts, list) or not facts
+            or proof.get("filled_reference_count") != len(facts)):
+        raise ValueError("daily reference enrichment proof differs")
+    published = {(row["ts_code"], row["trade_date"]): row for row in source["source_rows"]}
+    seen = set()
+    for fact in facts:
+        key = fact["ts_code"], fact["trade_date"]
+        try:
+            original = fact["original_pre_close"]
+            if original is not None and Decimal(str(original)).is_finite() and Decimal(str(original)) > 0:
+                raise ValueError("daily supplement cannot replace a finite primary reference")
+            if (key in seen or key[1] != source["trade_date"].replace("-", "")
+                    or key not in published or not stk_limit_prices_valid(fact)
+                    or any(Decimal(str(fact[name])) != Decimal(str(published[key][name]))
+                           for name in ("pre_close", "up_limit", "down_limit"))):
+                raise ValueError("daily reference enrichment facts differ")
+        except (InvalidOperation, KeyError, TypeError) as exc:
+            raise ValueError("invalid daily reference source fact") from exc
+        seen.add(key)
 
 
 def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
@@ -45,7 +75,8 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
                     raise ValueError("prev_close approved sources conflict")
                 facts[key] = row
         return {"schema_version": SCHEMA, "inputs": dict(inputs), "sources": sources,
-                "facts": [facts[k] for k in sorted(facts)], "provider": "tushare.stk_limit",
+                "facts": [facts[k] for k in sorted(facts)],
+                "provider": DAILY_REFERENCE_PROVIDER if any(s.get("provider") == DAILY_REFERENCE_PROVIDER for s in sources) else "tushare.stk_limit",
                 "units": "CNY_per_share", "database_write": False}
     if set(inputs) != {"plan_path", "plan_sha256", "receipt_path", "receipt_sha256"}:
         raise ValueError("prev_close repair input fields differ")
@@ -97,10 +128,12 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
         source = pinned(entry["source_plan_path"], entry["source_plan_sha256"])
         source_hash = hashlib.sha256(canonical_json_bytes(source["source_rows"])).hexdigest()
         if (source.get("schema_version") != "local_data_stk_limit_pre_close_repair_v1"
-                or source.get("provider") != "tushare.stk_limit" or source.get("units") != "CNY_per_share"
+                or source.get("provider") not in {"tushare.stk_limit", DAILY_REFERENCE_PROVIDER} or source.get("units") != "CNY_per_share"
                 or source_hash != source.get("source_rows_sha256") or source_hash != entry["source_rows_sha256"]
                 or source.get("trade_date") != entry["trade_date"] or len(source["patches"]) != entry["keys"]):
             raise ValueError("prev_close provider source identity differs")
+        if source["provider"] == DAILY_REFERENCE_PROVIDER:
+            _validate_daily_reference(source)
         by_key = {(r["ts_code"], r["trade_date"]): r for r in source["source_rows"]}
         if len(by_key) != len(source["source_rows"]):
             raise ValueError("prev_close source keys are duplicated")
@@ -120,11 +153,13 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
             facts.append({**row, "trade_date": day.isoformat()})
         sources.append({"sha256": entry["source_plan_sha256"], "source_rows_sha256": source_hash,
                         "trade_date": entry["trade_date"], "keys": entry["keys"],
+                        "provider": source["provider"],
                         "captured_at": source.get("captured_at"), "historical_publication_time_proven": False})
     if not facts or len(facts) != verified_keys:
         raise ValueError("prev_close correction key count differs from production readback")
     return {"schema_version": SCHEMA, "inputs": dict(inputs), "sources": sources, "facts": facts,
-            "provider": "tushare.stk_limit", "units": "CNY_per_share", "database_write": False}
+            "provider": DAILY_REFERENCE_PROVIDER if any(s["provider"] == DAILY_REFERENCE_PROVIDER for s in sources) else "tushare.stk_limit",
+            "units": "CNY_per_share", "database_write": False}
 
 
 def _pending(root):

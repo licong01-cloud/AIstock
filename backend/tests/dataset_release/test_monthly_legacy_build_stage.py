@@ -441,7 +441,8 @@ def test_prev_close_failed_packaging_does_not_allow_published_root(tmp_path):
     assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
-@pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope"])
+@pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope",
+                                  "daily_reference", "daily_reference_bad_date", "daily_reference_bad_value"])
 def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, fault):
     from backend.services.dataset_release import monthly_prev_close_repair as correction
     root = tmp_path / "data_repair_staging"
@@ -451,10 +452,22 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
         path.write_text(json.dumps(value), encoding="utf-8")
         return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
     row = {"ts_code": "000001.SZ", "trade_date": "20260831", "pre_close": "11" if fault != "nonfinite" else "nan"}
+    proof = None
+    if fault and fault.startswith("daily_reference"):
+        row.update(up_limit="12.1", down_limit="9.9")
+        proof = {"schema_version": "stk_limit_daily_reference_enrichment_v1", "trade_date": "2026-08-31",
+                 "source_api": "tushare.daily", "source_field": "pre_close", "filled_reference_count": 1,
+                 "facts": [{**row, "original_pre_close": None}]}
+        if fault == "daily_reference_bad_date":
+            proof["trade_date"] = "2026-08-30"
+        elif fault == "daily_reference_bad_value":
+            proof["facts"][0]["pre_close"] = "11.1"
     rows_hash = hashlib.sha256(canonical_json_bytes([row])).hexdigest()
     source = {"schema_version": "local_data_stk_limit_pre_close_repair_v1", "provider": "tushare.stk_limit", "units": "CNY_per_share",
               "trade_date": "2026-08-31", "source_rows": [row], "patches": [row], "source_rows_sha256": rows_hash,
               "target_database": "aistock"}
+    if proof is not None:
+        source.update(provider="tushare.daily.pre_close_with_stk_limit_bounds", reference_enrichment=proof)
     source_path, source_hash = pin("source.json", source)
     plan = {"schema_version": "local_data_stk_limit_history_production_plan_v1", "target_database": "aistock", "target_table": "market.stk_limit",
             "changed_columns": ["pre_close"] if fault != "scope" else ["up_limit"],
@@ -466,12 +479,15 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
                "non_target_columns_unchanged": True, "verified_keys": 1}
     receipt_path, receipt_hash = pin("receipt.json", receipt)
     inputs = {"plan_path": plan_path, "plan_sha256": plan_hash, "receipt_path": receipt_path, "receipt_sha256": receipt_hash}
-    if fault:
+    if fault and fault != "daily_reference":
         with pytest.raises(ValueError):
             correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
     else:
         actual = correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
         assert actual["facts"] == [{**row, "trade_date": "2026-08-31"}] and actual["database_write"] is False
+        if proof is not None:
+            assert actual["provider"] == "tushare.daily.pre_close_with_stk_limit_bounds"
+            assert actual["sources"][0]["provider"] == actual["provider"]
         single_receipt = {"schema_version": "local_data_stk_limit_pre_close_production_readback_v1",
             "source_plan_sha256": source_hash, "source_rows_sha256": rows_hash, "database": "aistock",
             "production_database_written": True, "other_columns_unchanged": True, "other_same_day_keys_unchanged": True,
