@@ -23,7 +23,9 @@ from dotenv import dotenv_values  # noqa: E402
 import psycopg2.extras as pgx  # noqa: E402
 from scripts.repair_sw_sector_revision import connect  # noqa: E402
 from backend.services.dataset_release.canonical import canonical_json_bytes  # noqa: E402
-from backend.services.tushare_dataset_specs import STK_LIMIT, stk_limit_prices_valid  # noqa: E402
+from backend.services.tushare_dataset_specs import (  # noqa: E402
+    STK_LIMIT, stk_limit_prices_valid, validate_stk_limit_daily_reference_proof,
+)
 from backend.services.tushare_sync_engine import TushareSyncEngine  # noqa: E402
 
 SCHEMA = "local_data_stk_limit_pre_close_repair_v1"
@@ -225,8 +227,14 @@ def capture(env_file, day, out, *, required_codes=None):
     engine._tushare_token_cache = dotenv_values(env_file).get("TUSHARE_TOKEN")
     if not engine._tushare_token_cache:
         raise ValueError("Tushare credential location unavailable")
-    rows = engine._fetch_from_tushare(STK_LIMIT, {"trade_date": day.strftime("%Y%m%d")})
+    request = {"trade_date": day.strftime("%Y%m%d")}
+    if required_codes is None:
+        rows = engine._fetch_from_tushare(STK_LIMIT, request)
+    else:
+        rows = [row for code in sorted(required_codes)
+                for row in engine._fetch_from_tushare(STK_LIMIT, {**request, "ts_code": code})]
     engine._validate_rows_for_date(STK_LIMIT, rows, day)
+    rows, enrichment = engine._complete_stk_limit_references(STK_LIMIT, rows, day)
     rows = sorted((normalized_record(row) for row in rows), key=lambda row: row["ts_code"])
     with closing(connect(env_file, "production", readonly=True)) as conn:
         with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
@@ -247,6 +255,11 @@ def capture(env_file, day, out, *, required_codes=None):
                "no_limit_listing_facts": listing_facts, "no_limit_listing_facts_sha256": digest(listing_facts),
                "changed_columns": ["pre_close"], "target_database": "aistock",
                "repair_original_value_contract": "exact_invalid_reference_cas_v1"}
+    if enrichment is not None and enrichment["filled_reference_count"]:
+        validate_stk_limit_daily_reference_proof(enrichment, rows, day)
+        payload.update(provider="tushare.daily.pre_close_with_stk_limit_bounds",
+                       reference_contract="same_trade_date_daily_pre_close_is_ex_right_reference_not_previous_close_guess",
+                       reference_enrichment=enrichment)
     write_exclusive(out / "source-plan.json", payload)
     sql_path = out / "production-repair.sql"
     if patches:
@@ -264,6 +277,8 @@ def validate_dev(env_file, source_path, out):
     if plan["schema_version"] != SCHEMA or digest(plan["source_rows"]) != plan["source_rows_sha256"]:
         raise ValueError("source identity differs")
     day = date.fromisoformat(plan["trade_date"])
+    if plan.get("provider") == "tushare.daily.pre_close_with_stk_limit_bounds":
+        validate_stk_limit_daily_reference_proof(plan.get("reference_enrichment"), plan["source_rows"], day)
     listing_facts = plan.get("no_limit_listing_facts", [])
     if listing_facts and digest(listing_facts) != plan.get("no_limit_listing_facts_sha256"):
         raise ValueError("listing fact identity differs")
@@ -400,6 +415,7 @@ def main():
     parser.add_argument("--start-date", type=date.fromisoformat)
     parser.add_argument("--end-date", type=date.fromisoformat)
     parser.add_argument("--pit-key")
+    parser.add_argument("--codes", nargs="+", help="Exact symbols for a bounded capture; does not alter PIT")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     if args.mode == "capture" and args.trade_date is None:
@@ -412,7 +428,7 @@ def main():
     if args.mode == "audit":
         result = audit(args.env_file, args.start_date, args.end_date, args.pit_key, out)
     elif args.mode == "capture":
-        result = capture(args.env_file, args.trade_date, out)
+        result = capture(args.env_file, args.trade_date, out, required_codes=set(args.codes) if args.codes else None)
     else:
         result = validate_dev(args.env_file, args.source, out)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))

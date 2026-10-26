@@ -1432,6 +1432,21 @@ def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch)
     assert calls[0][1][0][2:] == (None, 16.83, 13.77)
 
 
+def test_stk_limit_daily_supplement_upsert_cannot_overwrite_existing_finite_reference(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    calls = []
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append((sql, values)))
+    rows = [{"ts_code": code, "trade_date": "20240723", "pre_close": 16.9,
+             "up_limit": 20.28, "down_limit": 13.52} for code in ("300280.SZ", "300630.SZ")]
+    TushareSyncEngine()._upsert_batch(_FakeConn(), STK_LIMIT, rows, reference_fill_only_codes={"300630.SZ"})
+    assert len(calls) == 2
+    assert "pre_close=COALESCE" in calls[0][0]
+    assert "pre_close=CASE WHEN stk_limit.pre_close IS NULL" in calls[1][0]
+    assert "ELSE stk_limit.pre_close END" in calls[1][0]
+    assert "('NaN','Infinity','-Infinity')" in calls[1][0]
+    assert calls[0][1][0][1] == "300280.SZ" and calls[1][1][0][1] == "300630.SZ"
+
+
 def test_stk_limit_preserves_provider_zero_lower_bound_without_fabricating_price(monkeypatch):
     from backend.services.tushare_dataset_specs import STK_LIMIT, stk_limit_prices_valid
     calls = []
@@ -1494,6 +1509,45 @@ def test_stk_limit_rechecks_a_bounded_tail_and_pending_dates():
     assert sync_engine.LATE_PUBLICATION_TAIL_DAYS["stk_limit"] == 5
 
 
+@pytest.mark.parametrize("missing", [None, float("nan"), 0, -1])
+def test_stk_limit_daily_reference_is_same_day_fact_not_shifted_close(missing):
+    from backend.services.tushare_dataset_specs import complete_stk_limit_daily_references
+    day = dt.date(2024, 7, 23)
+    raw = {"ts_code": "300280.SZ", "trade_date": "20240723", "pre_close": missing,
+           "up_limit": 20.28, "down_limit": 13.52}
+    # Today's official reference is 16.90; today's close must not be used.
+    daily = {"ts_code": "300280.SZ", "trade_date": "20240723", "pre_close": 16.90, "close": 16.26}
+    rows, proof = complete_stk_limit_daily_references([raw], [daily], day)
+    assert rows[0]["pre_close"] == 16.90
+    assert proof["filled_reference_count"] == 1
+    assert proof["facts"][0]["pre_close"] == "16.9"
+    assert rows[0]["up_limit"] == raw["up_limit"]
+    assert raw["pre_close"] is missing
+
+
+def test_stk_limit_daily_reference_preserves_finite_source_and_unproven_missing():
+    from backend.services.tushare_dataset_specs import complete_stk_limit_daily_references
+    day = dt.date(2024, 7, 23)
+    raw = {"ts_code": "300280.SZ", "trade_date": "20240723", "pre_close": 16.9,
+           "up_limit": 20.28, "down_limit": 13.52}
+    rows, proof = complete_stk_limit_daily_references([raw], [dict(raw, pre_close=17)], day)
+    assert rows == [raw] and proof["filled_reference_count"] == 0
+    for daily in ([], [dict(raw, pre_close=None)], [dict(raw, pre_close=30)]):
+        rows, proof = complete_stk_limit_daily_references([dict(raw, pre_close=None)], daily, day)
+        assert rows[0]["pre_close"] is None and proof["filled_reference_count"] == 0
+
+
+@pytest.mark.parametrize("change", ["wrong_day", "duplicate"])
+def test_stk_limit_daily_reference_rejects_identity_conflict(change):
+    from backend.services.tushare_dataset_specs import complete_stk_limit_daily_references
+    raw = {"ts_code": "300280.SZ", "trade_date": "20240723", "pre_close": None,
+           "up_limit": 20.28, "down_limit": 13.52}
+    daily = dict(raw, pre_close=16.9)
+    sources = [dict(daily, trade_date="20240724")] if change == "wrong_day" else [daily, daily]
+    with pytest.raises(ValueError):
+        complete_stk_limit_daily_references([raw], sources, dt.date(2024, 7, 23))
+
+
 def test_stk_limit_partial_traded_readback_cannot_mark_sync_success(monkeypatch):
     from backend.services.tushare_dataset_specs import STK_LIMIT
     engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
@@ -1512,6 +1566,33 @@ def test_stk_limit_partial_traded_readback_cannot_mark_sync_success(monkeypatch)
     assert result.success_batches == 0 and result.failed_batches == 1
     assert audit.success_calls[0]["failure_category"] == "traded_equity_limit_fact_incomplete"
     assert audit.success_calls[0]["metadata"]["traded_equity_readback"]["invalid_count"] == 1
+
+
+def test_stk_limit_sync_reuses_shared_same_day_reference_enrichment(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = engine._refresh_audit = _CapturingAudit()
+    day = dt.date(2024, 7, 23)
+    raw = {"ts_code": "300280.SZ", "trade_date": "20240723", "pre_close": None,
+           "up_limit": 20.28, "down_limit": 13.52}
+    calls, written = [], []
+
+    def fetch(spec, request):
+        calls.append((spec.tushare_api, request))
+        return [raw] if spec.tushare_api == "stk_limit" else [dict(raw, pre_close=16.9)]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, rows, **_kw: written.extend(rows) or len(rows))
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_update_progress", lambda *_: None)
+    monkeypatch.setattr(engine, "_stk_limit_readback_quality", lambda *_: ({"invalid_count": 0}, {"quality_status": "ok"}))
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    result = engine._sync_by_date(_FakeConn(), STK_LIMIT, day, day, uuid.uuid4())
+    assert result.success_batches == 1 and result.failed_batches == 0
+    assert [api for api, _ in calls] == ["stk_limit", "daily"]
+    assert all(request == {"trade_date": "20240723"} for _, request in calls)
+    assert written == [dict(raw, pre_close=16.9)] and raw["pre_close"] is None
+    assert audit.success_calls[0]["metadata"]["reference_enrichment"]["filled_reference_count"] == 1
 
 
 @pytest.mark.parametrize("pre_close,expected", [(15.30, True), (None, False), (float("nan"), False), (float("inf"), False), (20, False)])
