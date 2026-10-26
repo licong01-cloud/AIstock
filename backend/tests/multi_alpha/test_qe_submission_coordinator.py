@@ -315,8 +315,8 @@ def test_wsl_submission_uses_execution_mode_not_durable_training_default(
     client.assert_not_called()
 
 
-@pytest.mark.parametrize("backtest,expected", [(False, 2), (True, 4)])
-def test_remote_retry_or_forced_fit_cannot_inherit_four_backtest_slots(backtest, expected):
+@pytest.mark.parametrize("backtest,expected", [(False, 4), (True, 4)])
+def test_remote_cpu_fit_and_replay_preserve_four_loop_capacity(backtest, expected):
     repository = Mock(spec=QEExecutionReservationRepository)
     repository.reserve_execution_and_claim_source.return_value = QEExecutionReservationAcquireResult(
         acquired=False, duplicate_replay=False, active_count=expected,

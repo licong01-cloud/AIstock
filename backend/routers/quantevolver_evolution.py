@@ -1536,7 +1536,7 @@ class CustomEvoLoopConfig(BaseModel):
     prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
     prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
     prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
-    node_id: Optional[str] = Field(None, description="Loop node; balanced new batches redistribute uniform node defaults; explicit allocation preserves pins")
+    node_id: Optional[str] = Field(None, description="CPU model: remote; GPU model: WSL; explicit placement must match model device; frozen prediction replay may use either node")
 
     @model_validator(mode="after")
     def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
@@ -1556,9 +1556,9 @@ class CustomEvolutionCreateRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
     node_id: Optional[str] = Field(None, description="Preferred node for balanced placement; batch node when node_allocation=explicit")
     node_allocation: Literal["balanced", "explicit"] = Field(
-        "balanced", description="New batches balance unpinned Loops across active nodes; explicit preserves batch-node inheritance",
+        "balanced", description="New batches place models by CPU/GPU requirements; prediction replay balances across active nodes; explicit pins must remain compatible",
     )
-    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Defaults per node: full-fit Loops 2, pure-backtest Loops 4; explicit reductions allowed")
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Remote CPU models 4; WSL GPU models 2; pure backtests 4; stricter model guards and explicit reductions apply")
     phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
     resource_telemetry_enabled: bool = Field(
         False,
@@ -1830,8 +1830,8 @@ async def _prepare_custom_evo_loop_configs(
         loops_config.append(cfg_dict)
 
     from ..services.quantevolver.qe_batch_execution_policy import (
-        POLICY_KEY, QE_BATCH_EXECUTION_POLICY, batch_node_parallelism,
-        place_batch_loops, verify_batch_dataset_nodes,
+        POLICY_KEY, MODEL_BINDING_KEY, QE_BATCH_EXECUTION_POLICY, batch_node_parallelism,
+        bind_batch_model_nodes, verify_batch_dataset_nodes,
     )
     from ..services.quantevolver.qe_active_dataset_profile import load_active_qe_profile
 
@@ -1843,17 +1843,21 @@ async def _prepare_custom_evo_loop_configs(
         )
     automatic_placement = bool(placement_profile is not None and balanced_batch_nodes)
     if automatic_placement:
-        loops_config = place_batch_loops(
+        loops_config = bind_batch_model_nodes(
             loops_config,
             available_nodes=list(placement_profile.raw["node_bindings"]),
             preferred_node=request_node_id,
-            rebalance_single_node=True,
+            balanced=True,
         )
     try:
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
             loops_config,
             request_node_id,
         )
+        if apply_batch_policy and not automatic_placement:
+            loops_config = bind_batch_model_nodes(
+                loops_config, available_nodes=sorted(selected_node_ids), balanced=False,
+            )
         parallelism_scope = node_parallelism_scope_node_ids or selected_node_ids
         node_parallelism = normalize_node_parallelism(
             parallelism_scope,
@@ -1879,6 +1883,10 @@ async def _prepare_custom_evo_loop_configs(
         old_loop = persisted_by_index.get(int(cfg_dict["loop_index"])) or {}
         if old_loop.get(POLICY_KEY):
             cfg_dict[POLICY_KEY] = dict(old_loop[POLICY_KEY])
+            if old_loop.get(MODEL_BINDING_KEY):
+                cfg_dict[MODEL_BINDING_KEY] = dict(old_loop[MODEL_BINDING_KEY])
+            if old_loop[POLICY_KEY].get("version") == QE_BATCH_EXECUTION_POLICY:
+                bind_batch_model_nodes([cfg_dict], available_nodes=[cfg_dict["node_id"]], balanced=False)
         persisted = _persisted_qe_dataset_context(
             persisted_by_index.get(int(cfg_dict["loop_index"]))
         )
@@ -2080,15 +2088,19 @@ def _filter_node_parallelism_for_scope(
 def get_batch_execution_policy():
     from ..services.quantevolver.qe_batch_execution_policy import (
         QE_BATCH_EXECUTION_POLICY, QE_TRAINING_LOOP_CAPACITY, QE_BACKTEST_LOOP_CAPACITY,
+        QE_CPU_TRAINING_LOOP_CAPACITY, CPU_NODE, GPU_NODE,
     )
 
     return {
         "version": QE_BATCH_EXECUTION_POLICY,
         "default_node_allocation": "balanced",
         "per_node_workload_limits": {
-            "full_fit_loop": QE_TRAINING_LOOP_CAPACITY,
+            "cpu_full_fit_loop": QE_CPU_TRAINING_LOOP_CAPACITY,
+            "gpu_full_fit_loop": QE_TRAINING_LOOP_CAPACITY,
             "pure_backtest_loop": QE_BACKTEST_LOOP_CAPACITY,
         },
+        "model_node_affinity": {"cpu": CPU_NODE, "gpu": GPU_NODE},
+        "prediction_replay_nodes": [CPU_NODE, GPU_NODE],
         "slot_lifetime": "whole_loop",
         "stricter_model_and_global_capacity_guards": "preserved",
         "existing_task_bindings": "immutable",
