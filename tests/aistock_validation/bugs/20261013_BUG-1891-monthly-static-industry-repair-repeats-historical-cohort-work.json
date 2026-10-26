@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1891",
-  "closed_at": null,
+  "closed_at": "2026-10-26T03:33:29.908536Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,9 +27,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_industry_static.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1891-monthly-static-industry-repair-repeats-historical-cohort-work.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_industry_static.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1891-monthly-static-industry-repair-repeats-historical-cohort-work.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -44,8 +55,9 @@
   },
   "first_seen_at": "2026-10-13T19:11:02.958686Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "15fe18b81a78ce758d8427e8b9af35f566d1a018",
+  "fix_description": "Reuse exact stock/date facts from the completed sector output; input-bound sector and Parquet batch checkpoints preserve sealed work across interruption; missing static-only keys retain the previous authority path; unchanged columns, finite/NaN semantics, input drift and atomic publication remain verified. No full price export, dataset activation, database or runtime action.",
+  "fixed_at": "2026-10-25T18:53:34Z",
   "github_issue_number": 6035,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6035",
   "last_seen_at": "2026-10-13T19:11:02.958686Z",
@@ -53,6 +65,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6716",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,6 +76,7 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "static writer and its readback called remap_context again after sector H5 was completed, repeating alias/PIT/cohort aggregation; no per-static-batch progress or sealed-batch reuse. The original attempt267 long stall is not reproduced and is not attributed to disk speed or a multi-year first batch.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -73,24 +87,42 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-1891-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1891",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "15fe18b81a78ce758d8427e8b9af35f566d1a018",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-26T03:30:47.368402Z",
+      "mode": "read_only",
+      "observed_identity": "c1a3ba28fc0b362f521103771340769c922f1d30",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e479eeeefd1ce35117f561543cb6380ba449e25317fec2e37028dd651dfae506",
+      "receipt_sha256": "6b1b86fbe6793fc514e97683e6666b48ca92084727eaefd79590b6c08e6eb27d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6b12c68bbca13f2fec72d7a98e8b1f2659e997178d28ca51fee0227f89764e2b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
-  "root_cause": "static writer and its readback called remap_context again after sector H5 was completed, repeating alias/PIT/cohort aggregation; no per-static-batch progress or sealed-batch reuse. The original attempt267 long stall is not reproduced and is not attributed to disk speed or a multi-year first batch.",
-  "fix_description": "Reuse exact stock/date facts from the completed sector output; input-bound sector and Parquet batch checkpoints preserve sealed work across interruption; missing static-only keys retain the previous authority path; unchanged columns, finite/NaN semantics, input drift and atomic publication remain verified. No full price export, dataset activation, database or runtime action.",
-  "validation_evidence": [
-    "RED: four parameterized materialization cases fail on old source; GREEN: same four cases pass, including interruption/reuse and changed retained-batch rejection.",
-    "Related matrix: test_monthly_sector_mapping.py 69 passed, 1 skipped; Ruff, changed-file L0/ownership and git diff --check passed.",
-    "Read-only current release first 100000 rows (2018-08-01..2018-09-11): old recompute 2.973526s versus exact completed-fact join 0.161728s, different industry cells=0, unrelated columns unchanged. X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1891-bounded-100k-benchmark.json. Not a full-month runtime guarantee.",
-    "Three self-review rounds: exact-date and taxonomy/units parity; source-bound restart/cache drift and publication safety; actual bounded performance plus source/owner scope. DESIGN-COMPLIANCE-001: requirements matched, no mock-only completion, real frozen-file readback, no unapproved scope reduction."
-  ],
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -99,6 +131,13 @@
     "fingerprint": "839984c4c8bf3a47625f8989",
     "source_event_id": "FE-20261013-839984c4c8bf"
   },
+  "validation_evidence": [
+    "RED: four parameterized materialization cases fail on old source; GREEN: same four cases pass, including interruption/reuse and changed retained-batch rejection.",
+    "Related matrix: test_monthly_sector_mapping.py 69 passed, 1 skipped; Ruff, changed-file L0/ownership and git diff --check passed.",
+    "Read-only current release first 100000 rows (2018-08-01..2018-09-11): old recompute 2.973526s versus exact completed-fact join 0.161728s, different industry cells=0, unrelated columns unchanged. X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1891-bounded-100k-benchmark.json. Not a full-month runtime guarantee.",
+    "Three self-review rounds: exact-date and taxonomy/units parity; source-bound restart/cache drift and publication safety; actual bounded performance plus source/owner scope. DESIGN-COMPLIANCE-001: requirements matched, no mock-only completion, real frozen-file readback, no unapproved scope reduction.",
+    "User restart completed; official worker-scheduler verification passed against original source merge. Canonical-root runtime catalog matches verified receipt; no process control, dataset export or production writes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
