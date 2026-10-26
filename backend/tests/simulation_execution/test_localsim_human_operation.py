@@ -198,3 +198,29 @@ def test_cash_and_sellable_limits_do_not_turn_opportunity_into_a_fill():
     backend, result = human_day(plan, market, cash="100")
     assert not backend._ledger.fills and backend._ledger.cash_decimal == 100
     assert result["account"]["parents"][0]["status"] in {"NO_FILL", "UNAVAILABLE"}
+
+
+def test_concurrent_partial_fills_follow_native_cash_fact_replay_order(tmp_path):
+    from backend.services.simulation_execution.localsim.timing_research import backend_for
+    from backend.services.simulation_execution.localsim.timing_portfolio import commit_portfolio_day, validate_day_ledger
+    from backend.services.simulation_execution.localsim.timing_store import TimingFileRepository
+    from backend.services.position_timing.intraday.research import CostContract
+    plans, markets = full_markets()
+    first = plans[0].model_copy(update={"plan_id":"zebra"})
+    second = plans[1].model_copy(update={"plan_id":"middle"})
+    third = first.model_copy(update={"plan_id":"alpha", "symbol":"600001.SH", "valid_from":at("09:32:00")})
+    markets[third.symbol] = markets[first.symbol].model_copy(update={"symbol":third.symbol,
+        "day_facts":markets[first.symbol].day_facts.model_copy(update={"symbol":third.symbol})})
+    markets = {s:m.model_copy(update={"bars":tuple(b.model_copy(update={"volume_shares":Decimal("300")}) for b in m.bars)}) for s,m in markets.items()}
+    initial = {"account_id":"account", "portfolio_id":"account", "package_id":"fixture",
+               "origin_initial_cash_cny":"10000000", "cash_cny":"10000000", "positions":{}}
+    cost = CostContract(open_rate="0.000095",close_rate="0.000595",minimum_cny="5")
+    backend = backend_for(initial, markets[first.symbol], cost)
+    result = run_human_portfolio_day(backend=backend, markets=markets,
+        events=[PlanEvent(available_at=p.valid_from,plan=p) for p in (first,second,third)],
+        initial_marks={s:Decimal("10") for s in markets}, policy=HumanOperationPolicy(reaction_delay_seconds=0), run_id="concurrent")
+    assert sum(f.quantity for f in backend._ledger.fills) == 3000
+    assert len({f.symbol for f in backend._ledger.fills if f.trade_time == at("09:34:00")}) == 2
+    store = TimingFileRepository(tmp_path, "lsdm_"+"a"*48)
+    commit_portfolio_day(store=store,result=result,input_identity="b"*64,day_index=0)
+    validate_day_ledger(store.latest(), initial=initial,cost=cost)

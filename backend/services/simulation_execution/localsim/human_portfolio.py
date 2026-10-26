@@ -102,7 +102,14 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                                                "sellable_quantity": lot["available_quantity"] if lot else 0,
                                                "available_at": max(feedback.available_at, visible_at),
                                                "feedback_id": digest([feedback.feedback_id, account_view])})
-        return proposal.facade.evaluate(markets[plan.symbol], feedback, clock)
+        decision = proposal.facade.evaluate(markets[plan.symbol], feedback, clock)
+        if decision.status == "UNAVAILABLE":
+            # Audited NONE plans were already retained by the native plan
+            # compiler as typed unavailable rows. Unexpected core conflicts
+            # must fail the day, never become an apparently successful study.
+            raise ValueError("LOCALSIM_HUMAN_CORE_UNAVAILABLE:" + ",".join(decision.reason_codes))
+        proposal.reasons.update(decision.reason_codes)
+        return decision
 
     def add_cancel(proposal, clock, reason):
         execution = proposal.active
@@ -170,12 +177,13 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                 schedule(action.ready_at)
         # Existing orders match independently; new human orders cannot use this bar.
         any_fill = False
-        for proposal in proposals.values():
-            for execution in proposal.executions:
-                bar = bars.get(clock, {}).get(execution.order.symbol)
-                if (bar is not None and execution.order.status not in TERMINAL
-                        and (execution.facade.last_feedback_at is None or execution.facade.last_feedback_at <= clock)):
-                    any_fill = bool(execution.step(bar)) or any_fill
+        matching = sorted((e for p in proposals.values() for e in p.executions),
+                          key=lambda e:(e.order.side.value != "SELL", e.order.symbol, e.order.order_id))
+        for execution in matching:
+            bar = bars.get(clock, {}).get(execution.order.symbol)
+            if (bar is not None and execution.order.status not in TERMINAL
+                    and (execution.facade.last_feedback_at is None or execution.facade.last_feedback_at <= clock)):
+                any_fill = bool(execution.step(bar)) or any_fill
         if any_fill:
             views.append((clock + timedelta(seconds=65), _account(backend)))
         in_session = any(left <= clock < right for left, right in trading_sessions(day)) and clock < terminal

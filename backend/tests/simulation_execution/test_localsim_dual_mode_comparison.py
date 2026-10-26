@@ -112,3 +112,18 @@ def test_single_writer_and_failure_preserve_only_committed_prefix(tmp_path, monk
     result = dual.run_study(request)
     assert result["computed_account_days"] == 1
     assert all(p.read_bytes() == raw for p,raw in prefix.items())
+
+
+def test_invalid_economic_day_fails_before_any_journal_is_committed(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    real = dual.run_native_portfolio_day
+    def inconsistent(**kwargs):
+        result = real(**kwargs)
+        result["account"]["cash_cny"] = "10000000"
+        return result
+    monkeypatch.setattr(dual, "run_native_portfolio_day", inconsistent)
+    with pytest.raises(ValueError, match="LEDGER_RECONCILIATION_FAILED"):
+        dual.run_study(request)
+    root = Path(request.path).parent
+    assert not list((root / "journals").glob("*/generations/*.json"))
+    assert not (root / "results.json").exists()

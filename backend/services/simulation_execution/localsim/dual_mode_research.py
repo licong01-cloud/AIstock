@@ -22,6 +22,7 @@ from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
 
 from .human_operation import HumanOperationPolicy, operation_snapshot, validate_operation_configuration
+from .economic import local_sim_fact_payload
 from .human_portfolio import run_human_portfolio_day
 from .native_research import native_backend_for, run_native_portfolio_day, run_cash_only_portfolio_day
 from .timing_campaign import build_timing_plan_events, inspect_price_templates, validate_campaign_request
@@ -316,6 +317,11 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
                     projection_ref=projection_ref.model_dump(), price_policy_sha256=inspected["templates"].policy_document.sha256,
                     unavailable=unavailable)
                 result["account"].update(operation=initial["operation"], rule=initial["rule"], delay_seconds=initial["delay_seconds"])
+                # A failed replay must not publish even a completed-day journal.
+                validate_day_ledger({"checkpoint":{"account":result["account"]}, "facts":{
+                    "fills":{f.fill_id:local_sim_fact_payload(f, fact_type="fill") for f in backend._ledger.fills},
+                    "cash_entries":{e.fill_id:local_sim_fact_payload(e, fact_type="cash_entry") for e in backend._ledger.cash_entries}}},
+                    initial=initial, cost=cost)
                 commit_portfolio_day(store=store, result=result, input_identity=identity, day_index=0)
                 record = store.latest()
                 validate_day_ledger(record, initial=initial, cost=cost)

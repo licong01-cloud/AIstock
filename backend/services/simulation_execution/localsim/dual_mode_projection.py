@@ -31,6 +31,11 @@ REASON_LABELS = {"OPPORTUNITY_EXPIRED_IN_QUEUE": "响应或排队期间机会过
                  "INSUFFICIENT_CASH": "可用现金不足", "HARD_PRICE_CONSTRAINT": "未满足硬价格限制",
                  "QUANTITY_OR_LIQUIDITY_LIMIT": "数量或分钟流动性限制", "WAITING_FOR_DELAY": "等待冻结响应时长",
                  "NO_EXECUTABLE_INTENT": "当前没有可执行意图"}
+REASON_LABELS.update({"OPPORTUNITY_WAIT":"等待择时条件", "WAITING_FOR_BAR":"等待已完成分钟行情",
+                     "NO_AVAILABLE_CASH":"无可用现金", "NO_SELLABLE_QUANTITY":"无可卖数量",
+                     "LIMIT_UP_BUY_BLOCKED":"涨停限制买入", "LIMIT_DOWN_SELL_BLOCKED":"跌停限制卖出",
+                     "SESSION_BREAK":"非连续交易时段", "NO_OBSERVED_TRADE":"该分钟没有观察到交易",
+                     "PLAN_COMPLETED":"计划已按确认成交完成"})
 
 
 def portable_path(value: str) -> Path:
@@ -178,8 +183,8 @@ class DualModeReadService:
                     "holdings_value": str(Decimal(latest["terminal_nav_cny"]) - Decimal(latest["cash_cny"])),
                     "last_day_pnl": str(Decimal(latest["terminal_nav_cny"]) - Decimal(latest["initial_nav_cny"])),
                     "last_trade_date": latest["trade_date"],
-                    "return_pct": str((Decimal(account["terminal_nav_cny"]) / Decimal(account["initial_cash_cny"]) - 1) * 100),
-                    "max_drawdown_pct": str(Decimal(account["max_drawdown"]) * 100), "fees": account["fees_cny"],
+                    "return_pct": format((Decimal(account["terminal_nav_cny"]) / Decimal(account["initial_cash_cny"]) - 1) * 100, "f"),
+                    "max_drawdown_pct": format(Decimal(account["max_drawdown"]) * 100, "f"), "fees": account["fees_cny"],
                     "completion_pct": str(Decimal(statuses.get("FILLED", 0)) * 100 / count) if count else None,
                     "statuses": [{"name": STATUS_LABELS.get(s, "状态待核验"), "count": n} for s,n in statuses.items()],
                     "constraints": [{"name": name, "count": n} for name,n in constraints.items()],
