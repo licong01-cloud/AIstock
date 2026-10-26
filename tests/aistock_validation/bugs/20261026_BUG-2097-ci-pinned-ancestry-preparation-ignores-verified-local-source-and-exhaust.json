@@ -1,0 +1,309 @@
+{
+  "actual": "PR 6732 run 40323434899 attempts 1 and 2 time out in the 3-minute pinned ancestry preparation step before HMM tests. The runner mirror is stale and lacks the exact event base and source parent, while the verified canonical source already has both immutable commits. Restore exact pinned ancestry from verified local source before bounded remote fallback, retain complete CI gates and provide per-attempt evidence. Do not change HMM code, models, inputs, services or business databases.",
+  "allowed_write_scope": [
+    "scripts/ci_changed_files.py",
+    "backend/tests/scripts/test_ci_changed_files.py",
+    "tests/aistock_validation/bugs/20261026_BUG-2097-ci-pinned-ancestry-preparation-ignores-verified-local-source-and-exhaust.json"
+  ],
+  "assigned_agent": "codex-pipeline-20261026",
+  "bug_id": "BUG-2097",
+  "ci_ancestry_repair_20261026": {
+    "blocked_pr": "https://github.com/licong01-cloud/AIstock/pull/6732",
+    "design_compliance_review": {
+      "business_semantics_unchanged": true,
+      "no_new_approval_gate": true,
+      "no_partial_delivery": true,
+      "no_silent_success": true
+    },
+    "diagnosis": "Verified mirror lacks event base and PR parent b4781a186010236c7882efceb126cb7fd73dd1dd; canonical local source has both. Remote-only ancestry preparation times out before business tests.",
+    "direct_tests": {
+      "file": "backend/tests/scripts/test_ci_changed_files.py",
+      "passed": 27
+    },
+    "event_base": "f57d64cb71aec95f6f3f47bf79f5cb7cd75e9a07",
+    "failure_run": "https://github.com/licong01-cloud/AIstock/actions/runs/40323434899",
+    "hmm_continuation": "Source merge after real new-head CI; full-file prepare; bounded 4-fit comparison; file/database dual-entry zero-fit verification and effects analysis; separate QE and advisory/LocalSIM owner handoffs. Reuse existing worktree and completed artifacts.",
+    "isolated_pinned_probe": {
+      "changed_files_count": 9,
+      "elapsed_seconds": 8.64,
+      "fetch_attempts": 1,
+      "kind": "synthetic merge using real event base/source SHA, not a real CI pass",
+      "local_source_status": "proven",
+      "receipt": "tmp/validation/BUG-2097/pr-6732-ancestry-receipt.json",
+      "remote_fetch_attempts": 0
+    },
+    "observed_mirror_main": "8dc2606733067115d026220fc37533e8e284e1b2",
+    "production_gates": {
+      "database": "untouched",
+      "formal_fit_count": 0,
+      "hmm_worktree": "untouched",
+      "services": "untouched"
+    },
+    "review_rounds": [
+      {
+        "result": "Only CI changed-file tooling and its direct tests; no HMM source/model/data changes.",
+        "round": 1,
+        "scope": "Root cause and ownership"
+      },
+      {
+        "result": "Configured local repository identity, exact immutable base/source, shallow source rejection, unavailable origin, source ref stability, invalid identity and bounded remote fallback covered. Total local plus remote fetch attempts remain at most 3; 150-second budget and 3-minute CI step unchanged.",
+        "round": 2,
+        "scope": "Identity and fail-closed budget"
+      },
+      {
+        "result": "Real PR event identities proven in isolated shallow Git fixture; exact 9-file source diff. HMM PR must sync main and pass new-head CI before merge and research.",
+        "round": 3,
+        "scope": "Real pinned ancestry and delivery boundary"
+      }
+    ],
+    "source_head": "45b0435e38d468d91a3e53409c0d9d0573c2128d",
+    "ci_attempts": [
+      {
+        "run_id": 40338424473,
+        "source_head": "a773c18f472e0f7f6195411a7ab6436f7fba665c",
+        "ancestry_step": "passed in 8 seconds",
+        "direct_tests": "passed",
+        "result": "blocked by policy scanner literal retry-loop contract; not claimed as CI pass"
+      }
+    ],
+    "policy_followup": {
+      "change": "Preserve original maximum-three-attempt loop; a local fetch consumes first slot. Policy scanner is unchanged.",
+      "focused_retry_tests_passed": 4,
+      "policy_scan": "pass, all contracts true, no findings"
+    }
+  },
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-26T14:09:32.904113Z",
+  "description": "PR 6732 run 40323434899 attempts 1 and 2 time out in the 3-minute pinned ancestry preparation step before HMM tests. The runner mirror is stale and lacks the exact event base and source parent, while the verified canonical source already has both immutable commits. Restore exact pinned ancestry from verified local source before bounded remote fallback, retain complete CI gates and provide per-attempt evidence. Do not change HMM code, models, inputs, services or business databases.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261026-e0a471599970",
+      "timestamp": "2026-10-26T14:09:32.904097Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/40323434899"
+  ],
+  "expected": "Exact base and source ancestry is proven within the existing budget from verified local objects when available; missing or mismatched identity fails closed and remote fallback remains bounded.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "scripts/ci_changed_files.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2097-ci-pinned-ancestry-preparation-ignores-verified-local-source-and-exhaust.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "scripts/ci_changed_files.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2097-ci-pinned-ancestry-preparation-ignores-verified-local-source-and-exhaust.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/ci_changed_files.py",
+        "backend/tests/scripts/test_ci_changed_files.py"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/ci_changed_files.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_changed_files.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "ci_changed_files_test_owner"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/ci_changed_files.py",
+        "backend/tests/scripts/test_ci_changed_files.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/ci_changed_files.py",
+      "backend/tests/scripts/test_ci_changed_files.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ci_changed_files.py",
+      "backend/tests/scripts/test_ci_changed_files.py"
+    ]
+  },
+  "first_seen_at": "2026-10-26T14:09:32.904113Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6733,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6733",
+  "last_seen_at": "2026-10-26T14:09:32.904113Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "infra_failure",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI pinned ancestry preparation ignores verified local source and exhausts remote fetch budget",
+  "trigger_condition": {
+    "fingerprint": "e0a471599970ca8a6ab5a7db",
+    "source_event_id": "FE-20261026-e0a471599970"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -8,6 +8,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -140,6 +141,32 @@ def _commit(repo_root: Path, revision: str, field: str) -> str:
     return _git(repo_root, "rev-parse", "--verify", f"{value}^{{commit}}").strip()
 
 
+def _verified_local_source(root: Path, base: str, source: str) -> Path | None:
+    """Read immutable objects only from the runner's explicitly configured source."""
+    configured = os.environ.get("AISTOCK_SELF_HOSTED_SOURCE", "")
+    if not configured or not base or not source:
+        return None
+    candidate = Path(configured)
+    if not candidate.is_absolute():
+        return None
+    candidate = candidate.resolve()
+    if candidate == root or not candidate.is_dir():
+        return None
+    try:
+        origin = _git(candidate, "config", "--get", "remote.origin.url").rstrip("/")
+        if origin.endswith(".git"):
+            origin = origin[:-4]
+        if not origin.endswith("/licong01-cloud/AIstock"):
+            return None
+        if _git(candidate, "rev-parse", "--is-shallow-repository") != "false":
+            return None
+        if _commit(candidate, base, "local_base") != base or _commit(candidate, source, "local_source") != source:
+            return None
+        return candidate
+    except (ChangedFilesError, OSError):
+        return None
+
+
 def prepare_pr_merge_base(
     *,
     repo_root: Path,
@@ -196,17 +223,47 @@ def prepare_pr_merge_base(
     if not history_ready:
         local_history = _restore_local_mirror_ancestry(root, pinned_base)
         history_ready = ready()
+    local_source_receipt: dict[str, object] = {"status": "not_used"}
+    if not history_ready:
+        # The mirror contains main only and may lag the event base. A PR with
+        # several source commits also has parents outside checkout depth=2.
+        # Fetch exact event commits from the configured local repository before
+        # spending the same finite budget on GitHub. Never read its dirty files,
+        # move its refs, or substitute its current main/head for pinned identities.
+        local_source = _verified_local_source(root, pinned_base, pinned_source)
+        remaining = total_budget - (time.monotonic() - started)
+        if local_source is not None and remaining > 0:
+            print("ci_pr_ancestry transport=verified_local_source phase=start", file=sys.stderr, flush=True)
+            try:
+                _git(root, "fetch", "--no-tags", "--no-write-fetch-head",
+                     f"--deepen={max(1, int(deepen_by))}", str(local_source),
+                     f"+{pinned_base}:refs/remotes/origin/{branch}",
+                     f"+{pinned_source}:refs/remotes/origin/aistock-pr-source",
+                     timeout=min(20, remaining))
+            except ChangedFilesError:
+                local_source_receipt = {"status": "failed"}
+            else:
+                history_ready = ready()
+                local_source_receipt = {"status": "proven" if history_ready else "incomplete"}
+            print(f"ci_pr_ancestry transport=verified_local_source status={local_source_receipt['status']}",
+                  file=sys.stderr, flush=True)
     if not history_ready:
         fetch_specs = [
             f"+{pinned_base or 'refs/heads/' + branch}:refs/remotes/origin/{branch}",
             f"+{source_ref}:refs/remotes/origin/aistock-pr-checkout",
         ]
         detail = "merge base remains unavailable"
+        local_fetch_attempts = int(local_source_receipt["status"] != "not_used")
         for index in range(min(3, max(1, int(attempts)))):
+            # An attempted local fetch already consumed the first budget slot.
+            if index < local_fetch_attempts:
+                continue
             remaining = total_budget - (time.monotonic() - started)
             if remaining <= 0:
                 raise ChangedFilesError("pinned PR base/head history preparation failed: total fetch budget exhausted")
-            used_attempts = index + 1
+            used_attempts = index + 1 - local_fetch_attempts
+            print(f"ci_pr_ancestry transport=origin attempt={used_attempts} timeout={min(fetch_timeout, remaining):g}",
+                  file=sys.stderr, flush=True)
             try:
                 _git(root,
                     "fetch",
@@ -241,10 +298,12 @@ def prepare_pr_merge_base(
         "head_commit": head_commit,
         "source_head_commit": source_commit,
         "merge_base": merge_base,
-        "fetch_used": used_attempts > 0,
-        "fetch_attempts": used_attempts,
+        "fetch_used": used_attempts > 0 or local_source_receipt["status"] != "not_used",
+        "fetch_attempts": used_attempts + int(local_source_receipt["status"] != "not_used"),
+        "remote_fetch_attempts": used_attempts,
         "deepen_by": max(1, int(deepen_by)),
         "local_mirror_ancestry": local_history,
+        "local_source_ancestry": local_source_receipt,
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
 
