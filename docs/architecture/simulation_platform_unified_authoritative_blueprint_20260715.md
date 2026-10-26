@@ -34,7 +34,7 @@
 
 > 连续离线研究在这一显式身份内允许单一账户同时管理多个股票父订单，并复用原生目标、调仓和 T+1 结算；三规则与四档延迟使用12个独立账户。恢复边界是原子提交的完整交易日，不能用提醒或未确认机会推进账本。全年价格偏好输入缺失时保持研究阻断，不修改原 TWAP 账户配置。
 
-> 2026-10-26 用户要求的 LocalSIM 双模式增量设计：保留现有原生执行、TWAP 默认、旧账户、release、历史/实时模拟与来源接续能力，新增显式选择的 `operation_mode=HUMAN_SIM`，与 `NATIVE` 原生模式并存。模拟人工只在独立新配置中增加账户级响应/串行操作队列，派发后才提交既有 OMS，不复制选股、择时、撮合或账本。当前仅更新设计，源码、UI、历史验证和运行态均未实现/未激活；原12账户及288场景保持不可变。详细合同见 [localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)，验收为 `F-149..F-164`。设计合入不自动修改任何账户或启动回放。
+> 2026-10-26 用户要求的 LocalSIM 双模式增量设计：保留现有原生执行、TWAP 默认、旧账户、release、历史/实时模拟与来源接续能力，新增显式选择的 `operation_mode=HUMAN_SIM`，与 `NATIVE` 原生模式并存。模拟人工只在独立新配置中增加账户级响应/串行操作队列，派发后才提交既有 OMS，不复制选股、择时、撮合或账本。2026-10-27实现任务已提供离线核心、独立研究账户、恢复及只读API/UI并执行定向回归；真实历史短窗、CI/合入和用户重启状态见[实现验收](../analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md)。原12账户及288场景保持不可变。详细合同见 [localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)，验收为 `F-149..F-164`。在线人工profile/release及持久化是后续独立阶段，源码合入不自动修改账户或启动生产回放。
 
 ## 0. 权威声明与执行红线
 
@@ -60,7 +60,7 @@
 | `localsim_strategy_package_single_admission_f2_design_20260714.md` | 下位专项契约 | 策略包唯一一次准入和 package type 兼容 |
 | `simulation_daily_market_context_freeze_f2_detailed_design_20260821.md` | 下位 F2 实施级详细设计 | `F-126..F-132`：V1历史冻结、broker-specific limit authority、V2兼容/隔离、LocalSIM TDX-only hot path 与 MiniQMT 有界异常 |
 | `localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md` | 下位 F2 实施级详细设计 | `F-133..F-148`：LocalSIM data/signal/execution物理隔离、统一control plane、隔离replay、原子切流、旧产品代码与schema退役 |
-| `localsim_human_operation_dual_mode_f2_detailed_design_20261026.md` | 下位 F2 增量详细设计 | `F-149..F-164`：保留原生执行，增加模拟人工操作及双模式比较；本轮只冻结设计 |
+| `localsim_human_operation_dual_mode_f2_detailed_design_20261026.md` | 下位 F2 增量详细设计 | `F-149..F-164`：保留原生执行，增加模拟人工操作及双模式比较；实现、历史及运行态分别验收 |
 | `miniqmt_adaptive_is_phase0_tca_design.md` | 下位专项契约 | Phase 0A TCA 事实面 |
 | `miniqmt_adaptive_is_phase1_quote_contract_design.md` | 下位专项契约 | `B0_QUOTE_V2` quote/control/evidence 契约 |
 | `miniqmt_intraday_execution_strategy_analysis_20260710.md` | 下位算法域蓝图 | `ADAPTIVE_IS_L1` 目标算法，不拥有平台执行路径 |
@@ -1499,22 +1499,22 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `F-146` | §10.5/§10.7；legacy-retirement detailed §7.6、LR-9 | artifact: future commit-bound DEV/replay/capacity/restart/normal-day validation receipts | design_ready + explicitly approved production-state separation | all runtime evidence pending implementation |
 | `F-147` | §11；legacy-retirement detailed §6/§8 | artifact: future `SIM-LR-A..D` source/merge/DDL/runtime/cleanup receipts | design_ready + explicitly approved four-stage implementation | no rollback to legacy route |
 | `F-148` | §0.2、§16；legacy-retirement detailed §13–§15 | artifact: `docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md` and feature-validator receipt | design_ready + explicitly approved design-only scope | implementation completion is not claimed |
-| `F-149` | 下位双模式设计；双模式opt-in，旧TWAP默认、release、离线择时研究及账户事实不变 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-150` | 下位双模式设计；唯一共享选股/择时及原生交易账本；人工派发后才创建OMS订单 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-151` | 下位双模式设计；操作模式与执行策略分离，完整冻结政策、组合校验与旧schema只读兼容 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-152` | 下位双模式设计；账户级单人跨股票共用动作间隔、ready排序、机会去重与休市规则 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-153` | 下位双模式设计；可见输入/反馈、响应/排队/dispatch、strict-after隔离；不看未来bar或双重delay | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-154` | 下位双模式设计；部分成交、计划修订/撤销、取消竞态、硬期限及尾单；不隐去待撤单欠账 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-155` | 下位双模式设计；原生资金、可卖量、板块数量/T+1、价格/限停牌和父订单费用不漂移 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-156` | 下位双模式设计；冻结PIT、C/D/T、来源计划、价格UNKNOWN和模型合法区间，不静默迁移或切源 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-157` | 下位双模式设计；新账户1000万元，双账户基础组及13账户完整组；旧12账户与288产物不变 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-158` | 下位双模式设计；整流程对照、人工matched规则和冻结机会响应诊断分开；native TWAP不是matched B0 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-159` | 下位双模式设计；队列/动作/反馈与原生事务共同恢复，失败前缀及exact retry无重复成交收费 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-160` | 下位双模式设计；全人口和可回读receipt、source inspect先于收益；估值/MDD/公司行为及归因限制明确 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-161` | 下位双模式设计；保留左侧导航和原账户详情；增量中文模式比较，正常UI无机器编码或JSON | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-162` | 下位双模式设计；旧行为等价、因果/费用/限制、短窗/多日/增量/恢复、端到端性能及复杂度验证 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-163` | 下位双模式设计；离线/展示/在线分阶段，沿用既有scheduler；数据库/数据集/进程/生产授权分开 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
-| `F-164` | 下位双模式设计；精确范围及四项符合性；设计、功能、历史、运行和经济证据分离 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增功能、经济或运行态证据 |
+| `F-149` |下位双模式设计；双模式opt-in，旧TWAP默认、release、离线择时研究及账户事实不变 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-150` |下位双模式设计；唯一共享选股/择时及原生交易账本；人工派发后才创建OMS订单 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-151` |下位双模式设计；操作模式与执行策略分离，完整冻结政策、组合校验与旧schema只读兼容 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-152` |下位双模式设计；账户级单人跨股票共用动作间隔、ready排序、机会去重与休市规则 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-153` |下位双模式设计；可见输入/反馈、响应/排队/dispatch、strict-after隔离；不看未来bar或双重delay |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-154` |下位双模式设计；部分成交、计划修订/撤销、取消竞态、硬期限及尾单；不隐去待撤单欠账 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-155` |下位双模式设计；原生资金、可卖量、板块数量/T+1、价格/限停牌和父订单费用不漂移 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-156` |下位双模式设计；冻结PIT、C/D/T、来源计划、价格UNKNOWN和模型合法区间，不静默迁移或切源 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-157` |下位双模式设计；新账户1000万元，双账户基础组及13账户完整组；旧12账户与288产物不变 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-158` |下位双模式设计；整流程对照、人工matched规则和冻结机会响应诊断分开；native TWAP不是matched B0 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-159` |下位双模式设计；队列/动作/反馈与原生事务共同恢复，失败前缀及exact retry无重复成交收费 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-160` |下位双模式设计；全人口和可回读receipt、source inspect先于收益；估值/MDD/公司行为及归因限制明确 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-161` |下位双模式设计；保留左侧导航和原账户详情；增量中文模式比较，正常UI无机器编码或JSON |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-162` |下位双模式设计；旧行为等价、因果/费用/限制、短窗/多日/增量/恢复、端到端性能及复杂度验证 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-163` |下位双模式设计；离线/展示/在线分阶段，沿用既有scheduler；数据库/数据集/进程/生产授权分开 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
+| `F-164` |下位双模式设计；精确范围及四项符合性；设计、功能、历史、运行和经济证据分离 |artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md; artifact: docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md | verified_offline_stage | none |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
@@ -1605,7 +1605,7 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 
 | Progress ID | Acceptance IDs | 设计状态 | 源码 / 历史实验 | 运行态 / 生产 | 证据 |
 |---|---|---|---|---|---|
-| `SIM-P-087` | `F-149..F-164` | `DESIGN_ONLY`：保留原生LocalSIM，增加模拟人工及双模式比较 | `IMPLEMENTATION_NOT_STARTED / NOT_RUN`；原12账户/288产物保持 | `NOT_ACTIVATED`；无数据库、数据集、账户或服务操作 | [localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)；本轮设计复核及结构检查，不作为功能或收益证明 |
+| `SIM-P-087` | `F-149..F-164` | `OFFLINE_IMPLEMENTED`：保留原生LocalSIM，增加模拟人工及双模式比较 | 定向回归通过；真实短窗与当前HEAD CI另见实现验收；原12账户/288产物hash不变 | `PENDING_USER_RESTART`；无生产数据库、数据集、账户或服务进程操作 | [双模式实现验收](../analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md)；在线启用和经济支持均不能由源码或CI代替 |
 
 ### 15.1 运行阻断修复增量账本
 

@@ -173,6 +173,7 @@ class LocalSimBackend(BrokerBackend):
         initial_positions: Mapping[str, PositionLot] | None = None,
         scheduler_as_of_time: datetime | None = None,
         historical_suspension_provider: Any | None = None,
+        frozen_research_inputs: bool = False,
     ) -> None:
         if not portfolio_id:
             raise ValueError("portfolio_id is required")
@@ -201,7 +202,15 @@ class LocalSimBackend(BrokerBackend):
 
             if data_source != MinuteDataSource.DATASET_FILES or not isinstance(market_data_provider, MarketView):
                 raise ValueError("LOCALSIM_TIMING_EXPLICIT_FROZEN_MARKET_REQUIRED")
-        if data_source == MinuteDataSource.DATASET_FILES and not timing_selected:
+        if frozen_research_inputs:
+            from .native_research import FrozenResearchMarketProvider
+
+            if (data_source != MinuteDataSource.DATASET_FILES or timing_selected or manifest is None
+                    or not isinstance(market_data_provider, FrozenResearchMarketProvider)
+                    or market_data_provider.package_id != self._package_id):
+                raise ValueError("LOCALSIM_NATIVE_FROZEN_RESEARCH_SCOPE_INVALID")
+            market_data_provider.validate()
+        if data_source == MinuteDataSource.DATASET_FILES and not timing_selected and not frozen_research_inputs:
             from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
             from backend.services.simulation_runtime.localsim_file_inputs import (
                 current_file_dataset, historical_suspension_provider as file_suspension_provider,
@@ -254,7 +263,7 @@ class LocalSimBackend(BrokerBackend):
 
     # ----- Read accessors used by adapter / tests -----
     def open_timing_execution(self, *, plan: Any, delay_seconds: int, mode: str,
-                              run_id: str, binding_id: str) -> Any:
+                              run_id: str, binding_id: str, submitted_at: datetime | None = None) -> Any:
         """Opt-in plan execution on this backend's sole OMS/ledger, without I/O."""
         from .timing import ALGO_CODE, TimingExecution
 
@@ -265,14 +274,14 @@ class LocalSimBackend(BrokerBackend):
             raise ValueError("LOCALSIM_TIMING_SINGLE_ORDER_SCOPE_REQUIRED")
         execution = TimingExecution(self, plan=plan, market=self._market_data_provider,
                                     delay_seconds=delay_seconds, mode=mode,
-                                    run_id=run_id, binding_id=binding_id)
+                                    run_id=run_id, binding_id=binding_id, submitted_at=submitted_at)
         self._timing_execution = execution
         self._register_timing_execution(execution)
         return execution
 
     def _register_timing_execution(self, execution: Any) -> None:
         handle = OrderHandle(handle_id="lsh_" + execution.order.order_id,
-                             backend_id=self.backend_id, submitted_at=execution.facade.plan.valid_from,
+                             backend_id=self.backend_id, submitted_at=execution.order.created_at,
                              intent_id=execution.order.intent_id)
         execution.handle = handle
         self._records[handle.handle_id] = _OrderRecord(
@@ -286,7 +295,8 @@ class LocalSimBackend(BrokerBackend):
 
     def open_timing_portfolio_execution(self, *, plan: Any, market: Any,
                                         delay_seconds: int, run_id: str,
-                                        binding_id: str) -> Any:
+                                        binding_id: str, submitted_at: datetime | None = None,
+                                        facade: Any | None = None) -> Any:
         """Explicit offline multi-parent scope on this backend's one account.
 
         The single-plan study API remains exclusive. This API is for the new
@@ -304,12 +314,16 @@ class LocalSimBackend(BrokerBackend):
         if getattr(self, "_timing_portfolio_scope", scope) != scope:
             raise ValueError("LOCALSIM_TIMING_PORTFOLIO_SCOPE_CONFLICT")
         executions = getattr(self, "_timing_executions", {})
-        if len(self._records) != len(executions) or any(
-                e.facade.plan.plan_id == plan.plan_id for e in executions.values()):
+        conflicting = [e for e in executions.values() if e.facade.plan.plan_id == plan.plan_id]
+        human_successor = submitted_at is not None and all(
+            e.facade.plan.revision < plan.revision and e.order.status in {
+                OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED} for e in conflicting)
+        if len(self._records) != len(executions) or conflicting and not human_successor:
             raise ValueError("LOCALSIM_TIMING_PORTFOLIO_PARENT_CONFLICT")
         execution = TimingExecution(self, plan=plan, market=market,
                                     delay_seconds=delay_seconds, mode=CLOSED_LOOP_MODE,
-                                    run_id=run_id, binding_id=binding_id)
+                                    run_id=run_id, binding_id=binding_id,
+                                    submitted_at=submitted_at, facade=facade)
         self._timing_portfolio_scope = scope
         self._register_timing_execution(execution)
         return execution

@@ -7,6 +7,7 @@ import { localSimApi, request } from "@/lib/simulation/localsim/api";
 import { accountPath, amount, profitAmount, base, chinaTime, Filters, human, Overview, query, READ_ERROR, readView, readAllView, Result, Row, safeDate, Tab, TAB_NAMES, rememberAccount, selectionKey } from "@/lib/simulation/localsim/workbench";
 import { useLocalSimReadback } from "@/lib/simulation/localsim/use-readback";
 import styles from "./trading-workbench.module.css";
+import { DualModeStudyList } from "./dual-mode-comparison";
 
 type Selection = { accountId: string; tab: Tab; filters: Filters };
 type Bundle = { accountId: string; filters: string; summary: Result; income: Result; views: Partial<Record<Tab, Result>> };
@@ -165,6 +166,7 @@ export default function TradingWorkbench() {
     <header className={styles.heading}><div><h1>{selection.accountId?human(overviewName||summary?.name,"模拟账户详情"):"模拟盘总览"}</h1><p>以账户为中心查看持仓、交易与收益 · 金额单位：人民币元</p></div><div className={styles.actions}><span className={styles.muted}>页面最近读取：{chinaTime(readAt)}</span><button onClick={()=>{overviewReadAt.current=0;setRefresh(v=>v+1);}} disabled={busy}>{busy?"读取中…":"刷新"}</button><Link href="/simulation/localsim/configure">创建与配置</Link></div></header>
     {(error||entryError)&&<div role="alert" className={styles.notice}>{error||"原账户入口未通过核验，请从总览重新选择。"}<small>下方如有数据，为最后一次成功读取的内容。{error&&failedAt?`失败时间 ${chinaTime(failedAt)}`:""}</small></div>}
     {!selection.accountId?<>
+      <DualModeStudyList/>
       {!!blocked&&<div className={styles.notice}><b>{blocked} 个账户需要处理</b>{overview?.items.filter(a=>a.summary.stage.includes("受阻")).map(a=><button key={a.key} onClick={()=>change({accountId:a.key,tab:"events",filters:{}})}>{human(a.summary.name)} · 已完成 {safeDate(a.summary.completed_date)}</button>)}</div>}
       <p className={styles.muted}>共 {overview?.items.length??0} 个策略账户 · 资产和盈亏按各自估值时点分别展示，点击账户查看持仓与交易。</p>
       <section className={styles.accountgrid} aria-label="逐策略资产与盈亏">{accounts.map(a=><article className={styles.accountcard} key={a.key} aria-label={human(a.summary.name)}>
