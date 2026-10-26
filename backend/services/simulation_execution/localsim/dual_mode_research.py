@@ -23,7 +23,7 @@ from backend.services.strategy_package.execution_policy import local_sim_twap_on
 
 from .human_operation import HumanOperationPolicy, operation_snapshot, validate_operation_configuration
 from .human_portfolio import run_human_portfolio_day
-from .native_research import native_backend_for, run_native_portfolio_day
+from .native_research import native_backend_for, run_native_portfolio_day, run_cash_only_portfolio_day
 from .timing_campaign import build_timing_plan_events, inspect_price_templates, validate_campaign_request
 from .timing_continuation import inspect_successor_sources
 from .timing_portfolio import attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, validate_day_ledger
@@ -281,10 +281,27 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
                         if not markets[symbol].day_facts.is_suspended or symbol not in prior.get("marks_raw_cny", {}):
                             raise ValueError("LOCALSIM_DUAL_MODE_HELD_MARK_MISSING")
                         prices[symbol] = Decimal(prior["marks_raw_cny"][symbol])
-                backend, targets, native = compile_native_intents(projection=projection, manifest=manifest,
-                    account=account_input, markets=markets, prices=prices, cost=cost)
+                if markets:
+                    backend, targets, native = compile_native_intents(projection=projection, manifest=manifest,
+                        account=account_input, markets=markets, prices=prices, cost=cost)
+                else:
+                    clock = projection["runtime_config"]["point_in_time_context"]
+                    if (projection.get("valid_no_candidate") is not True or account_input["positions"]
+                            or projection["manifest_sha256_by_package"] != {account_input["package_id"]:request["manifest_sha256"]}
+                            or clock["effective_trade_date"] != day_string or clock["cutoff_date"] >= day_string):
+                        raise ValueError("LOCALSIM_DUAL_MODE_EMPTY_MARKET_WITHOUT_AUTHORITY")
+                    from backend.services.simulation_runtime.decision import RebalanceIntentService
+                    targets = []
+                    native = RebalanceIntentService().build_order_intents(package_id=account_input["package_id"],
+                        portfolio_id=account_id, strategy_id=account_id, trade_date=day, current_positions={},
+                        target_positions=[], current_prices={})
+                    backend = native_backend_for(account=account_input, markets={}, cost=cost, manifest=manifest,
+                        source_identity=identity, cash_only_trade_date=day)
                 unavailable = []
-                if initial["operation"]["operation_mode"] == "NATIVE":
+                if not markets:
+                    human_policy = HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]) if initial["operation"]["operation_mode"] == "HUMAN_SIM" else None
+                    result = run_cash_only_portfolio_day(backend=backend, trade_date=day, human_policy=human_policy)
+                elif initial["operation"]["operation_mode"] == "NATIVE":
                     backend = native_backend_for(account=account_input, markets=markets, cost=cost,
                                                    manifest=manifest, source_identity=identity)
                     result = run_native_portfolio_day(backend=backend, markets=markets, intents=native.order_intents,

@@ -21,14 +21,17 @@ from .timing_research import fee_model
 class FrozenResearchMarketProvider:
     """Explicit local-only carrier, never a fallback from production inputs."""
 
-    def __init__(self, *, package_id: str, markets: dict, source_identity: str):
+    def __init__(self, *, package_id: str, markets: dict, source_identity: str, cash_only_trade_date=None):
         self.package_id, self.markets, self.source_identity = package_id, markets, source_identity
+        self.cash_only_trade_date = cash_only_trade_date
         self.validate()
 
     def validate(self):
-        if (not self.package_id or not re.fullmatch(r"[0-9a-f]{64}", self.source_identity) or not self.markets
+        if (not self.package_id or not re.fullmatch(r"[0-9a-f]{64}", self.source_identity)
+                or not self.markets and self.cash_only_trade_date is None
+                or self.markets and self.cash_only_trade_date is not None
                 or any(m.symbol != symbol for symbol, m in self.markets.items())
-                or len({m.trade_date for m in self.markets.values()}) != 1):
+                or self.markets and len({m.trade_date for m in self.markets.values()}) != 1):
             raise ValueError("LOCALSIM_NATIVE_FROZEN_MARKET_INVALID")
 
     def load_symbol_input(self, *, symbol, trade_date, source, min_bars=1):
@@ -50,9 +53,11 @@ def native_bar(symbol, bar, facts):
                      limit_down=float(facts.limit_down) if facts.has_daily_limit else None)
 
 
-def native_backend_for(*, account, markets, cost, manifest, source_identity):
+def native_backend_for(*, account, markets, cost, manifest, source_identity, cash_only_trade_date=None):
+    if cash_only_trade_date is not None and account["positions"]:
+        raise ValueError("LOCALSIM_CASH_ONLY_SCOPE_HAS_POSITIONS")
     provider = FrozenResearchMarketProvider(package_id=account["package_id"], markets=markets,
-                                            source_identity=source_identity)
+                                            source_identity=source_identity, cash_only_trade_date=cash_only_trade_date)
     return LocalSimBackend(portfolio_id=account["portfolio_id"], package_id=account["package_id"],
                            manifest=manifest, data_source=MinuteDataSource.DATASET_FILES,
                            market_data_provider=provider, frozen_research_inputs=True,
@@ -60,6 +65,25 @@ def native_backend_for(*, account, markets, cost, manifest, source_identity):
                            initial_available_cash=Decimal(account["cash_cny"]),
                            initial_positions={s: PositionLot.model_validate(p) for s, p in account["positions"].items()},
                            fee_model=fee_model(cost), execution_policy=local_sim_twap_only_policy_snapshot())
+
+
+def run_cash_only_portfolio_day(*, backend, trade_date, human_policy=None):
+    """An authoritative empty-target day still owns a real native cash valuation."""
+    if backend._ledger.positions or backend._records or backend._ledger.fills or backend._ledger.cash_entries:
+        raise ValueError("LOCALSIM_CASH_ONLY_DAY_NOT_EMPTY")
+    start, terminal = (utc(datetime.combine(trade_date, t, CHINA)) for t in (time(9,30),time(14,57)))
+    initial = _account(backend)
+    nav = Decimal(str(backend._ledger.account_snapshot(prices={}, snapshot_time=start).nav))
+    result = portfolio_day_result(backend=backend, sessions=(), initial=initial, marks={},
+        navs=[{"as_of":start.isoformat(), "nav_cny":str(nav)}, {"as_of":terminal.isoformat(), "nav_cny":str(nav)}],
+        day=trade_date, terminal=terminal, initial_nav=nav)
+    if human_policy is not None:
+        from .human_operation import HumanOperationQueue
+        result["account"].update(human_operation_state=HumanOperationQueue(
+            account_id=backend.portfolio_id, policy=human_policy).snapshot(), human_operation_metrics={
+            "action_count":0, "maximum_queue":0, "pending_cancellation_at_deadline":0,
+            "cancellation_races":0, "expired_actions":0})
+    return result
 
 
 class _NativeExecution(TimingExecution):

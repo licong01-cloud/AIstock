@@ -76,6 +76,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_localsim_successor_core_dev_db": "localsim_successor_core_dev_db",
     "nox_localsim_control_plane_ui": "localsim_control_plane_ui",
     "nox_localsim_workbench_ui": "localsim_workbench_ui",
+    "nox_localsim_dual_mode_ui": "localsim_dual_mode_ui",
     "nox_miniqmt_execution_runtime_l2": "miniqmt_execution_runtime_l2",
     "nox_hmm_data_source_backend": "hmm_data_source_backend",
     "nox_localsim_unattended_l3": "localsim_unattended_l3",

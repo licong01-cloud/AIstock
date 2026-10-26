@@ -259,7 +259,7 @@ class TimingExecution:
         self.bar_hashes: dict[str, str] = {}
         self.waits: list[tuple[int, Decimal]] = []
         self.reasons: list[str] = []
-        self.feedback_history = [self._account_feedback(plan.valid_from)]
+        self.feedback_history = [self._account_feedback(order_clock)]
 
     def _account_feedback(self, available_at: datetime) -> ExecutionView:
         lot = self.backend._ledger.positions.get(self.order.symbol)

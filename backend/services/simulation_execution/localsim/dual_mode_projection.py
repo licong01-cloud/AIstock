@@ -22,6 +22,15 @@ STATUS_LABELS = {"FILLED": "全部成交", "PARTIAL": "部分成交", "NO_FILL":
                  "UNAVAILABLE": "不可用", "SUBMITTED": "已提交", "CANCELLED": "已取消",
                  "PARTIALLY_FILLED": "部分成交", "REJECTED": "已拒绝",
                  "QUEUED": "排队等待", "DISPATCHING": "正在处理", "COMPLETED": "操作已确认", "INVALIDATED": "机会已失效"}
+REASON_LABELS = {"OPPORTUNITY_EXPIRED_IN_QUEUE": "响应或排队期间机会过期",
+                 "STALE_OPPORTUNITY_AT_DISPATCH": "派发时机会已失效", "PLAN_REVISED": "交易计划修订",
+                 "PLAN_HARD_EXPIRY": "委托到达硬期限", "COMMON_TERMINAL_1457": "共同研究终点关闭委托",
+                 "HUMAN_CANCEL_CONFIRMED": "模拟操作员已确认撤单", "OPPORTUNITY_WAITING": "等待择时条件",
+                 "OPPORTUNITY_UNAVAILABLE": "择时必要输入不可用", "OPPORTUNITY_WITHDRAWN": "择时机会撤回",
+                 "SUSPENDED_BY_SUSPEND_D": "当日停牌", "SUSPENDED_OR_NON_TRADING_DAY": "停牌或非交易日",
+                 "INSUFFICIENT_CASH": "可用现金不足", "HARD_PRICE_CONSTRAINT": "未满足硬价格限制",
+                 "QUANTITY_OR_LIQUIDITY_LIMIT": "数量或分钟流动性限制", "WAITING_FOR_DELAY": "等待冻结响应时长",
+                 "NO_EXECUTABLE_INTENT": "当前没有可执行意图"}
 
 
 def portable_path(value: str) -> Path:
@@ -151,15 +160,29 @@ class DualModeReadService:
                 native = account["operation"]["operation_mode"] == "NATIVE"
                 statuses = account["status_counts"]
                 count = sum(statuses.values())
+                latest = self._ref(account["days"][-1])
+                if (latest["account_id"] != account["account_id"] or latest["study_identity"] != key
+                        or latest["trade_date"] != request["trade_dates"][-1]
+                        or Decimal(latest["terminal_nav_cny"]) != Decimal(account["terminal_nav_cny"])):
+                    raise DataUnavailableError("账户最新资产收据与研究结果不一致")
+                constraints = {}
+                for reason, number in account["reason_counts"].items():
+                    label = REASON_LABELS.get(reason, "其他已记录的执行约束")
+                    constraints[label] = constraints.get(label, 0) + number
                 accounts.append({"key": account["account_id"], "mode": "原生执行" if native else "模拟人工",
                     "rule": RULE_LABELS[account["rule"]], "delay_seconds": account["delay_seconds"],
                     "name": "原生分时执行" if native else RULE_LABELS[account["rule"]] + f" · {account['delay_seconds']//60}分钟响应",
                     "initial_cash": account["initial_cash_cny"], "nav": account["terminal_nav_cny"],
                     "pnl": str(Decimal(account["terminal_nav_cny"]) - Decimal(account["initial_cash_cny"])),
+                    "cash": latest["cash_cny"],
+                    "holdings_value": str(Decimal(latest["terminal_nav_cny"]) - Decimal(latest["cash_cny"])),
+                    "last_day_pnl": str(Decimal(latest["terminal_nav_cny"]) - Decimal(latest["initial_nav_cny"])),
+                    "last_trade_date": latest["trade_date"],
                     "return_pct": str((Decimal(account["terminal_nav_cny"]) / Decimal(account["initial_cash_cny"]) - 1) * 100),
                     "max_drawdown_pct": str(Decimal(account["max_drawdown"]) * 100), "fees": account["fees_cny"],
                     "completion_pct": str(Decimal(statuses.get("FILLED", 0)) * 100 / count) if count else None,
                     "statuses": [{"name": STATUS_LABELS.get(s, "状态待核验"), "count": n} for s,n in statuses.items()],
+                    "constraints": [{"name": name, "count": n} for name,n in constraints.items()],
                     "curve": account["daily_nav"], "operations": account.get("human_operation_metrics", {})})
         return {"schema_version": "localsim_dual_mode_detail_v1", "key": key, "name": self._name(request),
                 "complete": results is not None, "start_date": request["trade_dates"][0], "end_date": request["trade_dates"][-1],
@@ -220,6 +243,9 @@ class DualModeReadService:
                 raise DataUnavailableError("账户日收据身份不一致")
             facts = record["facts"]
             names = {r["symbol"]: r.get("stock_name") or r.get("name") for r in day["native_quantity_evidence"]["targets"]}
+            projection = self._ref(day["native_quantity_evidence"]["projection"], inside=False)
+            names.update({r["symbol"]:r.get("stock_name") or r.get("name")
+                          for r in projection["aggregate_results"]})
             def security_name(symbol):
                 name = names.get(symbol)
                 return name if isinstance(name, str) and re.search(r"[\u3400-\u9fff]", name) else "证券简称未提供"

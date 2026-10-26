@@ -2,7 +2,7 @@
 
 日期：2026-10-26。Feature tier：F2；风险分类：T3。状态：`IMPLEMENTATION_IN_PROGRESS`；用户已授权完成开发、审核、CI及合入，并停止在用户后端重启节点。
 
-本轮交付是设计更新，不是功能实现、历史实验、生产账户创建或运行态激活。用户明确要求保留现有 LocalSIM，在其上新增模拟人工能力，并比较两种场景；没有要求把旧账户转换为人工模式。源码基线：`origin/main@16a7ce7fb393ead897191cf18df3011d199088a6`。
+本设计最初通过PR #6736交付文档，随后用户授权本任务完成离线双模式、恢复与产品读取面的完整开发。当前实现工作树从`9d16f2df70f3caab4b38658c88e728c41aa88b4d`建立，并同步后续main。用户要求保留现有LocalSIM，没有要求把旧账户转换为人工模式。在线模拟的正式profile/release与持久化属于§10第五阶段；本任务不以离线功能代替在线激活。实现及实测状态见[验收报告](../analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md)。
 
 上位权威：[模拟盘统一蓝图](simulation_platform_unified_authoritative_blueprint_20260715.md)。本设计使用该蓝图新增的稳定验收条目 `F-149` 至 `F-164`，不替代旧蓝图或旧研究。直接消费合同：[现有 LocalSIM 择时设计](localsim_position_timing_integration_f2_detailed_design_20261024.md)、[共享择时蓝图](position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)。开发唯一规范仍为 `docs/standards/aistock_development_standard_v1.5_20260523.md`。
 
@@ -22,7 +22,7 @@ LocalSIM 的目标是自动验证策略包及配置，而不是接入真实资�
 4. 首个实现阶段为文件驱动的离线自动验证；后续在线模拟消费同一操作状态机和既有 scheduler，不增加第二个常驻调度器。
 5. 在现有 LocalSIM 页面展示模式、账户及比较结果；保留原账户详情和逐笔查询能力，左侧导航栏保持不变。
 
-### 2.1 本轮 allowed_write_scope
+### 2.1 前一轮设计任务 allowed_write_scope（历史记录）
 
 仅修改以下四个设计文件，不修改运行代码：
 
@@ -66,6 +66,7 @@ LocalSIM 的目标是自动验证策略包及配置，而不是接入真实资�
 - `noxfile.py`（仅登记新UI定向验证入口）
 - `tests/aistock_validation/catalog/module_registry.yaml`（仅将新UI计划登记到LocalSIM已有模块）
 - `tests/aistock_validation/catalog/test_plans.yaml`（仅登记新UI定向计划，确保CI实际执行）
+- `backend/services/validation/plan_catalog.py`（仅登记上述UI计划到现有命令映射，不改验证器）
 
 实现与离线验证不操作生产账户、数据库、行情网络或服务进程；后端新进程加载与在线运行证据在用户重启后单独验证。临时计划、日志及回执均位于`X:/AIstock_temp/localsim-human-operation-implementation-20261026`。
 
@@ -302,13 +303,13 @@ LocalSIM 总览                         [全部模式 v] [策略包 v]
 | UI与只读查询 | 现有账户、双模式比较、错误/不可用状态及分页 | 原账户功能和左侧导航不变；中文展示，无机器编码/JSON；查询不触发执行 |
 | 增量与在线接缝 | 完整离线验收后追加新交易日；将来用户重启后的新进程 | 只推进新日，不重写旧日；在线延续同状态机与既有scheduler，不借此自动激活 |
 
-后续最小直接测试位置拟为`backend/tests/simulation_execution/test_localsim_human_operation.py`、`test_localsim_dual_mode_comparison.py`，补充既有`test_localsim_position_timing.py`、`test_localsim_timing_campaign.py`、`test_twap_policy_authority.py`；UI测试放现有frontend测试体系。它们是未来实现任务，不是已经存在或通过的测试。
+直接测试现已落实为`backend/tests/simulation_execution/test_localsim_human_operation.py`、`test_localsim_dual_mode_comparison.py`、`test_localsim_native_nonregression.py`及`backend/tests/simulation_runtime/test_localsim_dual_mode_query.py`；既有择时、连续研究和TWAP合同继续回归。UI使用新比较页与旧工作台Playwright合同，并已登记到现有CI计划。实际运行次数及结果见实现验收报告，不将历史设计检查记作功能成功。
 
 性能测量端到端耗时、每交易日耗时、峰值RSS、磁盘新增量、队列峰值与事件数。使用同数据区间和相同账户规模与原生对照，不预设每天40秒。队列只维护当前账户活跃动作，建议使用稳定排序/小根堆，单次入出队O(log Q)，不构造证券×分钟×账户的重复完整数据副本。性能优化不能合并不同账户经济状态或共享业务结果。
 
 ## 10. Rollout / Rollback / Risks / 发布、回滚与风险
 
-1. **设计阶段（本轮）**：冻结本合同及父蓝图条目，审查兼容/因果/交易/费用/展示，只有文档改动。
+1. **设计阶段（已通过PR #6736完成）**：冻结本合同及父蓝图条目，审查兼容/因果/交易/费用/展示，只有文档改动。
 2. **离线功能阶段**：独立worktree实现操作层及延迟提交接缝，完成直接测试、旧行为等价、短窗和失败恢复。
 3. **历史经济阶段**：独立新request运行13账户，再开展其他包两账户基线；先整批source inspect，保留所有结果。不得覆盖旧研究或择优改参数。
 4. **产品展示阶段**：既有读取面和UI展示新产物；离线功能通过不能代替UI验收。
@@ -318,7 +319,7 @@ LocalSIM 总览                         [全部模式 v] [策略包 v]
 
 主要风险：固定响应/操作能力不代表实测人类；分钟开盘代理不代表真实成交；撤单确认晚到可能形成取消竞态；硬有效期安全约束不等于券商自动限时撤单；容量不足降低完成率也可能改变风险暴露；模型训练/选参泄漏或公司行为遗漏可使收益解释不可靠。以上均需在结果中明确，不通过删计划、挑delay或归零未知解决。
 
-## 11. Implementation Plan / 后续实现分工与精确接缝
+## 11. Implementation Plan / 实现分工与精确接缝
 
 | owner | 接缝与计划位置 | 边界 |
 |---|---|---|
@@ -332,32 +333,32 @@ LocalSIM 总览                         [全部模式 v] [策略包 v]
 
 ## 12. Production Gates / 生产边界
 
-本轮`production_ddl_gate=noop`、`database_read=false`、`database_write=false`、`dataset_mutation=false`、`live_market_network=false`、`production_account_mutation=false`、`replay_started=false`、`process_control=false`、`backend_restart_required=false`。
+实现任务`production_ddl_gate=noop`、`database_read=false`、`database_write=false`、`dataset_mutation=false`、`live_market_network=false`、`production_account_mutation=false`、`production_replay_started=false`、`user_service_process_control=false`。离线研究和测试在独立文件账户中执行；UI验证仅由Playwright启动并结束自己持有的前端测试进程。后端读取面新代码需用户重启后加载，因此`backend_restart_owner=user`、`runtime_activation=pending_user_restart`。配置`LOCALSIM_DUAL_MODE_RESEARCH_ROOT`才登记离线产物；未配置时原有工作台仍正常读取原生账户，空研究列表不代表零收益。
 
 未来若现有release/profile无法容纳正式操作政策，必须先明确最小兼容schema方案；任何DDL/DML先在既有DEV验证，具体生产目标与迁移另按用户授权执行。设计文档不授权创建生产账户或启动生产回放。在线模式运行态激活、用户重启与正常交易日证据独立报告，不增加逐笔人工审批。
 
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
-以下状态只表示本轮设计条款齐备。用户明确批准本轮更新设计；全部新增源码、测试、历史研究及运行验收仍未执行。矩阵中的artifact指本设计可回读章节，不是功能测试成功凭证。
+下列矩阵记录实现任务；完整年度研究、经济支持与在线激活分别报告，不凭功能合同测试填成已完成经济验收。旧设计阶段记录保留在§14。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-149 | §4.1模式兼容矩阵 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；§9原生不漂移oracle | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；未修改默认或旧账户 |
-| F-150 | §4、§5.2–5.3唯一链路与延迟提交 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；已核查TimingExecution构造行为 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新运行代码 |
-| F-151 | §4.1–4.2、§5.1版本与政策 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；模式/政策负例计划 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；生产schema未启用 |
-| F-152 | §5.1–5.3共享队列和时间 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；§9单人容量oracle | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；限速为工程假设 |
-| F-153 | §5.3可见性与strict-after | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；§9未来信息反例 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；未重跑旧研究 |
-| F-154 | §5.4状态、取消竞态与硬期限 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；§9生命周期/恢复触发 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；未模拟真实券商期限能力 |
-| F-155 | §5.5原生规则及费用 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；§9费用/资金oracle | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；费用和账本未修改 |
-| F-156 | §6.3来源、PIT与合法区间 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；整批inspect负例计划 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；不以旧候选代表当前active |
-| F-157 | §6.2基础组及13账户人口 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；共同初态及独立状态oracle | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；未创建账户 |
-| F-158 | §6.1三类比较及§7.1归因 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；native与matched区别明确 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；不声称经济有效 |
-| F-159 | §6.4事务、失败前缀与重试 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；§9故障注入矩阵 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；没有恢复生产任务 |
-| F-160 | §7.1全人口、收据和收益 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；source-first及估值限制 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无新增收益结果 |
-| F-161 | §7.2增量UI及旧详情 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；布局示意和只读字段 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；前端文件未修改 |
-| F-162 | §9验证和性能、§11接缝 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；直接业务oracle | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；未来测试不标PASS |
-| F-163 | §10分阶段发布及§12生产边界 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；生产动作均未授权执行 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；无数据库和进程操作 |
-| F-164 | §2.1写入范围及§14设计复核 | artifact: docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md；四项符合性逐项列出 | design_ready / IMPLEMENTATION_NOT_STARTED | 用户明确批准本轮仅更新设计；设计通过不等于实现通过 |
+| F-149 | backend/services/simulation_execution/localsim/runtime.py；human_operation.py | test: backend/tests/simulation_execution/test_localsim_native_nonregression.py；旧择时/TWAP回归 | implemented | 旧配置、release及生产账户不迁移 |
+| F-150 | human_portfolio.py:run_human_portfolio_day；timing.py:TimingExecution；native_research.py | test: test_two_stocks_share_one_operator_and_no_double_delay；test_native_twap_uses_existing_engine_without_calling_timing_core | implemented | 只在派发后建单，复用唯一撮合/费用/账本 |
+| F-151 | human_operation.py:validate_operation_configuration；dual_mode_research.py:inspect_study | test: test_legacy_shape_and_unknown_modes_fail_closed；test_source_change_and_rehashed_population_change_fail_before_outputs | implemented | 生产profile/release入口按§10第五阶段单列，不宣称已启用 |
+| F-152 | human_operation.py:HumanOperationQueue | test: test_account_capacity_rejections_cancellation_ready_and_exact_restore；持续机会与排队过期测试 | implemented | 确定性响应政策是研究假设 |
+| F-153 | human_portfolio.py:evaluate_proposal；timing.py:step | test: test_future_suffix_never_changes_earlier_human_dispatch；strict-after四档延迟；反馈起点为真实提交时刻 | implemented | 执行bar完整成交量只作为披露的事后容量代理 |
+| F-154 | human_portfolio.py修订/撤单/到期编排；HumanOperationQueue.invalidate_plan | test: test_partial_fill_multiple_revisions_cancel_once_then_only_confirmed_remaining；队列恢复负例 | implemented | 硬期限自动闭合与人工撤单欠账分开记录 |
+| F-155 | TimingExecution.step；既有OMS/MinuteExecutionEngine/InMemoryLedger | test: 资金/可卖量、T+1、部分成交、父单最低费及原生3次子成交精确现金oracle | implemented | 不修改交易、费用或账本权威 |
+| F-156 | dual_mode_research.py:_source_inspect；既有inspect_price_templates/inspect_successor_sources | test: 源码/人口变化在收益前拒绝；artifact: 冻结真实输入与完整SHA见实现验收报告 | implemented | 使用显式冻结后继，不追随可变active，不改旧run |
+| F-157 | dual_mode_research.py:profiles_for及独立账户生成 | test: test_thirteen_accounts_two_days_resume_native_journals_and_exact_retry；BASIC_2文件合同 | implemented | 1000万元纯现金；完整历史状态在验收报告单列 |
+| F-158 | dual_mode_research.py:summarize_accounts；execution_contract | test: 两比较family、异成交代理及quantity_matched=false；旧冻结288产物hash复核 | implemented | 原288是旧冻结机会诊断，不能当作新增人工队列或连续账户的纯延迟证据 |
+| F-159 | dual_mode_research.py单writer/日恢复；原生TimingFileRepository与economic coordinator | test: 2日恢复、exact retry零重算、摘要修复及test_single_writer_and_failure_preserve_only_committed_prefix | implemented | 完整日为离线恢复边界；在线minute CAS不由整日重算替代 |
+| F-160 | dual_mode_research.py全人口信封；dual_mode_projection.py只读核验 | test: 原生journal独立回放、收据篡改拒绝、分页隔离、所有状态保留；合法无目标日测试 | implemented | BUY/SELL净值与MDD归因保留null，不伪造因果归因 |
+| F-161 | backend/routers/simulation_runtime.py比较GET；dual-mode-comparison.tsx | test: frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts；旧workbench 11项回归 | implemented | 左侧导航不改，账户资产及盈亏独立；简称仅取冻结输入，不补造 |
+| F-162 | 定向回归与真实文件研究；实现验收报告性能/复杂度节 | artifact: X:/AIstock_temp/localsim-human-operation-implementation-20261026；239项回归、46项时钟补验、12项浏览器验证 | in_progress | 真实短窗及连续运行测量进行中，不用功能测试替代历史经济证据 |
+| F-163 | §10发布阶段；只读外部研究根配置 | test: test_unconfigured_research_does_not_touch_native_accounts；真实离线运行没有生产账户写入 | implemented | 后端重启和在线启用由用户执行，当前停在源码交付节点 |
+| F-164 | §2.2精确文件范围；实现验收报告与§14 | artifact: L0/ownership/CI选择回执、四项设计符合性复核 | in_progress | 最终当前HEAD CI和合入待完成 |
 
 ## 14. DESIGN-COMPLIANCE-001 / 设计复核记录
 

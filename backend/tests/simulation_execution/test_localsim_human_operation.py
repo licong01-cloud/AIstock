@@ -125,6 +125,7 @@ def test_two_stocks_share_one_operator_and_no_double_delay(delay, count):
     assert [f.trade_time for f in fills] == [at("09:32:00") + timedelta(seconds=delay + 60*n) for n in range(count)]
     assert len(backend._records) == count
     assert all(s.order.created_at == s.submitted_at for s in result["sessions"])
+    assert all(s.feedback_history[0].available_at == s.submitted_at for s in result["sessions"])
     assert backend._ledger.cash_decimal == Decimal("10000000") - Decimal("10005") * count
     assert all(p.available_quantity == 0 for p in backend._ledger.positions.values())
     assert result["account"]["human_operation_metrics"]["action_count"] == count
