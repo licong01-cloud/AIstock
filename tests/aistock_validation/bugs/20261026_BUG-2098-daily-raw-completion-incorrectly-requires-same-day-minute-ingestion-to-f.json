@@ -1,6 +1,7 @@
 {
   "actual": "2026-10-26 daily job a38dc89c-8251-4b7e-bc0a-7c6c7eba4b17 wrote 5577 valid production rows, but _raw_date_observation derives expected_symbols only from same-day minute rows. Daily completes before minute schedule, producing expected_symbols=0 and false raw_traded_date_incomplete failure. Decouple daily completeness from minute availability while preserving date-valid non-B provider population, real missing daily facts, suspension and numeric safety checks. Monthly must consume the corrected readiness contract.",
   "allowed_write_scope": [
+    "backend/tests/ingestion/test_daily_sync_recovery.py",
     "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20261026_BUG-2098-daily-raw-completion-incorrectly-requires-same-day-minute-ingestion-to-f.json"
