@@ -1,6 +1,6 @@
 # LocalSIM 原生执行与模拟人工操作双模式 F2 详细设计
 
-日期：2026-10-26。Feature tier：F2；风险分类：T3。状态：`DESIGN_ONLY / IMPLEMENTATION_NOT_STARTED`。
+日期：2026-10-26。Feature tier：F2；风险分类：T3。状态：`IMPLEMENTATION_IN_PROGRESS`；用户已授权完成开发、审核、CI及合入，并停止在用户后端重启节点。
 
 本轮交付是设计更新，不是功能实现、历史实验、生产账户创建或运行态激活。用户明确要求保留现有 LocalSIM，在其上新增模拟人工能力，并比较两种场景；没有要求把旧账户转换为人工模式。源码基线：`origin/main@16a7ce7fb393ead897191cf18df3011d199088a6`。
 
@@ -32,6 +32,42 @@ LocalSIM 的目标是自动验证策略包及配置，而不是接入真实资�
 - `docs/architecture/localsim_position_timing_integration_f2_detailed_design_20261024.md`
 
 后续实现必须在独立任务中登记精确源码、测试及 UI 写入范围；第11节的实现位置是计划，不是本轮源码写入授权。
+
+### 2.2 2026-10-26 实现任务 allowed_write_scope
+
+设计阶段记录保留；用户随后明确授权完整开发。实现工作树为`F:/Dev/AIstock_worktrees/localsim-human-operation-implementation-20261026`，当前允许写入以下精确文件：
+
+- `docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md`
+- `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`
+- `docs/analysis/localsim_human_operation_dual_mode_implementation_acceptance_20261026.md`
+- `backend/services/simulation_execution/localsim/human_operation.py`
+- `backend/services/simulation_execution/localsim/human_portfolio.py`
+- `backend/services/simulation_execution/localsim/native_research.py`
+- `backend/services/simulation_execution/localsim/dual_mode_research.py`
+- `backend/services/simulation_execution/localsim/dual_mode_projection.py`
+- `backend/services/simulation_execution/localsim/timing.py`
+- `backend/services/simulation_execution/localsim/timing_portfolio.py`
+- `backend/services/simulation_execution/localsim/timing_store.py`
+- `backend/services/simulation_execution/localsim/runtime.py`
+- `backend/services/simulation_runtime/localsim_runtime_profile.py`
+- `backend/services/simulation_runtime/localsim_workbench.py`
+- `backend/services/simulation_runtime/localsim_workbench_models.py`
+- `backend/routers/simulation_runtime.py`
+- `backend/tests/simulation_execution/test_localsim_human_operation.py`
+- `backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py`
+- `backend/tests/simulation_execution/test_localsim_native_nonregression.py`
+- `backend/tests/simulation_runtime/test_localsim_dual_mode_query.py`
+- `frontend/src/lib/simulation/localsim/workbench.ts`
+- `frontend/src/app/simulation/localsim/components/trading-workbench.tsx`
+- `frontend/src/app/simulation/localsim/components/trading-workbench.module.css`
+- `frontend/src/app/simulation/localsim/components/dual-mode-comparison.tsx`
+- `frontend/src/app/simulation/localsim/comparisons/[studyId]/page.tsx`
+- `frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts`
+- `noxfile.py`（仅登记新UI定向验证入口）
+- `tests/aistock_validation/catalog/module_registry.yaml`（仅将新UI计划登记到LocalSIM已有模块）
+- `tests/aistock_validation/catalog/test_plans.yaml`（仅登记新UI定向计划，确保CI实际执行）
+
+实现与离线验证不操作生产账户、数据库、行情网络或服务进程；后端新进程加载与在线运行证据在用户重启后单独验证。临时计划、日志及回执均位于`X:/AIstock_temp/localsim-human-operation-implementation-20261026`。
 
 ## 3. Non-goals / 非目标与边界
 

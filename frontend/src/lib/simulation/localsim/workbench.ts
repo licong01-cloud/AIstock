@@ -41,6 +41,22 @@ export interface Overview { items: { key: string; summary: Summary; curve: Row[]
   nav: string|null; pnl: string|null; daily_pnl:string|null; return_pct:string|null; economic_as_of:string|null; included_count:number; excluded_count:number; explanation:string; curve:Row[] }
 export interface Filters { start?: string; end?: string; as_of?: string; security?: string; side?: string; status?: string; group_by?: "date" | "security"; order_key?:string; search?:string; sort?:string; descending?:boolean }
 export const base = "/simulation-runtime/localsim";
+export interface DualModeStudy {key:string;name:string;start_date:string;end_date:string;account_count:number;status:string;complete:boolean;purpose:string}
+export interface DualModeAccount {key:string;mode:string;rule:string;name:string;delay_seconds:number|null;initial_cash:string;nav:string;pnl:string;return_pct:string;max_drawdown_pct:string;fees:string;completion_pct:string|null;curve:{date:string;nav_cny:string}[];operations:Record<string,number>}
+export interface DualModeDetail {schema_version:"localsim_dual_mode_detail_v1";key:string;name:string;complete:boolean;start_date:string;end_date:string;accounts:DualModeAccount[];explanation:string;comparisons:{family:string;account_id:string;baseline_account_id:string;net_increment_cny:string;mdd_reduction:string}[]}
+export interface DualModeView {schema_version:"localsim_dual_mode_account_view_v1";view:string;items:Record<string,string|number|null>[];total_count:number;next_cursor:string|null;snapshot_set:string}
+export async function readDualModeStudies(signal?:AbortSignal):Promise<DualModeStudy[]>{
+ const r=await request<{schema_version:string;items:DualModeStudy[]}>(`${base}/comparisons`,{signal});
+ if(r.schema_version!=="localsim_dual_mode_overview_v1"||!Array.isArray(r.items))throw Error(READ_ERROR);return r.items;
+}
+export async function readDualModeDetail(key:string,signal?:AbortSignal):Promise<DualModeDetail>{
+ const r=await request<DualModeDetail>(`${base}/comparisons/${encodeURIComponent(key)}`,{signal});
+ if(r.schema_version!=="localsim_dual_mode_detail_v1"||r.key!==key||!Array.isArray(r.accounts))throw Error(READ_ERROR);return r;
+}
+export async function readDualModeView(key:string,account:string,filters:{view:string;start?:string;end?:string;cursor?:string},signal?:AbortSignal):Promise<DualModeView>{
+ const r=await request<DualModeView>(`${base}/comparisons/${encodeURIComponent(key)}/accounts/${encodeURIComponent(account)}?${query(filters)}`,{signal});
+ if(r.schema_version!=="localsim_dual_mode_account_view_v1"||!Array.isArray(r.items))throw Error(READ_ERROR);return r;
+}
 export const accountPath = (id: string) => `${base}/accounts/${encodeURIComponent(id)}`;
 export function query(filters: object): string {
   const result = new URLSearchParams();

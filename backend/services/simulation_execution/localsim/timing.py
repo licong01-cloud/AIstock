@@ -215,24 +215,36 @@ class TimingExecution:
     """One LocalSIM order using its backend's existing OMS, ledger and engine."""
 
     def __init__(self, backend, *, plan: Plan, market: MarketView, delay_seconds: int,
-                 mode: str, run_id: str, binding_id: str):
+                 mode: str, run_id: str, binding_id: str,
+                 submitted_at: datetime | None = None, facade: TimingFacade | None = None,
+                 order_intent: OrderIntent | None = None):
         if (market.symbol, market.trade_date) != (plan.symbol, plan.target_trade_date):
             raise ValueError("LOCALSIM_TIMING_MARKET_IDENTITY_MISMATCH")
         if (market.day_facts.symbol, market.day_facts.trade_date, market.calendar.trade_date) != (
                 plan.symbol, plan.target_trade_date, plan.target_trade_date):
             raise ValueError("LOCALSIM_TIMING_DAY_FACT_IDENTITY_MISMATCH")
         self.backend, self.market = backend, market
-        self.facade = TimingFacade(plan, delay_seconds, mode=mode)
+        if facade is not None and (facade.plan != plan or facade.delay_seconds != delay_seconds or facade.mode != mode):
+            raise ValueError("LOCALSIM_TIMING_FACADE_IDENTITY_MISMATCH")
+        self.facade = facade if facade is not None else TimingFacade(plan, delay_seconds, mode=mode)
+        self.submitted_at = utc(submitted_at) if submitted_at is not None else None
+        if self.submitted_at is not None and not plan.valid_from <= self.submitted_at < plan.valid_until:
+            raise ValueError("LOCALSIM_TIMING_SUBMISSION_WINDOW_INVALID")
         self.state = self.facade.init_order(plan.symbol, plan.side, plan.target_quantity)
         self.run_id, self.binding_id = run_id, binding_id
-        intent = OrderIntent(intent_id="lst_" + digest([run_id, plan.plan_id, plan.revision]),
+        intent = order_intent if order_intent is not None else OrderIntent(intent_id="lst_" + digest([run_id, plan.plan_id, plan.revision]),
                              package_id=backend.package_id, portfolio_id=backend.portfolio_id,
                              symbol=plan.symbol, side=plan.side, quantity=plan.target_quantity,
                              target_trade_date=plan.target_trade_date,
                              metadata={"execution_policy": POLICY_ID, "plan_sha256": digest(plan)})
+        if (intent.package_id, intent.portfolio_id, intent.symbol, intent.side.value, intent.quantity,
+                intent.target_trade_date) != (backend.package_id, backend.portfolio_id, plan.symbol, plan.side,
+                                              plan.target_quantity, plan.target_trade_date):
+            raise ValueError("LOCALSIM_RESEARCH_ORDER_INTENT_CONFLICT")
         self.order = backend._oms.create_order(intent)
+        order_clock = self.submitted_at if self.submitted_at is not None else plan.valid_from
         self.order = self.order.model_copy(update={"order_id": "lsto_" + digest([run_id, plan.plan_id, plan.revision]),
-                                                  "created_at": plan.valid_from, "updated_at": plan.valid_from})
+                                                  "created_at": order_clock, "updated_at": order_clock})
         self.engine = MinuteExecutionEngine(adapter=_TimingAlgoAdapter(self.facade, self.state), oms=backend._oms)
         self.execution_state = LocalSimExecutionStateV1(
             run_id=run_id, binding_id=binding_id, trade_date=plan.target_trade_date, plan_id=plan.plan_id,
@@ -240,7 +252,7 @@ class TimingExecution:
             order_id=self.order.order_id, symbol=plan.symbol, side=plan.side,
             total_quantity=plan.target_quantity, filled_quantity=0, remaining_quantity=plan.target_quantity,
             algo_code=ALGO_CODE, order_status="SUBMITTED", runtime_status="ACTIVE",
-            schedule_version=POLICY_ID, causality_cursor=plan.valid_from, idempotency_key=digest(intent),
+            schedule_version=POLICY_ID, causality_cursor=order_clock, idempotency_key=digest(intent),
         )
         self.fills: list[Fill] = []
         self.events: list[Any] = []
@@ -267,7 +279,20 @@ class TimingExecution:
             raise ValueError("LOCALSIM_TIMING_FEEDBACK_NOT_YET_AVAILABLE")
         return available[-1]
 
+    def execution_bar(self, bar: ObservedBar, facts) -> MinuteBar:
+        """Timing's frozen next-open proxy; native research overrides only this input adapter."""
+        return MinuteBar(symbol=self.order.symbol, bar_time=bar.start.astimezone(CHINA),
+                         open=float(bar.open), high=float(bar.open), low=float(bar.open), close=float(bar.open),
+                         volume=int(bar.volume_shares), is_suspended=False,
+                         limit_up=float(facts.limit_up) if facts.has_daily_limit else None,
+                         limit_down=float(facts.limit_down) if facts.has_daily_limit else None)
+
+    def confirmed_algo_state(self, engine_state):
+        return self.engine._dump_algo_state(self.state)
+
     def step(self, bar: ObservedBar) -> list[Fill]:
+        if self.submitted_at is not None and utc(bar.start) <= self.submitted_at:
+            return []  # Human dispatch cannot fill at that clock or an earlier bar.
         key, identity = bar.start.isoformat(), bar.content_sha256()
         if key in self.bar_hashes:
             if self.bar_hashes[key] != identity:
@@ -292,18 +317,16 @@ class TimingExecution:
             self.order.remaining_quantity, lot.available_quantity if lot else 0)
         # The full interval's volume is a disclosed ex-post liquidity proxy,
         # not proof of opening-auction queue access or a signal feature.
-        proxy = MinuteBar(symbol=self.order.symbol, bar_time=bar.start.astimezone(CHINA),
-                          open=float(bar.open), high=float(bar.open), low=float(bar.open), close=float(bar.open),
-                          volume=int(bar.volume_shares), is_suspended=False,
-                          limit_up=float(facts.limit_up) if facts.has_daily_limit else None,
-                          limit_down=float(facts.limit_down) if facts.has_daily_limit else None)
+        proxy = self.execution_bar(bar, facts)
         before = self.backend._snapshot_ledger_state()
         state_before = deepcopy(self.state)
         facade_before = deepcopy(self.facade.__dict__)
         advice = utc(self.facade.pending["advice_available_at"]) if self.facade.pending else None
         try:
             order, engine_state, fills, events = self.engine.execute_order_incremental(
-                order=self.order, execution_state=self.execution_state, new_bars=[proxy], algo_code=ALGO_CODE,
+                order=self.order, execution_state=self.execution_state, new_bars=[proxy],
+                algo_code=self.execution_state.algo_code,
+                algo_config=getattr(self, "native_algo_config", None),
                 market_context={"execution_start": bar.start, "quantity_capacity": capacity,
                                 "position_quantity": lot.quantity if lot else 0},
             )
@@ -325,7 +348,7 @@ class TimingExecution:
         if advice is not None:
             self.waits.extend((f.quantity, Decimal(str((bar.start - advice).total_seconds()))) for f in fills)
         sequence = self.execution_state.sequence + 1
-        engine_state = engine_state.model_copy(update={"algo_state": self.engine._dump_algo_state(self.state),
+        engine_state = engine_state.model_copy(update={"algo_state": self.confirmed_algo_state(engine_state),
                                                        "order_status": order.status.value,
                                                        "runtime_status": (LocalSimExecutionRuntimeStatus.FILLED
                                                                           if order.status == OrderStatus.FILLED
@@ -395,6 +418,8 @@ class TimingExecution:
                 "feedback_history": payload(self.feedback_history),
                 "bar_hashes": self.bar_hashes, "waits": payload(self.waits), "reasons": self.reasons,
                 "liquidity_proxy": "EX_POST_INTERVAL_VOLUME_NOT_OPEN_QUEUE_PROOF"}
+        if self.submitted_at is not None:
+            receipt["human_submitted_at"] = payload(self.submitted_at)
         if include_account:
             receipt.update(cash_cny=str(ledger.cash_decimal),
                            positions={s: p.model_dump(mode="json") for s, p in ledger.positions.items()},
@@ -418,7 +443,8 @@ class TimingExecution:
         plan = Plan.model_validate(receipt["plan"])
         session = backend.open_timing_execution(plan=plan, delay_seconds=receipt["delay_seconds"],
                                                mode=receipt["mode"], run_id=receipt["run_id"],
-                                               binding_id=receipt["binding_id"])
+                                               binding_id=receipt["binding_id"],
+                                               submitted_at=receipt.get("human_submitted_at"))
         backend._records.pop(session.handle.handle_id)
         backend._intent_index.pop(session.handle.intent_id)
         session.order = Order.model_validate(receipt["order"])

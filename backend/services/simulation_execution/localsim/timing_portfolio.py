@@ -199,13 +199,19 @@ def run_portfolio_day(*, backend, markets: dict[str, MarketView], events: list[P
             navs.append({"as_of": clock.isoformat(), "nav_cny": str(nav)})
     for session in sessions.values():
         session.cancel("COMMON_TERMINAL_1457")
+    return portfolio_day_result(backend=backend, sessions=tuple(sessions.values()), initial=initial,
+                                marks=marks, navs=navs, day=day, terminal=terminal, initial_nav=initial_nav)
+
+
+def portfolio_day_result(*, backend, sessions, initial, marks, navs, day, terminal, initial_nav):
+    """One native valuation/result authority, shared by operation orchestrators."""
     values = [Decimal(row["nav_cny"]) for row in navs]
     peak, mdd = values[0], Decimal(0)
     for value in values:
         peak = max(peak, value)
         mdd = max(mdd, (peak - value) / peak)
     parents = []
-    for session in sessions.values():
+    for session in sessions:
         qty = session.order.filled_quantity
         parents.append({"plan_id": session.facade.plan.plan_id, "symbol": session.order.symbol,
                         "side": session.order.side.value, "target_quantity": session.order.quantity,
@@ -224,7 +230,7 @@ def run_portfolio_day(*, backend, markets: dict[str, MarketView], events: list[P
                "nav_observations": navs, "parents": parents,
                "fees_cny": str(sum((entry.fee for entry in backend._ledger.cash_entries), Decimal(0))),
                "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP", "recovery_unit": "ATOMIC_COMPLETED_DAY"}
-    return {"account": payload(account), "sessions": tuple(sessions.values()), "backend": backend}
+    return {"account": payload(account), "sessions": tuple(sessions), "backend": backend}
 
 
 def attach_native_quantity_evidence(result: dict, *, targets, native, projection_ref: dict,

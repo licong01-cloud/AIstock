@@ -740,6 +740,12 @@ def localsim_workbench_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def localsim_dual_mode_ui(session: nox.Session) -> None:
+    """Run read-only native/human comparison UI contracts."""
+    _run_localsim_frontend_target(session, "tests/paper-v2/localsim-dual-mode-comparison.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
