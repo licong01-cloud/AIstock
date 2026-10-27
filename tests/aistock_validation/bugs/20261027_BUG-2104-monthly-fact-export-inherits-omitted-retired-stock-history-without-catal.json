@@ -249,7 +249,8 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/health",
+    "business_smoke_ref": "monthly_worker_process.supervision",
+    "health_ref": "monthly_worker_process.health",
     "fresh_process_evidence": [
       "X:/AIstock_temp/DATA_PREPARATION/preclose-full-remediation-20261027-r1/private-catalog-payloads/producer-receipt.json"
     ],
