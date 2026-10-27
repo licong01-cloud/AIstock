@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-27T20:13:03.938398Z",
-  "description": "m_sw2_elg_individual_diverge differs on 1105 days and m_sw2_net_vol_momentum on 67 days; cache-hit gate reports passed on both nodes despite differing cache bytes and missing release provenance.",
+  "description": "m_sw2_elg_individual_diverge differs on 1105 days and m_sw2_net_vol_momentum on 67 days; cache-hit gate reports passed on both nodes despite differing cache bytes and missing release provenance. Runtime business readback additionally preserves the original completed R1 task and its frozen active-data/execution contract; this GET is not evidence of the new cache guard by itself. Exact guard behavior is verified by the two fresh native generated consumers, and must be repeated against merged source after user runtime activation. No existing Loop is resubmitted. Final repair keys direct-v2 caches by exact input bytes, frozen universe contract, factor name and complete source SHA under new qe_versions paths. Legacy root files are never migrated, relabelled or overwritten. New versions compute from original frozen H5; partial/invalid published versions fail closed. Cold/hit return the same requested window, retaining full warmup in the immutable version. Both native programs prepared 12 factors and exactly matching 5526983 x 11 AF panels, preserving both legacy metadata files; zero model fits, model predictions, backtests or HMM calls. Legacy non-direct-v2 behavior remains covered by the existing regressions.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +28,18 @@
   ],
   "expected": "A direct-v2 controlled QE run consumes factor values pinned to its active dataset inputs; absent or mismatching cache input provenance must fail closed or use an explicit isolated calculation without shared-cache mutation.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json",
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
@@ -117,11 +123,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261028_023509_6f6b/custom-evo-config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "{'command': 'python F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/prepare_versioned_cache_native.py rdagent-node1 AND wsl2-5080', 'result': 'passed: TWO_NODE_FORMAL_PREPARE_EXACT_11_COLUMN_AND_PANEL_MATCH; final source with input/universe/requested-window/full-code version keys; 12 factors per node; exact 5526983 x 11 panel and all column hashes; all legacy metadata retained; zero model fit/predict/backtest or HMM calls', 'evidence_ref': 'F:\\\\Dev\\\\AIstock\\\\tmp\\\\handoff\\\\qe-adaptive-24h-20261028\\\\run_v1\\\\BUG2109_versioned_cache_v3\\\\completion.json', 'evidence_sha256': '5b633dfca26d41f6c95f561a4b3e3c1253281acb66f1ec671bfb0016378303e8', 'source_sha256': 'c7fa614dc14b20fcf19f793a576ae37e79fee129ec8af833e51e1d8971619a1c', 'node_receipts': ['F:\\\\Dev\\\\AIstock\\\\tmp\\\\handoff\\\\qe-adaptive-24h-20261028\\\\run_v1\\\\BUG2109_versioned_cache_v3\\\\rdagent-node1\\\\completion.json', 'F:\\\\Dev\\\\AIstock\\\\tmp\\\\handoff\\\\qe-adaptive-24h-20261028\\\\run_v1\\\\BUG2109_versioned_cache_v3\\\\wsl2-5080\\\\completion.json'], 'tests': 'python -m pytest backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py -q -> 68 passed, 2 skipped', 'source_status': 'not_merged; API activation remains pending user restart'}",
+      "python F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/prepare_versioned_cache_native.py -> passed: BUG2109_versioned_cache_v3 final source; both nodes exact 5526983 x 11; 12 immutable factors each; legacy cache unchanged; zero fits/predictions/accounts"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

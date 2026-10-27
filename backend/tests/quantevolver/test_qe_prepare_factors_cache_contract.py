@@ -250,6 +250,198 @@ def test_prepare_factors_contract_classifies_hash_mismatch(monkeypatch, tmp_path
     assert contract["miss_reasons"]["hash_mismatch"] == ["DemoFactor"]
 
 
+def _direct_cache_fixture(monkeypatch, tmp_path):
+    import datetime
+    from types import SimpleNamespace
+
+    import backend.services.quantevolver.config_composer as module
+
+    data = tmp_path / "inputs"
+    data.mkdir()
+    (data / "daily_pv.h5").write_bytes(b"immutable-input-1")
+    meta = {"schema_version": "qe_direct_factor_h5_static_v2", "start": "2018-08-01",
+            "end": "2026-06-30", "universe_key": QE_ST_PIT_UNIVERSE_KEY, "files": ["daily_pv.h5"]}
+    (data / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    binding = SimpleNamespace(
+        release_id="frozen-research", cutoff=datetime.date(2026, 6, 30), factor_meta=meta,
+        factor_meta_sha256=hashlib.sha256((data / "meta.json").read_bytes()).hexdigest(),
+        day_pins={"universe_key": QE_ST_PIT_UNIVERSE_KEY, "rule_version": "rule_v1"},
+        selection_pins={"instruments_sha256": "fp-test"},
+    )
+    monkeypatch.setattr(module, "_direct_v2_dataset_binding", lambda params: binding)
+    script = _script(monkeypatch)
+    namespace = {"__name__": "contract_test"}
+    exec(script, namespace)
+    root = tmp_path / "factor_values"
+    (root / "single").mkdir(parents=True)
+    namespace.update(FACTOR_DATA_DIR=str(data), FACTOR_CACHE_SINGLE_DIR=str(root / "single"),
+                     FACTOR_CACHE_META=str(root / "_meta.json"))
+    index = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2018-08-01"), pd.Timestamp("2026-06-30")], ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"DemoFactor": [1., 2.]}, index=index)
+    code = "def calculate_DemoFactor(instruments, start_date, end_date):\n    return None\n"
+    with namespace["_exclusive_cache_lock"]("factor:DemoFactor"):
+        namespace["_write_cache"]("DemoFactor", code, frame)
+    _cache_path, metadata_path = namespace["_factor_cache_paths"]("DemoFactor", code)
+    return namespace, Path(metadata_path).parent, data, code, script
+
+
+def test_direct_cache_publication_and_exact_input_readback(monkeypatch, tmp_path):
+    namespace, root, data, code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    entry = json.loads((root / "_meta.json").read_text())["factors"]["DemoFactor"]
+    assert entry["qe_input_identity"]["input_files_sha256"] == {
+        "daily_pv.h5": hashlib.sha256((data / "daily_pv.h5").read_bytes()).hexdigest()}
+    assert entry["cache_file_sha256"] == hashlib.sha256((root / "single/DemoFactor.parquet").read_bytes()).hexdigest()
+    assert namespace["_validate_official_cache_hit_contract"]("DemoFactor", code)["official_cache_hit"]
+    assert namespace["_try_cache_hit"]("DemoFactor", code)["DemoFactor"].tolist() == [1., 2.]
+
+
+def test_direct_cache_legacy_identity_rejected_without_recompute_or_write(monkeypatch, tmp_path):
+    namespace, root, _data, code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    path = root / "_meta.json"
+    metadata = json.loads(path.read_text())
+    del metadata["factors"]["DemoFactor"]["qe_input_identity"]
+    path.write_text(json.dumps(metadata))
+    before = {p: p.read_bytes() for p in (path, root / "single/DemoFactor.parquet")}
+    with pytest.raises(RuntimeError, match="qe_factor_cache_input_identity_unverified"):
+        namespace["_execute_factor_locked"]("DemoFactor", code, str(tmp_path))
+    assert {p: p.read_bytes() for p in before} == before
+    assert not (tmp_path / "_factor_DemoFactor").exists()
+
+
+def test_direct_cache_changed_inputs_same_metadata_rejected_in_fresh_reader(monkeypatch, tmp_path):
+    namespace, root, data, code, script = _direct_cache_fixture(monkeypatch, tmp_path)
+    (data / "daily_pv.h5").write_bytes(b"different-input-version")
+    with pytest.raises(RuntimeError, match="qe_factor_cache_source_changed"):
+        namespace["_try_cache_hit"]("DemoFactor", code)
+    fresh = {"__name__": "contract_test_fresh"}
+    exec(script, fresh)
+    fresh.update(FACTOR_DATA_DIR=str(data), FACTOR_CACHE_SINGLE_DIR=namespace["FACTOR_CACHE_SINGLE_DIR"],
+                 FACTOR_CACHE_META=namespace["FACTOR_CACHE_META"])
+    assert fresh["_try_cache_hit"]("DemoFactor", code) is None
+    assert Path(fresh["_factor_cache_paths"]("DemoFactor", code)[1]).parent != root
+
+
+def test_direct_cache_changed_values_rejected_even_with_matching_input_tags(monkeypatch, tmp_path):
+    namespace, root, _data, code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    path = root / "single/DemoFactor.parquet"
+    frame = pd.read_parquet(path)
+    frame.iloc[0, 0] = 99.
+    frame.to_parquet(path)
+    with pytest.raises(RuntimeError, match="qe_factor_cache_value_hash_mismatch"):
+        namespace["_try_cache_hit"]("DemoFactor", code)
+
+
+def test_direct_cache_input_identity_is_path_independent(monkeypatch, tmp_path):
+    import shutil
+
+    namespace, _root, data, _code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    expected = namespace["_cache_input_identity"]()
+    other = tmp_path / "other_node"
+    shutil.copytree(data, other)
+    namespace.update(FACTOR_DATA_DIR=str(other), _QE_CACHE_INPUT_STATE=None)
+    assert namespace["_cache_input_identity"]() == expected
+
+
+def test_direct_cache_provenance_fresh_process_does_not_relabel_legacy(monkeypatch, tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    namespace, root, data, code, script = _direct_cache_fixture(monkeypatch, tmp_path)
+    meta = root / "_meta.json"
+    payload = json.loads(meta.read_text())
+    payload["factors"]["DemoFactor"].pop("qe_input_identity")
+    meta.write_text(json.dumps(payload))
+    before = meta.read_bytes()
+    path = tmp_path / "generated_prepare.py"
+    path.write_text(script, encoding="utf-8")
+    runner = "import runpy,sys; ns=runpy.run_path(sys.argv[1]); ns['_try_cache_hit']('DemoFactor',sys.argv[2])"
+    result = subprocess.run([sys.executable, "-c", runner, str(path), code],
+        env={**os.environ, "FACTOR_CACHE_DIR": str(Path(namespace["FACTOR_CACHE_META"]).parent), "RDAGENT_FACTOR_DATA_DIR": str(data),
+             "RDAGENT_FACTOR_DATA_WSL": str(data), "PYTHONIOENCODING": "utf-8"},
+        capture_output=True, encoding="utf-8", timeout=45)
+    assert result.returncode != 0 and "qe_factor_cache_input_identity_unverified" in result.stderr
+    assert meta.read_bytes() == before
+
+
+def test_direct_cache_new_version_computes_then_hits_same_window_without_legacy_mutation(monkeypatch, tmp_path):
+    namespace, _version, data, _old_code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    index = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2018-07-31"), pd.Timestamp("2018-08-01"), pd.Timestamp("2026-06-30")], ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    values = pd.DataFrame({"raw": [2., 3., 4.]}, index=index)
+    values.to_hdf(data / "daily_pv.h5", key="data", mode="w")
+    namespace["_QE_CACHE_INPUT_STATE"] = None  # a new input version, in a fresh run
+    legacy_root = Path(namespace["FACTOR_CACHE_META"]).parent
+    legacy_file = legacy_root / "single/DemoFactor.parquet"
+    pd.DataFrame({"value": [999.]}, index=index[:1]).to_parquet(legacy_file)
+    legacy_meta = legacy_root / "_meta.json"
+    legacy_meta.write_text('{"source": "old-unbound-cache"}')
+    before = {p: p.read_bytes() for p in (legacy_file, legacy_meta)}
+    code = (
+        "import pandas as pd\nfrom pathlib import Path\n"
+        "data = pd.read_hdf(Path(__file__).parent / 'daily_pv.h5')\n"
+        "data = (data * 2).rename(columns={'raw': 'DemoFactor'})\n"
+        "data.to_hdf(Path(__file__).parent / 'result.h5', key='data')\n"
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    first = namespace["execute_factor"]("DemoFactor", code, str(work))
+    second = namespace["execute_factor"]("DemoFactor", code, str(work))
+    pd.testing.assert_frame_equal(first, second)
+    pd.testing.assert_frame_equal(first, (values.iloc[1:] * 2).rename(columns={"raw": "DemoFactor"}))
+    version_file, meta = map(Path, namespace["_factor_cache_paths"]("DemoFactor", code))
+    assert "qe_versions" in version_file.parts and version_file != legacy_file
+    assert len(pd.read_parquet(version_file)) == 3  # immutable warmup retained
+    assert {p: p.read_bytes() for p in before} == before
+    expected = {p: p.read_bytes() for p in (version_file, meta)}
+    with pytest.raises(RuntimeError, match="qe_factor_cache_immutable_version_exists"):
+        namespace["_write_cache"]("DemoFactor", code, first)
+    assert {p: p.read_bytes() for p in expected} == expected
+
+
+def test_direct_cache_partial_version_does_not_recompute_or_overwrite(monkeypatch, tmp_path):
+    namespace, _root, _data, code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    other = code + "# next source version\n"
+    cache_path, _meta_path = map(Path, namespace["_factor_cache_paths"]("DemoFactor", other))
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_bytes(b"incomplete-published-file")
+    with pytest.raises(RuntimeError, match="qe_factor_cache_version_partial_requires_reconciliation"):
+        namespace["execute_factor"]("DemoFactor", other, str(tmp_path))
+    assert cache_path.read_bytes() == b"incomplete-published-file"
+
+
+def test_direct_cache_window_change_gets_independent_immutable_version(monkeypatch, tmp_path):
+    namespace, root, _data, code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    before = {p: p.read_bytes() for p in (root / "_meta.json", root / "single/DemoFactor.parquet")}
+    namespace["TRAIN_START"] = "2018-09-01"
+    assert Path(namespace["_factor_cache_paths"]("DemoFactor", code)[1]).parent != root
+    assert namespace["_try_cache_hit"]("DemoFactor", code) is None
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_direct_cache_off_still_rejects_source_change_during_computation(monkeypatch, tmp_path):
+    namespace, _root, data, code, _script_text = _direct_cache_fixture(monkeypatch, tmp_path)
+    namespace["FACTOR_CACHE_SINGLE_DIR"] = ""
+    frame = pd.DataFrame({"DemoFactor": [1.]}, index=pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-06-30"), "000001.SZ")], names=["datetime", "instrument"]))
+    work = tmp_path / "work"
+    work.mkdir()
+
+    def compute(*args, **kwargs):
+        (data / "daily_pv.h5").write_bytes(b"changed while computing")
+        frame.to_hdf(work / "_factor_DemoFactor/result.h5", key="data")
+        return b""
+
+    monkeypatch.setattr(namespace["subprocess"], "check_output", compute)
+    with pytest.raises(RuntimeError, match="qe_factor_cache_source_changed"):
+        namespace["execute_factor"]("DemoFactor", code, str(work))
+
+
 def test_prepare_factors_embeds_normalized_observation_panel_contract(monkeypatch) -> None:
     script = _panel_script(monkeypatch)
     ns: dict[str, object] = {}
