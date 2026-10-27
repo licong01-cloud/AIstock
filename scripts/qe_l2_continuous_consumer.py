@@ -173,6 +173,8 @@ class ContinuousInputs:
         )
         require(
             risk["input_identity"]["release_identity"] == m["producer_release_identity"]
+            and risk["input_identity"]["calendar_sha256"] == m["assets"]["calendar"]["sha256"]
+            and risk["input_identity"]["industry_authority_sha256"] == m["authority_canonical_sha256"]
             and risk["release_binding"]["manifest_sha256"] == m["release_identity"]["dataset_manifest_sha256"],
             "QE_L2_CONTINUOUS_PRODUCER_RELEASE_MISMATCH",
         )
@@ -196,6 +198,11 @@ class ContinuousInputs:
                 and bundle["model_sha256"] == canonical_sha(bundle["parameters"]) == m["models"][key]
                 and bundle["bootstrap_model_sha256"] == m["models"]["M0"],
                 "QE_L2_CONTINUOUS_MODEL_IDENTITY_MISMATCH",
+            )
+            require(
+                bundle["training_input_identity"] == risk["input_identity"]
+                and bundle["training_release_binding"] == risk["release_binding"],
+                "QE_L2_CONTINUOUS_TRAINING_INPUT_IDENTITY",
             )
         require(
             {b["vintage"]["id"] for b in bundles} == (set(VINTAGES) if arm == "M1" else set()),

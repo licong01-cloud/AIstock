@@ -37,7 +37,9 @@ def test_full_reader_and_previous_day_no_double_lag(data):
     assert p == 0.25 and row["as_of_date"] == "2026-03-31"
 
 
-@pytest.mark.parametrize("change", ["file", "model", "asof", "missing", "duplicate", "negative", "vintage"])
+@pytest.mark.parametrize(
+    "change", ["file", "model", "asof", "missing", "duplicate", "negative", "vintage", "authority", "training"]
+)
 def test_reader_rejects_tamper_and_incomplete_population(data, change, monkeypatch):
     value = deepcopy(data.risks["M1"])
     if change == "file":
@@ -57,6 +59,12 @@ def test_reader_rejects_tamper_and_incomplete_population(data, change, monkeypat
         value["predictions"][0]["probability"] = -0.1
     if change == "vintage":
         value["predictions"][0]["vintage_id"] = "2026Q3"
+    if change == "authority":
+        value["input_identity"]["industry_authority_sha256"] = "0" * 64
+    if change == "training":
+        bundle = value["model_bundles"][0]
+        bundle["training_input_identity"] = {"wrong": True}
+        value["model_bundles"][0] = _seal({k: v for k, v in bundle.items() if k != "receipt_sha256"})
     value = _seal({k: v for k, v in value.items() if k != "receipt_sha256"})
     ref = _write(data.root / "M1.json", value)
     data.manifest["assets"]["M1"] = ref

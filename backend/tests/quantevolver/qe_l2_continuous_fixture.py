@@ -90,6 +90,12 @@ def make_data(tmp_path, monkeypatch):
         "l2_projection": {"rows": [{"canonical_l2_code": x} for x in catalog], "canonical_hash": "projection"},
     }
     assets["authority"] = _write(tmp_path / "authority.json", authority)
+    producer_release = {"dataset_manifest_sha256": "a" * 64, "fixture_only": True}
+    producer_input = {
+        "release_identity": producer_release,
+        "calendar_sha256": assets["calendar"]["sha256"],
+        "industry_authority_sha256": canonical_sha(authority),
+    }
     models = {"M0": "f" * 64}
     bundles = []
     contract = {
@@ -111,13 +117,14 @@ def make_data(tmp_path, monkeypatch):
                     "parameters": parameters,
                     "model_sha256": models[vintage],
                     "bootstrap_model_sha256": models["M0"],
+                    "training_input_identity": producer_input,
+                    "training_release_binding": {"manifest_sha256": "a" * 64},
                     "vintage": dict(
                         zip(["id", "train_start", "train_end", "effective_start", "effective_end"], [vintage, *span])
                     ),
                 }
             )
         )
-    producer_release = {"dataset_manifest_sha256": "a" * 64, "fixture_only": True}
     risk_objects = {}
     for arm in ("M0", "M1"):
         rows = []
@@ -145,7 +152,7 @@ def make_data(tmp_path, monkeypatch):
                 "untouched_holdout": False,
                 "research_only": True,
                 "contract": contract,
-                "input_identity": {"release_identity": producer_release},
+                "input_identity": producer_input,
                 "release_binding": {"manifest_sha256": "a" * 64},
                 "model_bundles": bundles if arm == "M1" else [],
                 "predictions": rows,
