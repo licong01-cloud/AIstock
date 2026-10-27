@@ -26,6 +26,7 @@ from ..services.quantevolver.qe_evolution_service import (
     normalize_long_trend_profile_id,
 )
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
+from ..services.quantevolver.frozen_inference_contract import FrozenInferenceSpec
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
 from ..services.quantevolver import correlation_compute_service as _correlation_compute_service
 from ..services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
@@ -1532,6 +1533,7 @@ class CustomEvoLoopConfig(BaseModel):
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
     model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
     model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+    frozen_inference: Optional[FrozenInferenceSpec] = Field(None, description="Explicit hash-pinned frozen model and fitted-processor inference v1; no fit allowed")
     prediction_replay: StrictBool = Field(False, description="Replay one immutable completed-loop pred.pkl without training or inference")
     prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
     prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
@@ -1540,6 +1542,11 @@ class CustomEvoLoopConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
+        from ..services.quantevolver.frozen_inference_contract import validate_mode
+
+        frozen = validate_mode(self.model_dump())
+        if frozen is not None:
+            self.frozen_inference = frozen
         replay = normalize_prediction_replay_contract(
             self.model_dump(),
             context="custom_evo_loop",
@@ -1734,6 +1741,14 @@ async def _prepare_custom_evo_loop_configs(
             raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
         if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
+        if loop_cfg.frozen_inference is not None:
+            try:
+                scheduler._validate_frozen_source_metadata(
+                    loop_cfg.model_source_task_id, loop_cfg.model_source_loop_index,
+                    loop_cfg.frozen_inference, model_id=loop_cfg.model_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
         if loop_cfg.backtest_only or loop_cfg.prediction_replay:
             reuse_mode = "prediction replay" if loop_cfg.prediction_replay else "backtest-only"
             source_task_id = (
@@ -2405,6 +2420,9 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
             except ValueError as exc:
                 raise_http_seed_error(exc)
         if req.force_full_train:
+            frozen_loops = [loop.get("loop_index") for loop in config.get("loops") or [] if loop.get("frozen_inference") is not None]
+            if frozen_loops:
+                raise HTTPException(status_code=400, detail=f"QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN: loops={frozen_loops}")
             replay_loops = [
                 loop.get("loop_index")
                 for loop in config.get("loops") or []

@@ -2237,6 +2237,9 @@ def _run_main(args):
     rendered = render_yaml_template(args.yaml_path)
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
+    if config.get("qe_frozen_inference") is not None or Path("qe_frozen_inference_manifest.json").exists():
+        from qe_frozen_inference import validate_mode as validate_frozen_mode
+        validate_frozen_mode(config, backtest_only=bool(args.backtest_only))
 
     # BUG-989 zero-DB data plane: rebuild qe_event_risk_policy.json from the
     # frozen qlib bin dataset (pinned by qe_frozen_build_spec.json) before
@@ -2579,6 +2582,46 @@ def _load_backtest_only_model_from_loose_params(mlruns_dir: Path):
     return None, None
 
 
+def _run_frozen_inference(config: dict, experiment_name: str):
+    """Generate once with original fitted processors, then audit before any backtest."""
+    import copy
+    from qlib.utils import init_instance_by_config
+    from qlib.workflow import R
+    from qlib.model.trainer import fill_placeholder
+    from qe_frozen_inference import consume, require
+
+    _validate_backtest_recorder_isolation_manifest()
+    source_dir = Path(os.environ.get(SOURCE_PARAMS_ENV, "source_model"))
+    with R.start(experiment_name=experiment_name):
+        recorder = R.get_recorder()
+        recorder_ref = _write_qe_current_recorder(recorder, "frozen_inference", experiment_name)
+        with consume(config, source_dir) as pipeline:
+            task = fill_placeholder(copy.deepcopy(config["task"]),
+                                    {"<MODEL>": pipeline.model, "<DATASET>": pipeline.dataset})
+            records = task.get("record", [])
+            if isinstance(records, dict):
+                records = [records]
+            require(sum(item.get("class") == "SignalRecord" for item in records) == 1,
+                    "QE_FROZEN_ONE_SIGNAL_RECORD_REQUIRED")
+            require(any("PortAna" in item.get("class", "") for item in records), "QE_FROZEN_PORT_ANALYSIS_REQUIRED")
+            for item in records:
+                is_signal = item.get("class") == "SignalRecord"
+                require(is_signal or pipeline.prediction_checked, "QE_FROZEN_SIGNAL_MUST_PRECEDE_ANALYSIS")
+                record = init_instance_by_config(item, recorder=recorder, default_module="qlib.workflow.record_temp",
+                                                 try_kwargs={"model": pipeline.model, "dataset": pipeline.dataset})
+                record.generate()
+                if is_signal:
+                    pipeline.check_prediction(recorder.load_object("pred.pkl"))
+                    pipeline.result["executable_prediction_panel_sha256"] = _prediction_panel_sha256(recorder.load_object("pred.pkl"))
+            _validate_pred_backtest_has_execution(recorder, config, recorder.load_object("pred.pkl"))
+        # Fit guards are removed before serializing original weights and fitted processors.
+        recorder.save_objects(**{"config": config, "params.pkl": pipeline.model, "dataset": pipeline.dataset,
+                                 "qe_frozen_inference_receipt.pkl": pipeline.result})
+        _persist_sector_risk_overlay(recorder, config)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "frozen_inference", experiment_name, config)
+    print("[INFO] Frozen inference completed: verified zero refit and original prediction overlap")
+
+
 def _run_backtest_only(config: dict, experiment_name: str):
     """从已有 mlruns 加载训练好的模型，只执行信号生成 + 回测。
 
@@ -2589,6 +2632,8 @@ def _run_backtest_only(config: dict, experiment_name: str):
     from qlib.data.dataset import Dataset
     from qlib.model.trainer import fill_placeholder
 
+    if config.get("qe_frozen_inference") is not None:
+        return _run_frozen_inference(config, experiment_name)
     task_config = config.get("task")
     source_params_dir = Path(os.environ.get(SOURCE_PARAMS_ENV, "source_model"))
     model, params_path = _load_backtest_only_model_from_loose_params(source_params_dir)

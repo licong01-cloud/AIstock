@@ -117,6 +117,10 @@ def bind_batch_model_nodes(
 def is_pure_backtest(loop: Mapping[str, Any]) -> bool:
     if loop.get("backtest_only") and loop.get("prediction_replay"):
         raise ValueError("QE_BATCH_WORKLOAD_AMBIGUOUS: choose one reuse mode")
+    if loop.get("frozen_inference") is not None:
+        if not loop.get("backtest_only") or loop.get("prediction_replay"):
+            raise ValueError("QE_FROZEN_MODE_INVALID")
+        return False  # A real model executes; preserve CPU/GPU affinity and whole-Loop limits.
     return bool(loop.get("backtest_only") or loop.get("prediction_replay"))
 
 

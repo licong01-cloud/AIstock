@@ -782,6 +782,7 @@ def build_config_from_custom_evo_loop(
         backtest_only=backtest_only,
         model_source_task_id=model_source_task_id,
         model_source_loop_index=model_source_loop_index,
+        frozen_inference=loop_config.get("frozen_inference"),
         prediction_replay=prediction_replay,
         prediction_source_task_id=prediction_source_task_id,
         prediction_source_loop_index=prediction_source_loop_index,
