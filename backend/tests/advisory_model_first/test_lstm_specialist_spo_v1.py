@@ -150,3 +150,21 @@ def test_risk_failure_and_fold_axis_are_not_ignored():
     assert report["classification"] == "INNER_NOT_SUPPORTED"
     with pytest.raises(ValueError, match="three-fold"):
         core.summarize(data.loc[data.fold.ne(3)])
+
+
+def test_real_publication_all_stages_and_fresh_readback(tmp_path):
+    root, parent, plan = tmp_path / "study", None, "a" * 64
+    for logical in core.STAGE_PATHS:
+        data = {"receipt.json": json.dumps(dict(logical_stage=logical)).encode()}
+        digest = core.publish_artifacts(root, logical, plan, parent, data)
+        path = core.stage_location(root, logical)
+        actual = core.read_stage(path, stage=path.name, plan_sha256=plan, parent_sha256=parent)
+        assert actual["stage_sha256"] == digest
+        assert core.publish_artifacts(root, logical, plan, parent, data) == digest
+        with pytest.raises(Exception, match="conflicts"):
+            core.publish_artifacts(root, logical, plan, parent, {"receipt.json": b'{"changed":true}'})
+        parent = digest
+    assert (root / "fold1/trained/manifest.json").is_file()
+    assert (root / "terminal/evaluated/manifest.json").is_file()
+    with pytest.raises(ValueError, match="unregistered"):
+        core.stage_location(root, "fold4_trained")

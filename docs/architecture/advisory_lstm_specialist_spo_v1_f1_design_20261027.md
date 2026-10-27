@@ -1,6 +1,6 @@
 # P19 LSTM专属训练人口SPO+（F1）
 
-版本v1.0，2026-10-27，Advisory/model_first。用户按P18建议授权继续，仅一个候选、最多三折3次拟合。此P19属于2026-10重排序序列，不与旧2026-10-08固定5TD日频API历史P19混淆。
+版本v1.1，2026-10-27，Advisory/model_first。用户按P18建议授权继续，仅一个候选、原预算最多三折3次拟合。首折求解后发布阶段名错误导致未落盘，1 STARTED/0 FINISHED保留，实际累计245＋1；未产生经济结论。修复已通过真实阶段发布测试，额外1次恢复fit的预算调整待用户明确回复，未自动重试。此P19属于2026-10重排序序列，不与旧2026-10-08固定5TD日频API历史P19混淆。
 
 ## Background / Goal / Feature Card
 
@@ -64,3 +64,11 @@ R1核对新假设、原源/包/模型与窗口、唯一变量及预算；R2合�
 ## Non-goals / Risks / Production Gates
 
 无新源/研报/现金流/价格/Exit、多包搜索或2026收益复验；无final第4fit、独立确认、生产登记/榜单/DB写/数据集切换/QE或服务任务。production_ddl_gate、dependency/client均noop、backend_restart_required=false。模型在重复开发窗上的改进仍可能是选择效应；完整组监督存在非随机缺失，样本量减少可能更不稳定。研究结束不等于上线，不要求用户重启后端。
+
+## 发布失败与具体恢复修订
+
+初始producer `b31f7bce2df665badcb747a89ea5f64747362ea7`、实验`advlstmspecialist_de01ff2a5b79d0a4d60e5e04`。公共发布器只支持preregistered/prepared/trained/evaluated，runner错把fold1_trained当物理stage；求解返回后在发布入口被拒绝，模型尚未写文件、无unpublished模型可恢复。训练预算消耗1，三折经济评价尚未开始，不把失败归为负模型或零fit。
+
+修复将逻辑阶段映射到`fold1/trained`、`fold2/trained`、`fold3/trained`及`terminal/evaluated`，保留公共发布器及其完整性检查。真实七阶段发布/读回/幂等/冲突拒绝测试通过，WSL新进程验证runner所有阶段路径。原run_once.py/protocol/producer/claims保持不变；修订runner及未来工件在`recovery-v2`，引用原失败记录哈希。
+
+恢复提案仅补偿上述1次工程失败：原模型/参数/窗口不变，新执行仍三折3次，上限合计4次（失败1＋有效候选3），无最终模型额外fit。该预算变更仅在用户确认后生效；当前未执行恢复，不把等待回复当授权。

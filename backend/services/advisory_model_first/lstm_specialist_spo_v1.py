@@ -11,6 +11,7 @@ import pandas as pd
 from backend.services.advisory_model_first import spo_top10_5td_v1 as spo
 from backend.services.advisory_model_first.lstm_complementarity_v1 import LSTM
 from backend.services.advisory_model_first.prequential_top10_5td_study_v1 import projected_finance
+from backend.services.advisory_model_first.economic_entry_pipeline import publish_stage, read_stage
 
 DAY, KEY = spo.base.KEY[0], spo.KEY
 CONTRACT = dict(schema="lstm_specialist_spo_v1", hypothesis="LSTM_ONLY_TRAINING_POPULATION_SPO_V1",
@@ -18,6 +19,22 @@ CONTRACT = dict(schema="lstm_specialist_spo_v1", hypothesis="LSTM_ONLY_TRAINING_
                 max_fits=3, prior_fits=244, prior_index=1, input_rows=15250, input_days=305,
                 evaluation_rows=6300, evaluation_days=126, final_fit=False, outer=False,
                 decision_use="NAVIGATION_ONLY", independent_confirmation=False, production_ready=False)
+STAGE_PATHS = {"preregistered": "preregistered", "prepared": "prepared",
+               **{f"fold{i}_trained": f"fold{i}/trained" for i in (1, 2, 3)},
+               "evaluated": "evaluated", "completed": "terminal/evaluated"}
+
+
+def stage_location(root, logical_stage):
+    if logical_stage not in STAGE_PATHS:
+        raise ValueError("unregistered logical stage")
+    return Path(root) / STAGE_PATHS[logical_stage]
+
+
+def publish_artifacts(root, logical_stage, plan_sha256, parent_sha256, files):
+    path = stage_location(root, logical_stage)
+    publish_stage(study_root=path.parent, stage=path.name, plan_sha256=plan_sha256,
+                  parent_sha256=parent_sha256, artifacts=files)
+    return read_stage(path, stage=path.name, plan_sha256=plan_sha256, parent_sha256=parent_sha256)["stage_sha256"]
 
 
 def check_population(frame):
