@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2101",
-  "closed_at": null,
+  "closed_at": "2026-10-27T05:32:36.419202Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,19 +32,19 @@
   "expected": "Authoritative same-day finite reference facts are retained, missing values remain explicit until source-backed repair, and shared corrections reach daily frozen files without replacing unaffected components.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json",
       "backend/services/tushare_dataset_specs.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "scripts/repair_stk_limit_pre_close.py"
+      "scripts/repair_stk_limit_pre_close.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json",
       "backend/services/tushare_dataset_specs.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "scripts/repair_stk_limit_pre_close.py"
+      "scripts/repair_stk_limit_pre_close.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2101-historical-invalid-pre-close-facts-persist-in-shared-daily-qlib-bins-and.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -106,8 +106,8 @@
   },
   "first_seen_at": "2026-10-26T18:10:47.754014Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "00bc5a2149f74e2eb97245a373358aff5795a3f2",
+  "fixed_at": "2026-10-26T18:43:10Z",
   "github_issue_number": 6750,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6750",
   "last_seen_at": "2026-10-26T18:10:47.754014Z",
@@ -115,6 +115,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6753",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,9 +137,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\preclose-full-remediation-20261027-r1\\postrestart-BUG-2101.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2101",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "00bc5a2149f74e2eb97245a373358aff5795a3f2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-27T05:31:45.018322Z",
+      "mode": "read_only",
+      "observed_identity": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "35508d3cbc2196d41cef5dbc830a0c1c8ebf788920819299267a071da07e630d",
+      "receipt_sha256": "bbde50d056b1e21b62a86d0a54d4218e033549bed739d25565896aefeb847696",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1312e262e1e71c1cce098773379f5bec58fff37218c3e0c49b86b5c49574770e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -148,7 +172,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2101",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7528ad20291d696d",
+    "recorded_at": "2026-10-26T18:43:46.859774Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5c688740f6707bcbe04f563d036fa9fe4d73f6b9",
+    "source_merge_commit": "00bc5a2149f74e2eb97245a373358aff5795a3f2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6753",
+    "validation_evidence": [
+      "pytest backend/tests/test_tushare_sync_engine.py -q -k stk_limit -> passed (40)",
+      "python -m nox -s l0 -- backend/services/tushare_dataset_specs.py backend/services/tushare_sync_engine.py scripts/repair_stk_limit_pre_close.py backend/tests/test_tushare_sync_engine.py -> passed"
+    ],
+    "validation_evidence_digest": "8511503dce23cf7f10ee87d8048d0f7b0ae8bc300beaf74b938608b79bcb7e31"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -157,6 +203,10 @@
     "fingerprint": "1712f73b8ef0b4f96c4466f4",
     "source_event_id": "FE-20261026-1712f73b8ef0"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py -q -k stk_limit -> passed (40)",
+    "python -m nox -s l0 -- backend/services/tushare_dataset_specs.py backend/services/tushare_sync_engine.py scripts/repair_stk_limit_pre_close.py backend/tests/test_tushare_sync_engine.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
