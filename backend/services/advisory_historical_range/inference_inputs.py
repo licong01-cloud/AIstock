@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from functools import update_wrapper
@@ -80,6 +81,58 @@ class InferenceInputSession:
         self.static_builder: Callable | None = None
         self.file_dataset = None
         self.universe_reader: Callable | None = None
+        self.capture_factory = None
+        self.input_capture = None
+        self._revision_refs = {}
+
+    @contextmanager
+    def capture(self, start: date, end: date):
+        """Retain unchanged raw prefixes; truncate only a revised suffix.
+
+        File sessions already have immutable identity. DB sessions bind all
+        legacy nested readers to one transaction and end it before inference.
+        """
+        factory = self.capture_factory or (lambda *_: nullcontext(None))
+        with factory(start, end) as receipt:
+            if receipt is not None:
+                self._reconcile_revisions(receipt.get("partition_refs"))
+            try:
+                yield receipt
+            except BaseException:
+                # A partially captured partition is never reused as a full view.
+                self.invalidate(source_identity=self.source_identity)
+                raise
+            self.input_capture = receipt
+
+    def _reconcile_revisions(self, pins):
+        if pins is None:
+            # Untracked legacy DB has no safe revision-aware shared cache.
+            self.invalidate(source_identity=self.source_identity)
+            return
+        current = {(p["dataset"], p["trade_date"]): p["data_revision"] for p in pins}
+        aliases = {"load_daily_basic": "daily_basic", "load_moneyflow": "moneyflow_ts",
+                   "load_bak_basic": "bak_basic", "load_cyq_perf": "cyq_perf",
+                   "load_sector_data": "sector_data", "load_margin_detail": "margin_detail"}
+        with self._lock:
+            for key, entry in list(self._entries.items()):
+                dataset = aliases.get(key[1], key[1].removeprefix("market."))
+                changed = [date.fromisoformat(day) for (name, day), rev in current.items()
+                           if name == dataset and self._revision_refs.get((name, day)) != rev
+                           and any(start <= date.fromisoformat(day) <= end for start, end in entry.bounds.values())]
+                if not changed:
+                    continue
+                first = min(changed)
+                frame = entry.frame.loc[entry.frame.index.get_level_values("datetime") < pd.Timestamp(first)].copy()
+                bounds = {member: (start, min(end, first-timedelta(days=1)))
+                          for member, (start, end) in entry.bounds.items() if start < first}
+                self.retained_bytes -= entry.size
+                if bounds:
+                    size = int(frame.memory_usage(index=True, deep=True).sum())
+                    self._entries[key] = _Partition(frame, size, bounds)
+                    self.retained_bytes += size
+                else:
+                    del self._entries[key]
+            self._revision_refs.update(current)
 
     def read(self, *, dataset: str, members: list[str], start: date, end: date,
              loader: Callable[[list[str], date, date], pd.DataFrame]) -> pd.DataFrame:
@@ -200,6 +253,7 @@ class InferenceInputSession:
             raise ValueError("revision identity cannot be empty")
         with self._lock:
             self._entries.clear()
+            self._revision_refs.clear()
             self.retained_bytes = 0
             self.source_identity = source_identity
 
@@ -233,6 +287,8 @@ def database_input_session(*, consumer_scope: str, run_id: str, source_identity:
 
     session = InferenceInputSession(consumer_scope=consumer_scope, run_id=run_id,
                                     source_identity=source_identity, max_bytes=max_bytes)
+    from backend.services.data_integrity.inputs import capture_inputs
+    session.capture_factory = capture_inputs
     adjustment = AdjFactorProvider(use_tushare_fallback=False)
 
     def raw_price(members: list[str], start: date, end: date) -> pd.DataFrame:

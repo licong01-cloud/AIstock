@@ -266,6 +266,18 @@ def build_monthly_worker_supervisor_from_env(
     )
 
 
+def start_monthly_worker_nonfatal(*, project_root: Path, factory=None):
+    """A blocked optional worker is ERROR, never a broken whole API startup."""
+    supervisor = None
+    try:
+        supervisor = (factory or build_monthly_worker_supervisor_from_env)(project_root=project_root)
+        return supervisor, supervisor.start()
+    except Exception as exc:
+        LOGGER.exception("MONTHLY_WORKER_STARTUP_FAILED worker blocked; API remains available")
+        return supervisor, {"status": "ERROR", "reason": type(exc).__name__,
+                            "reason_code": "MONTHLY_WORKER_STARTUP_FAILED"}
+
+
 __all__: Sequence[str] = (
     "MONTHLY_WORKER_ENABLED_ENV",
     "MONTHLY_WORKER_POLL_SECONDS_ENV",
@@ -274,4 +286,5 @@ __all__: Sequence[str] = (
     "MonthlyWorkerSupervisorConfig",
     "MonthlyWorkerSupervisorError",
     "build_monthly_worker_supervisor_from_env",
+    "start_monthly_worker_nonfatal",
 )

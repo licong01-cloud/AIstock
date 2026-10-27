@@ -502,6 +502,9 @@ class _TransactionCursor:
         self.connection.in_transaction = True
         self.connection.sql.append(" ".join(sql.split()))
 
+    def fetchone(self):
+        return (False,)  # fixture models an installation before the additive ledger migration
+
     def fetchall(self):
         sql = self.connection.sql[-1]
         # Model the query's provider population, not a strategy eligibility pool.

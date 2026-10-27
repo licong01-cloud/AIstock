@@ -121,6 +121,8 @@ def mark_revision_dates(conn, dates, dependency):
         # Retain even an in-progress first build's date: filtering by MAX would
         # lose a revision racing that build. The normal append clears it once.
         cur.execute(_MARK_SQL, (dependency, dates))
+    from .data_integrity.repository import mark_changed
+    mark_changed(conn, "sector_data", dates, reason="dependency_changed", source=dependency)
 
 
 def mark_membership_revision(conn, existing, incoming):

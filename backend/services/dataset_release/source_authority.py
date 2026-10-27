@@ -997,7 +997,13 @@ ORDER BY ts_code,eligible_start,eligible_end,entry_reason,exit_reason,semantic_p
 _REFRESH_AUDIT_SQL = """
 SELECT dataset,trade_date,data_source,job_id,status,row_count,refreshed_at,
        error_message,data_max_at,written_rows,expected_rows,coverage_ratio,
-       quality_status,failure_category,metadata::text AS metadata_json
+       quality_status,failure_category,metadata::text AS metadata_json,
+       (to_jsonb(source_row)->>'data_revision')::bigint AS data_revision,
+       (to_jsonb(source_row)->>'validated_revision')::bigint AS validated_revision,
+       to_jsonb(source_row)->>'validation_status' AS validation_status,
+       to_jsonb(source_row)->>'validation_id' AS validation_id,
+       to_jsonb(source_row)->>'scope_version' AS scope_version,
+       to_jsonb(source_row)->>'rule_version' AS rule_version
 FROM market.dataset_date_refresh_audit AS source_row
 WHERE dataset = ANY(%(datasets)s)
   AND trade_date >= %(start)s AND trade_date <= %(end)s
@@ -1699,6 +1705,11 @@ class SourceRefreshAuditLedger:
                 )
             ],
             "safety": _zero_safety(),
+            "integrity_revision_pins": [
+                {"dataset": dataset, "fact_date": str(day), **dict(row["integrity_revision"])}
+                for (dataset, day), audit_rows in sorted(self.rows.items())
+                for row in audit_rows if row.get("integrity_revision") is not None
+            ],
         }
 
     def partition_digest(self, dataset: str, start: date, end: date) -> str:
@@ -1723,6 +1734,16 @@ class SourceRefreshAuditLedger:
         unusable = []
         for value in expected_dates:
             audit_rows = observed[value]
+            canonical = [r for r in audit_rows if r.get("data_source") == "canonical_db"]
+            if canonical:
+                from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+                from backend.services.data_integrity.contracts import effective_partition
+                row = canonical[0]
+                effective = effective_partition(row.get("integrity_revision"),
+                    scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                if not effective["source_complete"]:
+                    unusable.append(value.isoformat())
+                continue  # canonical physical verdict is the sole partition authority
             if not any(
                 str(row.get("data_source")) in eligible_sources
                 and str(row.get("status", "")).lower() == "success"
@@ -5103,6 +5124,9 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
         "metadata_sha256": _opaque_audit_digest(metadata),
         "audit_payload_sha256": sha256_hex(canonical_json_bytes(raw_identity)),
         **({"provider_publication": dict(proof)} if proof is not None else {}),
+        **({"integrity_revision": {key: row.get(key) for key in
+            ("data_revision", "validated_revision", "validation_status", "validation_id", "scope_version", "rule_version")}}
+            if row.get("data_source") == "canonical_db" and row.get("data_revision") is not None else {}),
     }
 
 

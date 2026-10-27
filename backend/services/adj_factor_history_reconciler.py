@@ -548,6 +548,19 @@ class PostgresAdjFactorHistoryRepository:
                         f"{symbol}: local history changed while reconciliation was running"
                     )
             with self.conn.cursor() as cur:
+                from .data_integrity.repository import schema_installed
+                changed_dates = []
+                if schema_installed(self.conn):
+                    cur.execute(f"""WITH original AS (
+                        SELECT ts_code,trade_date,adj_factor FROM market.adj_factor
+                        WHERE ts_code=ANY(%s) AND trade_date<=%s), staged AS (
+                        SELECT ts_code,trade_date,adj_factor FROM {_STAGE_TABLE}
+                        WHERE ts_code=ANY(%s) AND trade_date<=%s)
+                        SELECT DISTINCT COALESCE(a.trade_date,b.trade_date) AS day
+                        FROM original a FULL JOIN staged b USING(ts_code,trade_date)
+                        WHERE a.adj_factor IS DISTINCT FROM b.adj_factor ORDER BY 1""",
+                        (list(ordered), end_date, list(ordered), end_date))
+                    changed_dates = [r[0] for r in cur.fetchall()]
                 if replace:
                     cur.execute(
                         "DELETE FROM market.adj_factor WHERE ts_code = ANY(%s) AND trade_date <= %s",
@@ -569,6 +582,10 @@ class PostgresAdjFactorHistoryRepository:
                 raise AdjFactorHistoryReconcileError(
                     f"staged row count mismatch: expected {expected}, inserted {inserted}"
                 )
+            if changed_dates:
+                from .data_integrity.repository import mark_changed
+                mark_changed(self.conn, "adj_factor", changed_dates,
+                             reason="authoritative_history_restatement", source="adj_factor_history_reconciler")
             self.conn.commit()
             return inserted
         except Exception:

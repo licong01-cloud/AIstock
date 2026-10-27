@@ -154,6 +154,7 @@ class RawSyncSummary:
     fetched_rows: int
     written_rows: int
     skipped_rows: int
+    source_identities: tuple[dict, ...] = ()
 
 
 def _json_dumps(value: Any) -> str:
@@ -170,7 +171,7 @@ def _clean_value(value: Any) -> Any:
 
         if pd.isna(value):
             return None
-    except Exception:
+    except (ImportError, TypeError, ValueError):
         pass
     if hasattr(value, "to_pydatetime"):
         value = value.to_pydatetime()
@@ -331,9 +332,9 @@ def upsert_raw_rows(
     if not values:
         return 0, skipped
 
-    with conn.cursor() as cur:
-        psycopg2.extras.execute_values(
-            cur,
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(
+            conn,
             f"""
             INSERT INTO {config.table_name}
                 (
@@ -342,18 +343,23 @@ def upsert_raw_rows(
                     observed_at, first_seen_job_id, last_seen_job_id, job_id
                 )
             VALUES %s
-            ON CONFLICT (source_record_key, source_row_hash) DO UPDATE SET
-                source_api = EXCLUDED.source_api,
-                fetch_params = EXCLUDED.fetch_params,
-                last_seen_at = NOW(),
-                observed_at = EXCLUDED.observed_at,
-                last_seen_job_id = EXCLUDED.last_seen_job_id,
-                job_id = EXCLUDED.job_id,
-                updated_at = NOW()
+            ON CONFLICT (source_record_key, source_row_hash) DO NOTHING
+            RETURNING ann_date
             """,
-            values,
-            page_size=1000,
-        )
+            values, dataset=config.name, source=source_api, page_size=1000,
+    )
+    # Observation metadata is not a new economic fact version. Preserve the
+    # immutable original payload/first-seen fields without dirtying unchanged R.
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(cur, f"""
+            UPDATE {config.table_name} AS t SET
+                last_seen_at = NOW(),
+                last_seen_job_id = v.last_seen_job_id::uuid,
+                job_id = v.job_id::uuid,
+                updated_at = NOW()
+            FROM (VALUES %s) AS v(source_record_key,source_row_hash,last_seen_job_id,job_id)
+            WHERE t.source_record_key=v.source_record_key AND t.source_row_hash=v.source_row_hash
+            """, [(v[2], v[6], v[10], v[11]) for v in values], page_size=1000)
     return len(values), skipped
 
 
@@ -388,7 +394,7 @@ class TushareEventRawSyncService:
             period=period,
             source_api=source_api,
         )
-        with get_conn() as conn:
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
             written, skipped = upsert_raw_rows(
                 conn,
                 config,
@@ -404,6 +410,9 @@ class TushareEventRawSyncService:
             fetched_rows=len(rows),
             written_rows=written,
             skipped_rows=skipped,
+            source_identities=tuple({"source_record_key": source_record_key(config, row),
+                "source_row_hash": source_row_hash(row), "ann_date": row.get("ann_date")}
+                for row in rows if row.get("ts_code") and row.get("ann_date")),
         )
 
 

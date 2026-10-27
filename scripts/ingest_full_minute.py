@@ -230,7 +230,9 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
     sql = (
         "INSERT INTO market.kline_minute_raw (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
         "VALUES %s ON CONFLICT (ts_code, trade_time, freq) DO UPDATE SET "
-        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li"
+        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li "
+        "WHERE ROW(market.kline_minute_raw.open_li,market.kline_minute_raw.high_li,market.kline_minute_raw.low_li,market.kline_minute_raw.close_li,market.kline_minute_raw.volume_hand,market.kline_minute_raw.amount_li) "
+        "IS DISTINCT FROM ROW(EXCLUDED.open_li,EXCLUDED.high_li,EXCLUDED.low_li,EXCLUDED.close_li,EXCLUDED.volume_hand,EXCLUDED.amount_li) RETURNING trade_time::date"
     )
     values: List[Tuple[Any, ...]] = []
     last_ts: Optional[str] = None
@@ -252,8 +254,8 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
     values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, values, dataset="kline_minute_raw", source="tdx_api")
     _commit_if_needed(conn)
     return len(values), last_ts
 
@@ -261,7 +263,7 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
 def insert_minute_init(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
     sql = (
         "INSERT INTO market.kline_minute_raw (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
-        "VALUES %s"
+        "VALUES %s RETURNING trade_time::date"
     )
     values: List[Tuple[Any, ...]] = []
     last_ts: Optional[str] = None
@@ -283,8 +285,8 @@ def insert_minute_init(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[
     values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, values, dataset="kline_minute_raw", source="tdx_api")
     _commit_if_needed(conn)
     return len(values), last_ts
 

@@ -769,7 +769,8 @@ def test_daily_completion_does_not_depend_on_minute_schedule(missing, invalid, s
             minute_reads.append(sql)
             return []
         if "suspend_d" in sql:
-            return [{"ts_code": "000001.SZ"}] if suspended else []
+            return [{"ts_code": "000001.SZ", "trade_date": day,
+                     "suspend_type": "S", "suspend_timing": None}] if suspended else []
         if "kline_daily_raw" in sql:
             return [] if missing else [{"ts_code": "000001.SZ", "volume_hand": 10,
                                         "volume_shares": 1000, "invalid_fact": invalid}]
@@ -781,6 +782,20 @@ def test_daily_completion_does_not_depend_on_minute_schedule(missing, invalid, s
     assert maximum is None and count == int(not missing)
     assert coverage == {"expected_symbols": int(not suspended),
                         "incomplete_symbols": int((missing or invalid) and not suspended)}
+
+
+def test_full_day_suspension_does_not_excuse_conflicting_actual_turnover():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 9, 1)
+    scheduler._go_provider_codes = lambda *_a: ["000001.SZ"]
+    def fetch(query, _parameters=()):
+        if "suspend_d" in query:
+            return [{"ts_code": "000001.SZ", "trade_date": day, "suspend_type": "S", "suspend_timing": None}]
+        return [{"ts_code": "000001.SZ", "invalid_fact": False, "volume_hand": 1, "volume_shares": 100}]
+    scheduler._fetchall = fetch
+    count, _maximum, coverage = scheduler._raw_date_observation("kline_daily_raw", day, include_details=True)
+    assert count == 1 and coverage["incomplete_symbols"] == 1
+    assert coverage["invalid_symbols"] == ["000001.SZ"]
 
 
 @pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
@@ -2734,6 +2749,28 @@ def test_completion_change_dispatches_once_and_explicit_request_recovers(complet
         await _settle_completion(scheduler)
         assert len(calls) == 3
 
+    asyncio.run(scenario())
+
+
+def test_historical_revision_wakes_callback_without_advancing_latest_day(completion_owner):
+    scheduler, state = completion_owner
+    async def scenario():
+        calls = []
+        async def callback():
+            calls.append(1)
+        scheduler.register_completion_callback("old-repair", datasets=("sector_data",), callback=callback)
+        state["rows"][0]["integrity_watermark"] = "old-date-R1"
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 1
+        latest = state["rows"][0]["trade_date"]
+        state["rows"][0]["integrity_watermark"] = "old-date-R2"
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 2 and state["rows"][0]["trade_date"] == latest
+        assert "data_source='canonical_db'" in state["queries"][0][0]
     asyncio.run(scenario())
 
 

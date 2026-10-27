@@ -698,6 +698,22 @@ class PostgresMonthlySourceAdapter:
             baseline_row=baseline_row,
             source_stage_ref=source_stage_ref,
         )
+        if bundle.get("integrity_revision_pins") is not None:
+            from backend.services.data_integrity.inputs import partition_pins
+            captured = {(p["dataset"], p["fact_date"]): p for p in bundle["integrity_revision_pins"]}
+            # Only exact declared changes, using this already imported SOURCE
+            # snapshot. No history price scan or checkpoint invalidation.
+            source_names = {"moneyflow": ["moneyflow_ts"],
+                "industry_classification": ["sector_data", "sw_index_classify", "sw_index_member"]}
+            for change in changes:
+                if change.kind == "TAIL_APPEND":
+                    continue
+                for pin in partition_pins(connection, change.start, change.end,
+                        datasets=source_names.get(change.dataset, [change.dataset])) or []:
+                    normalized = {"dataset": pin["dataset"], "fact_date": pin["trade_date"],
+                                  **{k: v for k, v in pin.items() if k not in {"dataset", "trade_date"}}}
+                    captured[(normalized["dataset"], normalized["fact_date"])] = normalized
+            bundle["integrity_revision_pins"] = [captured[k] for k in sorted(captured)]
         bundle["monthly_repair_inputs"] = repair_inputs
         if historical_minutes_ref is not None:
             bundle["historical_minute_coverage_ref"] = historical_minutes_ref.as_dict()
@@ -800,6 +816,9 @@ class PostgresMonthlySourceAdapter:
             "source_manifest_ref": frozen.source_manifest_ref.as_dict(),
             "source_reuse_manifest_ref": frozen.source_reuse_manifest_ref.as_dict(),
             "source_audit_ref": frozen.source_audit_ref.as_dict(),
+            "integrity_revision_pins": self.cas.get_json_bounded(
+                frozen.source_audit_ref, max_bytes=64 * 1024 * 1024
+            ).get("integrity_revision_pins") or None,
             "source_provenance_ref": frozen.source_provenance_ref.as_dict(),
             "pit_snapshot_ref": frozen.pit_snapshot_ref.as_dict(),
             "artifact_ready_contract_ref": frozen.artifact_ready_contract_ref.as_dict(),

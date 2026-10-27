@@ -85,6 +85,11 @@ class _DataCache:
 
     def get(self, func_name: str, instruments: List[str], start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         key = self._make_key(func_name, instruments, start_date, end_date)
+        from backend.db.pg_pool import captured_read_cache
+        captured = captured_read_cache()
+        if captured is not None:
+            value = captured.get((id(self), key))
+            return value.copy() if value is not None else None
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -98,6 +103,11 @@ class _DataCache:
     def set(self, func_name: str, instruments: List[str], start_date: str, end_date: str,
             df: pd.DataFrame, ttl_seconds: Optional[int] = None) -> None:
         key = self._make_key(func_name, instruments, start_date, end_date)
+        from backend.db.pg_pool import captured_read_cache
+        captured = captured_read_cache()
+        if captured is not None:
+            captured[(id(self), key)] = df.copy()
+            return
         ttl = ttl_seconds if ttl_seconds is not None else self._default_ttl
         with self._lock:
             self._store[key] = (df, time.time() + ttl)

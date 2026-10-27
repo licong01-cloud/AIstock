@@ -161,8 +161,9 @@ def test_shared_upsert_preserves_nullable_late_facts_without_changing_adj_factor
     import backend.services.tushare_sync_engine as module
 
     captured = []
-    monkeypatch.setattr(module.pgx, "execute_values", lambda _cur, sql, vals: captured.append((sql, vals)))
-    conn = SimpleNamespace(cursor=lambda: nullcontext(None))
+    monkeypatch.setattr(module.pgx, "execute_values", lambda _cur, sql, vals, **_kwargs: captured.append((sql, vals)) or [])
+    monkeypatch.setattr("backend.services.data_integrity.repository.mark_changed", lambda *args, **kwargs: {})
+    conn = SimpleNamespace(autocommit=False, cursor=lambda: nullcontext(None))
     TushareSyncEngine()._upsert_plain_batch(conn, spec, [{"trade_date": "20261013", "ts_code": "000001.SZ"}])
     assert ("COALESCE(EXCLUDED." in captured[0][0]) == (spec is not ADJ_FACTOR)
     assert None in captured[0][1][0]

@@ -162,6 +162,30 @@ def full_day_keys(rows: Iterable[Mapping[str, Any]], *, authority: Mapping[str, 
                      if row["state"] == "FULL_DAY_SUSPENDED")
 
 
+def required_minute_end_times(symbol: str, day: date, rows: Iterable[Mapping[str, Any]], *,
+                              authority: Mapping[str, Any] | None = None) -> frozenset[time] | None:
+    """Shared regular end-minute coverage; unresolved timing is NOT an excuse.
+
+    A bar ending exactly at halt start is still required. End-minutes inside
+    (halt_start, halt_end] can be absent; this never creates a price/bar or
+    removes an actual raw quote. Auction timestamps are a separate contract.
+    """
+    facts = [dict(row) for row in rows if str(row["ts_code"]).strip() == symbol and day_value(row["trade_date"]) == day]
+    projected = project_suspension_days(facts, authority=authority, required_dates=(day,))
+    state = next((row for row in projected if row["ts_code"] == symbol), None)
+    regular = frozenset(time(minute//60, minute%60) for minute in (*range(571, 691), *range(781, 901)))
+    if state is None or state["state"] == "RESUMED":
+        return regular
+    if state["state"] == "UNRESOLVED":
+        return None
+    if state["state"] == "FULL_DAY_SUSPENDED":
+        return frozenset()
+    timing = state.get("effective_suspend_timing") or next(
+        row["suspend_timing"] for row in facts if row["suspend_type"] == "S")
+    spans = [tuple(datetime.strptime(clock, "%H:%M").time() for clock in span.split("-")) for span in timing.split(",")]
+    return frozenset(clock for clock in regular if not any(start < clock <= end for start, end in spans))
+
+
 def publication_quality(rows: list[dict[str, Any]], day: date) -> tuple[dict[str, Any], dict[str, Any]]:
     authority = load_authority()
     states = project_suspension_days(rows, authority=authority, required_dates=(day,))

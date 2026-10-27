@@ -408,7 +408,8 @@ class TDXScheduler:
                             _logger.warning("completion callback pending retry: %s", name)
                 rows = self._fetchall(
                     """
-                    SELECT latest.* FROM unnest(%s::text[]) AS requested(dataset)
+                    SELECT latest.*, revisions.integrity_watermark
+                    FROM unnest(%s::text[]) AS requested(dataset)
                     CROSS JOIN LATERAL (
                         SELECT a.dataset, a.trade_date, a.data_source, a.refreshed_at,
                                a.status, a.quality_status, a.row_count, a.job_id::text
@@ -416,7 +417,15 @@ class TDXScheduler:
                         WHERE a.dataset=requested.dataset AND a.trade_date<=%s
                         ORDER BY a.trade_date DESC, a.refreshed_at DESC, a.data_source
                         LIMIT 1
-                    ) latest ORDER BY latest.dataset
+                    ) latest
+                    LEFT JOIN LATERAL (
+                        SELECT md5(string_agg(concat_ws(':',a.trade_date::text,
+                            to_jsonb(a)->>'data_revision',to_jsonb(a)->>'validated_revision',
+                            to_jsonb(a)->>'validation_id',to_jsonb(a)->>'scope_version',
+                            to_jsonb(a)->>'rule_version'), ',' ORDER BY a.trade_date)) AS integrity_watermark
+                        FROM market.dataset_date_refresh_audit a
+                        WHERE a.dataset=requested.dataset AND a.data_source='canonical_db' AND a.trade_date<=latest.trade_date
+                    ) revisions ON TRUE ORDER BY latest.dataset
                     """,
                     (list(entry.datasets), dt.datetime.now(_CN_TZ).date()),
                 )
@@ -1031,11 +1040,35 @@ class TDXScheduler:
             self._reconcile_go_job_refresh_audit()
         except Exception:  # noqa: BLE001 - audit self-heal must not block schedule refresh.
             _logger.exception("go job refresh audit reconciliation failed")
+        self._dispatch_daily_integrity()
         try:
             self._reconcile_due_data_sync_targets()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
         self._dispatch_completion_callbacks()
+
+    def _dispatch_daily_integrity(self) -> None:
+        """Reuse the maintenance executor, with one bounded durable-ledger sweep."""
+        if getattr(self, "_schedule_thread", None) is None:
+            return
+        now = time.monotonic()
+        with self._lock:
+            pending = getattr(self, "_daily_integrity_future", None)
+            if pending is not None and not pending.done():
+                return
+            if now < getattr(self, "_daily_integrity_next_check", 0.0):
+                return
+            self._daily_integrity_next_check = now + 60.0
+            self._daily_integrity_future = self._executor.submit(self._run_daily_integrity)
+
+    @staticmethod
+    def _run_daily_integrity():
+        from backend.services.data_integrity.worker import DailyIntegrityWorker
+        try:
+            return DailyIntegrityWorker().run_once()
+        except Exception:
+            _logger.exception("daily integrity maintenance unavailable; existing collection continues")
+            return {"status": "ERROR"}
 
     def _dispatch_canonical_pit_roll(self) -> None:
         """Reuse the maintenance executor; never block collection or business loops."""
@@ -1280,7 +1313,7 @@ class TDXScheduler:
         self._last_final_target_recovery_sweep = now
         candidates = self._fetchall(
             """SELECT DISTINCT ON (dataset, target_date)
-                      target_id, dataset, target_date
+                      target_id, dataset, target_date, metadata
                  FROM market.data_sync_targets
                 WHERE target_status = 'final_blocked'
                   AND data_source = 'readiness_gate'
@@ -1301,6 +1334,12 @@ class TDXScheduler:
                 _logger.warning("final target recovery precheck failed for %s/%s: %s", dataset, target_date, exc)
                 continue
             if readiness is None or getattr(readiness, "status", None) != "ok":
+                # Deadline upgrades the alert, not an eternal end to provider
+                # catch-up. Reopen only reviewed late-publication families.
+                if dataset in LATE_PUBLICATION_TAIL_DAYS:
+                    DataSyncTargetRepository().mark_retry(target_id,
+                        retry_after=now+dt.timedelta(hours=6), reason="late_publication_followup",
+                        context={"deadline_alerted": True, "integrity_repair": True})
                 continue
             self._reconcile_recovered_target_state(
                 dataset=dataset,
@@ -1318,7 +1357,7 @@ class TDXScheduler:
 
         repo = DataSyncTargetRepository()
         try:
-            due_targets = repo.list_fillable_targets(limit=100)
+            due_targets = repo.list_fillable_targets(limit=100, exclude_operation="VALIDATE_ONLY")
         except Exception as exc:  # noqa: BLE001
             _logger.warning("target retry: due-target scan skipped: %s", exc)
             return []
@@ -1330,6 +1369,8 @@ class TDXScheduler:
         seen: Set[str] = set()
         now = _now()
         for target in due_targets:
+            if (target.get("target_scope") or {}).get("operation") == "VALIDATE_ONLY":
+                continue  # canonical validation has its own fenced claim, not a fetch job
             health_dataset = str(target.get("dataset") or "").strip().lower()
             schedule_dataset = self._retry_schedule_dataset(health_dataset, target.get("metadata"))
             if (
@@ -1368,7 +1409,9 @@ class TDXScheduler:
             required_before = self._coerce_target_datetime(target.get("required_before"))
             if required_before is None:
                 required_before = self._final_deadline_for_target(schedule_dataset, target_date)
-            if required_before is not None and now >= required_before:
+            continued_upstream_retry = (health_dataset in LATE_PUBLICATION_TAIL_DAYS
+                or target.get("data_source") == "integrity_repair")
+            if required_before is not None and now >= required_before and not continued_upstream_retry:
                 failure_category = str(
                     getattr(readiness, "failure_category", None) or "target_deadline_expired"
                 )
@@ -1429,7 +1472,7 @@ class TDXScheduler:
                 )
                 continue
 
-            if not self._target_retry_window_open(schedule_dataset, target_date=target_date, now=now):
+            if not continued_upstream_retry and not self._target_retry_window_open(schedule_dataset, target_date=target_date, now=now):
                 continue
             if self._recent_dataset_submission_exists(schedule_dataset, retry_mode):
                 continue
@@ -2273,6 +2316,7 @@ class TDXScheduler:
             "triggered_by": triggered_by,
             "data_sync_target_id": target_id,
             "data_sync_target_dataset": health_dataset,
+            "integrity_repair": target.get("data_source") == "integrity_repair",
         }
         if target_date is not None:
             target_date_text = target_date.isoformat()
@@ -2395,7 +2439,9 @@ class TDXScheduler:
             if final_deadline_at is None:
                 final_deadline_at = self._final_deadline_for_target(health_dataset, target_date)
             after_deadline = final_deadline_at is not None and now >= final_deadline_at
-            if after_deadline:
+            continued_upstream_retry = (health_dataset in LATE_PUBLICATION_TAIL_DAYS
+                or options.get("integrity_repair") is True)
+            if after_deadline and not continued_upstream_retry:
                 repo.mark_final_blocked(target_id, reason=error_message or failure_category, context=metadata)
                 repo.record_attempt(
                     DataSyncAttemptRecord(
@@ -2425,7 +2471,7 @@ class TDXScheduler:
 
             repo.mark_retry(
                 target_id,
-                retry_after=now + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES),
+                retry_after=now + dt.timedelta(minutes=360 if after_deadline else _AUTO_RETRY_DELAY_MINUTES),
                 reason=error_message or failure_category,
                 context={**metadata, "failure_category": failure_category},
             )
@@ -2437,7 +2483,7 @@ class TDXScheduler:
                     job_id=options.get("job_id"),
                     finished_at=now,
                     error_message=error_message,
-                    retry_after=now + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES),
+                    retry_after=now + dt.timedelta(minutes=360 if after_deadline else _AUTO_RETRY_DELAY_MINUTES),
                     context_json={**metadata, "failure_category": failure_category},
                 )
             )
@@ -3907,7 +3953,7 @@ class TDXScheduler:
         return self._raw_date_observation(dataset, trade_date)[2]
 
     def _raw_date_observation(
-        self, dataset: str, trade_date: dt.date,
+        self, dataset: str, trade_date: dt.date, *, include_details: bool = False,
     ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
         """Observe raw totals and the existing 1m completeness contract once."""
         from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
@@ -3934,29 +3980,41 @@ class TDXScheduler:
             # absent quote; missing/invalid traded facts remain incomplete.
             population = {code for code in self._go_provider_codes(trade_date, trade_date)
                           if not is_b_share_ts_code(code)}
-            suspended = {str(row["ts_code"]).strip() for row in self._fetchall(
-                """SELECT s.ts_code FROM market.suspend_d s
-                    WHERE s.trade_date=%s GROUP BY s.ts_code
-                    HAVING BOOL_AND(s.suspend_type='S' AND
-                      NULLIF(BTRIM(COALESCE(s.suspend_timing,'')),'') IS NULL)""", (trade_date,),
-            )}
+            from backend.data_service.suspension_day_authority import full_day_keys
+            suspension_rows = self._fetchall(
+                """SELECT ts_code,trade_date,suspend_type,suspend_timing FROM market.suspend_d
+                    WHERE trade_date=%s""", (trade_date,))
+            suspended = {symbol for symbol, _day in full_day_keys(suspension_rows, required_dates=(trade_date,))}
             expected = population - suspended
-            incomplete = len(expected.difference(daily)) + sum(
-                bool(row["invalid_fact"]) for row in daily_rows
-            )
-            return len(daily_rows), None, {"expected_symbols": len(expected),
-                                           "incomplete_symbols": incomplete}
+            missing_codes = sorted(expected.difference(daily))
+            invalid_codes = sorted(code for code, row in daily.items() if row["invalid_fact"]
+                or (code in suspended and ((row["volume_hand"] or 0)>0 or (row["volume_shares"] or 0)>0)))
+            incomplete = len(missing_codes) + len(invalid_codes)
+            coverage = {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
+            if include_details:
+                coverage.update(missing_symbols=missing_codes, invalid_symbols=invalid_codes,
+                                expected_symbol_keys=sorted(expected), legal_na_symbols=sorted(population & suspended))
+            return len(daily_rows), None, coverage
         day_start = dt.datetime.combine(trade_date, dt.time.min, tzinfo=_CN_TZ)
         minute_rows = self._fetchall(
-            """SELECT ts_code,freq,COUNT(*) AS bars,MAX(trade_time) AS data_max_at,
+            """SELECT ts_code,freq,COUNT(*) FILTER (WHERE
+                (trade_time AT TIME ZONE 'Asia/Shanghai')::time NOT IN (TIME '09:00',TIME '09:30')) AS bars,
+                MAX(trade_time) AS data_max_at,
                 BOOL_OR(volume_hand > 0 OR volume_shares > 0) AS traded,
-                COUNT(*) FILTER (WHERE NOT (
+                COUNT(*) FILTER (WHERE
+                  (trade_time AT TIME ZONE 'Asia/Shanghai')::time NOT IN (TIME '09:00',TIME '09:30') AND (NOT (
                     ((trade_time AT TIME ZONE 'Asia/Shanghai')::time BETWEEN TIME '09:31' AND TIME '11:30') OR
                     ((trade_time AT TIME ZONE 'Asia/Shanghai')::time BETWEEN TIME '13:01' AND TIME '15:00'))
+                    OR EXTRACT(SECOND FROM trade_time)<>0
+                    OR open_li IS NULL OR high_li IS NULL OR low_li IS NULL OR close_li IS NULL
+                    OR volume_hand IS NULL OR amount_li IS NULL
                     OR open_li <= 0 OR low_li <= 0 OR high_li <= 0 OR close_li <= 0
-                    OR volume_hand < 0 OR amount_li < 0) AS bad_bars
+                    OR high_li<low_li OR open_li NOT BETWEEN low_li AND high_li
+                    OR close_li NOT BETWEEN low_li AND high_li
+                    OR volume_hand < 0 OR amount_li < 0 OR volume_shares<0)) AS bad_bars
               FROM market.kline_minute_raw
-             WHERE trade_time >= %s AND trade_time < %s GROUP BY ts_code,freq""",
+             WHERE trade_time >= %s AND trade_time < %s AND freq='1m' AND adjust_type='none'
+             GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
         # Old B-share facts remain stored, but must not re-enter the completion
@@ -3965,12 +4023,17 @@ class TDXScheduler:
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         expected = {code for code, row in daily.items()
                     if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
-        incomplete = sum(code not in minute or minute[code]["bars"] != 240
-                         or minute[code]["bad_bars"] > 0 for code in expected)
+        missing_codes = sorted(code for code in expected if code not in minute or minute[code]["bars"] != 240)
+        invalid_codes = sorted(code for code in expected if code in minute and minute[code]["bad_bars"] > 0)
+        incomplete = len(set(missing_codes) | set(invalid_codes))
         row_count = sum(int(row["bars"]) for row in minute_rows)
         data_max_at = max((row["data_max_at"] for row in minute_rows
                            if row["data_max_at"] is not None), default=None)
-        return row_count, data_max_at, {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
+        coverage = {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
+        if include_details:
+            coverage.update(missing_symbols=missing_codes, invalid_symbols=invalid_codes,
+                            expected_symbol_keys=sorted(expected), legal_na_symbols=[])
+        return row_count, data_max_at, coverage
 
     def _retry_range_for_health_failure(
         self,

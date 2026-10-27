@@ -171,6 +171,9 @@ def run(args):
                 changed = apply_precision_patches(cur, patches)
                 if len(changed) != len(patches):
                     raise ValueError('NULL-only precision CAS affected-row mismatch')
+            from backend.services.data_integrity.repository import mark_changed
+            mark_changed(conn, 'kline_daily_raw', [row[1] for row in changed],
+                         reason='source_volume_precision', source='controlled_precision_backfill')
         after = read_rows(conn, keys)
         if any(tuple(before[k][f] for f in OLD) != tuple(after[k][f] for f in OLD) for k in keys):
             raise ValueError('protected raw columns changed')

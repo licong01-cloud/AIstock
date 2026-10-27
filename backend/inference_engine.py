@@ -736,6 +736,7 @@ class InferenceEngine:
         # read this from the same engine instance; existing score consumers keep
         # the original DataFrame return contract.
         self.last_inference_receipt: dict[str, Any] | None = None
+        self.last_input_capture = None
         self.resource_session = resource_session
         self.performance_reference = performance_reference
         self.input_session = input_session
@@ -1587,6 +1588,7 @@ class InferenceEngine:
         2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
         self.last_inference_receipt = None
+        self.last_input_capture = None
         self.last_inference_performance = None
         if self.feature_session is not None:
             self.feature_session.bind_source((self.input_session.consumer_scope, self.input_session.run_id,
@@ -1756,55 +1758,52 @@ class InferenceEngine:
         )
         timings.mark("universe_calendar_window")
 
-        # 4.2 尝试从缓存获取数据
-        cache = get_selection_data_cache() if use_selection_data_cache and self.input_session is None else None
-        cached_data = cache.get(actual_date.date(), universe) if cache is not None else None
-
-        if cached_data is not None:
-            df_history, df_fund_raw = cached_data
-            cached_ok, cached_days, cached_msg = check_data_window_sufficient(
-                df_history, required_window, buffer_days=5
-            )
-            if cached_ok:
-                logger.info(f"✓ 从缓存获取数据: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
-            else:
-                logger.info(
-                    "缓存数据窗口不足，将按当前策略包窗口重新加载: actual_days=%s, msg=%s",
-                    cached_days,
-                    cached_msg,
-                )
-                cached_data = None
-
-        if cached_data is None:
-            # 4.3 缓存未命中或窗口不足，从数据库获取
-            if self.input_session is not None:
-                if allow_external_market_fallback:
-                    raise ValueError("consumer input sessions require explicit DB-only source selection")
-                if self.input_session.price_reader is None or self.input_session.static_builder is None:
-                    raise ValueError("input session has no read-only daily view providers")
-                df_history = self.input_session.price_reader(universe, start_date.date(), actual_date.date())
-                df_fund_raw = self.input_session.static_builder(
-                    universe, start_date.date(), actual_date.date(), asof_fill_slow_static=True)
-            else:
-                df_history = get_history_window(
-                universe=universe,
-                start=start_date,
-                end=actual_date,
-                fields=["open", "high", "low", "close", "volume", "amount", "factor"],
-                freq="1d",
-                adj="front",
-                allow_xtquant_fallback=allow_external_market_fallback,
-                allow_tushare_adj_fallback=allow_external_market_fallback,
-                )
-                df_fund_raw = (self.fundamental_reader or _fetch_inference_fundamental_data)(
-                    universe=universe, start_date=start_date.date(), end_date=actual_date.date())
-            if df_history.empty:
-                raise ValueError("获取历史数据为空")
-
-            # 存入缓存
-            if cache is not None:
-                cache.put(actual_date.date(), universe, df_history, df_fund_raw)
-            logger.info(f"✓ 数据已缓存: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
+        # Capture only source reads, never factor/model computation. All nested
+        # DB readers borrow the same short snapshot. File sessions keep their
+        # immutable source; neither kind silently rebinds a frozen task.
+        from .services.data_integrity.inputs import capture_inputs
+        capture = self.input_session.capture if self.input_session is not None else capture_inputs
+        with capture(start_date.date(), actual_date.date()) as input_capture:
+            # The earlier call may have prepared an explicit legacy pool. Actual
+            # membership, prices and fundamentals are captured together here.
+            universe = self._get_default_universe_excluding_st(
+                actual_date, ensure=False, pit_identity=resolved_pit_identity)
+            if input_capture is not None:
+                input_capture = {**input_capture, "pit_identity": resolved_pit_identity.as_dict(),
+                    "universe_sha256": _inference_receipt_sha256(sorted(universe)),
+                    "external_fallback_allowed": allow_external_market_fallback}
+            cache = get_selection_data_cache() if use_selection_data_cache and self.input_session is None else None
+            if input_capture is None or not input_capture.get("ledger_available"):
+                cache = None  # untracked DB cannot safely certify a legacy cache
+            cache_identity = input_capture.get("input_revision_sha256") if input_capture else None
+            cached_data = cache.get(actual_date.date(), universe, source_identity=cache_identity) if cache is not None else None
+            if cached_data is not None:
+                df_history, df_fund_raw = cached_data
+                cached_ok, _, _ = check_data_window_sufficient(df_history, required_window, buffer_days=5)
+                if not cached_ok:
+                    cached_data = None
+            if cached_data is None:
+                if self.input_session is not None:
+                    if allow_external_market_fallback:
+                        raise ValueError("consumer input sessions require explicit DB-only source selection")
+                    if self.input_session.price_reader is None or self.input_session.static_builder is None:
+                        raise ValueError("input session has no read-only daily view providers")
+                    df_history = self.input_session.price_reader(universe, start_date.date(), actual_date.date())
+                    df_fund_raw = self.input_session.static_builder(
+                        universe, start_date.date(), actual_date.date(), asof_fill_slow_static=True)
+                else:
+                    df_history = get_history_window(
+                        universe=universe, start=start_date, end=actual_date,
+                        fields=["open", "high", "low", "close", "volume", "amount", "factor"],
+                        freq="1d", adj="front", allow_xtquant_fallback=allow_external_market_fallback,
+                        allow_tushare_adj_fallback=allow_external_market_fallback)
+                    df_fund_raw = (self.fundamental_reader or _fetch_inference_fundamental_data)(
+                        universe=universe, start_date=start_date.date(), end_date=actual_date.date())
+                if df_history.empty:
+                    raise ValueError("获取历史数据为空")
+                if cache is not None:
+                    cache.put(actual_date.date(), universe, df_history, df_fund_raw, source_identity=cache_identity)
+            self.last_input_capture = input_capture
         timings.mark("market_and_fundamental_read")
         
         # 🔍 诊断：检查df_history初始列数
@@ -2413,6 +2412,7 @@ class InferenceEngine:
                 },
             ],
             "input_context": {
+                "input_capture": self.last_input_capture,
                 "requested_trade_date": requested_trade_date.date().isoformat(),
                 "effective_trade_date": actual_date.date().isoformat(),
                 "score_trade_date": actual_date.date().isoformat(),

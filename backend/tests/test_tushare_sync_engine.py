@@ -144,10 +144,10 @@ def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(mo
     result = engine._sync_by_date(conn, SUSPEND_D, trade_date, trade_date, uuid.uuid4())
 
     assert result.failed_batches == 0
-    assert conn.executed[0] == ("DELETE FROM market.suspend_d WHERE trade_date = %s", (trade_date,))
+    assert conn.executed[0] == ("DELETE FROM market.suspend_d WHERE trade_date = %s RETURNING trade_date", (trade_date,))
     assert any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
     assert upserted == [[]]
-    assert conn.commits == 1
+    assert conn.commits == 2  # date replacement plus atomic observation/validation target
     assert conn.rollbacks == 0
     assert conn.autocommit is True
 
@@ -174,7 +174,7 @@ def test_sync_by_date_treats_empty_stock_st_events_as_valid_no_change(monkeypatc
     assert result.success_batches == 1
     assert result.inserted_rows == 0
     assert conn.executed[0] == (
-        "DELETE FROM market.stock_st_events WHERE pub_date = %s",
+        "DELETE FROM market.stock_st_events WHERE pub_date = %s RETURNING pub_date",
         (publish_date,),
     )
     audit_params = next(
@@ -202,7 +202,7 @@ def test_sync_by_date_treats_empty_dividend_as_valid_complete_set(monkeypatch):
     assert result.success_batches == 1
     assert result.inserted_rows == 0
     assert conn.executed[0] == (
-        "DELETE FROM market.dividend WHERE ex_date = %s",
+        "DELETE FROM market.dividend WHERE ex_date = %s RETURNING ex_date",
         (ex_date,),
     )
     audit_params = next(
@@ -399,7 +399,7 @@ def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(m
     assert all("DELETE FROM market.suspend_d" not in sql for sql, _params in conn.executed)
     assert any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
     assert upserted == [rows]
-    assert conn.commits == 0
+    assert conn.commits == 1  # audit and validation target share a transaction
 
 
 def test_financial_event_raw_dataset_specs_use_period_vip_sync_mode():
@@ -1264,7 +1264,7 @@ def test_sw_refresh_explicitly_requests_current_and_historical_members(monkeypat
     result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
     assert result.ok
     assert [r["is_new"] for r in requests] == ["Y", "N"]
-    assert conn.commits == 1
+    assert conn.commits == 2  # source history plus the reference-scan observation
 
 
 def test_sw_provider_ignoring_history_flag_cannot_change_local_facts(monkeypatch):
@@ -1423,7 +1423,7 @@ def test_stk_limit_keeps_individual_provider_nulls_without_percent_gate():
 def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch):
     from backend.services.tushare_dataset_specs import STK_LIMIT
     calls = []
-    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append((sql, values)))
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values, **kw: calls.append((sql, values)))
     TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [
         {"ts_code": "001205.SZ", "trade_date": "20260508", "pre_close": None, "up_limit": 16.83, "down_limit": 13.77},
     ])
@@ -1435,7 +1435,7 @@ def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch)
 def test_stk_limit_daily_supplement_upsert_cannot_overwrite_existing_finite_reference(monkeypatch):
     from backend.services.tushare_dataset_specs import STK_LIMIT
     calls = []
-    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append((sql, values)))
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values, **kw: calls.append((sql, values)))
     rows = [{"ts_code": code, "trade_date": "20240723", "pre_close": 16.9,
              "up_limit": 20.28, "down_limit": 13.52} for code in ("300280.SZ", "300630.SZ")]
     TushareSyncEngine()._upsert_batch(_FakeConn(), STK_LIMIT, rows, reference_fill_only_codes={"300630.SZ"})
@@ -1452,7 +1452,7 @@ def test_stk_limit_preserves_provider_zero_lower_bound_without_fabricating_price
     calls = []
     row = {"ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": 14.21,
            "up_limit": 99999.99, "down_limit": 0.0}
-    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append(values))
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values, **kw: calls.append(values))
     assert TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [row]) == 1
     assert calls[0][0][-1] == 0.0
     assert not stk_limit_prices_valid(row)  # consumer execution contract is unchanged.
@@ -1862,7 +1862,7 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
     rows = []
     for index in range(100):
         row = {
-            col: ("20260908" if col == "trade_date" else f"{col}-{index}")
+            col: ("20260908" if col == "trade_date" else f"000{index:03}.SZ" if col == "ts_code" else 1.0)
             for col in DAILY_BASIC.columns
         }
         row.update(turnover_rate=1.0, turnover_rate_f=1.0, volume_ratio=1.0, total_mv=1.0, circ_mv=1.0)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Callable, Iterator
 
@@ -31,6 +32,12 @@ class DatasetRefreshStatus:
     coverage_ratio: float | None = None
     quality_status: str = "unknown"
     failure_category: str | None = None
+    data_revision: int | None = None
+    validated_revision: int | None = None
+    validation_status: str | None = None
+    validation_id: str | None = None
+    scope_version: str | None = None
+    rule_version: str | None = None
 
 
 class DataRefreshAuditRepository:
@@ -146,7 +153,7 @@ class DataRefreshAuditRepository:
                     "error_message": status.error_message,
                 },
             )
-        if status.quality_status in {"error", "empty_invalid", "low_coverage"}:
+        if status.quality_status not in {"ok", "empty_valid"}:
             raise DataUnavailableError(
                 "required dataset refresh quality is not usable",
                 context={
@@ -189,15 +196,21 @@ class DataRefreshAuditRepository:
             SELECT dataset, trade_date, data_source, status, row_count,
                    refreshed_at, job_id::text, error_message, metadata,
                    data_max_at, written_rows, expected_rows, coverage_ratio,
-                   quality_status, failure_category
-            FROM market.dataset_date_refresh_audit
+                   quality_status, failure_category,
+                   (to_jsonb(a)->>'data_revision')::bigint AS data_revision,
+                   (to_jsonb(a)->>'validated_revision')::bigint AS validated_revision,
+                   to_jsonb(a)->>'validation_status' AS validation_status,
+                   to_jsonb(a)->>'validation_id' AS validation_id,
+                   to_jsonb(a)->>'scope_version' AS scope_version,
+                   to_jsonb(a)->>'rule_version' AS rule_version
+            FROM market.dataset_date_refresh_audit a
             WHERE dataset = %s AND trade_date = %s
         """
         params: list[Any] = [dataset, trade_date]
         if data_source is not None:
             sql += " AND data_source = %s"
             params.append(data_source)
-        sql += " ORDER BY refreshed_at DESC LIMIT 1"
+        sql += " ORDER BY CASE WHEN data_source='canonical_db' THEN 0 ELSE 1 END, refreshed_at DESC LIMIT 1"
         try:
             with self._conn_factory() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -214,7 +227,7 @@ class DataRefreshAuditRepository:
             ) from exc
         if not row:
             return None
-        return DatasetRefreshStatus(
+        status = DatasetRefreshStatus(
             dataset=str(row["dataset"]),
             trade_date=row["trade_date"],
             data_source=str(row["data_source"]),
@@ -230,7 +243,28 @@ class DataRefreshAuditRepository:
             coverage_ratio=float(row["coverage_ratio"]) if row["coverage_ratio"] is not None else None,
             quality_status=str(row["quality_status"] or "unknown"),
             failure_category=row["failure_category"],
+            **{key: row.get(key) for key in ("data_revision", "validated_revision", "validation_status",
+                                           "validation_id", "scope_version", "rule_version")},
         )
+        if status.data_source == "canonical_db":
+            from .data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+            from .data_integrity.contracts import effective_partition
+            canonical = effective_partition(dict(row), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+            if not canonical["source_complete"]:
+                status = replace(status, status="failed", quality_status="unproven",
+                                 failure_category="canonical_partition_not_validated")
+        elif status.data_revision is not None:
+            # Migration installed: a provider observation alone cannot certify
+            # shared DB facts. An explicit provider restriction still applies.
+            if data_source is not None and (status.status != "success" or status.quality_status not in {"ok", "empty_valid"}):
+                return status
+            from .data_integrity.catalog import canonical_dataset
+            canonical = self.get_latest_status(dataset=canonical_dataset(dataset), trade_date=trade_date,
+                                               data_source="canonical_db")
+            if canonical is not None:
+                return canonical
+            return replace(status, status="failed", quality_status="unproven", failure_category="canonical_partition_missing")
+        return status
 
     def _record(
         self,
@@ -251,43 +285,32 @@ class DataRefreshAuditRepository:
         failure_category: str | None,
         conn: Any | None,
     ) -> None:
+        kwargs = dict(dataset=dataset, trade_date=trade_date, data_source=data_source,
+            status=status, row_count=row_count, job_id=job_id, error_message=error_message,
+            metadata=metadata, data_max_at=data_max_at, written_rows=written_rows,
+            expected_rows=expected_rows, coverage_ratio=coverage_ratio,
+            quality_status=quality_status, failure_category=failure_category)
         if conn is not None:
-            self._record_with_conn(
-                conn,
-                dataset=dataset,
-                trade_date=trade_date,
-                data_source=data_source,
-                status=status,
-                row_count=row_count,
-                job_id=job_id,
-                error_message=error_message,
-                metadata=metadata,
-                data_max_at=data_max_at,
-                written_rows=written_rows,
-                expected_rows=expected_rows,
-                coverage_ratio=coverage_ratio,
-                quality_status=quality_status,
-                failure_category=failure_category,
-            )
-            return
-        with self._conn_factory() as owned_conn:
-            self._record_with_conn(
-                owned_conn,
-                dataset=dataset,
-                trade_date=trade_date,
-                data_source=data_source,
-                status=status,
-                row_count=row_count,
-                job_id=job_id,
-                error_message=error_message,
-                metadata=metadata,
-                data_max_at=data_max_at,
-                written_rows=written_rows,
-                expected_rows=expected_rows,
-                coverage_ratio=coverage_ratio,
-                quality_status=quality_status,
-                failure_category=failure_category,
-            )
+            self._record_transaction(conn, **kwargs)
+        else:
+            with self._conn_factory() as owned_conn:
+                self._record_transaction(owned_conn, **kwargs)
+
+    def _record_transaction(self, conn, **kwargs):
+        owns = getattr(conn, "autocommit", False)
+        if owns:
+            conn.autocommit = False
+        try:
+            self._record_with_conn(conn, **kwargs)
+            if owns:
+                conn.commit()
+        except BaseException:
+            if owns:
+                conn.rollback()
+            raise
+        finally:
+            if owns:
+                conn.autocommit = True
 
     @staticmethod
     def _record_with_conn(
@@ -308,6 +331,18 @@ class DataRefreshAuditRepository:
         quality_status: str,
         failure_category: str | None,
     ) -> None:
+        from .data_integrity.catalog import canonical_dataset
+        from .data_integrity.repository import enqueue_validation, schema_installed
+
+        if data_source != "canonical_db" and schema_installed(conn):
+            enqueue_validation(conn, dataset, trade_date)
+            if status == "success":
+                with conn.cursor() as revision_cur:
+                    revision_cur.execute("""SELECT data_revision FROM market.dataset_date_refresh_audit
+                        WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db'""",
+                        (canonical_dataset(dataset), trade_date))
+                    observed = revision_cur.fetchone()
+                metadata = {**metadata, "integrity_observed_revision": int(observed[0])}
         with conn.cursor() as cur:
             cur.execute(
                 """

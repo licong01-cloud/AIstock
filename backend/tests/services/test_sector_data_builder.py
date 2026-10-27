@@ -102,8 +102,8 @@ def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(mon
             "trade_date": dt.date(2026, 7, 22),
             "authority_id": "aistock_equity_pit_canonical",
         }
-    assert "sector_dependency_revision" in cursor.executed[5][0]
-    assert cursor.executed[5][1] == (dt.date(2026, 7, 22), 7, dt.date(2026, 7, 22))
+    clear = next(item for item in cursor.executed if "sector_dependency_revision" in item[0])
+    assert clear[1] == (dt.date(2026, 7, 22), 7, dt.date(2026, 7, 22))
     assert "market.stock_universe_pit_spans" in module._BUILD_DAY_SQL
     assert "JOIN authoritative_universes USING (universe_key, rule_version)" in module._BUILD_DAY_SQL
     assert "market.sw_index_member" in module._BUILD_DAY_SQL
