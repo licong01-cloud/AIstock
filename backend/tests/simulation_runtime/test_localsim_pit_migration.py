@@ -153,6 +153,26 @@ def test_daily_roll_forward_freezes_new_day_but_never_silently_changes_pit_rules
             source_binding=binding, trade_date=date(2026, 10, 20), authoritative_manifest_sha256=release.manifest_sha256)
 
 
+def test_native_canonical_daily_renewal_retains_full_frozen_profile(monkeypatch):
+    from backend.tests.simulation_runtime.test_localsim_native_context import _bundle, _canonical_profile
+    from backend.services.selection_center.canonical_pit_runtime import require_canonical_pit_runtime_binding
+
+    _, _, profile, _, _, release, _ = _bundle(_canonical_profile(), pit_authority_resolver=_canonical_resolver())
+    original = deepcopy(release.release_config_json)
+    old_metadata = original['metadata']
+    monkeypatch.setattr(migration, 'CanonicalPitAuthorityResolver',
+                        lambda: _canonical_resolver(coverage_end=date(2026, 10, 20)))
+    new_metadata = migration.refresh_daily_pit(old_metadata, trade_date=date(2026, 10, 20))
+    assert POLICY_KEY not in new_metadata
+    assert require_canonical_pit_runtime_binding(new_metadata['selection_runtime_config'],
+        trade_date=date(2026, 10, 20)).coverage_end == date(2026, 10, 20)
+    with pytest.raises(CanonicalPitRuntimeError):
+        require_canonical_pit_runtime_binding(old_metadata['selection_runtime_config'], trade_date=date(2026, 10, 20))
+    renewed = release.model_copy(update={'release_config_json': {**original, 'metadata': new_metadata}})
+    assert frozen_localsim_profile(renewed) == profile
+    assert release.release_config_json == original
+
+
 @pytest.mark.parametrize("changes", [{"coverage_start": date(2026, 8, 28)},
                                       {"coverage_end": date(2026, 8, 27)}])
 def test_existing_dev_c_and_d_coverage_fail_closed(dev_migration, changes):
