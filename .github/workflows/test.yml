@@ -429,8 +429,8 @@ jobs:
             mapfile -t module_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r')
             other_test_targets=()
             for target in "${module_test_targets[@]}"; do
-              if [[ "$target" == "tests/paper-v2/paper-v2-advisory-ui.spec.ts" ]]; then
-                node node_modules/@playwright/test/cli.js test --config=tests/advisory-mocked.config.ts
+              if [[ "$target" == "tests/paper-v2/paper-v2-advisory-ui.spec.ts" || "$target" == "tests/paper-v2/advisory-workbench.spec.ts" ]]; then
+                node node_modules/@playwright/test/cli.js test --config=tests/advisory-mocked.config.ts "$target"
               elif [[ "$target" == "tests/qe/qe-evolution-best-loop-ui.spec.ts" || "$target" == "tests/qe/qe-evolution-read-only.spec.ts" || "$target" == "tests/qe/qe-read-performance.spec.ts" ]]; then
                 # Execute each exact target separately: an empty mocked selection
                 # must fail, not be hidden by passing source/harness tests.

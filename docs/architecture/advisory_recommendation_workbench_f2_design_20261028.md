@@ -2,7 +2,7 @@
 
 日期：2026-10-28。分级：F2，Advisory 只读业务视图、API 与前端联动。设计依据：用户确认的卡片首页、策略详情和当日推荐三张效果图，以及当前发布/结算/收益合同。用户已授权本设计经多轮审核后合入，再开发、审核、验证并合入代码；用户后端重启仍由用户执行。
 
-交付状态：本文件首次合入只完成详细设计验收，不表示源码、运行激活或经济效果已经完成。实施后用同一索引逐项回填代码和直接证据。
+交付状态：详细设计已在 PR #6776 独立合入。实现经三轮自审修订、后端直接测试及合成异常/真实只读结果浏览器验证；以下矩阵对应源码交付。用户后端重启、运行身份核验与经济效果仍分开报告。
 
 ## 1. 背景与范围
 
@@ -17,7 +17,7 @@
 - 不改模型、排名、选股人口、目标数量、买卖规则、成本口径、发布/结算调度；不触发拟合、QE、回放、数据修复或真实下单。
 - 不恢复缺失冻结资产，不执行生产 DDL/DML，不替代数据 owner 的每日就绪判断。
 - 不删除历史记录，不把参考收益称为账户收益。重排序保持影子观察，不替换原生推荐。
-- 保持全局左侧导航和其他模块不变。效果图的侧栏是上下文示意，正式实现仅替换原导航右侧内容区。
+- 2026-10-28用户追加授权：在全局左侧导航添加“荐股”链接直达新总览；其它导航项、分组行为和模块不变。正式工作台内容仍在原导航右侧。
 - 保留旧管理能力，但日常只读工作台不挂载旧页面，不因浏览触发实时模型推理。
 
 ## 2. 视觉与信息架构
@@ -131,6 +131,7 @@
 - F-011：真实仓库/数据库读取、白名单轻量 API、超时与 SQL 只读。
 - F-012：视觉一致、响应式、键盘操作、业务中文，无 raw JSON 业务流。
 - F-013：多轮审核、直接后端/浏览器证据、五任务实读及发布边界。
+- F-014：全局左侧导航“荐股”入口、当前页高亮及直接跳转新总览（用户追加授权）。
 
 ## 6. 实施方案与允许修改文件
 
@@ -140,7 +141,18 @@
 
 顺序：设计三轮审核修订→独立设计 PR 合入→只读 API/直接测试→前端组件→真实数据读取与浏览器验收→语义/失败/范围三轮自审修复→代码 PR/CI 合入。无未经验证的阶段冒充整体完成。
 
+实施文件细化：新增路由叶 `backend/routers/advisory_workbench.py`，由既有 Advisory router include，避免继续扩充旧巨型路由；其余语义与授权范围不变。页面专属测试以精确文件 `backend/tests/advisory_workbench/test_projection.py`、`test_service.py`、`test_api.py`、`test_repository.py` 登记。仅本次隔离工作树 `tmp/advisory-workbench/` 保存验证输入/输出及临时 PR 正文。
+
+追加允许范围：`frontend/src/lib/navigation/nav-groups.ts` 与 `frontend/src/app/Sidebar.tsx`，仅新增荐股链接所需图标和注册；F-014由同一工作台浏览器测试验证，不改变其它导航。
+
+页面容器细化：`frontend/src/app/paper-v2/layout.tsx` 仅在新工作台根路径去除旧交易应用大横幅，避免重复标题；管理页与其它 Paper 页面保持原容器。开发复用已安装 frontend/node_modules 的目录联接，不安装新依赖。
+
+
+验收持久化文件细化：`docs/operations/evidence/advisory_workbench_20261028/receipt.json`、`overview.png`、`daily.png`、`history-detail.png`。截图来自 3012 隔离前端对真实只读响应的呈现，不是生产运行激活证据。模型类别仅取正式 manifest 的 model_type，缺失显示待核验，不以名称反推。
+
 ## 7. 验证方案与结果验证
+
+提交前门检细化：新测试必须被 CI 实际执行，追加精确注册文件 `tests/aistock_validation/catalog/file_ownership.yaml`、`module_registry.yaml`、`test_plans.yaml`，`backend/services/validation/plan_catalog.py`、`noxfile.py`、`frontend/tests/advisory-mocked.config.ts`、`.github/workflows/test.yml`、`backend/tests/scripts/test_ci_change_classifier.py`。仅增加本工作台测试归属、直接执行计划及对应隔离前端匹配，不恢复业务流水线、不运行用户启动脚本。
 
 后端直接测试覆盖前向 WATCH 进入、阈值外 WATCH、范围外 WAITING、集合变化和缺前序、换绑定、同股票多 episode、无数据/null、结算前后、来源未知、>20 版本真实首日、交易日缺口、分页过滤与快照变更、跨包身份、参数/错误和只读路径。
 
@@ -150,25 +162,26 @@
 
 执行 feature validator、changed-file Ruff/TypeScript/ESLint、直接 pytest、Playwright、diff/scope 检查。广域回归由现有 CI/Validation Center 承担，未执行模块明确记录。
 
-## 8. Design Acceptance Matrix（本次设计交付）
+## 8. Design Acceptance Matrix（实现验收）
 
-本矩阵仅验收设计定义和可验证性；implementation_refs 在此阶段指本文合同位置。代码交付时逐项替换为真实实现及执行证据，不能复用设计通过状态宣称实现通过。
+14 项按最终代码和直接证据核对；原设计阶段审核留存在独立设计 PR。PASS 仅指源码和隔离验证，运行激活仍按第 9 节由用户执行。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §2.1 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-002 | §3.2 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-003 | §3.1 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-004 | §2.2/3.1 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-005 | §2.3/4.1 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-006 | §2.3/4.2 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-007 | §3.3 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-008 | §3.2 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-009 | §2.3 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-010 | §4.1 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-011 | §4/7 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-012 | §2 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
-| F-013 | §6/7/9 | artifact:docs/analysis/advisory_workbench_design_review_20261028.md | design_verified | 无 |
+| F-001 | frontend/src/components/advisory/workbench/Overview.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | 无 |
+| F-002 | backend/services/advisory_workbench/projection.py | backend/tests/advisory_workbench/test_projection.py | verified | 无 |
+| F-003 | backend/services/advisory_workbench/projection.py | backend/tests/advisory_workbench/test_projection.py | verified | 无 |
+| F-004 | frontend/src/components/advisory/workbench/DailyList.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | 无 |
+| F-005 | backend/services/advisory_workbench/repository.py; frontend/src/components/advisory/workbench/EpisodeTable.tsx | backend/tests/advisory_workbench/test_repository.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | 无 |
+| F-006 | frontend/src/components/advisory/workbench/StockDrawer.tsx; backend/services/advisory_workbench/service.py | backend/tests/advisory_workbench/test_service.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | 无 |
+| F-007 | backend/services/advisory_workbench/service.py; frontend/src/components/advisory/workbench/Performance.tsx | backend/tests/advisory_historical_range/test_program_performance.py; artifact:docs/operations/evidence/advisory_workbench_20261028/receipt.json | verified | 无 |
+| F-008 | frontend/src/components/advisory/workbench/ProgramDetail.tsx; backend/services/advisory_workbench/service.py | artifact:docs/operations/evidence/advisory_workbench_20261028/receipt.json | verified | 无 |
+| F-009 | frontend/src/components/advisory/workbench/ModelObservation.tsx; frontend/src/app/paper-v2/advisory/manage/page.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts; frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts | verified | 无 |
+| F-010 | frontend/src/components/advisory/workbench/shared.tsx; backend/services/advisory_workbench/service.py | frontend/tests/paper-v2/advisory-workbench.spec.ts; backend/tests/advisory_workbench/test_service.py | verified | 无 |
+| F-011 | backend/routers/advisory_workbench.py; backend/services/advisory_workbench/repository.py | backend/tests/advisory_workbench/test_api.py; artifact:docs/operations/evidence/advisory_workbench_20261028/receipt.json | verified | 无 |
+| F-012 | frontend/src/components/advisory/workbench/workbench.module.css; frontend/src/components/advisory/workbench/StockDrawer.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact:docs/operations/evidence/advisory_workbench_20261028/daily.png | verified | 无 |
+| F-013 | docs/operations/advisory_workbench_delivery_20261028.md | artifact:docs/operations/evidence/advisory_workbench_20261028/receipt.json | verified | 无 |
+| F-014 | frontend/src/lib/navigation/nav-groups.ts; frontend/src/app/Sidebar.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | 无 |
 
 ## 9. 发布、回滚、风险和生产门禁
 
@@ -178,4 +191,4 @@
 
 风险：旧 episode 来源不足→UNKNOWN；daily integrity 尚未迁移/激活→显示不可用；父包资产缺失→卡片阻断；并发写入→409刷新；昂贵统计→小请求、只读超时和明显失败；当前估值用于历史 episode→标明当前估值日期；列表成员超过配置目标→保留实际发布集合，不截断或重新排名。
 
-四项设计符合性：完整交付按13项验收；错误和UNKNOWN可见；不改变推荐/交易语义；不引入额外审批或生产门禁。用户授权继续覆盖设计与代码两次合入，无需重复询问。
+四项设计符合性：完整交付按14项验收；错误和UNKNOWN可见；不改变推荐/交易语义；不引入额外审批或生产门禁。用户授权继续覆盖设计与代码两次合入，无需重复询问。

@@ -1,0 +1,2714 @@
+"use client";
+
+import { Fragment, Suspense, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  advisoryApi,
+  type AdvisoryBindingPayload,
+  type AdvisoryDeliveryPreflight,
+  type AdvisoryEpisode,
+  type AdvisoryForwardRun,
+  type AdvisoryForwardRunDetail,
+  type AdvisoryForwardModelMetrics,
+  type AdvisoryListVersionDetail,
+  type AdvisoryLeaderboardRow,
+  type AdvisoryModelShadowResponse,
+  type AdvisoryOutcomeCandidate,
+  type AdvisoryPackageMode,
+  type AdvisoryProgram,
+  type AdvisoryQualityReport,
+  type AdvisoryRecommendationListItem,
+  type AdvisoryRecommendationListVersion,
+  type AdvisoryReviewDecision,
+  type AdvisoryReviewResult,
+  type AdvisoryStrategyBindingVersion,
+  type AdvisoryTradingDayDefaults,
+  type AdvisoryUniverseOptions,
+  type AdvisoryUniverseSelection,
+} from "@/lib/api/advisory";
+import { selectionCenterApi } from "@/lib/paper-v2/api";
+import { packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
+import type { SelectablePackage } from "@/lib/paper-v2/types";
+import type { JsonObject } from "@/lib/api/selectionCenter";
+import { HistoricalRangeResearchView } from "@/app/paper-v2/advisory/historical-range";
+import { EconomicEntryValueCard } from "@/components/advisory/EconomicEntryValueCard";
+import { SectorEntryPriceCard } from "@/components/advisory/SectorEntryPriceCard";
+
+type SortDirection = "asc" | "desc";
+type ActivePoolSortKey =
+  | "symbol"
+  | "status"
+  | "signal_date"
+  | "effective_entry_date"
+  | "entry_price"
+  | "entry_rank"
+  | "current_rank"
+  | "holding_trading_days"
+  | "return_bps"
+  | "max_drawdown_bps"
+  | "price_quality_status"
+  | "exit_reason";
+
+type ActivePoolSort = { key: ActivePoolSortKey; direction: SortDirection } | null;
+type ListDetailSource = "latest" | "review_result" | "timeline";
+type PackageWeightRow = { rowId: string; packageId: string; weight: string };
+type ProgramStrategyDraft = {
+  packageMode: AdvisoryPackageMode;
+  targetCount: string;
+  rows: PackageWeightRow[];
+  universeMode: AdvisoryUniverseSelection["mode"];
+  universePoolIds: string[];
+  activationReason: string;
+  activeBindingVersionId?: string | null;
+  applyResult: AdvisoryStrategyBindingVersion | null;
+};
+type ReviewDateOption = {
+  value: string;
+  label: string;
+  selectionAsOfDate?: string | null;
+  description: string;
+  disabled?: boolean;
+};
+type ReviewProgress = {
+  firstPublishedTargetDate: string | null;
+  latestPublishedTargetDate: string | null;
+  reviewedThroughDate: string | null;
+  missingTargetDates: string[];
+  selectedRemainingMissingDates: string[];
+};
+type QualityInputRow = {
+  rowId: string;
+  code: string;
+  tradeDate: string;
+  currentPrice: string;
+  maxBuyPrice: string;
+  action: string;
+  reasonCode: string;
+  dayLow: string;
+  dayHigh: string;
+  scoreBucket: string;
+  regime: string;
+};
+
+type ActivePoolColumn = {
+  key: ActivePoolSortKey;
+  label: string;
+  value: (row: AdvisoryEpisode) => string | number | boolean | null | undefined;
+  render: (row: AdvisoryEpisode) => ReactNode;
+};
+
+function stockLabel(row: { symbol: string; stock_name?: string | null; symbol_name?: string | null }): ReactNode {
+  const name = row.stock_name || row.symbol_name;
+  return (
+    <span>
+      <strong>{name || row.symbol}</strong>
+      {name ? <><br /><span className="pv2-muted pv2-mono">{row.symbol}</span></> : null}
+    </span>
+  );
+}
+
+const REVIEW_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+
+function fmtPct(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-";
+}
+
+function calibratedMetric(
+  state: "CALIBRATED" | "UNCALIBRATED" | undefined,
+  calibrated: ReactNode,
+  raw: ReactNode,
+): ReactNode {
+  if (state === "CALIBRATED") {
+    return <><strong>校准 {calibrated}</strong><small className="pv2-muted">raw {raw}</small></>;
+  }
+  return <><span>{raw}</span>{state === "UNCALIBRATED" ? <small className="pv2-muted">UNCALIBRATED</small> : null}</>;
+}
+
+function fmtBps(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value / 100).toFixed(2)}%` : "-";
+}
+
+function metricStatusText(row: AdvisoryLeaderboardRow): string {
+  if (row.metric_status === "READY") {
+    return row.metric_mark_trade_date ? `盯市 ${row.metric_mark_trade_date}` : "盯市已更新";
+  }
+  if (row.metric_status === "WAITING_MARKET_DATA") {
+    const missing = row.missing_open_mark_count ?? row.active_count ?? 0;
+    return missing > 0 ? `缺行情 ${missing}` : "等待行情";
+  }
+  if (row.metric_status === "LOADING") return "统计加载中";
+  return row.metric_status || "";
+}
+
+function fmtNumber(value: number | null | undefined, digits = 0): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+}
+
+function shadowBaselineMetric(
+  shadow: AdvisoryModelShadowResponse | null,
+  baseline: string,
+  metric = "mean_excess_return_5",
+): number | null {
+  const row = shadow?.baselines?.[baseline];
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const value = (row as JsonObject)[metric];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+const OUTCOME_HORIZONS = [1, 3, 5, 10, 20] as const;
+type OutcomeHorizon = (typeof OUTCOME_HORIZONS)[number];
+
+function outcomeHorizon(
+  candidate: AdvisoryOutcomeCandidate,
+  horizon: OutcomeHorizon,
+) {
+  return candidate.horizons.find((item) => item.horizon_days === horizon) || null;
+}
+
+function fmtPrice(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "-";
+}
+
+function fmtPriceBand(value: { low: number; high: number } | null | undefined): string {
+  return value ? `${fmtPrice(value.low)} - ${fmtPrice(value.high)}` : "-";
+}
+
+function forwardPrediction(detail: AdvisoryForwardRunDetail | null): AdvisoryModelShadowResponse | null {
+  const payload = detail?.model_observation?.prediction_payload_json;
+  if (!payload || payload.status !== "EXPERIMENTAL_SHADOW" || !Array.isArray(payload.candidates)) return null;
+  return payload as unknown as AdvisoryModelShadowResponse;
+}
+
+function short(value: unknown, len = 10): string {
+  const text = String(value ?? "-");
+  return text.length > len ? `${text.slice(0, len)}...` : text;
+}
+
+function packageIdsFromText(text: string): string[] {
+  return text.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+const DEFAULT_UNIVERSE_SELECTION: AdvisoryUniverseSelection = { mode: "stock_universe", pool_ids: [] };
+
+function normalizeUniverseSelection(value?: AdvisoryUniverseSelection | null): AdvisoryUniverseSelection {
+  const mode = value?.mode || "stock_universe";
+  const poolIds = [...new Set(value?.pool_ids || [])].sort();
+  return { mode, pool_ids: mode === "stock_universe" ? [] : poolIds };
+}
+
+function requireUniverseSelection(
+  mode: AdvisoryUniverseSelection["mode"],
+  poolIds: string[],
+): AdvisoryUniverseSelection {
+  const selection = normalizeUniverseSelection({ mode, pool_ids: poolIds });
+  if (selection.mode === "single_index" && selection.pool_ids.length !== 1) {
+    throw new Error("单指数股票池必须选择一个核心指数");
+  }
+  if (selection.mode === "index_union" && selection.pool_ids.length < 1) {
+    throw new Error("多指数并集必须至少选择一个核心指数");
+  }
+  return selection;
+}
+
+function packageRowsFromText(text: string): PackageWeightRow[] {
+  const ids = packageIdsFromText(text);
+  if (!ids.length) return [{ rowId: "pkg-1", packageId: "", weight: "1" }];
+  return [{ rowId: "pkg-1", packageId: ids[0], weight: "1" }];
+}
+
+function packageRowsFromIds(packageIds: string[] = [], packageWeights: Record<string, number> = {}): PackageWeightRow[] {
+  if (!packageIds.length) return [{ rowId: "pkg-1", packageId: "", weight: "1" }];
+  const packageId = packageIds[0];
+  return [{ rowId: "pkg-1", packageId, weight: String(packageWeights[packageId] ?? 1) }];
+}
+
+function packageOptionLabel(pkg: SelectablePackage): string {
+  const parts = [packageDisplayLabel(pkg), pkg.package_status];
+  if (pkg.alpha_mode) parts.push(String(pkg.alpha_mode));
+  if (pkg.latest_selection_run?.trade_date) parts.push(`最近选股 ${pkg.latest_selection_run.trade_date}`);
+  return parts.filter(Boolean).join(" / ");
+}
+
+function statusText(defaults: { trading_day_status?: JsonObject } | null | undefined, key: string): string | null {
+  const value = defaults?.trading_day_status?.[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function isTradingDay(defaults: { trading_day_status?: JsonObject } | null | undefined): boolean {
+  return defaults?.trading_day_status?.is_trading_day === true;
+}
+
+function dateContextFromListVersion(version: AdvisoryRecommendationListVersion | null | undefined): { targetTradeDate: string | null; selectionAsOfDate: string | null } {
+  const summary = (version?.summary_json || {}) as JsonObject;
+  const context = (summary.advisory_date_context || {}) as JsonObject;
+  const target = version?.target_trade_date || context.target_trade_date || summary.target_trade_date || version?.trade_date || null;
+  const selectionAsOf = version?.selection_as_of_trade_date || context.selection_as_of_trade_date || summary.selection_as_of_trade_date || null;
+  return {
+    targetTradeDate: typeof target === "string" ? target : null,
+    selectionAsOfDate: typeof selectionAsOf === "string" ? selectionAsOf : null,
+  };
+}
+
+function publishedTargetDates(program: Pick<AdvisoryProgram, "latest_recommendation_target_trade_date" | "published_recommendation_target_trade_dates"> | null | undefined, versions: AdvisoryRecommendationListVersion[] = []): Set<string> {
+  const dates = new Set<string>();
+  (program?.published_recommendation_target_trade_dates || []).forEach((value) => { if (value) dates.add(value); });
+  if (program?.latest_recommendation_target_trade_date) dates.add(program.latest_recommendation_target_trade_date);
+  versions
+    .filter((version) => version.version_status === "PUBLISHED")
+    .forEach((version) => {
+      const context = dateContextFromListVersion(version);
+      if (context.targetTradeDate) dates.add(context.targetTradeDate);
+    });
+  return dates;
+}
+
+function hasPublishedTarget(program: AdvisoryProgram | null | undefined, targetDate: string, versions: AdvisoryRecommendationListVersion[] = []): boolean {
+  return Boolean(targetDate && publishedTargetDates(program, versions).has(targetDate));
+}
+
+function sortedDates(values: Iterable<string | null | undefined>): string[] {
+  return [...new Set([...values].filter((value): value is string => typeof value === "string" && value.length > 0))].sort();
+}
+
+function latestRecommendationMeta(program: AdvisoryProgram | null | undefined, versions: AdvisoryRecommendationListVersion[] = []) {
+  const latestVersion = versions.find((version) => version.version_status === "PUBLISHED");
+  if (latestVersion) {
+    const context = dateContextFromListVersion(latestVersion);
+    return {
+      listVersionId: latestVersion.list_version_id,
+      targetTradeDate: context.targetTradeDate || latestVersion.trade_date,
+      selectionAsOfDate: context.selectionAsOfDate,
+      generatedAt: latestVersion.created_at || null,
+      versionStatus: latestVersion.version_status,
+    };
+  }
+  return {
+    listVersionId: program?.latest_recommendation_list_version_id || null,
+    targetTradeDate: program?.latest_recommendation_target_trade_date || program?.latest_recommendation_trade_date || program?.latest_review_trade_date || null,
+    selectionAsOfDate: program?.latest_recommendation_selection_as_of_trade_date || null,
+    generatedAt: program?.latest_recommendation_generated_at || null,
+    versionStatus: program?.latest_recommendation_version_status || null,
+  };
+}
+
+function selectionAsOfForTarget(targetDate: string, defaults: AdvisoryTradingDayDefaults | null | undefined): string | null {
+  const latestDataDate = defaults?.data_ready_latest_date || defaults?.latest_trading_day || null;
+  const previous = statusText(defaults, "previous_trading_day") || null;
+  const tradingDays = Array.isArray(defaults?.trading_days) ? defaults.trading_days : [];
+  const candidates = sortedDates([
+    ...tradingDays,
+    defaults?.latest_trading_day,
+    previous,
+  ]).filter((date) => date < targetDate && (!latestDataDate || date <= latestDataDate));
+  return candidates.at(-1) || null;
+}
+
+function reviewTargetCandidates(defaults: AdvisoryTradingDayDefaults | null | undefined): string[] {
+  const tradingDays = Array.isArray(defaults?.trading_days) ? defaults?.trading_days : [];
+  const today = defaults?.as_of_date || "";
+  return sortedDates([
+    ...(tradingDays || []),
+    isTradingDay(defaults) ? today : null,
+    defaults?.latest_trading_day,
+    defaults?.next_trading_day,
+  ]);
+}
+
+function catchUpCutoffDate(defaults: AdvisoryTradingDayDefaults | null | undefined): string {
+  return defaults?.as_of_date || defaults?.latest_trading_day || "";
+}
+
+function missingTargetDates(defaults: AdvisoryTradingDayDefaults | null | undefined, published: Set<string>): string[] {
+  if (!published.size) return [];
+  const firstPublished = sortedDates(published)[0];
+  const cutoff = catchUpCutoffDate(defaults);
+  return reviewTargetCandidates(defaults)
+    .filter((date) => date > firstPublished && (!cutoff || date <= cutoff) && !published.has(date));
+}
+
+function earliestMissingTargetDate(defaults: AdvisoryTradingDayDefaults | null | undefined, published: Set<string>): string | null {
+  return missingTargetDates(defaults, published)[0] || null;
+}
+
+function reviewProgress(
+  defaults: AdvisoryTradingDayDefaults | null | undefined,
+  program?: AdvisoryProgram | null,
+  versions: AdvisoryRecommendationListVersion[] = [],
+  selectedTargetDate = "",
+): ReviewProgress {
+  const published = publishedTargetDates(program, versions);
+  const publishedDates = sortedDates(published);
+  const missingDates = missingTargetDates(defaults, published);
+  const allKnownDates = sortedDates([...reviewTargetCandidates(defaults), ...publishedDates]);
+  const firstMissing = missingDates[0] || null;
+  const latestPublished = publishedDates.at(-1) || null;
+  const reviewedThrough = firstMissing
+    ? allKnownDates.filter((date) => date < firstMissing && published.has(date)).at(-1) || publishedDates[0] || null
+    : latestPublished;
+  return {
+    firstPublishedTargetDate: publishedDates[0] || null,
+    latestPublishedTargetDate: latestPublished,
+    reviewedThroughDate: reviewedThrough,
+    missingTargetDates: missingDates,
+    selectedRemainingMissingDates: selectedTargetDate
+      ? missingDates.filter((date) => date > selectedTargetDate)
+      : missingDates.slice(1),
+  };
+}
+
+function blockingMissingDate(progress: ReviewProgress, targetDate: string, targetPublished: boolean): string | null {
+  const firstMissing = progress.missingTargetDates[0];
+  if (!firstMissing || !targetDate || targetPublished) return null;
+  return targetDate !== firstMissing && targetDate > firstMissing ? firstMissing : null;
+}
+
+function compactDateList(dates: string[], maxVisible = 4): string {
+  if (!dates.length) return "无";
+  const visible = dates.slice(0, maxVisible).join("、");
+  return dates.length > maxVisible ? `${visible} 等 ${dates.length} 天` : visible;
+}
+
+function defaultReviewTargetDate(
+  defaults: AdvisoryTradingDayDefaults | null | undefined,
+  program?: AdvisoryProgram | null,
+  versions: AdvisoryRecommendationListVersion[] = [],
+): string {
+  const missing = earliestMissingTargetDate(defaults, publishedTargetDates(program, versions));
+  return missing || defaults?.next_trading_day || defaults?.latest_trading_day || defaults?.as_of_date || "";
+}
+
+function reviewDateOptions(
+  defaults: AdvisoryTradingDayDefaults | null | undefined,
+  program?: AdvisoryProgram | null,
+  versions: AdvisoryRecommendationListVersion[] = [],
+): ReviewDateOption[] {
+  const seen = new Set<string>();
+  const options: ReviewDateOption[] = [];
+  const add = (option: ReviewDateOption | null) => {
+    if (!option?.value || seen.has(option.value)) return;
+    seen.add(option.value);
+    options.push(option);
+  };
+  const latest = defaults?.latest_trading_day || "";
+  const previous = statusText(defaults, "previous_trading_day") || (latest && latest !== defaults?.as_of_date ? latest : null);
+  const today = defaults?.as_of_date || latest;
+  const progress = reviewProgress(defaults, program, versions);
+  const published = publishedTargetDates(program, versions);
+  const firstMissing = progress.missingTargetDates[0] || null;
+  const nextSelectionAsOf = defaults?.next_trading_day ? selectionAsOfForTarget(defaults.next_trading_day, defaults) : null;
+  const todaySelectionAsOf = today ? selectionAsOfForTarget(today, defaults) : null;
+  const latestSelectionAsOf = latest ? selectionAsOfForTarget(latest, defaults) : null;
+  progress.missingTargetDates.forEach((missing, index) => {
+    const missingSelectionAsOf = selectionAsOfForTarget(missing, defaults);
+    add({
+      value: missing,
+      label: index === 0 ? `待补跑目标日 ${missing}` : `后续缺失目标日 ${missing}（先补 ${firstMissing}）`,
+      selectionAsOfDate: missingSelectionAsOf,
+      description: index === 0
+        ? `按顺序补齐缺失荐股：用 ${missingSelectionAsOf || "系统解析"} 数据生成 ${missing} 荐股名单；主按钮只执行这一个目标日。`
+        : `该交易日仍缺失，但必须先补齐 ${firstMissing}，避免跳过中间交易日。`,
+      disabled: index > 0,
+    });
+  });
+  add(defaults?.next_trading_day ? {
+    value: defaults.next_trading_day,
+    label: firstMissing && defaults.next_trading_day > firstMissing ? `下一交易日 ${defaults.next_trading_day}（先补 ${firstMissing}）` : `下一交易日 ${defaults.next_trading_day}`,
+    selectionAsOfDate: nextSelectionAsOf,
+    description: firstMissing && defaults.next_trading_day > firstMissing
+      ? `当前仍有缺失目标日 ${firstMissing}，请先补齐；该按钮不会跳过中间交易日。`
+      : nextSelectionAsOf ? `默认盘后复评：用 ${nextSelectionAsOf} 已就绪数据生成 ${defaults.next_trading_day} 荐股名单。` : "默认盘后复评：等待最新数据就绪后生成下一交易日荐股名单。",
+    disabled: Boolean(firstMissing && defaults.next_trading_day > firstMissing && !published.has(defaults.next_trading_day)),
+  } : null);
+  add(today && isTradingDay(defaults) ? {
+    value: today,
+    label: firstMissing && today > firstMissing ? `当天交易日 ${today}（先补 ${firstMissing}）` : `当天交易日 ${today}`,
+    selectionAsOfDate: todaySelectionAsOf || previous,
+    description: firstMissing && today > firstMissing
+      ? `当前仍有缺失目标日 ${firstMissing}，请先补齐；不能直接跳到 ${today}。`
+      : todaySelectionAsOf ? `盘中补跑：用 ${todaySelectionAsOf} 数据生成 ${today} 荐股名单。` : `盘中补跑：生成 ${today} 荐股名单。`,
+    disabled: Boolean(firstMissing && today > firstMissing && !published.has(today)),
+  } : null);
+  add(latest ? {
+    value: latest,
+    label: firstMissing && latest > firstMissing ? `最新已就绪交易日 ${latest}（先补 ${firstMissing}）` : `最新已就绪交易日 ${latest}`,
+    selectionAsOfDate: latestSelectionAsOf || (latest === today ? previous : null),
+    description: firstMissing && latest > firstMissing
+      ? `当前仍有缺失目标日 ${firstMissing}，请先补齐；不能直接跳到 ${latest}。`
+      : latest === today && previous ? `用 ${previous} 数据生成 ${latest} 荐股名单。` : `使用 ${latest} 作为目标荐股交易日。`,
+    disabled: Boolean(firstMissing && latest > firstMissing && !published.has(latest)),
+  } : null);
+  return options;
+}
+
+function packageIdsFromRows(rows: PackageWeightRow[]): string[] {
+  return rows.map((row) => row.packageId.trim()).filter(Boolean).slice(0, 1);
+}
+
+function newQualityRow(index: number): QualityInputRow {
+  return {
+    rowId: `quality-${Date.now()}-${index}`,
+    code: "",
+    tradeDate: "",
+    currentPrice: "",
+    maxBuyPrice: "",
+    action: "HOLD",
+    reasonCode: "HOLD",
+    dayLow: "",
+    dayHigh: "",
+    scoreBucket: "",
+    regime: "",
+  };
+}
+
+function optionalNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function requiredNumber(value: string, label: string): number {
+  const parsed = optionalNumber(value);
+  if (parsed === undefined) throw new Error(`${label} 必须是有效数字`);
+  return parsed;
+}
+
+function buildQualityRecord(row: QualityInputRow, index: number): JsonObject {
+  const code = row.code.trim();
+  if (!code) throw new Error(`第 ${index + 1} 行缺少股票代码`);
+  if (!row.tradeDate) throw new Error(`第 ${index + 1} 行缺少交易日`);
+  const record: JsonObject = {
+    code,
+    trade_date: row.tradeDate,
+    current_price: requiredNumber(row.currentPrice, `第 ${index + 1} 行当前价`),
+    entry_band_json: { max_buy_price: requiredNumber(row.maxBuyPrice, `第 ${index + 1} 行最高买入价`) },
+    action: row.action,
+    reason_code: row.reasonCode.trim() || row.action,
+  };
+  const dayLow = optionalNumber(row.dayLow);
+  const dayHigh = optionalNumber(row.dayHigh);
+  if (dayLow !== undefined) record.day_low = dayLow;
+  if (dayHigh !== undefined) record.day_high = dayHigh;
+  if (row.scoreBucket.trim()) record.score_bucket = row.scoreBucket.trim();
+  if (row.regime.trim()) record.regime = row.regime.trim();
+  return record;
+}
+
+function compareValues(left: string | number | boolean | null | undefined, right: string | number | boolean | null | undefined): number {
+  const leftEmpty = left === null || left === undefined || left === "";
+  const rightEmpty = right === null || right === undefined || right === "";
+  if (leftEmpty && rightEmpty) return 0;
+  if (leftEmpty) return 1;
+  if (rightEmpty) return -1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  if (typeof left === "boolean" && typeof right === "boolean") return Number(left) - Number(right);
+  return String(left).localeCompare(String(right), "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+}
+
+function nextSort(current: ActivePoolSort, key: ActivePoolSortKey): ActivePoolSort {
+  if (!current || current.key !== key) return { key, direction: "asc" };
+  if (current.direction === "asc") return { key, direction: "desc" };
+  return null;
+}
+
+function SortHeader({ column, sort, onClick }: { column: ActivePoolColumn; sort: ActivePoolSort; onClick: () => void }) {
+  const active = sort?.key === column.key;
+  const marker = active ? (sort.direction === "asc" ? " ▲" : " ▼") : " ↕";
+  return (
+    <button
+      aria-label={`${column.label} 排序`}
+      className={`pv2-sort-button ${active ? "pv2-sort-button-active" : ""}`}
+      data-testid={`advisory-active-sort-${column.key}`}
+      onClick={onClick}
+      type="button"
+    >
+      {column.label}{marker}
+    </button>
+  );
+}
+
+function reviewRuntimeConfig(program: AdvisoryProgram, dateContext?: { targetTradeDate?: string; selectionAsOfDate?: string | null }): JsonObject {
+  const topK = Math.max(1, Math.min(50, Number(program.target_count || 20)));
+  const selectionArtifactConfig: JsonObject = {
+    auto_generate: true,
+    inference_backend: "wsl",
+    pit_mode: "PREVIOUS_TRADING_DAY_CLOSE",
+  };
+  if (dateContext?.selectionAsOfDate) {
+    selectionArtifactConfig.cutoff_date = dateContext.selectionAsOfDate;
+    selectionArtifactConfig.cutoff_policy = "FIXED_CUTOFF";
+    selectionArtifactConfig.fixed_cutoff = true;
+  }
+  return {
+    top_k: topK,
+    display_top_n: topK,
+    st_pit_authoritative: true,
+    advisory_date_context: {
+      target_trade_date: dateContext?.targetTradeDate,
+      selection_as_of_trade_date: dateContext?.selectionAsOfDate || undefined,
+    },
+    selection_artifact_config: selectionArtifactConfig,
+    runtime_profile: {
+      selection: { top_k: topK },
+      tradability: { exclude_suspended: !dateContext?.selectionAsOfDate },
+      industry_blacklist: [],
+      hmm: { enabled: false, model_config_id: null, model_snapshot_id: null, signal_preset: null },
+    },
+  };
+}
+
+function buildReviewPayload(program: AdvisoryProgram, targetDate: string, selectionAsOfDate?: string | null) {
+  return {
+    trade_date: targetDate,
+    target_trade_date: targetDate,
+    selection_as_of_trade_date: selectionAsOfDate || undefined,
+    runtime_config: reviewRuntimeConfig(program, { targetTradeDate: targetDate, selectionAsOfDate }),
+  };
+}
+
+function isLegacyManualMultiPackage(source: Pick<AdvisoryProgram, "package_mode" | "package_ids">): boolean {
+  return source.package_mode !== "single_package" || source.package_ids.length !== 1;
+}
+
+function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisoryStrategyBindingVersion | null): ProgramStrategyDraft {
+  const source = binding || program;
+  const universeSelection = normalizeUniverseSelection(binding?.universe_selection);
+  return {
+    packageMode: source.package_mode,
+    targetCount: String(program.target_count || 20),
+    rows: packageRowsFromIds(source.package_ids, source.package_weights || {}),
+    universeMode: universeSelection.mode,
+    universePoolIds: universeSelection.pool_ids,
+    activationReason: `替换荐股任务「${program.program_name}」策略包配置`,
+    activeBindingVersionId: binding?.binding_version_id || null,
+    applyResult: null,
+  };
+}
+
+function bindingPayloadFromDraft(draft: ProgramStrategyDraft): AdvisoryBindingPayload {
+  const packageIds = packageIdsFromRows(draft.rows);
+  if (draft.packageMode !== "single_package" || packageIds.length !== 1) {
+    throw new Error("荐股只支持一个单 Alpha 策略包或一个原生多 Alpha 父包");
+  }
+  const targetCount = Number(draft.targetCount || 20);
+  if (!Number.isFinite(targetCount) || targetCount <= 0) throw new Error("目标数量必须是有效正数");
+  return {
+    package_mode: "single_package",
+    package_ids: packageIds,
+    package_weights: { [packageIds[0]]: 1 },
+    target_count: Math.min(100, Math.max(1, Math.round(targetCount))),
+    universe_selection: requireUniverseSelection(draft.universeMode, draft.universePoolIds),
+  };
+}
+
+function adviceText(item: AdvisoryRecommendationListItem): string {
+  return String(item.operation_advice_json?.human_label || item.operation_advice_json?.reason_summary || item.reason_code || "-");
+}
+
+function finalRecommendationItems(items: AdvisoryRecommendationListItem[]): AdvisoryRecommendationListItem[] {
+  return items
+    .filter((item) => item.symbol && item.item_state === "ACTIVE" && item.action !== "EXIT")
+    .sort((left, right) => {
+      const rankDiff = (left.rank ?? 999999) - (right.rank ?? 999999);
+      return rankDiff !== 0 ? rankDiff : left.symbol.localeCompare(right.symbol);
+    });
+}
+
+function defaultWatchlistCategoryName(program: AdvisoryProgram | null | undefined, version: { trade_date?: string } | null | undefined): string {
+  const programName = (program?.program_name || "荐股名单").trim();
+  const tradeDate = String(version?.trade_date || "").trim() || "未定日期";
+  return `${programName} ${tradeDate}`;
+}
+
+function reviewState(program: AdvisoryProgram, targetDate: string, hasPriorList = Boolean(program.latest_review_trade_date), targetPublished = false, blockingMissingTargetDate?: string | null) {
+  if (isLegacyManualMultiPackage(program)) return { canPreview: false, canRun: false, label: "已退役", previewLabel: "已退役", hint: "历史手工多包任务只保留查询；请改用经过回测验证的原生多 Alpha 父包。", isInitialRun: false };
+  if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", previewLabel: "等待交易日", hint: "等待交易日服务返回最近交易日。", isInitialRun: false };
+  if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", previewLabel: "预览", hint: "任务启用后才可执行首次运行或每日复评。", isInitialRun: false };
+  if (targetPublished) {
+    return { canPreview: true, canRun: false, label: "已复评", previewLabel: "预览", hint: `${targetDate} 已完成复评，等待下一个交易日。`, isInitialRun: false };
+  }
+  if (blockingMissingTargetDate) {
+    return {
+      canPreview: false,
+      canRun: false,
+      label: `先补 ${blockingMissingTargetDate}`,
+      previewLabel: `先补 ${blockingMissingTargetDate}`,
+      hint: `检测到更早缺失目标日 ${blockingMissingTargetDate}；请按顺序补齐，不能直接跳到 ${targetDate}。`,
+      isInitialRun: false,
+    };
+  }
+  if (!hasPriorList) {
+    return {
+      canPreview: true,
+      canRun: true,
+      label: "生成初始列表",
+      previewLabel: "预览初始列表",
+      hint: `目标交易日 ${targetDate}，首次运行会自动生成候选并发布第一版荐股列表，无需填写任何内部 ID。`,
+      isInitialRun: true,
+    };
+  }
+  return { canPreview: true, canRun: true, label: "执行复评", previewLabel: "预览", hint: `本次只执行目标交易日 ${targetDate}；不会一次性补全所有漏评日，后续缺失会在完成后继续提示。`, isInitialRun: false };
+}
+
+function reviewActionContext(
+  defaults: AdvisoryTradingDayDefaults | null | undefined,
+  program: AdvisoryProgram,
+  versions: AdvisoryRecommendationListVersion[] = [],
+  preferredTargetDate = "",
+) {
+  const targetDate = preferredTargetDate || defaultReviewTargetDate(defaults, program, versions);
+  const dateChoices = reviewDateOptions(defaults, program, versions);
+  const selectedChoice = dateChoices.find((option) => option.value === targetDate);
+  const selectionAsOfDate = selectedChoice?.selectionAsOfDate ?? selectionAsOfForTarget(targetDate, defaults);
+  const progress = reviewProgress(defaults, program, versions, targetDate);
+  const targetPublished = hasPublishedTarget(program, targetDate, versions);
+  const hasPriorList = versions.length > 0 || Boolean(latestRecommendationMeta(program, versions).targetTradeDate);
+  const blockingMissingTargetDate = blockingMissingDate(progress, targetDate, targetPublished);
+  const state = reviewState(program, targetDate, hasPriorList, targetPublished, blockingMissingTargetDate);
+  return {
+    targetDate,
+    dateChoices,
+    selectedChoice,
+    selectionAsOfDate,
+    progress,
+    targetPublished,
+    hasPriorList,
+    blockingMissingTargetDate,
+    state,
+  };
+}
+
+function loadingReviewState(hint: string) {
+  return {
+    canPreview: false,
+    canRun: false,
+    label: "加载日期",
+    previewLabel: "加载日期",
+    hint,
+    isInitialRun: false,
+  };
+}
+
+function deliveryPreflightSummary(result: AdvisoryDeliveryPreflight): ReactNode {
+  const universeLabels: Record<AdvisoryDeliveryPreflight["universe_compatibility"]["status"], string> = {
+    EXACT_UNIVERSE_MATCHED: "策略包股票池与荐股股票池精确匹配",
+    FILTER_ONLY_COMPATIBLE: "可在 Selection 候选后执行荐股股票池过滤，但不等同于 QE 指数池内重新推理",
+    LEGACY_UNIVERSE_UNSPECIFIED: "旧策略包未声明冻结股票池身份，将保留基线兼容但不能标记为精确匹配",
+    PACKAGE_IDENTITY_MISMATCH: "策略包股票池不能覆盖目标荐股股票池",
+    DELIVERY_CONTRACT_INCOMPLETE: "策略包交付的股票池合同缺失一致性或格式不完整",
+  };
+  const modelLabels: Record<AdvisoryDeliveryPreflight["model_compatibility"]["status"], string> = {
+    DESCRIPTOR_FILE_PRESENT: "当前绑定的模型描述文件存在；完整身份仍在正式发布时校验",
+    MODEL_DESCRIPTOR_UNAVAILABLE: "Advisory 模型描述文件不可用，Selection 基线仍可运行",
+    REQUIRED_AFTER_BINDING: "新绑定生效后才能生成并完整校验对应模型描述文件",
+    NOT_APPLICABLE: "交付身份被阻断，暂不检查模型描述文件",
+  };
+  const policyLabel = result.policy_compatibility.status === "ACTIVE_POLICY_MATCH"
+    ? `目标数量 ${result.policy_compatibility.requested_target_count} 与当前策略合同一致`
+    : `目标数量 ${result.policy_compatibility.requested_target_count} 将形成新的策略绑定身份`;
+  return (
+    <>
+      <strong>{result.overall_status === "BLOCKED" ? "交付预检未通过" : result.overall_status === "READY_WITH_MODEL" ? "交付预检通过（模型文件已存在）" : "交付预检通过（基线可用）"}</strong>
+      <div>{universeLabels[result.universe_compatibility.status]}</div>
+      <div>{policyLabel}</div>
+      <div>{modelLabels[result.model_compatibility.status]}</div>
+      {result.blockers.length ? <div>阻断：{result.blockers.join("；")}</div> : null}
+      {result.warnings.length ? <div className="pv2-muted">提示：{result.warnings.join("；")}</div> : null}
+    </>
+  );
+}
+
+// Keep cumulative history out of unrelated form/model renders. Pagination is
+// presentation-only: retain the original rows, ordering and financial values.
+const EpisodeReturnsTable = memo(function EpisodeReturnsTable({ rows }: { rows: AdvisoryEpisode[] }) {
+  const pageSize = 25;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => { setPage(1); }, [rows]);
+  return <>
+    <div className="pv2-table-wrap">
+      <table className="pv2-table" data-testid="advisory-returns-table">
+        <thead><tr><th>股票</th><th>入选口径</th><th>入选生效日</th><th>退出原因</th><th>涨跌幅</th><th>胜负</th><th>回撤</th></tr></thead>
+        <tbody>
+          {visibleRows.map((row) => (
+            <tr key={row.episode_id}><td>{stockLabel(row)}</td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
+          ))}
+          {!rows.length ? <tr><td colSpan={7}>暂无 episode 收益。</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+    <nav className="pv2-pagination" aria-label="Episode 收益分页">
+      <button className="pv2-button-ghost" disabled={currentPage <= 1} onClick={() => setPage(1)} type="button">首页</button>
+      <button className="pv2-button-ghost" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} type="button">上一页</button>
+      <span className="pv2-muted" aria-live="polite">第 {currentPage} / {totalPages} 页，共 {rows.length} 条 · 每页 {pageSize} 条</span>
+      <button className="pv2-button-ghost" disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)} type="button">下一页</button>
+      <button className="pv2-button-ghost" disabled={currentPage >= totalPages} onClick={() => setPage(totalPages)} type="button">末页</button>
+    </nav>
+  </>;
+});
+
+function AdvisoryPageContent() {
+  const params = useSearchParams();
+  const prefillPackages = params.get("package_ids") || "";
+  const [activeView, setActiveView] = useState<"current" | "historical-range">(
+    params.get("view") === "historical-range" ? "historical-range" : "current",
+  );
+  const [historicalProgramId, setHistoricalProgramId] = useState(params.get("program_id") || "");
+  const [programs, setPrograms] = useState<AdvisoryProgram[]>([]);
+  const [leaderboard, setLeaderboard] = useState<AdvisoryLeaderboardRow[]>([]);
+  const [selectedProgramId, setSelectedProgramId] = useState("");
+  const [sortBy, setSortBy] = useState("win_rate");
+  const [programName, setProgramName] = useState("每日 Top20 荐股任务");
+  const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
+  const [selectablePackages, setSelectablePackages] = useState<SelectablePackage[]>([]);
+  const [targetCount, setTargetCount] = useState(20);
+  const [universeOptions, setUniverseOptions] = useState<AdvisoryUniverseOptions | null>(null);
+  const [universeMode, setUniverseMode] = useState<AdvisoryUniverseSelection["mode"]>(DEFAULT_UNIVERSE_SELECTION.mode);
+  const [universePoolIds, setUniversePoolIds] = useState<string[]>(DEFAULT_UNIVERSE_SELECTION.pool_ids);
+  const [reviewTradeDate, setReviewTradeDate] = useState("");
+  const [reviewDateTouched, setReviewDateTouched] = useState(false);
+  const [tradingDefaults, setTradingDefaults] = useState<AdvisoryTradingDayDefaults | null>(null);
+  const [tradingDefaultsError, setTradingDefaultsError] = useState<string | null>(null);
+  const [reviewingKey, setReviewingKey] = useState("");
+  const [activePool, setActivePool] = useState<AdvisoryEpisode[]>([]);
+  const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
+  const [listVersions, setListVersions] = useState<AdvisoryRecommendationListVersion[]>([]);
+  const [listVersionDetail, setListVersionDetail] = useState<AdvisoryListVersionDetail | null>(null);
+  const [modelShadow, setModelShadow] = useState<AdvisoryModelShadowResponse | null>(null);
+  const [modelShadowLoading, setModelShadowLoading] = useState(false);
+  const [modelShadowError, setModelShadowError] = useState<string | null>(null);
+  const [forwardRuns, setForwardRuns] = useState<AdvisoryForwardRun[]>([]);
+  const [latestForwardDetail, setLatestForwardDetail] = useState<AdvisoryForwardRunDetail | null>(null);
+  const [forwardModelMetrics, setForwardModelMetrics] = useState<AdvisoryForwardModelMetrics | null>(null);
+  const [forwardModelMetricsLoading, setForwardModelMetricsLoading] = useState(false);
+  const [forwardError, setForwardError] = useState<string | null>(null);
+  const [outcomeHorizonDays, setOutcomeHorizonDays] = useState<OutcomeHorizon>(5);
+  const [selectedListVersionId, setSelectedListVersionId] = useState("");
+  const [listVersionLoadingId, setListVersionLoadingId] = useState("");
+  const [listDetailSource, setListDetailSource] = useState<ListDetailSource>("latest");
+  const [activeSort, setActiveSort] = useState<ActivePoolSort>(null);
+  const [reviews, setReviews] = useState<AdvisoryReviewDecision[]>([]);
+  const [reviewTotalCount, setReviewTotalCount] = useState(0);
+  const [reviewPage, setReviewPage] = useState(1);
+  const [reviewPageSize, setReviewPageSize] = useState<(typeof REVIEW_PAGE_SIZE_OPTIONS)[number]>(20);
+  const [returns, setReturns] = useState<AdvisoryEpisode[]>([]);
+  const [reviewResult, setReviewResult] = useState<AdvisoryReviewResult | null>(null);
+  const [expandedStrategyProgramId, setExpandedStrategyProgramId] = useState("");
+  const [programStrategyDrafts, setProgramStrategyDrafts] = useState<Record<string, ProgramStrategyDraft>>({});
+  const [createDeliveryPreflight, setCreateDeliveryPreflight] = useState<AdvisoryDeliveryPreflight | null>(null);
+  const [programDeliveryPreflights, setProgramDeliveryPreflights] = useState<Record<string, AdvisoryDeliveryPreflight>>({});
+  const [strategyActionKey, setStrategyActionKey] = useState("");
+  const [qualityRows, setQualityRows] = useState<QualityInputRow[]>(() => [{ ...newQualityRow(1), rowId: "quality-1" }]);
+  const [qualityReport, setQualityReport] = useState<AdvisoryQualityReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [loadedDetailsProgramId, setLoadedDetailsProgramId] = useState("");
+  const [addingWatchlist, setAddingWatchlist] = useState(false);
+  const [catchUpProgress, setCatchUpProgress] = useState<{ programId: string; index: number; total: number; targetDate: string } | null>(null);
+  const [tdxAvailable, setTdxAvailable] = useState(false);
+  const [tdxSyncing, setTdxSyncing] = useState(false);
+  const [tdxSyncResult, setTdxSyncResult] = useState<{ display_name: string; count: number } | null>(null);
+  const listDetailRef = useRef<HTMLDivElement | null>(null);
+  const refreshSeqRef = useRef(0);
+  const tradingDefaultsRequestRef = useRef<Promise<AdvisoryTradingDayDefaults | null> | null>(null);
+  const detailsSeqRef = useRef(0);
+  const modelShadowSeqRef = useRef(0);
+
+  const selectedProgram = useMemo(
+    () => programs.find((item) => item.program_id === selectedProgramId) || programs[0],
+    [programs, selectedProgramId],
+  );
+  const latestForwardPrediction = useMemo(
+    () => forwardPrediction(latestForwardDetail),
+    [latestForwardDetail],
+  );
+
+  const activeColumns = useMemo<ActivePoolColumn[]>(() => [
+    { key: "symbol", label: "股票", value: (row) => row.symbol, render: (row) => stockLabel(row) },
+    { key: "status", label: "状态", value: (row) => row.status, render: (row) => row.status },
+    { key: "signal_date", label: "信号日", value: (row) => row.signal_date, render: (row) => row.signal_date },
+    { key: "effective_entry_date", label: "入选生效日", value: (row) => row.effective_entry_date, render: (row) => row.effective_entry_date },
+    { key: "entry_price", label: "入选价", value: (row) => row.entry_price, render: (row) => fmtPrice(row.entry_price) },
+    { key: "entry_rank", label: "入选排名", value: (row) => row.entry_rank, render: (row) => fmtNumber(row.entry_rank) },
+    { key: "current_rank", label: "当前排名", value: (row) => row.current_rank ?? row.entry_rank, render: (row) => fmtNumber(row.current_rank ?? row.entry_rank) },
+    { key: "holding_trading_days", label: "持有天数", value: (row) => row.holding_trading_days, render: (row) => fmtNumber(row.holding_trading_days) },
+    { key: "return_bps", label: "涨跌幅", value: (row) => row.return_bps, render: (row) => fmtBps(row.return_bps) },
+    { key: "max_drawdown_bps", label: "最大回撤", value: (row) => row.max_drawdown_bps, render: (row) => fmtBps(row.max_drawdown_bps) },
+    { key: "price_quality_status", label: "价格状态", value: (row) => row.price_quality_status, render: (row) => row.price_quality_status || "-" },
+    { key: "exit_reason", label: "退出原因", value: (row) => row.exit_reason, render: (row) => row.exit_reason || "-" },
+  ], []);
+
+  const packageById = useMemo(
+    () => new Map(selectablePackages.map((pkg) => [pkg.package_id, pkg])),
+    [selectablePackages],
+  );
+
+  const packageLabel = (packageId: string): string => {
+    const pkg = packageById.get(packageId);
+    return pkg ? packageDisplayLabel(pkg) : shortHash(packageId, 7);
+  };
+
+  const packageSummary = (packageIds: string[]): string => {
+    if (!packageIds.length) return "-";
+    return packageIds.map(packageLabel).join(" + ");
+  };
+
+  const activeBindingForProgram = (programId: string): AdvisoryStrategyBindingVersion | undefined => {
+    if (programId === selectedProgram?.program_id && loadedDetailsProgramId === programId) {
+      return bindings.find((item) => item.activation_status === "ACTIVE") || bindings[0];
+    }
+    return undefined;
+  };
+
+  const sortedActivePool = useMemo(() => {
+    if (!activeSort) return activePool;
+    const column = activeColumns.find((item) => item.key === activeSort.key);
+    if (!column) return activePool;
+    const originalIndex = new Map(activePool.map((row, index) => [row.episode_id, index]));
+    return [...activePool].sort((left, right) => {
+      const compared = compareValues(column.value(left), column.value(right));
+      if (compared !== 0) return activeSort.direction === "asc" ? compared : -compared;
+      return (originalIndex.get(left.episode_id) ?? 0) - (originalIndex.get(right.episode_id) ?? 0);
+    });
+  }, [activeColumns, activePool, activeSort]);
+
+  const reviewTotalPages = Math.max(1, Math.ceil(reviewTotalCount / reviewPageSize));
+  const reviewPageSafe = Math.min(reviewPage, reviewTotalPages);
+  const pagedReviews = reviews;
+
+  async function loadReviews(programId: string, page: number, pageSize: (typeof REVIEW_PAGE_SIZE_OPTIONS)[number]) {
+    const offset = (Math.max(page, 1) - 1) * pageSize;
+    const pageData = await advisoryApi.reviews(programId, pageSize, offset);
+    setReviews(pageData.reviews);
+    setReviewTotalCount(pageData.total_count);
+  }
+
+  async function loadModelShadow(programId: string, version: AdvisoryRecommendationListVersion) {
+    const requestSeq = ++modelShadowSeqRef.current;
+    const targetDate = dateContextFromListVersion(version).targetTradeDate || version.trade_date;
+    setModelShadow(null);
+    setModelShadowError(null);
+    setModelShadowLoading(true);
+    try {
+      const shadow = await advisoryApi.modelShadow(programId, targetDate, "entry-v2", version.list_version_id);
+      if (requestSeq !== modelShadowSeqRef.current) return;
+      setModelShadow(shadow);
+    } catch (exc) {
+      if (requestSeq !== modelShadowSeqRef.current) return;
+      setModelShadowError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestSeq === modelShadowSeqRef.current) setModelShadowLoading(false);
+    }
+  }
+
+  function applyPackageOptions(packageOptions: SelectablePackage[]) {
+    setSelectablePackages(packageOptions);
+    setPackageRows((rows) => {
+      if (rows.some((row) => row.packageId.trim()) || !packageOptions[0]) return rows;
+      return rows.map((row, index) => index === 0 ? { ...row, packageId: packageOptions[0].package_id } : row);
+    });
+  }
+
+  async function loadSelectablePackageOptions() {
+    try {
+      applyPackageOptions(await selectionCenterApi.selectablePackages(100, "summary"));
+    } catch {
+      applyPackageOptions([]);
+    }
+  }
+
+  async function loadProgramDetails(programId: string, page = 1, pageSize: (typeof REVIEW_PAGE_SIZE_OPTIONS)[number] = reviewPageSize) {
+    const requestSeq = ++detailsSeqRef.current;
+    const stillCurrent = () => requestSeq === detailsSeqRef.current;
+    const offset = (Math.max(page, 1) - 1) * pageSize;
+    modelShadowSeqRef.current += 1;
+    setModelShadow(null);
+    setModelShadowError(null);
+    setModelShadowLoading(false);
+    setForwardRuns([]);
+    setLatestForwardDetail(null);
+    setForwardModelMetrics(null);
+    setForwardModelMetricsLoading(true);
+    setForwardError(null);
+    const [poolRows, reviewPageData, bindingRows, versionRows] = await Promise.all([
+      advisoryApi.activePool(programId),
+      advisoryApi.reviews(programId, pageSize, offset),
+      advisoryApi.bindings(programId),
+      advisoryApi.listVersions(programId, 20, 0),
+    ]);
+    if (!stillCurrent()) return versionRows;
+    setActivePool(poolRows);
+    setReviews(reviewPageData.reviews);
+    setReviewTotalCount(reviewPageData.total_count);
+    setBindings(bindingRows);
+    setListVersions(versionRows);
+    void advisoryApi.forwardRuns(programId, 20)
+      .then((forwardRows) => {
+        if (!stillCurrent()) return;
+        setForwardRuns(forwardRows);
+        if (!forwardRows[0]) return;
+        return advisoryApi.forwardRunDetail(forwardRows[0].forward_run_id);
+      })
+      .then((detail) => {
+        if (detail && stillCurrent()) setLatestForwardDetail(detail);
+      })
+      .catch((exc) => {
+        if (stillCurrent()) setForwardError(exc instanceof Error ? exc.message : String(exc));
+      });
+    void advisoryApi.forwardModelMetrics(programId)
+      .then((metrics) => {
+        if (!stillCurrent()) return;
+        setForwardModelMetrics(metrics);
+        setForwardModelMetricsLoading(false);
+      })
+      .catch((exc) => {
+        if (!stillCurrent()) return;
+        setForwardModelMetricsLoading(false);
+        setForwardError(exc instanceof Error ? exc.message : String(exc));
+      });
+    setLoadedDetailsProgramId(programId);
+    if (versionRows[0]) {
+      const latestVersion = versionRows[0];
+      setListVersionDetail({ list_version: latestVersion, items: [] });
+      setSelectedListVersionId(latestVersion.list_version_id);
+      setListDetailSource("latest");
+      setListVersionLoadingId(latestVersion.list_version_id);
+      void loadModelShadow(programId, latestVersion);
+      advisoryApi.listVersionDetail(latestVersion.list_version_id)
+        .then((detail) => {
+          if (!stillCurrent()) return;
+          setListVersionDetail(detail);
+          setSelectedListVersionId(detail.list_version.list_version_id);
+          setListDetailSource("latest");
+        })
+        .catch((exc) => {
+          if (stillCurrent()) setError(exc instanceof Error ? exc.message : String(exc));
+        })
+        .finally(() => {
+          if (stillCurrent()) setListVersionLoadingId("");
+        });
+    } else {
+      setListVersionDetail(null);
+      setSelectedListVersionId("");
+      setListDetailSource("latest");
+      setModelShadow(null);
+      setModelShadowError(null);
+      setModelShadowLoading(false);
+    }
+    setReturns([]);
+    advisoryApi.returns(programId)
+      .then((returnRows) => {
+        if (stillCurrent()) setReturns(returnRows.returns || []);
+      })
+      .catch((exc) => {
+        if (stillCurrent()) setError(exc instanceof Error ? exc.message : String(exc));
+      });
+    return versionRows;
+  }
+
+  async function refreshAll(nextProgramId?: string, options: { resetReviewDate?: boolean; preserveReviewDate?: boolean } = {}) {
+    const requestSeq = ++refreshSeqRef.current;
+    const stillCurrent = () => requestSeq === refreshSeqRef.current;
+    let ownedDetailsSeq: number | null = null;
+    setLoading(true);
+    setLeaderboardLoading(false);
+    setDetailsLoading(false);
+    setError(null);
+    setTradingDefaults(null);
+    setTradingDefaultsError(null);
+    const tradingDefaultsPromise = advisoryApi.tradingDayDefaults(10)
+      .then((defaults) => {
+        if (stillCurrent()) setTradingDefaults(defaults);
+        return defaults;
+      })
+      .catch((exc) => {
+        if (stillCurrent()) setTradingDefaultsError(exc instanceof Error ? exc.message : String(exc));
+        return null;
+      });
+    tradingDefaultsRequestRef.current = tradingDefaultsPromise;
+    try {
+      const programRows = await advisoryApi.programs(false);
+      if (!stillCurrent()) return;
+      const placeholderBoardRows = programRows.map((program) => ({ ...program, metric_status: "LOADING" })) as AdvisoryLeaderboardRow[];
+      const hydratedPrograms = programRows;
+      setPrograms(hydratedPrograms);
+      setLeaderboard(placeholderBoardRows);
+      setLeaderboardLoading(true);
+      if (options.resetReviewDate) setReviewDateTouched(false);
+      const resolvedProgramId = nextProgramId || selectedProgramId || hydratedPrograms[0]?.program_id || "";
+      const resolvedProgram = hydratedPrograms.find((item) => item.program_id === resolvedProgramId) || hydratedPrograms[0] || null;
+      setSelectedProgramId(resolvedProgramId);
+      setReviewPage(1);
+      setLoadedDetailsProgramId("");
+      setLoading(false);
+      void loadSelectablePackageOptions();
+      advisoryApi.leaderboard(sortBy)
+        .then((boardRows) => {
+          if (!stillCurrent()) return;
+          const boardById = new Map(boardRows.map((row) => [row.program_id, row]));
+          setPrograms((rows) => rows.map((program) => ({ ...(boardById.get(program.program_id) || {}), ...program })));
+          setLeaderboard(boardRows);
+        })
+        .catch((exc) => {
+          if (stillCurrent()) setError(exc instanceof Error ? exc.message : String(exc));
+        })
+        .finally(() => {
+          if (stillCurrent()) setLeaderboardLoading(false);
+        });
+      if (resolvedProgramId) {
+        setDetailsLoading(true);
+        const versionsPromise = loadProgramDetails(resolvedProgramId, 1, reviewPageSize);
+        ownedDetailsSeq = detailsSeqRef.current;
+        const versionRows = await versionsPromise;
+        if (!stillCurrent() || ownedDetailsSeq !== detailsSeqRef.current) return;
+        setDetailsLoading(false);
+        const nextTradingDefaults = await tradingDefaultsPromise;
+        if (!stillCurrent() || ownedDetailsSeq !== detailsSeqRef.current || !nextTradingDefaults) return;
+        setReviewTradeDate((current) => (
+          !options.preserveReviewDate && (options.resetReviewDate || !reviewDateTouched || !current)
+            ? defaultReviewTargetDate(nextTradingDefaults, resolvedProgram, versionRows)
+            : current
+        ));
+      } else {
+        setActivePool([]);
+        setReviews([]);
+        setReviewTotalCount(0);
+        setReturns([]);
+        setBindings([]);
+        setListVersions([]);
+        setListVersionDetail(null);
+        setSelectedListVersionId("");
+        setLoadedDetailsProgramId("");
+        setListDetailSource("latest");
+        setReviewResult(null);
+        const nextTradingDefaults = await tradingDefaultsPromise;
+        if (!stillCurrent() || !nextTradingDefaults) return;
+        setReviewTradeDate((current) => (!options.preserveReviewDate && (options.resetReviewDate || !reviewDateTouched || !current) ? defaultReviewTargetDate(nextTradingDefaults) : current));
+      }
+    } catch (exc) {
+      if (stillCurrent()) setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (stillCurrent()) {
+        setLoading(false);
+        if (ownedDetailsSeq === null || ownedDetailsSeq === detailsSeqRef.current) setDetailsLoading(false);
+      }
+    }
+  }
+
+  async function selectProgram(programId: string) {
+    setSelectedProgramId(programId);
+    setReviewPage(1);
+    setReviewResult(null);
+    setLoadedDetailsProgramId("");
+    setDetailsLoading(true);
+    setError(null);
+    const versionsPromise = loadProgramDetails(programId, 1, reviewPageSize);
+    const requestSeq = detailsSeqRef.current;
+    try {
+      const versionRows = await versionsPromise;
+      if (requestSeq !== detailsSeqRef.current) return;
+      setDetailsLoading(false);
+      const nextTradingDefaults = await (tradingDefaultsRequestRef.current || Promise.resolve(tradingDefaults));
+      if (requestSeq !== detailsSeqRef.current || !nextTradingDefaults) return;
+      const program = programs.find((item) => item.program_id === programId) || null;
+      setReviewTradeDate((current) => (!reviewDateTouched || !current ? defaultReviewTargetDate(nextTradingDefaults, program, versionRows) : current));
+    } catch (exc) {
+      if (requestSeq === detailsSeqRef.current) setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestSeq === detailsSeqRef.current) setDetailsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshAll().catch((exc) => setError(exc instanceof Error ? exc.message : String(exc)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortBy]);
+
+  useEffect(() => {
+    let alive = true;
+    advisoryApi.tdxAvailable().then((available) => {
+      if (alive) setTdxAvailable(available);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    advisoryApi.universeOptions().then((options) => {
+      if (!alive) return;
+      setUniverseOptions(options);
+    }).catch((exc) => {
+      if (alive) setError(exc instanceof Error ? exc.message : String(exc));
+    });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (prefillPackages) {
+      setPackageRows(packageRowsFromText(prefillPackages));
+    }
+  }, [prefillPackages]);
+
+  async function createProgram() {
+    setError(null);
+    try {
+      const packageIds = packageIdsFromRows(packageRows);
+      if (packageIds.length !== 1) throw new Error("请选择一个单 Alpha 策略包或一个原生多 Alpha 父包");
+      const selectedUniverse = requireUniverseSelection(universeMode, universePoolIds);
+      const preflight = await advisoryApi.deliveryPreflight({
+        package_id: packageIds[0],
+        universe_selection: selectedUniverse,
+        target_count: targetCount,
+      });
+      setCreateDeliveryPreflight(preflight);
+      if (preflight.overall_status === "BLOCKED") {
+        throw new Error(`策略包交付预检未通过：${preflight.blockers.join("；") || preflight.universe_compatibility.status}`);
+      }
+      const confirmed = window.confirm(`确认创建并启用荐股任务「${programName}」？启用后会进入每日复评与排行榜统计。`);
+      if (!confirmed) return;
+      const program = await advisoryApi.createProgram({
+        program_name: programName,
+        package_mode: "single_package",
+        package_ids: packageIds,
+        target_count: targetCount,
+        package_weights: { [packageIds[0]]: 1 },
+        universe_selection: selectedUniverse,
+        status: "ENABLED",
+      });
+      await refreshAll(program.program_id);
+      if (reviewTradeDate) {
+        window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+      }
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  async function setStatus(programId: string, action: "enable" | "pause" | "archive") {
+    setError(null);
+    const program = programs.find((item) => item.program_id === programId);
+    if (action === "enable") {
+      const confirmed = window.confirm(`确认启用荐股任务「${program?.program_name || programId}」？启用后会进入每日复评与排行榜统计。`);
+      if (!confirmed) return;
+    }
+    try {
+      if (action === "enable") await advisoryApi.enable(programId);
+      if (action === "pause") await advisoryApi.pause(programId);
+      if (action === "archive") await advisoryApi.archive(programId);
+      await refreshAll(programId);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  async function cloneProgram(programId: string) {
+    setError(null);
+    try {
+      const program = await advisoryApi.clone(programId);
+      await refreshAll(program.program_id);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  async function runReview(program: AdvisoryProgram, preview: boolean, targetDate?: string, selectionAsOfDate?: string | null) {
+    if (!tradingDefaults) return;
+    const programVersions = program.program_id === selectedProgram?.program_id && loadedDetailsProgramId === program.program_id ? listVersions : [];
+    const context = reviewActionContext(tradingDefaults, program, programVersions, targetDate || (program.program_id === selectedProgram?.program_id ? reviewTradeDate : ""));
+    if (!context.state.canPreview || (!preview && !context.state.canRun)) return;
+    setError(null);
+    setReviewResult(null);
+    setReviewingKey(`${program.program_id}:${preview ? "preview" : "run"}`);
+    try {
+      const resolvedSelectionAsOfDate = selectionAsOfDate ?? context.selectionAsOfDate;
+      const payload = buildReviewPayload(program, context.targetDate, resolvedSelectionAsOfDate);
+      const result = preview
+        ? await advisoryApi.previewReview(program.program_id, payload)
+        : await advisoryApi.runReview(program.program_id, payload);
+      if (!preview) await refreshAll(program.program_id, { resetReviewDate: true });
+      setReviewResult(result);
+      setSelectedListVersionId(result.list_version_id || "");
+      if (result.list_items && result.list_version_id) {
+        setListDetailSource("review_result");
+        const activeCount = result.list_items.filter((item) => item.item_state === "ACTIVE").length;
+        setListVersionDetail({
+          list_version: {
+            list_version_id: result.list_version_id,
+            program_id: program.program_id,
+            binding_version_id: result.binding_version_id || activeBinding?.binding_version_id || "",
+            review_run_id: result.review_run_id || "",
+            trade_date: result.trade_date,
+            previous_list_version_id: listVersions[0]?.list_version_id || null,
+            version_status: result.preview ? "PREVIEW" : "PUBLISHED",
+            target_count: program.target_count,
+            active_count: activeCount,
+            entered_count: Number(result.change_summary?.entered_count ?? 0),
+            held_count: Number(result.change_summary?.held_count ?? 0),
+            exited_count: Number(result.change_summary?.exited_count ?? 0),
+            waiting_count: Number(result.change_summary?.waiting_count ?? 0),
+            changed_count: Number(result.change_summary?.changed_count ?? result.decisions.length),
+            turnover_rate: result.change_summary?.turnover_rate as number | null | undefined,
+            overlap_rate: result.change_summary?.overlap_rate as number | null | undefined,
+          },
+          items: result.list_items,
+        });
+      } else {
+        setListDetailSource("latest");
+      }
+      window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setReviewingKey("");
+    }
+  }
+
+  async function runCatchUp(program: AdvisoryProgram, targetDates: string[]) {
+    if (!tradingDefaults) return;
+    const programVersions = program.program_id === selectedProgram?.program_id && loadedDetailsProgramId === program.program_id ? listVersions : [];
+    const context = reviewActionContext(tradingDefaults, program, programVersions);
+    const orderedTargetDates = sortedDates(targetDates).filter((date) => context.progress.missingTargetDates.includes(date));
+    if (!orderedTargetDates.length) return;
+    setError(null);
+    setReviewResult(null);
+    setReviewingKey(`${program.program_id}:catchup`);
+    try {
+      let lastResult: AdvisoryReviewResult | null = null;
+      for (const [index, targetDate] of orderedTargetDates.entries()) {
+        setCatchUpProgress({ programId: program.program_id, index: index + 1, total: orderedTargetDates.length, targetDate });
+        const selectionAsOfDate = selectionAsOfForTarget(targetDate, tradingDefaults);
+        lastResult = await advisoryApi.runReview(program.program_id, buildReviewPayload(program, targetDate, selectionAsOfDate));
+      }
+      await refreshAll(program.program_id, { preserveReviewDate: false, resetReviewDate: true });
+      setReviewResult(lastResult);
+      if (lastResult?.list_version_id) setSelectedListVersionId(lastResult.list_version_id);
+      window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setCatchUpProgress(null);
+      setReviewingKey("");
+    }
+  }
+
+  function setProgramStrategyDraft(programId: string, updater: (draft: ProgramStrategyDraft) => ProgramStrategyDraft) {
+    setProgramStrategyDrafts((drafts) => {
+      const program = programs.find((item) => item.program_id === programId) || leaderboard.find((item) => item.program_id === programId);
+      if (!program) return drafts;
+      const current = drafts[programId] || strategyDraftFromProgram(program, activeBindingForProgram(programId));
+      return { ...drafts, [programId]: updater(current) };
+    });
+  }
+
+  async function toggleStrategyManager(program: AdvisoryProgram) {
+    if (expandedStrategyProgramId === program.program_id) {
+      setExpandedStrategyProgramId("");
+      return;
+    }
+    setExpandedStrategyProgramId(program.program_id);
+    if (programStrategyDrafts[program.program_id]) return;
+    setStrategyActionKey(`${program.program_id}:load-binding`);
+    try {
+      let binding = activeBindingForProgram(program.program_id);
+      if (!binding) {
+        binding = await advisoryApi.activeBinding(program.program_id);
+      }
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: strategyDraftFromProgram(program, binding),
+      }));
+    } catch {
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: strategyDraftFromProgram(program),
+      }));
+    } finally {
+      setStrategyActionKey("");
+    }
+  }
+
+  function updateStrategyRow(programId: string, rowId: string, patch: Partial<PackageWeightRow>) {
+    setProgramDeliveryPreflights((rows) => {
+      const next = { ...rows };
+      delete next[programId];
+      return next;
+    });
+    setProgramStrategyDraft(programId, (draft) => ({
+      ...draft,
+      rows: draft.rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row),
+    }));
+  }
+
+  async function applyProgramStrategyBinding(program: AdvisoryProgram) {
+    const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
+    const activationReason = draft.activationReason.trim() || `更新荐股任务「${program.program_name}」策略包配置`;
+    setError(null);
+    setStrategyActionKey(`${program.program_id}:apply`);
+    try {
+      const binding = bindingPayloadFromDraft(draft);
+      const packageId = binding.package_ids[0];
+      const preflight = await advisoryApi.deliveryPreflight({
+        package_id: packageId,
+        universe_selection: binding.universe_selection || DEFAULT_UNIVERSE_SELECTION,
+        target_count: Number(binding.target_count ?? program.target_count),
+        program_id: program.program_id,
+      });
+      setProgramDeliveryPreflights((rows) => ({ ...rows, [program.program_id]: preflight }));
+      if (preflight.overall_status === "BLOCKED") {
+        throw new Error(`策略包交付预检未通过：${preflight.blockers.join("；") || preflight.universe_compatibility.status}`);
+      }
+      const defaults = await advisoryApi.bindingDefaults(program.program_id);
+      const result = await advisoryApi.applyBinding(program.program_id, {
+        binding,
+        activation_reason: activationReason,
+        source_replay_run_id: null,
+        expected_program_version: defaults.expected_program_version,
+        expected_binding_version_id: defaults.expected_binding_version_id,
+        effective_from_trade_date: defaults.effective_from_trade_date,
+        created_by: "advisory_ui",
+      });
+      setProgramStrategyDrafts((drafts) => ({
+        ...drafts,
+        [program.program_id]: {
+          ...strategyDraftFromProgram(result.program, result.binding),
+          activationReason,
+          activeBindingVersionId: result.binding.binding_version_id,
+          applyResult: result.binding,
+        },
+      }));
+      const keepSelectedProgramId = selectedProgramId || program.program_id;
+      await refreshAll(keepSelectedProgramId, { preserveReviewDate: true });
+      setExpandedStrategyProgramId(program.program_id);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setStrategyActionKey("");
+    }
+  }
+
+  function openView(view: "current" | "historical-range", programId = "") {
+    setActiveView(view);
+    if (programId) setHistoricalProgramId(programId);
+    const query = new URLSearchParams(window.location.search);
+    query.set("view", view);
+    if (programId) query.set("program_id", programId);
+    else if (view === "current") query.delete("program_id");
+    window.history.pushState({}, "", `${window.location.pathname}?${query.toString()}`);
+  }
+
+  async function buildQualityReport() {
+    setError(null);
+    setQualityReport(null);
+    try {
+      const records = qualityRows
+        .filter((row) => row.code.trim() || row.tradeDate || row.currentPrice.trim() || row.maxBuyPrice.trim())
+        .map(buildQualityRecord);
+      if (!records.length) throw new Error("请至少填写一条诊断样本");
+      setQualityReport(await advisoryApi.qualityReport(records, 1));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  function updatePackageRow(rowId: string, patch: Partial<PackageWeightRow>) {
+    setCreateDeliveryPreflight(null);
+    setPackageRows((rows) => rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
+  }
+
+  function updateQualityRow(rowId: string, patch: Partial<QualityInputRow>) {
+    setQualityRows((rows) => rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
+  }
+
+  async function changeReviewPage(nextPage: number) {
+    if (!selectedProgram) return;
+    setDetailsLoading(true);
+    setError(null);
+    try {
+      await loadReviews(selectedProgram.program_id, nextPage, reviewPageSize);
+      setReviewPage(nextPage);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
+  async function changeReviewPageSize(nextPageSize: (typeof REVIEW_PAGE_SIZE_OPTIONS)[number]) {
+    if (!selectedProgram) {
+      setReviewPageSize(nextPageSize);
+      setReviewPage(1);
+      return;
+    }
+    setDetailsLoading(true);
+    setError(null);
+    try {
+      await loadReviews(selectedProgram.program_id, 1, nextPageSize);
+      setReviewPageSize(nextPageSize);
+      setReviewPage(1);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
+  async function viewListVersion(listVersionId: string) {
+    setListVersionLoadingId(listVersionId);
+    setError(null);
+    try {
+      const detail = await advisoryApi.listVersionDetail(listVersionId);
+      setListVersionDetail(detail);
+      setSelectedListVersionId(detail.list_version.list_version_id);
+      setListDetailSource("timeline");
+      setReviewResult(null);
+      void loadModelShadow(detail.list_version.program_id, detail.list_version);
+      window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setListVersionLoadingId("");
+    }
+  }
+
+  const selectedVersionsForContext = selectedProgram && loadedDetailsProgramId === selectedProgram.program_id ? listVersions : [];
+  const selectedDateContextLoading = Boolean(selectedProgram && (!tradingDefaults || loadedDetailsProgramId !== selectedProgram.program_id));
+  const selectedActionContext = selectedProgram
+    ? reviewActionContext(tradingDefaults, selectedProgram, selectedVersionsForContext, reviewTradeDate)
+    : null;
+  const reviewDateChoices = selectedDateContextLoading ? [] : selectedActionContext?.dateChoices || [];
+  const selectedReviewDateChoice = selectedDateContextLoading ? undefined : selectedActionContext?.selectedChoice;
+  const reviewSelectionAsOfDate = selectedDateContextLoading ? null : selectedActionContext?.selectionAsOfDate || null;
+  const selectedReviewProgress = selectedActionContext?.progress || reviewProgress(tradingDefaults, selectedProgram, selectedVersionsForContext, reviewTradeDate);
+  const selectedBlockingMissingDate = selectedDateContextLoading ? null : selectedActionContext?.blockingMissingTargetDate || null;
+  const selectedReviewState = selectedDateContextLoading
+    ? loadingReviewState("正在加载该任务最新预测目标日与缺失复评日期，加载完成后按钮状态会固定。")
+    : selectedActionContext?.state || null;
+  const selectedPreviewKey = selectedProgram ? `${selectedProgram.program_id}:preview` : "";
+  const selectedRunKey = selectedProgram ? `${selectedProgram.program_id}:run` : "";
+  const selectedCatchUpKey = selectedProgram ? `${selectedProgram.program_id}:catchup` : "";
+  const activeBinding = bindings.find((item) => item.activation_status === "ACTIVE") || bindings[0];
+  const selectedLatestMeta = latestRecommendationMeta(selectedProgram, selectedVersionsForContext);
+  const reviewResultDetailActive = listDetailSource === "review_result" && Boolean(reviewResult?.list_version_id);
+  const visibleListItems = reviewResultDetailActive ? (reviewResult?.list_items || []) : listVersionDetail?.items || [];
+  const visibleListVersion: AdvisoryRecommendationListVersion | undefined = reviewResultDetailActive && reviewResult?.list_version_id
+    ? {
+        list_version_id: reviewResult.list_version_id,
+        program_id: reviewResult.program.program_id,
+        binding_version_id: reviewResult.binding_version_id || activeBinding?.binding_version_id || "",
+        review_run_id: reviewResult.review_run_id || "",
+        trade_date: reviewResult.trade_date,
+        previous_list_version_id: listVersions[0]?.list_version_id || null,
+        version_status: reviewResult.preview ? "PREVIEW" : "PUBLISHED",
+        target_count: reviewResult.program.target_count,
+        summary_json: reviewResult.change_summary || {},
+        target_trade_date: typeof reviewResult.change_summary?.advisory_date_context === "object" ? String((reviewResult.change_summary.advisory_date_context as JsonObject).target_trade_date || reviewResult.trade_date) : reviewResult.trade_date,
+        selection_as_of_trade_date: typeof reviewResult.change_summary?.advisory_date_context === "object" ? String((reviewResult.change_summary.advisory_date_context as JsonObject).selection_as_of_trade_date || "") || null : null,
+        active_count: visibleListItems.filter((item) => item.item_state === "ACTIVE").length,
+        entered_count: Number(reviewResult.change_summary?.entered_count ?? 0),
+        held_count: Number(reviewResult.change_summary?.held_count ?? 0),
+        exited_count: Number(reviewResult.change_summary?.exited_count ?? 0),
+        waiting_count: Number(reviewResult.change_summary?.waiting_count ?? 0),
+        changed_count: Number(reviewResult.change_summary?.changed_count ?? reviewResult.decisions.length),
+        turnover_rate: reviewResult.change_summary?.turnover_rate as number | null | undefined,
+        overlap_rate: reviewResult.change_summary?.overlap_rate as number | null | undefined,
+        created_at: null,
+      }
+    : listVersionDetail?.list_version || undefined;
+  const visibleListSourceLabel = listDetailSource === "review_result" ? "刚刚执行结果" : listDetailSource === "timeline" ? "手动查看版本" : "最新列表版本";
+  const finalWatchlistItems = useMemo(() => finalRecommendationItems(visibleListItems), [visibleListItems]);
+  const watchlistCategoryName = useMemo(
+    () => defaultWatchlistCategoryName(selectedProgram, visibleListVersion),
+    [selectedProgram, visibleListVersion],
+  );
+  const canAddFinalWatchlist = Boolean(
+    selectedProgram &&
+      visibleListVersion?.version_status === "PUBLISHED" &&
+      finalWatchlistItems.length &&
+      !addingWatchlist,
+  );
+
+  async function ensureWatchlistCategory(name: string) {
+    const existing = (await advisoryApi.watchlistCategories()).find((category) => category.name === name);
+    if (existing) return existing;
+    try {
+      return await advisoryApi.createWatchlistCategory(name, `荐股中心自动创建：${name}`);
+    } catch (exc) {
+      const raced = (await advisoryApi.watchlistCategories()).find((category) => category.name === name);
+      if (raced) return raced;
+      throw exc;
+    }
+  }
+
+  async function addFinalListToWatchlist() {
+    if (!selectedProgram || !visibleListVersion) return;
+    if (visibleListVersion.version_status !== "PUBLISHED") {
+      setError("只有正式发布后的最终荐股名单可以加入自选股票池；预览结果请先执行正式复评。");
+      return;
+    }
+    if (!finalWatchlistItems.length) {
+      setError("当前列表没有 ACTIVE 状态的最终荐股，无法加入自选股票池。");
+      return;
+    }
+    setAddingWatchlist(true);
+    setError(null);
+    try {
+      const category = await ensureWatchlistCategory(watchlistCategoryName);
+      const codes = finalWatchlistItems.map((item) => item.symbol);
+      const result = await advisoryApi.addWatchlistItems(codes, category.id);
+      const added = result.added ?? result.inserted ?? 0;
+      const skipped = result.skipped ?? Math.max(0, codes.length - added);
+      window.alert(`已将 ${codes.length} 只最终荐股加入自选股票池分类「${category.name}」。新增 ${added} 只，已存在 ${skipped} 只。`);
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+    } finally {
+      setAddingWatchlist(false);
+    }
+  }
+
+  async function syncFinalListToTdx() {
+    if (!canAddFinalWatchlist) return;
+    setTdxSyncing(true);
+    setTdxSyncResult(null);
+    setError(null);
+    try {
+      const result = await advisoryApi.tdxSyncFromCategory(watchlistCategoryName);
+      setTdxSyncResult({ display_name: result.display_name, count: result.count });
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setTdxSyncing(false);
+    }
+  }
+
+  function renderStrategyManager(program: AdvisoryProgram): ReactNode {
+    const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
+    const loadingBinding = strategyActionKey === `${program.program_id}:load-binding`;
+    const applyRunning = strategyActionKey === `${program.program_id}:apply`;
+    const deliveryPreflight = programDeliveryPreflights[program.program_id];
+    if (isLegacyManualMultiPackage(program)) {
+      return (
+        <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">历史策略绑定</div>
+              <h3 style={{ margin: 0 }}>{program.program_name}</h3>
+              <p className="pv2-muted" data-testid={`advisory-strategy-manager-hint-${program.program_id}`}>
+                历史手工多包模式已退役，现有列表和复评证据继续保留查询。新的荐股任务请选择一个单 Alpha 策略包或一个经过回测验证的原生多 Alpha 父包。
+              </p>
+            </div>
+            <button className="pv2-button-ghost" onClick={() => setExpandedStrategyProgramId("")} type="button">收起</button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">独立策略包配置</div>
+            <h3 style={{ margin: 0 }}>{program.program_name}</h3>
+            <p className="pv2-muted" data-testid={`advisory-strategy-manager-hint-${program.program_id}`}>
+              当前面板只作用于本荐股任务；历史研究请进入独立的 Phase 1R 范围，不会修改本任务荐股列表或 active binding。
+            </p>
+          </div>
+          <button
+            className="pv2-button-ghost"
+            onClick={() => setExpandedStrategyProgramId("")}
+            type="button"
+          >
+            收起
+          </button>
+        </div>
+        <div className="pv2-form-grid" style={{ marginTop: 8 }}>
+          <label className="pv2-field">
+            目标数量
+            <input
+              className="pv2-input"
+              data-testid={`advisory-strategy-target-count-${program.program_id}`}
+              min={1}
+              max={100}
+              type="number"
+              value={draft.targetCount}
+              onChange={(event) => {
+                setProgramDeliveryPreflights((rows) => {
+                  const next = { ...rows };
+                  delete next[program.program_id];
+                  return next;
+                });
+                setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, applyResult: null }));
+              }}
+            />
+          </label>
+          <label className="pv2-field">
+            应用原因
+            <input
+              className="pv2-input"
+              data-testid={`advisory-strategy-activation-reason-${program.program_id}`}
+              value={draft.activationReason}
+              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, activationReason: event.target.value }))}
+            />
+          </label>
+          <label className="pv2-field">
+            荐股股票池
+            <select
+              className="pv2-select"
+              data-testid={`advisory-strategy-universe-mode-${program.program_id}`}
+              value={draft.universeMode}
+              onChange={(event) => {
+                const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setProgramDeliveryPreflights((rows) => {
+                  const next = { ...rows };
+                  delete next[program.program_id];
+                  return next;
+                });
+                setProgramStrategyDraft(program.program_id, (current) => ({
+                  ...current,
+                  universeMode: mode,
+                  universePoolIds: mode === "stock_universe" ? [] : current.universePoolIds.slice(0, 1),
+                  applyResult: null,
+                }));
+              }}
+            >
+              <option value="stock_universe">全市场股票池</option>
+              <option value="single_index">单个核心指数</option>
+              <option value="index_union">多个核心指数并集</option>
+            </select>
+          </label>
+          {draft.universeMode !== "stock_universe" ? (
+            <label className="pv2-field">
+              核心指数{draft.universeMode === "index_union" ? "（可多选）" : ""}
+              {draft.universeMode === "index_union" ? (
+                <select
+                  className="pv2-select"
+                  data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
+                  multiple
+                  value={draft.universePoolIds}
+                  onChange={(event) => {
+                    setProgramDeliveryPreflights((rows) => {
+                      const next = { ...rows };
+                      delete next[program.program_id];
+                      return next;
+                    });
+                    setProgramStrategyDraft(program.program_id, (current) => ({
+                      ...current,
+                      universePoolIds: Array.from(event.target.selectedOptions, (option) => option.value),
+                      applyResult: null,
+                    }));
+                  }}
+                >
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              ) : (
+                <select
+                  className="pv2-select"
+                  data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
+                  value={draft.universePoolIds[0] || ""}
+                  onChange={(event) => {
+                    setProgramDeliveryPreflights((rows) => {
+                      const next = { ...rows };
+                      delete next[program.program_id];
+                      return next;
+                    });
+                    setProgramStrategyDraft(program.program_id, (current) => ({
+                      ...current,
+                      universePoolIds: event.target.value ? [event.target.value] : [],
+                      applyResult: null,
+                    }));
+                  }}
+                >
+                  <option value="">选择核心指数</option>
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              )}
+            </label>
+          ) : null}
+        </div>
+        <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+          <table className="pv2-table">
+            <thead><tr><th>策略包</th><th>类型</th><th>状态</th></tr></thead>
+            <tbody>
+              {draft.rows.slice(0, 1).map((row) => (
+                <tr key={row.rowId}>
+                  <td>
+                    <select
+                      className="pv2-select"
+                      data-testid={`advisory-strategy-package-${program.program_id}-${row.rowId}`}
+                      value={row.packageId}
+                      onChange={(event) => updateStrategyRow(program.program_id, row.rowId, { packageId: event.target.value })}
+                    >
+                      <option value="">选择策略包</option>
+                      {selectablePackages.map((pkg) => (
+                        <option key={pkg.package_id} value={pkg.package_id}>{packageOptionLabel(pkg)}</option>
+                      ))}
+                      {row.packageId && !packageById.has(row.packageId) ? (
+                        <option value={row.packageId}>当前绑定策略包 {shortHash(row.packageId, 7)}</option>
+                      ) : null}
+                    </select>
+                    <div className="pv2-muted" style={{ marginTop: 4 }}>
+                      {row.packageId ? `${packageLabel(row.packageId)} / ${packageById.get(row.packageId)?.package_status || "当前绑定"}` : "从下拉菜单选择策略包，不需要填写或记忆内部 ID。"}
+                    </div>
+                  </td>
+                  <td>{packageById.get(row.packageId)?.alpha_mode || "-"}</td>
+                  <td>{packageById.get(row.packageId)?.package_status || "当前绑定"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="pv2-row-actions" style={{ marginTop: 10 }}>
+          <button
+            className="pv2-button"
+            data-testid={`advisory-strategy-replay-${program.program_id}`}
+            disabled={loadingBinding || applyRunning}
+            onClick={() => openView("historical-range", program.program_id)}
+            type="button"
+          >
+            在历史验证中研究
+          </button>
+          <button
+            className="pv2-button-primary"
+            data-testid={`advisory-strategy-apply-${program.program_id}`}
+            disabled={loadingBinding || applyRunning}
+            onClick={() => void applyProgramStrategyBinding(program)}
+            type="button"
+          >
+            {applyRunning ? "应用中..." : "应用新策略绑定"}
+          </button>
+          <span className="pv2-muted">历史验证是独立研究路径，不作为应用绑定的程序硬门禁；应用后仅替换本任务策略包配置。</span>
+        </div>
+        {deliveryPreflight ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-delivery-preflight-${program.program_id}`}>
+            {deliveryPreflightSummary(deliveryPreflight)}
+          </div>
+        ) : null}
+        {draft.applyResult ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-apply-result-${program.program_id}`}>
+            已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)} / 股票池 {draft.applyResult.universe_selection?.mode || "stock_universe"}{draft.applyResult.universe_selection?.pool_ids.length ? ` (${draft.applyResult.universe_selection.pool_ids.join("+")})` : ""}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <main className="pv2-main">
+      <nav className="ahr-view-switch" aria-label="荐股研究视图" data-testid="advisory-view-switch">
+        <button aria-current={activeView === "current" ? "page" : undefined} className={activeView === "current" ? "is-active" : ""} onClick={() => openView("current")} type="button">当前荐股</button>
+        <button aria-current={activeView === "historical-range" ? "page" : undefined} className={activeView === "historical-range" ? "is-active" : ""} onClick={() => openView("historical-range")} type="button">历史验证</button>
+      </nav>
+      {activeView === "historical-range" ? (
+        <HistoricalRangeResearchView prefillProgramId={historicalProgramId} />
+      ) : <>
+      <section className="pv2-card">
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">荐股中心</div>
+            <h2>运行中的荐股任务排行榜</h2>
+            <p className="pv2-muted">默认按胜率排序；自动保留的质量/状态字段仅为 last_review_status。</p>
+          </div>
+          <div className="pv2-row-actions">
+            <select className="pv2-select" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+              <option value="win_rate">胜率</option>
+              <option value="avg_return_bps">平均涨幅</option>
+              <option value="median_return_bps">中位涨幅</option>
+              <option value="entered_episode_count">累计荐股数</option>
+              <option value="enabled_since">启用时间</option>
+              <option value="max_drawdown_bps">最大回撤</option>
+            </select>
+            <button className="pv2-button" onClick={() => refreshAll()} disabled={loading} type="button">刷新</button>
+          </div>
+        </div>
+        {error ? <div className="pv2-error-panel">{error}</div> : null}
+        {tradingDefaultsError ? (
+          <div className="pv2-error-panel" role="alert" data-testid="advisory-calendar-error">
+            交易日暂不可用：{tradingDefaultsError}。已有任务、荐股列表和持有池仍可查看；日期相关复评暂停，请点击“刷新”重试。
+          </div>
+        ) : !tradingDefaults ? (
+          <div className="pv2-readable-panel" role="status" data-testid="advisory-calendar-loading">
+            正在加载权威交易日；已有荐股数据独立加载，交易日就绪前不执行复评。
+          </div>
+        ) : null}
+        {loading || leaderboardLoading ? (
+          <div className="pv2-readable-panel" data-testid="advisory-fast-loading-status" style={{ marginBottom: 12 }}>
+            {loading
+              ? "正在加载荐股任务基础信息；任务列表会先显示，排行榜统计和明细随后异步补齐。"
+              : "荐股任务已显示，排行榜统计和所选任务明细仍在异步补齐。"}
+          </div>
+        ) : null}
+        <div className="pv2-table-wrap">
+          <table className="pv2-table">
+            <thead>
+              <tr>
+                <th>荐股任务</th>
+                <th>状态</th>
+                <th>启用时间</th>
+                <th>累计</th>
+                <th>当前持有</th>
+                <th>止盈</th>
+                <th>止损</th>
+                <th>胜率</th>
+                <th>平均涨幅</th>
+                <th>最近复评</th>
+                <th>每日复评</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leaderboard.map((row) => {
+                const legacyManualMulti = isLegacyManualMultiPackage(row);
+                const rowVersions = row.program_id === selectedProgram?.program_id && loadedDetailsProgramId === row.program_id ? listVersions : [];
+                const rowLatestMeta = latestRecommendationMeta(row, rowVersions);
+                const rowActionContext = reviewActionContext(tradingDefaults, row, rowVersions);
+                const rowProgress = rowActionContext.progress;
+                const rowContextLoading = !tradingDefaults || (leaderboardLoading && row.metric_status === "LOADING")
+                  || (row.program_id === selectedProgram?.program_id && loadedDetailsProgramId !== row.program_id);
+                const state = rowContextLoading ? loadingReviewState("正在加载该任务复评日期上下文，加载完成后按钮状态会固定。") : rowActionContext.state;
+                const previewKey = `${row.program_id}:preview`;
+                const runKey = `${row.program_id}:run`;
+                const catchUpKey = `${row.program_id}:catchup`;
+                const catchUpRunning = catchUpProgress?.programId === row.program_id;
+                return (
+                  <Fragment key={row.program_id}>
+                    <tr onClick={() => void selectProgram(row.program_id)}>
+                      <td><strong>{row.program_name}</strong><br /><span className="pv2-muted">{packageSummary(row.package_ids)}</span></td>
+                      <td>{row.status}</td>
+                      <td>{short(row.enabled_since, 16)}</td>
+                      <td>{row.entered_episode_count ?? 0}</td>
+                      <td>{row.active_count ?? 0}</td>
+                      <td>{row.take_profit_count ?? 0}</td>
+                      <td>{row.stop_loss_count ?? 0}</td>
+                      <td>{fmtPct(row.win_rate)}<br /><span className="pv2-muted">{metricStatusText(row)}</span></td>
+                      <td>{fmtBps(row.avg_return_bps)}<br /><span className="pv2-muted">样本 {row.metric_evaluable_count ?? 0}/{row.active_count ?? 0}</span></td>
+                      <td data-testid={`advisory-row-latest-context-${row.program_id}`}>
+                        {row.last_review_status || "STALE"}
+                        <br /><span className="pv2-muted">预测目标：{rowLatestMeta.targetTradeDate || "尚未生成"}</span>
+                        <br /><span className="pv2-muted">数据截止：{rowLatestMeta.selectionAsOfDate || "未记录"}</span>
+                        <br /><span className="pv2-muted">生成时间：{short(rowLatestMeta.generatedAt, 16)}</span>
+                      </td>
+                      <td>
+                        <div className="pv2-muted" data-testid={`advisory-row-review-progress-${row.program_id}`} style={{ marginBottom: 6 }}>
+                          已复评到：{rowProgress.reviewedThroughDate || "尚未开始"}；缺失：{compactDateList(rowProgress.missingTargetDates)}
+                          <br />本行待执行目标：{rowActionContext.targetDate || "-"}；数据截止：{rowActionContext.selectionAsOfDate || "系统解析"}
+                          {catchUpRunning ? <><br />补跑 {catchUpProgress.index}/{catchUpProgress.total}：{catchUpProgress.targetDate}</> : null}
+                          {rowContextLoading ? <><br />正在加载该任务完整版本时间线...</> : null}
+                        </div>
+                        <div className="pv2-row-actions">
+                          <button
+                            className="pv2-button"
+                            data-testid={`advisory-preview-${row.program_id}`}
+                            disabled={!state.canPreview || Boolean(reviewingKey)}
+                            onClick={(event) => { event.stopPropagation(); void runReview(row, true, rowActionContext.targetDate, rowActionContext.selectionAsOfDate); }}
+                            type="button"
+                          >
+                            {reviewingKey === previewKey ? "预览中..." : state.previewLabel}
+                          </button>
+                          <button
+                            className="pv2-button-primary"
+                            data-testid={`advisory-run-${row.program_id}`}
+                            disabled={!state.canRun || Boolean(reviewingKey)}
+                            onClick={(event) => { event.stopPropagation(); void runReview(row, false, rowActionContext.targetDate, rowActionContext.selectionAsOfDate); }}
+                            type="button"
+                          >
+                            {reviewingKey === runKey ? "执行中..." : state.label}
+                          </button>
+                          <button
+                            className="pv2-button"
+                            data-testid={`advisory-catchup-${row.program_id}`}
+                            disabled={legacyManualMulti || rowContextLoading || !rowProgress.missingTargetDates.length || Boolean(reviewingKey)}
+                            onClick={(event) => { event.stopPropagation(); void runCatchUp(row, rowProgress.missingTargetDates); }}
+                            type="button"
+                          >
+                            {reviewingKey === catchUpKey && catchUpProgress ? `补跑 ${catchUpProgress.index}/${catchUpProgress.total}` : `补齐全部缺失复评（${rowProgress.missingTargetDates.length} 天）`}
+                          </button>
+                          <button
+                            className="pv2-button"
+                            data-testid={`advisory-manage-strategy-${row.program_id}`}
+                            onClick={(event) => { event.stopPropagation(); void toggleStrategyManager(row); }}
+                            type="button"
+                          >
+                            {expandedStrategyProgramId === row.program_id ? "收起策略包" : "策略包配置"}
+                          </button>
+                        </div>
+                        <span className="pv2-muted">{state.hint}</span>
+                      </td>
+                    </tr>
+                    {expandedStrategyProgramId === row.program_id ? (
+                      <tr>
+                        <td colSpan={11}>{renderStrategyManager(row)}</td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {!leaderboard.length ? (
+                <tr><td colSpan={11}>暂无启用中的荐股任务；请在下方创建，页面不会展示 mock 行。</td></tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="pv2-card">
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">任务设置</div>
+            <h2>创建或管理独立荐股任务</h2>
+            <p className="pv2-muted">每个任务绑定一个原生 StrategyPackage；单 Alpha 包和经过回测验证的多 Alpha 父包使用同一运行链路。</p>
+          </div>
+          <button className="pv2-button-primary" data-testid="advisory-create-program" onClick={createProgram} type="button">创建并启用</button>
+        </div>
+        <div className="pv2-form-grid">
+          <label className="pv2-field">任务名称<input className="pv2-input" value={programName} onChange={(event) => setProgramName(event.target.value)} /></label>
+          <label className="pv2-field">目标数量<input className="pv2-input" data-testid="advisory-target-count" type="number" min={1} max={100} value={targetCount} onChange={(event) => { setCreateDeliveryPreflight(null); setTargetCount(Number(event.target.value)); }} /></label>
+          <label className="pv2-field">
+            荐股股票池
+            <select
+              className="pv2-select"
+              data-testid="advisory-universe-mode"
+              value={universeMode}
+              onChange={(event) => {
+                const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setCreateDeliveryPreflight(null);
+                setUniverseMode(mode);
+                setUniversePoolIds(mode === "stock_universe" ? [] : universePoolIds.slice(0, 1));
+              }}
+            >
+              <option value="stock_universe">全市场股票池</option>
+              <option value="single_index">单个核心指数</option>
+              <option value="index_union">多个核心指数并集</option>
+            </select>
+          </label>
+          {universeMode !== "stock_universe" ? (
+            <label className="pv2-field">
+              核心指数{universeMode === "index_union" ? "（可多选）" : ""}
+              {universeMode === "index_union" ? (
+                <select
+                  className="pv2-select"
+                  data-testid="advisory-universe-pools"
+                  multiple
+                  value={universePoolIds}
+                  onChange={(event) => {
+                    setCreateDeliveryPreflight(null);
+                    setUniversePoolIds(Array.from(event.target.selectedOptions, (option) => option.value));
+                  }}
+                >
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              ) : (
+                <select
+                  className="pv2-select"
+                  data-testid="advisory-universe-pools"
+                  value={universePoolIds[0] || ""}
+                  onChange={(event) => {
+                    setCreateDeliveryPreflight(null);
+                    setUniversePoolIds(event.target.value ? [event.target.value] : []);
+                  }}
+                >
+                  <option value="">选择核心指数</option>
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              )}
+            </label>
+          ) : null}
+        </div>
+        <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
+          <table className="pv2-table">
+            <thead><tr><th>策略包</th><th>类型</th><th>状态</th></tr></thead>
+            <tbody>
+              {packageRows.slice(0, 1).map((row) => (
+                <tr key={row.rowId}>
+                  <td>
+                    <select
+                      className="pv2-select"
+                      data-testid={`advisory-package-select-${row.rowId}`}
+                      value={row.packageId}
+                      onChange={(event) => updatePackageRow(row.rowId, { packageId: event.target.value })}
+                    >
+                      <option value="">选择策略包</option>
+                      {selectablePackages.map((pkg) => (
+                        <option key={pkg.package_id} value={pkg.package_id}>{packageOptionLabel(pkg)}</option>
+                      ))}
+                      {row.packageId && !packageById.has(row.packageId) ? (
+                        <option value={row.packageId}>已预填策略包 {shortHash(row.packageId, 7)}</option>
+                      ) : null}
+                    </select>
+                    <div className="pv2-muted" style={{ marginTop: 4 }}>
+                      {row.packageId ? `${packageLabel(row.packageId)} / ${packageById.get(row.packageId)?.package_status || "已预填"}` : "请从下拉菜单选择，无需记忆内部编号。"}
+                    </div>
+                  </td>
+                  <td>{packageById.get(row.packageId)?.alpha_mode || "-"}</td>
+                  <td>{packageById.get(row.packageId)?.package_status || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {createDeliveryPreflight ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-create-delivery-preflight">
+            {deliveryPreflightSummary(createDeliveryPreflight)}
+          </div>
+        ) : null}
+        <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
+          <table className="pv2-table">
+            <thead><tr><th>名称</th><th>策略模式</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>
+            <tbody>
+              {programs.map((program) => (
+                <tr key={program.program_id}>
+                  <td><button className="pv2-link-button" onClick={() => void selectProgram(program.program_id)} type="button">{program.program_name}</button></td>
+                  <td>{program.package_mode}</td>
+                  <td>{program.status}</td>
+                  <td>{program.version}</td>
+                  <td className="pv2-row-actions">
+                    <button className="pv2-button" data-testid={`advisory-enable-${program.program_id}`} disabled={program.status === "ENABLED" || isLegacyManualMultiPackage(program)} onClick={() => setStatus(program.program_id, "enable")} type="button">{isLegacyManualMultiPackage(program) ? "已退役" : program.status === "ENABLED" ? "已启用" : "启用"}</button>
+                    <button className="pv2-button-ghost" onClick={() => setStatus(program.program_id, "pause")} type="button">暂停</button>
+                    <button className="pv2-button-ghost" disabled={isLegacyManualMultiPackage(program)} onClick={() => cloneProgram(program.program_id)} type="button">克隆</button>
+                    <button className="pv2-button-danger" onClick={() => setStatus(program.program_id, "archive")} type="button">归档</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="pv2-card">
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">{selectedReviewState?.isInitialRun ? "首次运行" : "每日复评"}</div>
+            <h2>{selectedProgram ? selectedProgram.program_name : "未选择荐股任务"}</h2>
+            <p className="pv2-muted">
+              {detailsLoading ? "正在加载所选任务明细，排行榜和复评入口已可先查看。" : "上方表格是该荐股任务的最新/指定列表版本；下方“当前推荐股票”是仍处于 ACTIVE 的持有池，列表版本还会保留 ENTER/HOLD/EXIT/WAITING 的每日调整方案。"}
+            </p>
+          </div>
+          <div className="pv2-row-actions">
+            <button
+              className="pv2-button"
+              data-testid="advisory-selected-preview"
+              onClick={() => selectedProgram && void runReview(selectedProgram, true)}
+              disabled={!selectedProgram || !selectedReviewState?.canPreview || Boolean(reviewingKey)}
+              type="button"
+            >
+              {reviewingKey && reviewingKey === selectedPreviewKey ? "预览中..." : selectedReviewState?.previewLabel || "预览"}
+            </button>
+            <button
+              className="pv2-button-primary"
+              data-testid="advisory-selected-run"
+              onClick={() => selectedProgram && void runReview(selectedProgram, false)}
+              disabled={!selectedProgram || !selectedReviewState?.canRun || Boolean(reviewingKey)}
+              type="button"
+            >
+              {reviewingKey && reviewingKey === selectedRunKey ? "执行中..." : selectedReviewState?.label || "执行复评"}
+            </button>
+            <button
+              className="pv2-button"
+              data-testid="advisory-selected-catchup"
+              onClick={() => selectedProgram && void runCatchUp(selectedProgram, selectedReviewProgress.missingTargetDates)}
+              disabled={selectedDateContextLoading || !selectedProgram || isLegacyManualMultiPackage(selectedProgram) || !selectedReviewProgress.missingTargetDates.length || Boolean(reviewingKey)}
+              type="button"
+            >
+              {reviewingKey === selectedCatchUpKey && catchUpProgress ? `补跑 ${catchUpProgress.index}/${catchUpProgress.total}` : `补齐全部缺失复评（${selectedReviewProgress.missingTargetDates.length} 天）`}
+            </button>
+          </div>
+        </div>
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+          <label className="pv2-field" style={{ marginBottom: 8 }}>
+            目标荐股交易日
+            <select
+              className="pv2-select"
+              data-testid="advisory-review-target-select"
+              value={reviewTradeDate}
+              onChange={(event) => { setReviewDateTouched(true); setReviewTradeDate(event.target.value); }}
+              disabled={selectedDateContextLoading}
+            >
+              {!reviewDateChoices.length ? <option value={reviewTradeDate || ""}>{selectedDateContextLoading ? "正在加载复评日期上下文" : "等待交易日"}</option> : null}
+              {reviewDateChoices.map((option) => (
+                <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
+              ))}
+              {reviewDateChoices.length && reviewTradeDate && !reviewDateChoices.some((option) => option.value === reviewTradeDate) ? <option value={reviewTradeDate}>{reviewTradeDate}</option> : null}
+            </select>
+          </label>
+          <div data-testid="advisory-selected-latest-context">
+            <strong>最新荐股结果：</strong>
+            <span className="pv2-muted"> 预测目标 {selectedLatestMeta.targetTradeDate || "尚未生成"}；数据截止 {selectedLatestMeta.selectionAsOfDate || "未记录"}；生成时间 {short(selectedLatestMeta.generatedAt, 16)}；列表 {short(selectedLatestMeta.listVersionId, 18)}</span>
+          </div>
+          <strong>目标复评交易日： <span data-testid="advisory-review-target-date">{selectedDateContextLoading ? "加载中" : reviewTradeDate || "-"}</span></strong>
+          <span className="pv2-muted"> {selectedReviewState?.hint || "选择启用中的荐股任务后即可复评。"}</span>
+          <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-review-data-cutoff">
+            {selectedDateContextLoading
+              ? "正在加载该任务最新预测目标日、数据截止日与缺失复评日期。"
+              : `选股数据截止日：${reviewSelectionAsOfDate || "系统自动按目标交易日解析"}；${selectedReviewDateChoice?.description || "请选择目标荐股交易日。"}`}
+          </div>
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid="advisory-review-progress-summary">
+            <strong>复评补跑进度：</strong>
+            <span className="pv2-muted">
+              {" "}首个列表目标日 {selectedReviewProgress.firstPublishedTargetDate || "尚未生成"}；
+              最新已发布目标日 {selectedReviewProgress.latestPublishedTargetDate || "尚未生成"}；
+              当前连续复评到 {selectedReviewProgress.reviewedThroughDate || "尚未开始"}。
+            </span>
+            <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-review-missing-dates">
+              后续缺失目标日：{compactDateList(selectedReviewProgress.missingTargetDates)}。
+            </div>
+            <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-review-execution-scope">
+              本次按钮只执行目标交易日 {selectedDateContextLoading ? "加载中" : reviewTradeDate || "-"}，不是一次性补全所有漏评日；
+              {selectedReviewProgress.selectedRemainingMissingDates.length
+                ? `执行成功后仍需继续补跑：${compactDateList(selectedReviewProgress.selectedRemainingMissingDates)}。`
+                : "执行成功后若没有新的缺失日期，按钮会变为已复评或指向下一目标日。"}
+              {selectedBlockingMissingDate ? ` 当前选择被限制：必须先补 ${selectedBlockingMissingDate}。` : ""}
+              {catchUpProgress && catchUpProgress.programId === selectedProgram?.program_id ? ` 正在补齐全部缺失复评：${catchUpProgress.index}/${catchUpProgress.total}，目标 ${catchUpProgress.targetDate}。` : ""}
+            </div>
+          </div>
+          <div className="pv2-muted" style={{ marginTop: 6 }}>生效日按目标荐股交易日与选股数据截止日计算；盘中运行若只用昨日收盘数据，入选生效日应落到今天这个交易日，而不是简单自然日加一天。</div>
+          {activeBinding ? (
+            <div className="pv2-muted" style={{ marginTop: 6 }}>
+              当前策略绑定：{activeBinding.package_mode} / {packageSummary(activeBinding.package_ids)} / {short(activeBinding.binding_version_id, 18)}
+            </div>
+          ) : null}
+        </div>
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-forward-publication">
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">每日前向</div>
+              <h3>基线发布与模型观察</h3>
+            </div>
+            <div className="pv2-row-actions">
+              <span className={`pv2-badge ${forwardRuns[0]?.publication_status === "PUBLISHED" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {forwardRuns[0]?.publication_status || "NO_FORWARD_RUN"}
+              </span>
+              <span className="pv2-badge pv2-badge-neutral">{forwardRuns[0]?.settlement_status || "NOT_DUE"}</span>
+              <span className={`pv2-badge ${latestForwardDetail?.model_observation?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {latestForwardDetail?.model_observation?.status || "MODEL_UNAVAILABLE"}
+              </span>
+            </div>
+          </div>
+          {forwardError ? <div className="pv2-error" data-testid="advisory-forward-error">{forwardError}</div> : null}
+          {forwardRuns[0] ? (
+            <div data-testid="advisory-forward-latest">
+              <strong>目标日 {forwardRuns[0].target_trade_date}</strong>
+              <span className="pv2-muted"> 数据截止 {forwardRuns[0].decision_as_of_trade_date}；阶段 {forwardRuns[0].last_stage}；发布 {short(forwardRuns[0].published_at, 16)}；结算 {short(forwardRuns[0].settled_at, 16)}</span>
+              {forwardRuns[0].last_reason_code ? <div className="pv2-muted" style={{ marginTop: 6 }}>原因：{forwardRuns[0].last_reason_code}</div> : null}
+              {latestForwardDetail?.model_observation ? (
+                <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-model-identity">
+                  模型 {short(latestForwardDetail.model_observation.bundle_id, 14)}；Top5 {latestForwardDetail.model_observation.shortlist_count}/{latestForwardDetail.model_observation.candidate_count}；成熟日 {latestForwardDetail.model_observation.maturity_trade_date || "尚无"}
+                  {latestForwardDetail.model_observation.reason_code ? `；${latestForwardDetail.model_observation.reason_code}` : ""}
+                </div>
+              ) : null}
+              <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid="advisory-forward-model-metrics">
+                <div className="pv2-row-actions">
+                  <strong>模型前向效果</strong>
+                  <span className={`pv2-badge ${forwardModelMetrics?.status === "READY" ? "pv2-badge-success" : forwardModelMetrics?.status === "FAILED" ? "pv2-badge-danger" : "pv2-badge-neutral"}`}>
+                    {forwardModelMetricsLoading ? "LOADING" : forwardModelMetrics?.status || "UNAVAILABLE"}
+                  </span>
+                </div>
+                {forwardModelMetricsLoading ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>正在加载模型前向证据…</div>
+                ) : forwardModelMetrics?.evaluation ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>
+                    成熟 observation {forwardModelMetrics.evaluation.matured_outcome_count}/{forwardModelMetrics.evaluation.due_observation_count}；
+                    已退出 episode {forwardModelMetrics.evaluation.metrics_json.exited_episode_count ?? 0}；
+                    胜率 {fmtPct(forwardModelMetrics.evaluation.metrics_json.completed_episode_hit_rate)}；
+                    日均净收益 {fmtBps(forwardModelMetrics.evaluation.metrics_json.mean_daily_net_return_bps)}；
+                    日均超额 {fmtBps(forwardModelMetrics.evaluation.metrics_json.mean_daily_net_excess_return_bps)}；
+                    最大回撤 {fmtPct(forwardModelMetrics.evaluation.metrics_json.maximum_drawdown)}；
+                    平均换手 {fmtPct(forwardModelMetrics.evaluation.metrics_json.mean_turnover_fraction)}；
+                    覆盖率 {fmtPct(forwardModelMetrics.evaluation.metrics_json.coverage)}
+                  </div>
+                ) : forwardModelMetrics ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>
+                    已记录 {forwardModelMetrics?.observation_count ?? 0} 条 P0-D observation，
+                    当前到期 {forwardModelMetrics?.due_observation_count ?? 0} 条；
+                    {forwardModelMetrics?.next_maturity_trade_date
+                      ? `下一成熟日 ${forwardModelMetrics.next_maturity_trade_date}`
+                      : "尚无可结算样本"}
+                    {forwardModelMetrics?.reason_code ? `；${forwardModelMetrics.reason_code}` : ""}
+                  </div>
+                ) : (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>模型前向指标不可用，请查看上方错误。</div>
+                )}
+              </div>
+              {latestForwardPrediction ? (
+                <>
+                <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-child-status">
+                  收益/周期 {latestForwardPrediction.outcome?.status || "OUTCOME_UNAVAILABLE"}；价格区间 {latestForwardPrediction.price_range?.status || "PRICE_RANGE_UNAVAILABLE"}
+                </div>
+                <div className="pv2-table-wrap" style={{ marginTop: 10 }} data-testid="advisory-forward-prediction-table">
+                  <table className="pv2-table">
+                    <thead><tr><th>模型排名</th><th>股票</th><th>建议周期</th><th>5日收益区间</th><th>买入区间</th><th>止盈区间</th><th>止损区间</th></tr></thead>
+                    <tbody>
+                      {latestForwardPrediction.candidates
+                        .filter((candidate) => candidate.is_top5)
+                        .sort((left, right) => left.advisory_model_rank - right.advisory_model_rank)
+                        .map((candidate) => {
+                          const outcomeCandidate = latestForwardPrediction.outcome?.candidates.find((row) => row.symbol === candidate.symbol);
+                          const horizon = outcomeCandidate ? outcomeHorizon(outcomeCandidate, 5) : null;
+                          const price = latestForwardPrediction.price_range?.candidates.find((row) => row.symbol === candidate.symbol);
+                          return (
+                            <tr key={candidate.symbol} data-testid="advisory-forward-prediction-row">
+                              <td>{candidate.advisory_model_rank}</td>
+                              <td><strong>{candidate.symbol}</strong></td>
+                              <td>{outcomeCandidate ? `${outcomeCandidate.holding_period.range_low_days}-${outcomeCandidate.holding_period.range_high_days}日` : "-"}</td>
+                              <td>{horizon ? `${fmtPct(horizon.excess_return_calibrated_q10 ?? horizon.excess_return_q10)} - ${fmtPct(horizon.excess_return_calibrated_q90 ?? horizon.excess_return_q90)}` : "-"}</td>
+                              <td>{fmtPriceBand(price?.calibrated_entry_price_range ?? price?.entry_price_range)}</td>
+                              <td>{fmtPriceBand(price?.take_profit_price)}</td>
+                              <td>{fmtPriceBand(price?.stop_loss_price)}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="pv2-muted" data-testid="advisory-forward-empty">尚未产生自然前向发布日期；自动前向只从启用后当前交易日开始，不回填历史缺口。</div>
+          )}
+        </div>
+        {reviewResult ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+            <strong>复评状态： {reviewResult.review_status}</strong>
+            <span className="pv2-muted"> 决策数： {reviewResult.decisions.length}; 活跃快照数： {reviewResult.active_pool.length}; 列表版本： {short(reviewResult.list_version_id, 20)}</span>
+          </div>
+        ) : null}
+        {visibleListVersion ? (
+          <div className="pv2-readable-panel" ref={listDetailRef} style={{ marginTop: 12 }} data-testid="advisory-list-version-summary" tabIndex={-1}>
+            <strong>当前查看：{visibleListSourceLabel} / {short(visibleListVersion.list_version_id, 22)} / {visibleListVersion.trade_date} / {visibleListVersion.version_status}</strong>
+            <span className="pv2-muted">
+              {" "}ACTIVE {visibleListVersion.active_count}，ENTER {visibleListVersion.entered_count}，HOLD {visibleListVersion.held_count}，EXIT {visibleListVersion.exited_count}，WAITING {visibleListVersion.waiting_count}，换手 {fmtPct(visibleListVersion.turnover_rate)}，重合 {fmtPct(visibleListVersion.overlap_rate)}
+            </span>
+            <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-visible-list-date-context">
+              预测目标交易日：{dateContextFromListVersion(visibleListVersion).targetTradeDate || visibleListVersion.trade_date}；选股数据截止日：{dateContextFromListVersion(visibleListVersion).selectionAsOfDate || "未记录"}；生成时间：{short(visibleListVersion.created_at, 16)}
+            </div>
+            {visibleListVersion.waiting_count > 0 ? (
+              <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-list-waiting-hint">
+                WAITING 表示该版本已经生成，但对应股票仍在等待行情、停复牌或可交易性确认；这不是未刷新旧表。
+              </div>
+            ) : null}
+            <div className="pv2-row-actions" style={{ marginTop: 10 }}>
+              <button
+                className="pv2-button-primary"
+                data-testid="advisory-add-final-watchlist"
+                disabled={!canAddFinalWatchlist}
+                onClick={() => void addFinalListToWatchlist()}
+                type="button"
+              >
+                {addingWatchlist ? "加入中..." : "一键加入自选股票池"}
+              </button>
+              {tdxAvailable && (
+                <button
+                  className="pv2-button"
+                  data-testid="advisory-tdx-sync"
+                  disabled={!canAddFinalWatchlist || tdxSyncing}
+                  onClick={() => void syncFinalListToTdx()}
+                  type="button"
+                >
+                  📡 加入通达信自选
+                </button>
+              )}
+              <span className="pv2-muted" data-testid="advisory-watchlist-category-hint">
+                默认分类：{watchlistCategoryName}；仅加入当前 PUBLISHED 列表中 ACTIVE 的最终荐股，共 {finalWatchlistItems.length} 只。
+              </span>
+              {tdxSyncResult && (
+                <div className="pv2-readable-panel" style={{ marginTop: 8 }} data-testid="advisory-tdx-sync-result">
+                  ✅ 板块「{tdxSyncResult.display_name}」，已同步 {tdxSyncResult.count} 只股票到通达信客户端。
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="pv2-readable-panel" ref={listDetailRef} style={{ marginTop: 12 }} data-testid="advisory-list-version-summary" tabIndex={-1}>
+            <strong>尚未生成初始列表</strong>
+            <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
+          </div>
+        )}
+        <SectorEntryPriceCard programId={selectedProgram?.program_id} targetTradeDate={visibleListVersion?.target_trade_date || visibleListVersion?.trade_date} listVersionId={visibleListVersion?.list_version_id} />
+        <EconomicEntryValueCard programId={selectedProgram?.program_id} targetTradeDate={visibleListVersion?.target_trade_date || visibleListVersion?.trade_date} />
+        <section className="mt-3 rounded-lg border bg-card p-4 text-card-foreground" data-testid="advisory-entry-price">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">独立买入价格区间</h3>
+            <span className="text-sm text-muted-foreground">{modelShadowLoading ? "LOADING" : modelShadow?.entry_price?.availability_status || "UNAVAILABLE"}</span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            目标日 {modelShadow?.entry_price?.target_trade_date || "-"} · RISK_MANAGED_ADVISORY · 不复权人民币。
+            预测对象为下一交易日有效开盘价分布，不是盘中最佳买点，不承诺收益或成交；不改变原荐股排序。
+          </p>
+          <p className="mt-1 text-sm" data-testid="advisory-entry-evidence">
+            {modelShadow?.entry_price?.evidence_state === "CONFIRMED_PRICE_DISTRIBUTION" ? "已确认价格分布（不代表收益验证通过）" : "价格模型尚未确认或配置"}
+          </p>
+          {modelShadow?.entry_price?.reason_code ? <p className="mt-2 text-sm" role="status">{modelShadow.entry_price.reason_code} · {modelShadow.entry_price.message}</p> : null}
+          {!modelShadowLoading && !modelShadow?.entry_price ? <p className="mt-2 text-sm" role="status">ENTRY_PRICE_RESPONSE_MISSING · 独立价格通道尚未返回结果。</p> : null}
+          {modelShadow?.entry_price_collection ? <div className="mt-2 text-xs text-muted-foreground" data-testid="advisory-entry-collection">
+            每日采集：{modelShadow.entry_price_collection.configured_enabled ? "调度已配置" : "调度未启用"} · 最近检查 {modelShadow.entry_price_collection.last_run_at || "尚无"}（状态检查不等于已发布预测）
+            {modelShadow.entry_price_collection.attempts.map((attempt, index) => <div key={`${attempt.stage}-${attempt.target_trade_date}-${index}`}>{attempt.target_trade_date || "-"} {attempt.stage || ""} {attempt.status} {attempt.reason_code || ""}</div>)}
+          </div> : null}
+          {modelShadow?.entry_price?.candidates.length ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-sm" data-testid="advisory-entry-price-table">
+                <thead><tr className="border-b"><th className="p-2">股票</th><th className="p-2">参考收盘 / 日期</th><th className="p-2">开盘价格区间 / 中位</th><th className="p-2">止盈 / 止损</th><th className="p-2">状态</th></tr></thead>
+                <tbody>{modelShadow.entry_price.candidates.map((candidate) => {
+                  const band = candidate.entry_price.calibrated_range ?? candidate.entry_price.raw_range;
+                  return <tr key={candidate.symbol} className="border-b" data-testid="advisory-entry-price-row">
+                    <td className="p-2">{candidate.symbol}</td>
+                    <td className="p-2">{fmtPrice(candidate.decision_reference_price)} / {candidate.decision_price_trade_date || "-"}</td>
+                    <td className="p-2">{candidate.entry_price.status === "AVAILABLE" && band ? `${fmtPriceBand(band)} / ${fmtPrice(band.mid)}` : "不可用"}</td>
+                    <td className="p-2">{candidate.take_profit.status === "AVAILABLE" ? fmtPriceBand(candidate.take_profit.payload) : "止盈未验证"} / {candidate.stop_loss.status === "AVAILABLE" ? fmtPriceBand(candidate.stop_loss.payload) : "止损未验证"}</td>
+                    <td className="p-2">{candidate.entry_price.reason_code || candidate.entry_price.status}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          ) : null}
+          <details className="mt-3 text-xs text-muted-foreground"><summary>价格角色身份</summary><pre className="mt-2 overflow-auto">{JSON.stringify(modelShadow?.entry_price ?? {}, null, 2)}</pre></details>
+        </section>
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-model-shadow">
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">模型影子排序</div>
+              <h3>实验 Top5</h3>
+            </div>
+            <div className="pv2-row-actions">
+              <span className={`pv2-badge ${modelShadow?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {modelShadowLoading ? "LOADING" : modelShadow?.status || "MODEL_UNAVAILABLE"}
+              </span>
+              <span className="pv2-badge pv2-badge-neutral">{modelShadow?.calibration_state || "UNCALIBRATED"}</span>
+            </div>
+          </div>
+          {modelShadowLoading ? <div className="pv2-muted" data-testid="advisory-model-shadow-loading">正在读取实时特征并执行影子推理...</div> : null}
+          {modelShadowError ? (
+            <div className="pv2-error" data-testid="advisory-model-shadow-request-error">{modelShadowError}</div>
+          ) : null}
+          {!modelShadowLoading && modelShadow?.status === "MODEL_UNAVAILABLE" ? (
+            <div data-testid="advisory-model-shadow-unavailable">
+              <strong>{modelShadow.reason_code || "MODEL_UNAVAILABLE"}</strong>
+              <span className="pv2-muted"> {modelShadow.message || "模型影子结果不可用"}</span>
+            </div>
+          ) : null}
+          {modelShadow?.status === "EXPERIMENTAL_SHADOW" ? (
+            <>
+              <div className="pv2-muted" data-testid="advisory-model-shadow-context">
+                数据截止 {modelShadow.decision_as_of_trade_date || "-"}；目标日 {modelShadow.target_trade_date}；候选 {modelShadow.candidate_count}；Top5 {modelShadow.shortlist_count}；HMM 行业不可用 {modelShadow.hmm_unavailable.length}
+              </div>
+              <div className="pv2-row-actions" style={{ marginTop: 8 }} data-testid="advisory-model-shadow-baselines">
+                <span>模型 5日超额 {fmtPct(shadowBaselineMetric(modelShadow, "model_top5"))}</span>
+                <span>原 Top5 {fmtPct(shadowBaselineMetric(modelShadow, "selection_rank_top5"))}</span>
+                <span>随机 Top5 {fmtPct(shadowBaselineMetric(modelShadow, "random_top5"))}</span>
+              </div>
+              <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                <table className="pv2-table" data-testid="advisory-model-shadow-table">
+                  <thead><tr><th>股票</th><th>原排名</th><th>模型排名</th><th>模型分</th><th>Top5</th><th>主要贡献</th></tr></thead>
+                  <tbody>
+                    {modelShadow.candidates.map((candidate) => (
+                      <tr key={candidate.symbol} data-testid="advisory-model-shadow-row">
+                        <td>{candidate.symbol}</td>
+                        <td>{candidate.selection_effective_rank} / {fmtNumber(candidate.selection_score, 4)}</td>
+                        <td>{candidate.advisory_model_rank}</td>
+                        <td>{fmtNumber(candidate.advisory_model_score, 6)}</td>
+                        <td>{candidate.is_top5 ? "Y" : "-"}</td>
+                        <td className="pv2-mono">
+                          {candidate.top_feature_contributions.map((item) => `${item.feature} ${item.contribution >= 0 ? "+" : ""}${item.contribution.toFixed(4)}`).join("; ")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ marginTop: 16 }} data-testid="advisory-outcome-shadow">
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-kicker">收益与持股周期</div>
+                    <h3>实验预测</h3>
+                  </div>
+                  <div className="pv2-row-actions">
+                    <span className={`pv2-badge ${modelShadow.outcome?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                      {modelShadow.outcome?.status || "OUTCOME_UNAVAILABLE"}
+                    </span>
+                    <span className="pv2-badge pv2-badge-neutral">
+                      {modelShadow.outcome?.calibration_state || "UNCALIBRATED"}
+                    </span>
+                  </div>
+                </div>
+                {modelShadow.outcome?.status !== "EXPERIMENTAL_SHADOW" ? (
+                  <div data-testid="advisory-outcome-unavailable">
+                    <strong>{modelShadow.outcome?.reason_code || "ADVISORY_OUTCOME_RESPONSE_MISSING"}</strong>
+                    <span className="pv2-muted"> {modelShadow.outcome?.message || "收益与持股周期模型响应不可用"}</span>
+                  </div>
+                ) : null}
+                {modelShadow.outcome?.status === "EXPERIMENTAL_SHADOW" ? (
+                  <>
+                    <div className="pv2-tabs" role="tablist" aria-label="预测周期" data-testid="advisory-outcome-horizons">
+                      {OUTCOME_HORIZONS.map((horizon) => (
+                        <button
+                          key={horizon}
+                          className={`pv2-tab ${outcomeHorizonDays === horizon ? "pv2-tab-active" : ""}`}
+                          data-testid={`advisory-outcome-horizon-${horizon}`}
+                          onClick={() => setOutcomeHorizonDays(horizon)}
+                          role="tab"
+                          aria-selected={outcomeHorizonDays === horizon}
+                          type="button"
+                        >
+                          {horizon}日
+                        </button>
+                      ))}
+                    </div>
+                    <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                      <table className="pv2-table" data-testid="advisory-outcome-table">
+                        <thead>
+                          <tr><th>股票</th><th>M2排名</th><th>超额收益 q10 / q50 / q90</th><th>正收益</th><th>信号存活</th><th>MFE q50 / q90</th><th>MAE q50 / q90</th><th>持股范围</th></tr>
+                        </thead>
+                        <tbody>
+                          {modelShadow.outcome.candidates.map((candidate) => {
+                            const horizon = outcomeHorizon(candidate, outcomeHorizonDays);
+                            const rank = modelShadow.candidates.find((item) => item.symbol === candidate.symbol)?.advisory_model_rank;
+                            return (
+                              <tr key={candidate.symbol} data-testid="advisory-outcome-row">
+                                <td>{candidate.symbol}</td>
+                                <td>{rank ?? "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.return_interval_calibration_state, <>{fmtPct(horizon.excess_return_calibrated_q10)} / {fmtPct(horizon.excess_return_calibrated_q50)} / {fmtPct(horizon.excess_return_calibrated_q90)}</>, <>{fmtPct(horizon.excess_return_q10)} / {fmtPct(horizon.excess_return_q50)} / {fmtPct(horizon.excess_return_q90)}</>) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.positive_probability_calibration_state, fmtPct(horizon.positive_probability_calibrated), fmtPct(horizon.positive_probability)) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.signal_survival_probability_calibration_state, fmtPct(horizon.signal_survival_probability_calibrated), fmtPct(horizon.signal_survival_probability)) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.path_mfe_calibration_state, <>{fmtPct(horizon.path_mfe_calibrated_q50)} / {fmtPct(horizon.path_mfe_calibrated_q90)}</>, <>{fmtPct(horizon.path_mfe_q50)} / {fmtPct(horizon.path_mfe_q90)}</>) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.path_mae_loss_calibration_state, <>{fmtPct(horizon.path_mae_loss_calibrated_q50)} / {fmtPct(horizon.path_mae_loss_calibrated_q90)}</>, <>{fmtPct(horizon.path_mae_loss_q50)} / {fmtPct(horizon.path_mae_loss_q90)}</>) : "-"}</td>
+                                <td>{candidate.holding_period.range_low_days}-{candidate.holding_period.range_high_days}日（{candidate.holding_period.mode_days}日）{candidate.holding_period.calibration_state ? <small className="pv2-muted">{candidate.holding_period.calibration_state}</small> : null}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+              <div style={{ marginTop: 16 }} data-testid="advisory-price-range-shadow">
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-kicker">日级价格区间（实验影子）</div>
+                    <h3>次交易日进场、止盈、保护与止损参考</h3>
+                  </div>
+                  <div className="pv2-row-actions">
+                    <span className={`pv2-badge ${modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                      {modelShadow.price_range?.status || "PRICE_RANGE_UNAVAILABLE"}
+                    </span>
+                    <span className="pv2-badge pv2-badge-neutral">
+                      {modelShadow.price_range?.calibration_state || "UNCALIBRATED"}
+                    </span>
+                  </div>
+                </div>
+                <div className="pv2-muted" data-testid="advisory-price-range-basis">
+                  未复权 CNY；决策日 {modelShadow.price_range?.decision_as_of_trade_date || "-"}，目标日 {modelShadow.price_range?.target_trade_date || "-"}。仅为日级价格预测，不表示最佳分钟、成交保证或交易指令；止盈、保护和止损条件于按预测进场中位价建仓。
+                </div>
+                <div className="pv2-muted" data-testid="advisory-price-range-source">
+                  M4 {short(modelShadow.price_range?.price_range_bundle_id, 14)} · M2 {short(modelShadow.price_range?.parent_bundle_id, 14)} · M3 {short(modelShadow.price_range?.outcome_bundle_id, 14)} · {modelShadow.price_range?.price_basis || "UNADJUSTED_CNY_DECISION_CLOSE"}
+                </div>
+                {modelShadow.price_range?.status !== "EXPERIMENTAL_SHADOW" ? (
+                  <div data-testid="advisory-price-range-unavailable">
+                    <strong>{modelShadow.price_range?.reason_code || "ADVISORY_PRICE_RANGE_RESPONSE_MISSING"}</strong>
+                    <span className="pv2-muted"> {modelShadow.price_range?.message || "价格范围模型响应不可用"}</span>
+                  </div>
+                ) : null}
+                {modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? (
+                  <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="pv2-table" data-testid="advisory-price-range-table">
+                      <thead>
+                        <tr><th>股票</th><th>目标交易日</th><th>决策参考价</th><th>次日开盘区间</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
+                      </thead>
+                      <tbody>
+                        {modelShadow.price_range.candidates.map((candidate) => (
+                          <tr key={candidate.symbol} data-testid="advisory-price-range-row">
+                            <td>{candidate.symbol}</td>
+                            <td>{modelShadow.price_range?.target_trade_date || "-"}</td>
+                            <td>{fmtPrice(candidate.decision_reference_price)}</td>
+                            <td>{candidate.calibrated_entry_price_range ? <>{fmtPriceBand(candidate.calibrated_entry_price_range)}（中位 {fmtPrice(candidate.calibrated_entry_price_range.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price_range ? fmtPriceBand(candidate.entry_price_range) : "-"}</span></> : candidate.entry_price_range ? `${fmtPriceBand(candidate.entry_price_range)}（中位 ${fmtPrice(candidate.entry_price_range.mid)}）` : "-"}</td>
+                            <td>{candidate.take_profit_price ? `${fmtPriceBand(candidate.take_profit_price)} / ${candidate.take_profit_price.horizon_trade_days}日` : "-"}</td>
+                            <td>{candidate.protective_price?.status === "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION" ? `${fmtPriceBand({ low: candidate.protective_price.floor_low!, high: candidate.protective_price.floor_high! })}（激活 ${fmtPrice(candidate.protective_price.policy_activation_price)}）` : candidate.protective_price?.status || "-"}</td>
+                            <td>{candidate.stop_loss_price ? `${fmtPriceBand(candidate.stop_loss_price)} / ${fmtPrice(candidate.stop_loss_price.hard_stop_price)}` : "-"}</td>
+                            <td>{candidate.regulatory_price_range?.status === "LIMITED" ? `${fmtPrice(candidate.regulatory_price_range.low)} - ${fmtPrice(candidate.regulatory_price_range.high)} (${candidate.regulatory_price_range.rule_id})` : candidate.regulatory_price_range ? `${candidate.regulatory_price_range.status} (${candidate.regulatory_price_range.rule_id})` : "-"}</td>
+                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration?.state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">{candidate.availability_status}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+        <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
+          <table className="pv2-table" data-testid="advisory-list-items-table">
+            <thead><tr><th>股票</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>
+            <tbody>
+              {visibleListItems.map((item) => (
+                <tr key={item.list_item_id}>
+                  <td>{stockLabel(item)}</td>
+                  <td>{item.item_state}</td>
+                  <td>{item.action}</td>
+                  <td>{item.rank ?? "-"} / {fmtNumber(item.score, 3)}</td>
+                  <td>{item.previous_action ? `${item.previous_action} -> ${item.action}` : item.action}</td>
+                  <td>{adviceText(item)}<br /><span className="pv2-muted">{item.price_basis || "-"} @ {fmtPrice(item.action === "EXIT" ? item.exit_price : item.entry_price)}</span></td>
+                  <td>{item.effective_trade_date || "-"}</td>
+                  <td>{item.reason_code}</td>
+                </tr>
+              ))}
+              {!visibleListItems.length ? <tr><td colSpan={8}>暂无列表版本明细；执行预览或复评后会显示 ENTER/HOLD/EXIT/WAITING 调整方案。</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="pv2-card">
+        <div className="pv2-card-head">
+          <div>
+            <div className="pv2-kicker">列表版本时间线</div>
+            <h2>初始列表与每日复评后的推荐列表</h2>
+            <p className="pv2-muted">这里是版本时间线，用于回看初始列表和每个交易日复评后的完整列表；与上方当前查看区域联动，不是另一个策略包输出表。</p>
+          </div>
+        </div>
+        <div className="pv2-table-wrap">
+          <table className="pv2-table" data-testid="advisory-list-versions-table">
+            <thead><tr><th>交易日</th><th>状态</th><th>ACTIVE</th><th>ENTER</th><th>HOLD</th><th>EXIT</th><th>WAITING</th><th>换手</th><th>重合</th><th>操作</th></tr></thead>
+            <tbody>
+              {listVersions.map((version) => {
+                const selected = selectedListVersionId === version.list_version_id;
+                const loadingDetail = listVersionLoadingId === version.list_version_id;
+                return (
+                  <tr key={version.list_version_id} data-testid={`advisory-list-version-row-${version.list_version_id}`} aria-selected={selected} style={selected ? { outline: "2px solid #2563eb", outlineOffset: -2 } : undefined}>
+                    <td>{version.trade_date}<br /><span className="pv2-muted pv2-mono">{short(version.list_version_id, 18)}</span></td>
+                    <td>{version.version_status}</td>
+                    <td>{version.active_count}</td>
+                    <td>{version.entered_count}</td>
+                    <td>{version.held_count}</td>
+                    <td>{version.exited_count}</td>
+                    <td>{version.waiting_count}</td>
+                    <td>{fmtPct(version.turnover_rate)}</td>
+                    <td>{fmtPct(version.overlap_rate)}</td>
+                    <td>
+                      <button
+                        className={selected ? "pv2-button-primary" : "pv2-button"}
+                        data-testid={`advisory-view-list-version-${version.list_version_id}`}
+                        disabled={loadingDetail}
+                        onClick={() => void viewListVersion(version.list_version_id)}
+                        type="button"
+                      >
+                        {loadingDetail ? "加载中..." : selected ? "当前明细" : "查看明细"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!listVersions.length ? <tr><td colSpan={10}>暂无列表版本；请在上方点击“预览初始列表”或“生成初始列表”。</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div className="pv2-grid pv2-grid-2">
+        <section className="pv2-card">
+          <div className="pv2-card-head"><div><div className="pv2-kicker">当前荐股池</div><h2>当前推荐股票</h2><p className="pv2-muted">这里只显示最新列表中仍然 ACTIVE 的股票；退出/等待/新进入的完整调整请看上方列表版本明细。点击任意列名切换排序。</p></div></div>
+          <div className="pv2-table-wrap">
+            <table className="pv2-table" data-testid="advisory-active-table">
+              <thead>
+                <tr>
+                  {activeColumns.map((column) => (
+                    <th key={column.key}><SortHeader column={column} sort={activeSort} onClick={() => setActiveSort((current) => nextSort(current, column.key))} /></th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedActivePool.map((row) => (
+                  <tr data-testid="advisory-active-row" key={row.episode_id}>
+                    {activeColumns.map((column) => <td data-testid={`advisory-active-cell-${column.key}`} key={column.key}>{column.render(row)}</td>)}
+                  </tr>
+                ))}
+                {!activePool.length ? <tr><td colSpan={activeColumns.length}>当前任务暂无活跃荐股。</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section className="pv2-card">
+          <div className="pv2-card-head">
+            <div><div className="pv2-kicker">复评记录</div><h2>只追加决策记录</h2></div>
+            <div className="pv2-row-actions">
+              <label className="pv2-field" style={{ minWidth: 110 }}>每页
+                <select className="pv2-select" data-testid="advisory-review-page-size" value={reviewPageSize} onChange={(event) => void changeReviewPageSize(Number(event.target.value) as (typeof REVIEW_PAGE_SIZE_OPTIONS)[number])}>
+                  {REVIEW_PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div className="pv2-table-wrap">
+            <table className="pv2-table" data-testid="advisory-review-table">
+              <thead><tr><th>日期</th><th>股票</th><th>动作</th><th>原因</th><th>状态</th><th>排名</th></tr></thead>
+              <tbody>
+                {pagedReviews.map((row, index) => (
+                  <tr data-testid="advisory-review-row" key={`${row.trade_date}-${row.symbol}-${row.action}-${row.episode_id || index}`}><td>{row.trade_date}</td><td>{stockLabel(row)}</td><td>{row.action}</td><td>{row.reason_code}</td><td>{row.review_status}</td><td>{row.rank ?? "-"}</td></tr>
+                ))}
+                {!reviews.length ? <tr><td colSpan={6}>暂无复评记录。</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+          <div className="pv2-pagination">
+            <button className="pv2-button-ghost" disabled={reviewPageSafe <= 1} onClick={() => void changeReviewPage(Math.max(1, reviewPageSafe - 1))} type="button">上一页</button>
+            <span className="pv2-muted">第 {reviewPageSafe} / {reviewTotalPages} 页，共 {reviewTotalCount} 条</span>
+            <button className="pv2-button-ghost" disabled={reviewPageSafe >= reviewTotalPages} onClick={() => void changeReviewPage(Math.min(reviewTotalPages, reviewPageSafe + 1))} type="button">下一页</button>
+          </div>
+        </section>
+      </div>
+
+      <section className="pv2-card">
+        <div className="pv2-card-head"><div><div className="pv2-kicker">荐股收益</div><h2>Episode 收益与胜率证据</h2><p className="pv2-muted">默认入选价格口径为 next_open_executable；signal_close 与 next_close 仅作敏感性口径。</p></div></div>
+        <EpisodeReturnsTable key={selectedProgramId} rows={returns} />
+      </section>
+
+      <section className="pv2-card">
+        <div className="pv2-card-head">
+          <div><div className="pv2-kicker">质量报告</div><h2>事后诊断</h2><p className="pv2-muted">用结构化字段录入诊断样本；decision input 中禁止未来结果字段，报告不是 validated PnL。</p></div>
+          <div className="pv2-row-actions">
+            <button className="pv2-button" onClick={() => setQualityRows((rows) => [...rows, newQualityRow(rows.length + 1)])} type="button">添加样本</button>
+            <button className="pv2-button-primary" onClick={buildQualityReport} type="button">生成报告</button>
+          </div>
+        </div>
+        <div className="pv2-table-wrap">
+          <table className="pv2-table">
+            <thead><tr><th>股票</th><th>交易日</th><th>当前价</th><th>最高买入价</th><th>动作</th><th>原因</th><th>日低</th><th>日高</th><th>分层标签</th><th>操作</th></tr></thead>
+            <tbody>
+              {qualityRows.map((row) => (
+                <tr key={row.rowId}>
+                  <td><input className="pv2-input" value={row.code} onChange={(event) => updateQualityRow(row.rowId, { code: event.target.value })} placeholder="000001.SZ" /></td>
+                  <td><input className="pv2-input" type="date" value={row.tradeDate} onChange={(event) => updateQualityRow(row.rowId, { tradeDate: event.target.value })} /></td>
+                  <td><input className="pv2-input" type="number" value={row.currentPrice} onChange={(event) => updateQualityRow(row.rowId, { currentPrice: event.target.value })} /></td>
+                  <td><input className="pv2-input" type="number" value={row.maxBuyPrice} onChange={(event) => updateQualityRow(row.rowId, { maxBuyPrice: event.target.value })} /></td>
+                  <td><select className="pv2-select" value={row.action} onChange={(event) => updateQualityRow(row.rowId, { action: event.target.value })}><option value="HOLD">HOLD</option><option value="ENTER">ENTER</option><option value="SKIP">SKIP</option><option value="WAITING">WAITING</option><option value="EXIT">EXIT</option></select></td>
+                  <td><input className="pv2-input" value={row.reasonCode} onChange={(event) => updateQualityRow(row.rowId, { reasonCode: event.target.value })} /></td>
+                  <td><input className="pv2-input" type="number" value={row.dayLow} onChange={(event) => updateQualityRow(row.rowId, { dayLow: event.target.value })} /></td>
+                  <td><input className="pv2-input" type="number" value={row.dayHigh} onChange={(event) => updateQualityRow(row.rowId, { dayHigh: event.target.value })} /></td>
+                  <td>
+                    <input className="pv2-input" value={row.scoreBucket} onChange={(event) => updateQualityRow(row.rowId, { scoreBucket: event.target.value })} placeholder="score" />
+                    <input className="pv2-input" style={{ marginTop: 6 }} value={row.regime} onChange={(event) => updateQualityRow(row.rowId, { regime: event.target.value })} placeholder="regime" />
+                  </td>
+                  <td><button className="pv2-button-ghost" disabled={qualityRows.length <= 1} onClick={() => setQualityRows((rows) => rows.filter((item) => item.rowId !== row.rowId))} type="button">移除</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {qualityReport ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+            样本数 {qualityReport.sample_count}; 买入区间命中 {fmtPct(qualityReport.metrics.entry_zone_hit_rate as number | null | undefined)}; 可成交 {fmtPct(qualityReport.metrics.entry_zone_fillable_rate as number | null | undefined)}
+          </div>
+        ) : null}
+      </section>
+      </>}
+    </main>
+  );
+}
+
+export default function PaperV2AdvisoryPage() {
+  return (
+    <Suspense fallback={<main className="pv2-main"><section className="pv2-card">荐股中心加载中...</section></main>}>
+      <AdvisoryPageContent />
+    </Suspense>
+  );
+}

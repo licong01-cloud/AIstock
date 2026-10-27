@@ -29,7 +29,7 @@ for (const [state, text] of [
       unmodeled_items: [{ instrument: "600001.SH", rank: 21, action: "WATCH", reason_code: "OUTSIDE_MODEL_TOP20_SCOPE" }],
     };
     const { calls } = await mockAdvisoryApis(page, { sectorEntryDaily: sector });
-    await page.goto("/paper-v2/advisory");
+    await page.goto("/paper-v2/advisory/manage");
     const card = page.getByTestId("advisory-sector-entry-price");
     await expect(card).toContainText(text);
     await expect(card).toContainText("不保证成交或盈利");
@@ -72,7 +72,7 @@ test("M1 sector entry original-list presentation discards late previous-list res
     return json(route, result);
   });
   try {
-    await page.goto("/paper-v2/advisory");
+    await page.goto("/paper-v2/advisory/manage");
     await observed;
     await page.getByTestId(`advisory-view-list-version-${nextList.list_version_id}`).click();
     const card = page.getByTestId("advisory-sector-entry-price");
@@ -114,7 +114,7 @@ for (const [state, text] of [
           risk_budget: { maximum_loss_bps: 800, reference_use: "FIXED_RESEARCH_STOP_REFERENCE" }, model_bundle_sha256: "b".repeat(64),
           original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }] },
     });
-    await page.goto("/paper-v2/advisory");
+    await page.goto("/paper-v2/advisory/manage");
     const card = page.getByTestId("advisory-economic-entry-value");
     await expect(card.getByTestId("economic-entry-role-status")).toContainText("NOT_CONFIGURED");
     await card.locator("summary").filter({ hasText: "只读查看" }).click();
@@ -151,7 +151,7 @@ for (const state of ["PUBLISHED", "STALE", "IDENTITY_CONFLICT"] as const) {
         model_bundle_sha256: "b".repeat(64), original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }],
     };
     const { calls } = await mockAdvisoryApis(page, { economicEntryStatus: economicStatus });
-    await page.goto("/paper-v2/advisory");
+    await page.goto("/paper-v2/advisory/manage");
     const card = page.getByTestId("advisory-economic-entry-value");
     if (state === "IDENTITY_CONFLICT") {
       await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
@@ -714,7 +714,7 @@ test("Advisory return history bounds rendered rows without dropping records or i
     ...returns[index % returns.length], episode_id: `history-${index}`, stock_name: `历史样本${index}`,
   }));
   const { calls } = await mockAdvisoryApis(page, { returnsByProgramId: { [PROGRAM_ID]: history } });
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Episode 收益与胜率证据", exact: true }) });
   const rows = section.locator("tbody tr");
   await expect(rows).toHaveCount(25);
@@ -743,7 +743,7 @@ test("Advisory return history resets across task and shorter refresh without sta
   const history = Array.from({ length: 51 }, (_, index) => ({ ...returns[0], episode_id: `history-${index}`, stock_name: `旧样本${index}` }));
   const byProgram: Record<string, JsonObject[]> = { [PROGRAM_ID]: history, [String(other.program_id)]: [] };
   await mockAdvisoryApis(page, { extraPrograms: [other], returnsByProgramId: byProgram });
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Episode 收益与胜率证据", exact: true }) });
   await expect(section).toContainText("共 51 条");
   await section.getByRole("button", { name: "末页", exact: true }).click();
@@ -1399,7 +1399,7 @@ for (const calendarState of ["unavailable", "slow"] as const) {
       return route.fallback();
     });
     try {
-      await page.goto("/paper-v2/advisory");
+      await page.goto("/paper-v2/advisory/manage");
       await expect(page.getByText("codex_smoke_20260604").first()).toBeVisible();
       await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
       await expect(page.getByTestId("advisory-active-cell-symbol").first()).toBeVisible();
@@ -1437,7 +1437,7 @@ test("Advisory page renders task shell before slow leaderboard and detail endpoi
   await mockShellApis(page);
   await mockAdvisoryApis(page, { leaderboardDelayMs: 2500, detailDelayMs: 2500 });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByText("codex_smoke_20260604").first()).toBeVisible({ timeout: 1500 });
   await expect(page.getByTestId(`advisory-row-review-progress-${PROGRAM_ID}`)).toBeVisible({ timeout: 1500 });
@@ -1463,7 +1463,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
 
   const shell = await mockShellApis(page);
   const { calls, reviewBodies, createBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page);
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByRole("heading", { name: "运行中的荐股任务排行榜" })).toBeVisible();
   await expect(page.getByText("codex_smoke_20260604").first()).toBeVisible();
@@ -1680,7 +1680,7 @@ test("Advisory delivery preflight blocks an incompatible package before create m
     await dialog.dismiss();
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
   await page.getByTestId("advisory-package-select-pkg-1").selectOption("pkg_codex_smoke");
   await page.getByTestId("advisory-create-program").click();
 
@@ -1749,7 +1749,7 @@ test("Advisory calibrated outcome shows calibrated and raw values without hiding
     },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
   const row = page.getByTestId("advisory-outcome-table").locator("tbody tr").first();
   await expect(page.getByTestId("advisory-outcome-shadow")).toContainText("PARTIAL");
   await expect(row).toContainText("校准");
@@ -1804,7 +1804,7 @@ test("Advisory calibrated daily entry interval keeps the raw interval visible", 
     },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
   const row = page.getByTestId("advisory-price-range-table").locator("tbody tr").first();
   await expect(page.getByTestId("advisory-price-range-shadow")).toContainText(
     "CALIBRATED_INTERVAL",
@@ -1865,7 +1865,7 @@ test("Advisory model unavailability preserves independent entry prices and the p
     },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-model-shadow-unavailable")).toContainText(
     "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
@@ -1917,7 +1917,7 @@ test("Advisory outcome unavailability preserves the M2 ranking table", async ({ 
     },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(1);
   await expect(page.getByTestId("advisory-outcome-unavailable")).toContainText(
@@ -1954,7 +1954,7 @@ test("Advisory missing outcome response is explicit and preserves M2 ranking", a
     },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(1);
   await expect(page.getByTestId("advisory-outcome-unavailable")).toContainText(
@@ -1980,7 +1980,7 @@ test("Advisory model shadow does not create page overflow across approved viewpo
     { width: 1440, height: 900 },
   ]) {
     await page.setViewportSize(viewport);
-    await page.goto("/paper-v2/advisory");
+    await page.goto("/paper-v2/advisory/manage");
     await expect(page.getByTestId("advisory-model-shadow")).toContainText("EXPERIMENTAL_SHADOW");
     const pageOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -2025,7 +2025,7 @@ test("Advisory review defaults to next target date after current target was publ
     initialListVersions: [publishedListVersion("2026-06-09", "2026-06-08")],
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-10");
   await expect(page.getByTestId("advisory-review-progress-summary")).toContainText("最新已发布目标日 2026-06-09");
@@ -2088,7 +2088,7 @@ test("Advisory review defaults to earliest missing target date and keeps catch-u
     initialListVersions: [publishedListVersion("2026-06-09", "2026-06-08")],
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-10");
   await expect(page.getByTestId("advisory-review-target-select").locator("option").first()).toHaveText(/待补跑目标日 2026-06-10/);
@@ -2193,7 +2193,7 @@ test("Advisory leaderboard keeps legacy manual multi-package rows readable but r
     listVersionsByProgramId: { [rowProgramId]: rowVersions },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-09");
   await expect(page.getByTestId(`advisory-row-latest-context-${rowProgramId}`)).toContainText("预测目标：2026-06-10");
@@ -2241,7 +2241,7 @@ test("Advisory catch-up uses the nearest previous data-ready trading day for a m
     ],
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
   await expect(page.getByTestId("advisory-review-target-select").locator("option").first()).toHaveText(/待补跑目标日 2026-06-08/);
@@ -2304,7 +2304,7 @@ test("Advisory catch-up all runs missing target dates sequentially", async ({ pa
     ],
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-review-missing-dates")).toContainText("2026-06-08");
   await expect(page.getByTestId("advisory-review-missing-dates")).toContainText("2026-06-10");
@@ -2415,7 +2415,7 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
     bindingsByProgramId: { [rowProgramId]: [rowBinding] },
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId(`advisory-manage-strategy-${rowProgramId}`)).toBeVisible();
   await page.getByTestId(`advisory-manage-strategy-${rowProgramId}`).click();
@@ -2692,7 +2692,7 @@ test("Advisory page exposes initial list generation when a new program has no li
     return route.fallback();
   });
 
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
 
   await expect(page.getByTestId("advisory-selected-preview")).toHaveText("预览初始列表");
   await expect(page.getByTestId("advisory-selected-run")).toHaveText("生成初始列表");
@@ -2799,7 +2799,7 @@ test("Advisory forward panel renders the frozen observation instead of the on-de
   });
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto("/paper-v2/advisory");
+  await page.goto("/paper-v2/advisory/manage");
   await expect(page.getByTestId("advisory-forward-latest")).toContainText("目标日 2026-08-13");
   await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("LOADING");
   await expect(page.getByTestId("advisory-forward-model-metrics")).not.toContainText("EVIDENCE_IMMATURE");

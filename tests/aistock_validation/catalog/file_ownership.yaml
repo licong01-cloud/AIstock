@@ -1,5 +1,16 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_workbench_read_contracts
+    priority: 141
+    include:
+      - backend/services/advisory_workbench/**
+      - backend/routers/advisory_workbench.py
+      - backend/tests/advisory_workbench/**
+    primary_module: advisory.workbench
+    impact_modules: []
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: Read-only published membership, episode pagination and reference-performance projections; direct tests require no business services or database writes.
   - rule_id: qe_l2_continuous_risk_consumer
     priority: 126
     include:
@@ -56,6 +67,9 @@ rules:
     include:
       - frontend/src/app/paper-v2/advisory/**
       - frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts
+      - frontend/tests/paper-v2/advisory-workbench.spec.ts
+      - frontend/src/components/advisory/**
+      - frontend/src/lib/api/advisoryWorkbench.ts
     primary_module: advisory.ui
     impact_modules: []
     layer: frontend
