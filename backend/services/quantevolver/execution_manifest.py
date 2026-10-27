@@ -106,6 +106,8 @@ def _requested_manifest(config: ExperimentConfig, ctx: ExecutionContext, mode: s
     }
     if ctx.prediction_replay_source is not None:
         manifest["prediction_replay_source"] = ctx.prediction_replay_source.model_dump(mode="json")
+    if config.frozen_inference is not None:
+        manifest["frozen_inference"] = config.frozen_inference.model_dump(mode="json")
     return manifest
 
 
@@ -120,7 +122,7 @@ def _artifact_manifest(conf: Mapping[str, Any], requested: Mapping[str, Any]) ->
     executor = _task_section(conf, "port_analysis_config", "executor")
     qe_runtime = _as_dict(conf.get("qe_runtime"))
     factor_names = _artifact_factor_names(conf, requested)
-    return {
+    artifact = {
         "model": {
             "class": task_model.get("class"),
             "module_path": task_model.get("module_path"),
@@ -152,6 +154,9 @@ def _artifact_manifest(conf: Mapping[str, Any], requested: Mapping[str, Any]) ->
         "factor_list": factor_names,
         "factor_count": len(factor_names),
     }
+    if conf.get("qe_frozen_inference") is not None:
+        artifact["frozen_inference"] = conf["qe_frozen_inference"]
+    return artifact
 
 
 def _append_mismatch(mismatches: list[str], path: str, requested: Any, artifact: Any) -> None:
@@ -190,6 +195,7 @@ def _compare_manifest(requested: Mapping[str, Any], artifact: Mapping[str, Any])
         normalize_label_horizon(requested.get("label_horizon")),
         _as_dict(artifact.get("dataset")).get("label_horizon"),
     )
+    _append_mismatch(mismatches, "frozen_inference", requested.get("frozen_inference"), artifact.get("frozen_inference"))
     return mismatches
 
 
@@ -210,7 +216,7 @@ def build_and_audit_execution_manifest(
     try:
         conf = _safe_conf_yaml_load(conf_yaml)
     except ValueError as exc:
-        if requested.get("random_seed") is not None:
+        if requested.get("random_seed") is not None or requested.get("frozen_inference") is not None:
             raise
         manifest = normalize_json({
             "schema_version": "qe_execution_manifest_v1",
@@ -224,7 +230,7 @@ def build_and_audit_execution_manifest(
         manifest["manifest_sha256"] = sha256_json(manifest)
         return manifest, str(manifest["manifest_sha256"])
     if not _is_auditable_conf(conf):
-        if requested.get("random_seed") is not None:
+        if requested.get("random_seed") is not None or requested.get("frozen_inference") is not None:
             raise ValueError("execution manifest audit requires generated Qlib task and port_analysis_config sections")
         manifest = normalize_json({
             "schema_version": "qe_execution_manifest_v1",

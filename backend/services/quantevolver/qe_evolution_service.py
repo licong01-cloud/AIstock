@@ -934,9 +934,13 @@ class AutoEvolutionScheduler:
         source_loop_index: int,
         *,
         reason: str,
+        frozen_inference=None,
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         """Package reusable model params through the QE node API for backtest-only runs."""
         source_loop = f"Loop{source_loop_index}"
+        if frozen_inference is not None:
+            self._get_prediction_replay_source_loop(source_task_id, source_loop_index)
+            self._validate_frozen_source_metadata(source_task_id, source_loop_index, frozen_inference)
         mlruns_tar = await source_client.download_mlruns_params(source_task_id, source_loop)
         if not mlruns_tar:
             raise RuntimeError(
@@ -961,6 +965,11 @@ class AutoEvolutionScheduler:
             "mlruns_params.tar.gz.b64": base64.b64encode(mlruns_tar).decode("ascii"),
             "qe_backtest_source_ref.json": json.dumps(source_ref, ensure_ascii=False, indent=2),
         }
+        if frozen_inference is not None:
+            from .frozen_inference_contract import source_assets
+            extra_experiment_files.update(await source_assets(
+                source_client, source_task_id, source_loop, frozen_inference, mlruns_tar,
+            ))
         logger.info(
             "%s packaged source model params via node API: source=%s/%s bytes=%s",
             reason,
@@ -969,6 +978,33 @@ class AutoEvolutionScheduler:
             len(mlruns_tar),
         )
         return model_source, extra_experiment_files
+
+    def _validate_frozen_source_metadata(self, task_id, loop_index, spec, *, model_id=None):
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT status, config_json FROM qe_evolution_loops WHERE task_id=%s AND loop_index=%s",
+                            (task_id, loop_index))
+                row = cur.fetchone()
+        if not row or row["status"] != "completed":
+            raise ValueError("QE_FROZEN_SOURCE_NOT_COMPLETED")
+        meta = row["config_json"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        params = meta.get("custom_params") or meta.get("model_params") or {}
+        summary = params.get("_qe_active_dataset_summary") or {}
+        # A data-vintage change is explicit in the contract, never an implicit rebind.
+        if spec.source_training_manifest_sha256 != summary.get("dataset_manifest_sha256"):
+            raise ValueError("QE_FROZEN_TRAINING_IDENTITY_MISMATCH")
+        if model_id is not None and model_id != meta.get("model_id"):
+            raise ValueError("QE_FROZEN_SOURCE_MODEL_ID_MISMATCH")
+        expected_code = {"qe_custom_loaders.py"} | {f"factors/{name}.py" for name in meta.get("factor_list") or []}
+        if set(spec.code_sha256) != expected_code:
+            raise ValueError("QE_FROZEN_FACTOR_CODE_PIN_SET_MISMATCH")
+        processing = params.get("feature_processing") or {}
+        if sorted(processing.get("exclude_from_model") or []) != sorted(spec.excluded_reference_columns):
+            raise ValueError("QE_FROZEN_SOURCE_REFERENCE_SCHEMA_MISMATCH")
+        if set(meta.get("factor_list") or []) != set(spec.feature_names + spec.excluded_reference_columns):
+            raise ValueError("QE_FROZEN_SOURCE_FACTOR_SCHEMA_MISMATCH")
 
     def _get_prediction_replay_source_loop(
         self,
@@ -1104,6 +1140,34 @@ class AutoEvolutionScheduler:
             ),
         }
         return source_ref, extra_experiment_files
+
+    @staticmethod
+    def _validate_frozen_inference_result(result, *, config):
+        expected = config.get("frozen_inference")
+        if (not isinstance(expected, dict) or not isinstance(result, dict) or result.get("schema_version") != "qe_frozen_inference_result_v1"
+                or result.get("status") != "verified" or result.get("mode") != "frozen_inference"
+                or result.get("spec") != expected or type(result.get("fit_calls")) is not int
+                or result["fit_calls"] != 0 or result.get("source_bytes_unchanged") is not True
+                or result.get("reference_equivalent") is not True
+                or result.get("source_task_id") != config.get("model_source_task_id")
+                or result.get("source_loop_index") != config.get("model_source_loop_index")):
+            raise ValueError("QE_FROZEN_RESULT_CONTRACT_MISMATCH")
+        for field in ("processor_state", "model_weights"):
+            before = result.get(field + "_before")
+            if not isinstance(before, str) or not re.fullmatch(r"[0-9a-f]{64}", before) or before != result.get(field + "_after"):
+                raise ValueError("QE_FROZEN_RESULT_STATE_CHANGED")
+        for field in ("output_rows", "reference_rows"):
+            if type(result.get(field)) is not int or result[field] < 1:
+                raise ValueError("QE_FROZEN_RESULT_ROWS_INVALID")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(result.get("executable_prediction_panel_sha256") or "")):
+            raise ValueError("QE_FROZEN_RESULT_PANEL_PIN_MISSING")
+        if result.get("feature_names") != expected["feature_names"] or result.get("step_len") != expected["step_len"]:
+            raise ValueError("QE_FROZEN_RESULT_SCHEMA_CHANGED")
+        split = config.get("data_split") or {}
+        if any(str(result.get("output_" + edge, ""))[:10] != str(split.get("test_" + edge, ""))[:10]
+               for edge in ("start", "end")):
+            raise ValueError("QE_FROZEN_RESULT_WINDOW_MISMATCH")
+        return result
 
     @staticmethod
     def _validate_prediction_replay_result(
@@ -2761,6 +2825,11 @@ class AutoEvolutionScheduler:
                 td = self._compute_training_diagnostics(enhanced_data.get("training_curves", {}))
                 enhanced_data["training_diagnostics"] = td
             metrics["enhanced_metrics"] = enhanced_data
+            if config.get("frozen_inference") is not None:
+                frozen_client = self._get_workspace_client_for_node_id(config.get("node_id") or config.get("execution_node_id"))
+                metrics["frozen_inference_result"] = self._validate_frozen_inference_result(
+                    await frozen_client.get_workspace_file(task_id, loop_id, "qe_frozen_inference_result.json"), config=config,
+                )
             if bool(config.get("prediction_replay")):
                 replay_client = self._get_workspace_client_for_node_id(
                     config.get("node_id") or config.get("execution_node_id")
@@ -4296,18 +4365,26 @@ class AutoEvolutionScheduler:
                     await client.get_workspace_file(task_id, loop_id, "qe_prediction_replay_result.json"),
                     expected_source_sha256=str(config.get("prediction_source_sha256") or ""),
                 )
+            frozen_result = None
+            if config.get("frozen_inference") is not None:
+                frozen_result = self._validate_frozen_inference_result(
+                    await client.get_workspace_file(task_id, loop_id, "qe_frozen_inference_result.json"), config=config,
+                )
             artifacts = await collect_results_only_artifacts(
                 client=client,
                 task_id=task_id,
                 loop_id=loop_id,
                 node_id=effective_node_id,
                 **({
-                    "expected_prediction_panel_sha256": replay_result["executable_prediction_panel_sha256"],
-                    "expected_prediction_rows": replay_result["executable_prediction_rows"],
-                } if replay_result is not None else {}),
+                    "expected_prediction_panel_sha256": (replay_result or frozen_result)["executable_prediction_panel_sha256"],
+                    "expected_prediction_rows": (replay_result["executable_prediction_rows"] if replay_result is not None
+                                                 else frozen_result["output_rows"]),
+                } if replay_result is not None or frozen_result is not None else {}),
             )
             if replay_result is not None:
                 artifacts.metrics["prediction_replay_result"] = replay_result
+            if frozen_result is not None:
+                artifacts.metrics["frozen_inference_result"] = frozen_result
             manifest = upload_results_only_prediction_store(
                 artifacts=artifacts,
                 task_id=task_id,
@@ -4572,6 +4649,8 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         config = dict(config or {})
+        if config.get("frozen_inference") is not None and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
+            raise ValueError("QE_FROZEN_GENERIC_RETRY_FORBIDDEN: reconcile original artifacts; no training fallback")
         if bool(config.get("prediction_replay")) and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
@@ -7782,6 +7861,8 @@ class AutoEvolutionScheduler:
         if not loop_config:
             logger.error(f"Loop {loop_index} 的配置未找到")
             raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
+        if force_full_train and loop_config.get("frozen_inference") is not None:
+            raise ValueError("QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN")
         if force_full_train and bool(loop_config.get("prediction_replay")):
             raise ValueError(
                 "QE_PREDICTION_REPLAY_FORCE_FULL_TRAIN_FORBIDDEN: "
@@ -7962,6 +8043,15 @@ class AutoEvolutionScheduler:
                 )
 
             # 2. 保存 config 记录到 loop
+            if cfg.frozen_inference is not None:
+                if force_full_train:
+                    raise ValueError("QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN")
+                self._validate_frozen_source_metadata(
+                    cfg.model_source_task_id, cfg.model_source_loop_index, cfg.frozen_inference, model_id=cfg.model_id,
+                )
+                summary = cfg.build_custom_params().get("_qe_active_dataset_summary") or {}
+                if summary.get("dataset_manifest_sha256") != cfg.frozen_inference.input_manifest_sha256:
+                    raise ValueError("QE_FROZEN_INPUT_IDENTITY_MISMATCH")
             runtime_flags = cfg.build_runtime_flags()
             requested_seed = runtime_flags.get("random_seed")
             if requested_seed is None and not (cfg.backtest_only or cfg.prediction_replay):
@@ -8065,6 +8155,10 @@ class AutoEvolutionScheduler:
                     else None
                 ),
             }
+            if cfg.frozen_inference is not None:
+                frozen_spec = cfg.frozen_inference.model_dump(mode="json")
+                config_record["frozen_inference"] = frozen_spec
+                config_record["execution_manifest"]["frozen_inference"] = frozen_spec
             config_record["execution_manifest_sha256"] = sha256_json(config_record["execution_manifest"])
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -8168,6 +8262,7 @@ class AutoEvolutionScheduler:
                     cfg.model_source_task_id,
                     int(cfg.model_source_loop_index),
                     reason="custom evolution backtest-only",
+                    frozen_inference=cfg.frozen_inference,
                 )
                 logger.info(
                     "custom evolution backtest-only packaged source model: source=%s/Loop%s source_node=%s target_node=%s",
