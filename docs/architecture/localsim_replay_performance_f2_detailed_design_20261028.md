@@ -135,20 +135,20 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | dual_mode_research.py、native_research.py | backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py | pending | 实现中 |
-| F-002 | research_performance.py；§5.1公共合同 | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 共享owner接口待确认 |
-| F-003 | research_performance.py、dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-004 | timing.py、human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-005 | human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-006 | timing_portfolio.py、native_research.py、human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-007 | dual_mode_research.py、timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-008 | research_performance.py、dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-009 | dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-010 | dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-011 | research_performance.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | pending | 实现中 |
-| F-012 | docs/analysis/localsim_replay_performance_implementation_acceptance_20261028.md | artifact: X:/AIstock_temp/localsim-replay-performance-20261028 | pending | 真实测量尚未执行 |
-| F-013 | 本设计§3/§8 | artifact: X:/AIstock_temp/localsim-replay-performance-20261028 | pending | 旧artifact哈希读回待执行 |
-| F-014 | docs/analysis/localsim_replay_performance_implementation_acceptance_20261028.md | artifact: X:/AIstock_temp/localsim-replay-performance-20261028 | pending | 审核及交付尚未执行 |
+| F-001 | dual_mode_research.py?native_research.py | backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py | verified | - |
+| F-002 | research_performance.py??5.1???? | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified_consumer_stage | approved_by_user????????????????????Reader??????????owner???? |
+| F-003 | dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-004 | human_portfolio.py???timing.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-005 | research_performance.py?human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-006 | native_research.py?human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-007 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-008 | research_performance.py?dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-009 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py?artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-continuation-receipt.json | verified | - |
+| F-010 | dual_mode_research.py | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
+| F-011 | research_performance.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-012 | docs/analysis/localsim_replay_performance_implementation_acceptance_20261028.md | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
+| F-013 | ????3/?8????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
+| F-014 | ?????6??????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/final-directed-receipt.json | verified_local_pr_gate | - |
 
 ## 12. DESIGN-COMPLIANCE-001 / 逐项复核
 

@@ -5,6 +5,8 @@ from dataclasses import asdict
 from datetime import timedelta
 from decimal import Decimal
 from functools import partial
+import json
+import re
 
 import pytest
 from pydantic import BaseModel
@@ -18,6 +20,8 @@ from backend.services.simulation_execution.localsim.models import LocalSimExecut
 from backend.services.simulation_execution.localsim.research_performance import ResearchPerformanceOptions, VisibleAccountIndex
 from backend.services.simulation_execution.localsim.timing_research import backend_for
 from backend.services.simulation_runtime.models import TradingRuleDecision
+from backend.services.trading_core.models import Fill, Order, OrderEvent
+from backend.services.trading_core.oms import OMS
 from backend.tests.simulation_execution.test_localsim_human_operation import full_markets
 from backend.tests.simulation_execution.test_localsim_position_timing import at, inputs
 
@@ -25,9 +29,9 @@ from backend.tests.simulation_execution.test_localsim_position_timing import at,
 def economic_account(value):
     """Keep trade/dispatch clocks; validate and separate native processing clocks.
 
-    Native OMS event_time/updated_at and state creation clocks already use wall
-    time. They are not the fill's trade_time or the human queue's dispatch_at.
-    Independent computations cannot have identical processing-clock hashes.
+    Native processing clocks and OMS cancel/reject UUIDs differ across fresh
+    computations. Trade/dispatch clocks, deterministic ids, event multiplicity
+    and parent links remain compared; original receipts stay untouched.
     """
     if isinstance(value, BaseModel):
         return economic_account(value.model_dump(mode="json"))
@@ -35,12 +39,22 @@ def economic_account(value):
         return [economic_account(item) for item in value]
     if not isinstance(value, dict):
         return value
+    event_keys = {"event_id", "event_type", "order_id", "event_time"}
+    if value and all(isinstance(v, dict) and event_keys.issubset(v) and k == v["event_id"]
+                     for k, v in value.items()):
+        events = [economic_account(v) for v in value.values()]
+        return {"__native_order_event_multiset__": sorted(
+            events, key=lambda v: json.dumps(v, sort_keys=True, separators=(",", ":")))}
     excluded = set()
     if {"state_id", "state_hash", "runtime_status"}.issubset(value):
         LocalSimExecutionStateV1.model_validate(value)
         excluded = {"created_at", "updated_at", "state_hash"}
-    elif {"event_id", "event_type", "order_id", "event_time"}.issubset(value):
+    elif event_keys.issubset(value):
+        OrderEvent.model_validate(value)
         excluded = {"event_time"}
+        if (value["event_type"] in {"CANCELLED", "REJECTED"} and value.get("fill") is None
+                and re.fullmatch(r"evt_[0-9a-f]{32}", value["event_id"])):
+            excluded.add("event_id")
     elif {"order_id", "filled_quantity", "created_at", "updated_at"}.issubset(value):
         excluded = {"updated_at"}
     elif {"decision_id", "decision_hash", "requested_quantity", "legal_quantity", "created_at"}.issubset(value):
@@ -298,3 +312,39 @@ def test_worker_account_scope_mismatch_never_reaches_native_economic_commit(tmp_
     with pytest.raises(ValueError, match="WORKER_ACCOUNT_SCOPE_CONFLICT"):
         dual.run_study(request)
     assert not list((Path(request.path).parent / "journals").glob("*/generations/*.json"))
+
+
+def test_native_cancel_uuid_separation_preserves_order_links_and_reason():
+    order = Order(order_id="oracle-order", intent_id="oracle-intent", package_id="fixture",
+                  portfolio_id="account", symbol="600000.SH", side="BUY", quantity=1000,
+                  order_type="LIMIT", limit_price=10, status="SUBMITTED", created_at=at("09:30:00"))
+    _, first = OMS().cancel_order(order, "HUMAN_CANCEL_CONFIRMED")
+    _, second = OMS().cancel_order(order, "HUMAN_CANCEL_CONFIRMED")
+    assert first.event_id != second.event_id
+    assert economic_account(first) == economic_account(second)
+    assert economic_account({first.event_id: first.model_dump(mode="json")}) == economic_account(
+        {second.event_id: second.model_dump(mode="json")})
+    assert economic_account(first) != economic_account(second.model_copy(update={"order_id": "wrong-parent"}))
+    assert economic_account(first) != economic_account(second.model_copy(update={"reason": "PLAN_HARD_EXPIRY"}))
+
+
+def test_native_event_multiset_keeps_duplicate_count_and_deterministic_cancel_identity():
+    first = OrderEvent(order_id="oracle-order", event_type="CANCELLED", reason="confirmed")
+    second = OrderEvent(order_id="oracle-order", event_type="CANCELLED", reason="confirmed")
+    one = {first.event_id: first.model_dump(mode="json")}
+    two = {**one, second.event_id: second.model_dump(mode="json")}
+    assert economic_account(one) != economic_account(two)
+    stable_a = first.model_copy(update={"event_id": "evt_deterministic_a"})
+    stable_b = first.model_copy(update={"event_id": "evt_deterministic_b"})
+    assert economic_account(stable_a) != economic_account(stable_b)
+
+
+def test_economic_comparison_never_discards_fill_ids_trade_clock_quantity_or_price():
+    fill = Fill(fill_id="oracle-fill", order_id="oracle-order", symbol="600000.SH", side="BUY",
+                quantity=100, price=10, trade_time=at("09:33:00"), bar_time=at("09:33:00"), reason="NEXT_ELIGIBLE_BAR_OPEN")
+    event = OrderEvent(event_id="evt_oracle_fill", order_id="oracle-order", event_type="FILLED", fill=fill)
+    variants = [event.model_copy(update={"event_id": "evt_other_fill"})]
+    for updates in ({"fill_id": "wrong-fill"}, {"trade_time": at("09:34:00")}, {"quantity": 200}, {"price": 11}):
+        variants.append(event.model_copy(update={"fill": fill.model_copy(update=updates)}))
+    for changed in variants:
+        assert economic_account(event) != economic_account(changed)
