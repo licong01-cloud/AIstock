@@ -224,13 +224,8 @@ def correction_pins(materialization, *, provider, cas):
             raise MonthlyBuildResumeError("minute correction escaped feature scope")
         path = provider.parent.parent / relative
         signature, raw = _signature(path), path.read_bytes()
-        ref = entry["target_ref"]
-        quote = next((r for r in materialization.get("quote_fact_correction", {}).get("files", [])
-                      if r["relative_path"] == relative), None)
-        if quote is not None:
-            if quote["original_sha256"] != ref["sha256"]:
-                raise MonthlyBuildResumeError("quote/minute correction lineage differs")
-            ref = quote["target_ref"]
+        from .monthly_quote_fact_correction import following_correction_ref
+        ref = following_correction_ref(materialization,relative=relative,reference=entry['target_ref'],owner='minute_correction')
         if (len(raw) != ref["size"] or hashlib.sha256(raw).hexdigest() != ref["sha256"]
                 or _signature(path) != signature):
             raise MonthlyBuildResumeError("minute correction bytes changed")

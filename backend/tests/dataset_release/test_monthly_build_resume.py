@@ -261,6 +261,87 @@ def test_quote_fact_creates_missing_feature_without_touching_other_files(tmp_pat
     quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
     assert np.all(np.fromfile(path,dtype='<f4')[1:241] == 5)
 
+
+def test_quote_fact_applies_to_regular_incremental_predecessor(tmp_path):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    plan['predecessor_manifest_ref'] = plan.pop('monthly_ready_correction')['base_manifest_ref']
+    quote.apply_quote_repairs(resume, finalized=finalized, plan=plan, cas=resume.cas)
+    assert np.all(np.fromfile(path, dtype='<f4')[1:241] == 5)
+
+
+@pytest.mark.parametrize('order', [('minute_correction','quote_fact_correction'),('quote_fact_correction','minute_correction')])
+def test_quote_and_minute_amendments_validate_actual_byte_order(tmp_path, order):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    relative = path.relative_to(resume.root).as_posix()
+    first = {'relative_path':relative,'original_sha256':'a'*64,'target_ref':resume.cas.put_bytes(b'first').as_dict()}
+    last = {'relative_path':relative,'original_sha256':first['target_ref']['sha256'],
+        'target_ref':resume.cas.put_bytes(b'last').as_dict()}
+    materialization = {order[0]:{'files':[first]},order[1]:{'files':[last]}}
+    for owner, row in zip(order,(first,last)):
+        assert quote.following_correction_ref(materialization,relative=relative,reference=row['target_ref'],owner=owner) == last['target_ref']
+    materialization['prev_close_correction'] = {'files':[{**last,'target_ref':first['target_ref']}]}
+    with pytest.raises(ValueError,match='branch'):
+        quote.following_correction_ref(materialization,relative=relative,reference=first['target_ref'],owner=order[0])
+
+
+def test_minute_fill_after_catalog_quote_keeps_both_physical_proofs(tmp_path):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    authority = resume.cas.get_json(plan[quote.BINDING]['authority_ref'])
+    target = np.frombuffer(resume.cas.get_bytes(resume.cas.validate_reference_metadata(
+        authority['files'][0]['target_ref'])),dtype='<f4').copy()
+    target[121:241] = np.nan
+    authority['files'][0]['target_ref'] = resume.cas.put_bytes(target.tobytes()).as_dict()
+    plan[quote.BINDING]['authority_ref'] = resume.cas.put_json(authority).as_dict()
+    finalized = quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    finalized = minute_repair_subject.apply_minute_corrections(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    materialization = resume.cas.get_json(resume.cas.get_json(finalized['finalize_receipt_ref'])['minute_receipt_ref'])
+    provider = path.parents[2]
+    quote_pins = quote.correction_pins(materialization,provider=provider,cas=resume.cas)
+    minute_pins = minute_repair_subject.correction_pins(materialization,provider=provider,cas=resume.cas)
+    assert quote_pins[path]['target_sha256'] == minute_pins[path]['target_sha256']
+    assert np.all(np.fromfile(path,dtype='<f4')[1:241]==5)
+
+
+def test_catalog_delta_reuses_atomic_quote_transaction_and_resume(tmp_path):
+    from backend.services.dataset_release.monthly_construction_facts import DAILY_CATALOG_SCHEMA, daily_catalog_repair_plan
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    plan['predecessor_manifest_ref'] = plan.pop('monthly_ready_correction')['base_manifest_ref']
+    plan.pop(quote.BINDING)
+    code, day = '000585.SZ', '2026-07-10'
+    provider = resume.root/'daily_bin/qlib'
+    (provider/'calendars').mkdir(parents=True, exist_ok=True)
+    (provider/'calendars/day.txt').write_text(day+'\n')
+    catalog = provider/'instruments/all.txt'
+    catalog.parent.mkdir()
+    catalog.write_text('603900.SH\t2026-07-10\t2026-09-01\n')
+    materialization = {'dataset':'daily_bin','cutoff':'2026-09-30'}
+    _atomic(resume.root/'daily_bin/materialization_receipt.json',materialization)
+    inner = resume.cas.get_json(finalized['finalize_receipt_ref'])
+    inner['daily_receipt_ref'] = resume.cas.put_json(materialization).as_dict()
+    finalized = {'finalize_receipt_ref':resume.cas.put_json(inner).as_dict()}
+    resume.record['steps']['finalize-bins'] = resume.cas.put_json(finalized).as_dict()
+    for target in (catalog,resume.root/'daily_bin/materialization_receipt.json'):
+        resume.record['files'][target.relative_to(resume.root).as_posix()] = list(_signature(target))
+    _atomic(resume.path,resume.record)
+    factor = resume.root/'factor_bundle/daily_pv.h5'
+    factor.parent.mkdir(exist_ok=True)
+    frame = pd.DataFrame({'open':[5.], 'high':[5.5], 'low':[4.5], 'close':[5.],
+        'volume':[2000.], 'amount':[10000.], 'factor':[.5]},
+        index=pd.MultiIndex.from_tuples([(code,pd.Timestamp(day))],names=['instrument','datetime']))
+    frame.to_hdf(factor,key='data',format='table',data_columns=True)
+    source = {'schema_version':DAILY_CATALOG_SCHEMA,'database_write':False,'stock_days':1,'codes':[code],
+        'facts':[{'ts_code':code,'trade_date':day,'pre_close':10.,'up_limit':11.,'down_limit':9.}]}
+    inputs = {'historical_daily_catalog_ref':resume.cas.put_json(source).as_dict()}
+    prepared = resume.cas.get_json(resume.record['steps']['prepare'])
+    computed = daily_catalog_repair_plan(plan,resume=resume,prepare=prepared,build_inputs=inputs,cas=resume.cas)
+    authority = resume.cas.get_json(computed[quote.BINDING]['authority_ref'])
+    assert len(authority['files']) == 12
+    assert authority['base_manifest_ref'] == plan['predecessor_manifest_ref']
+    result = quote.apply_quote_repairs(resume,finalized=finalized,prepare=prepared,plan=computed,cas=resume.cas)
+    assert np.fromfile(provider/'features/000585.sz/prev_close.day.bin',dtype='<f4').tolist() == [0.,10.]
+    assert daily_catalog_repair_plan(plan,resume=resume,prepare=prepared,build_inputs=inputs,cas=resume.cas) == computed
+    assert quote.apply_quote_repairs(resume,finalized=result,prepare=prepared,plan=computed,cas=resume.cas) == result
+
 @pytest.mark.parametrize("mode", ["prepend", "append", "absent"])
 @pytest.mark.parametrize("crash", [False, True])
 def test_expand_real_minute_facts_keeps_published_bytes_and_recovers(tmp_path, monkeypatch, mode, crash):

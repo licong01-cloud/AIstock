@@ -108,6 +108,11 @@ def test_history_capture_uses_daily_fact_catalog_not_pit_and_same_snapshot(tmp_p
         return {'facts': ['sealed']}
     monkeypatch.setattr(monthly_minute_repair, 'capture_database_minutes', capture)
     assert capture_historical_coverage(prefix=prefix, pit=pit, cutoff=date(2026,9,30), connection=connection) == {'facts': ['sealed']}
+    # A new daily identity missing from BOTH old catalogues must not fall
+    # through the month-only minute tail. Its exact observed date is captured.
+    (daily / 'all.txt').write_text('')
+    assert capture_historical_coverage(prefix=prefix, pit=pit, cutoff=date(2026,9,30), connection=connection,
+        additional_quote_days=(('600811.SH','2024-12-16'),)) == {'facts': ['sealed']}
 
 
 def test_auto_binding_uses_frozen_bytes_and_rejects_conflicting_explicit_fact(tmp_path):

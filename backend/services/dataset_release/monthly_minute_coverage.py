@@ -48,7 +48,7 @@ def historical_catalog_gaps(spans, *, provider: Path, days, before: date):
     return [{'ts_code': code, 'trade_date': day} for code, day in sorted(holes)]
 
 
-def capture_historical_coverage(*, prefix, pit, cutoff, connection):
+def capture_historical_coverage(*, prefix, pit, cutoff, connection, additional_quote_days=()):
     """Capture only historical catalog holes in the exported SOURCE snapshot.
 
     Empty source days remain explicit and must still be explained by the
@@ -59,9 +59,11 @@ def capture_historical_coverage(*, prefix, pit, cutoff, connection):
     sessions = calendar_sessions(provider / 'calendars/1min.txt')
     # Some inherited calendars contain a 13:00 placeholder; it is not a bar.
     sessions = {day: [t for t in rows if t[11:] != '13:00:00'] for day, rows in sessions.items()}
-    daily = prefix.root / Path(prefix.manifest['components']['daily_meta_export']['path']).parent
+    from .monthly_construction_facts import daily_catalog_provider
+    daily = daily_catalog_provider(prefix)
     spans = [line.split('\t') for line in
              (daily / 'instruments/all.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
+    spans.extend((code,day,day) for code,day in additional_quote_days)
     # Daily all is the factual quote catalog. Never substitute eligible spans:
     # ST, IPO-warmup and exited securities still require their real minute bars.
     keys = historical_catalog_gaps(spans,
