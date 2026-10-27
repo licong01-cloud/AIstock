@@ -38,23 +38,23 @@
   "expected": "A transient read-only preflight failure may recover within three bounded GET attempts; persistent, authorization and contract errors still fail closed.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2105-qe-workspace-preflight-fails-a-valid-loop-on-a-single-transient-get-conn.json",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_workspace_client.py",
+      "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py"
+      "tests/aistock_validation/bugs/20261027_BUG-2105-qe-workspace-preflight-fails-a-valid-loop-on-a-single-transient-get-conn.json"
     ],
     "added_files": [
       "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2105-qe-workspace-preflight-fails-a-valid-loop-on-a-single-transient-get-conn.json",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_workspace_client.py",
+      "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py"
+      "tests/aistock_validation/bugs/20261027_BUG-2105-qe-workspace-preflight-fails-a-valid-loop-on-a-single-transient-get-conn.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -156,7 +156,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/workspace-preflight/rdagent-node1",
     "fresh_process_evidence": [
       "python -X utf8 tmp/issue_workflow/BUG-2105/verify_fresh_preflight.py -> PASS; isolated ASGI imported the changed tracked client/router and completed actual read-only preflight on both nodes, with SHA-bound receipt tmp/issue_workflow/BUG-2105/fresh-preflight.json; no service restart or submission.",
-      "python tmp/issue_workflow/BUG-2105/verify_fresh_preflight.py -> passed; fresh ASGI loaded persistent client/router and runtime semantic contract, real node preflights passed; tmp/issue_workflow/BUG-2105/fresh-preflight.json"
+      "python tmp/issue_workflow/BUG-2105/verify_fresh_preflight.py -> passed; fresh ASGI loaded persistent client/router and runtime semantic contract, real node preflights passed; tmp/issue_workflow/BUG-2105/fresh-preflight.json",
+      "python tmp/issue_workflow/BUG-2105/verify_fresh_preflight.py -> passed; tracked-source SHA bound, actual two-node GET config and exact runtime semantic contract, no production restart"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
