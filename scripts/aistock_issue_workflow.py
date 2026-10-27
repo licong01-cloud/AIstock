@@ -3548,6 +3548,8 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
     (re.compile(r"^/api/v1/quantevolver/evolution/execution-policy$"),
      "qe_batch_execution_policy", _runtime_semantics._validate_qe_batch_execution_policy),
+    (re.compile(r"^/api/v1/quantevolver/evolution/workspace-preflight/[^/]+$"),
+     "qe_workspace_preflight", _runtime_semantics._validate_qe_workspace_preflight),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (re.compile(r"^/api/v1/factor-metrics/results$"), "factor_metrics_results", _validate_factor_metrics_results),
