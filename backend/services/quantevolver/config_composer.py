@@ -5385,6 +5385,89 @@ class ConfigComposer:
         lines.append("    FACTOR_CACHE_META = ''")
         lines.append(f"TRAIN_START = '{train_start}'")
         lines.append(f"TEST_END = '{test_end}'")
+        cache_input_binding = None
+        if direct_v2_dataset_binding is not None:
+            cache_input_binding = {
+                "schema_version": "qe_direct_v2_factor_cache_inputs_v1",
+                "release_id": direct_v2_dataset_binding.release_id,
+                "cutoff": direct_v2_dataset_binding.cutoff.isoformat(),
+                "factor_meta_sha256": direct_v2_dataset_binding.factor_meta_sha256,
+            }
+        lines.append("QE_FACTOR_CACHE_INPUT_BINDING = " + repr(cache_input_binding))
+        lines.extend('''
+_QE_CACHE_INPUT_STATE = None
+
+def _cache_file_stat(path):
+    value = os.stat(path)
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+def _cache_file_sha256(path):
+    before = _cache_file_stat(path)
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    if _cache_file_stat(path) != before:
+        raise RuntimeError('qe_factor_cache_file_changed_during_read: ' + path)
+    return digest.hexdigest()
+
+def _cache_input_identity():
+    # Node paths are excluded; exact input bytes must agree.
+    global _QE_CACHE_INPUT_STATE
+    if QE_FACTOR_CACHE_INPUT_BINDING is None:
+        return None
+    if _QE_CACHE_INPUT_STATE is not None:
+        for path, expected in _QE_CACHE_INPUT_STATE['stats'].items():
+            if _cache_file_stat(path) != expected:
+                raise RuntimeError('qe_factor_cache_source_changed: ' + path)
+        return _QE_CACHE_INPUT_STATE['identity']
+    meta_path = os.path.join(FACTOR_DATA_DIR, 'meta.json')
+    if _cache_file_sha256(meta_path) != QE_FACTOR_CACHE_INPUT_BINDING['factor_meta_sha256']:
+        raise RuntimeError('qe_factor_cache_source_meta_mismatch')
+    with open(meta_path, 'r', encoding='utf-8') as stream:
+        meta = _json.load(stream)
+    declared = meta.get('files')
+    if (not isinstance(declared, list) or not declared
+            or not all(isinstance(name, str) for name in declared)
+            or len(set(declared)) != len(declared)):
+        raise RuntimeError('qe_factor_cache_source_files_invalid')
+    names = sorted(name for name in ALLOWED_DATA_FILES if os.path.isfile(os.path.join(FACTOR_DATA_DIR, name)))
+    if not names or set(names) != set(declared).intersection(ALLOWED_DATA_FILES):
+        raise RuntimeError('qe_factor_cache_source_files_invalid')
+    paths = [meta_path] + [os.path.join(FACTOR_DATA_DIR, name) for name in names]
+    stats = {path: _cache_file_stat(path) for path in paths}
+    files = {name: _cache_file_sha256(os.path.join(FACTOR_DATA_DIR, name)) for name in names}
+    if any(_cache_file_stat(path) != stat for path, stat in stats.items()):
+        raise RuntimeError('qe_factor_cache_source_changed')
+    identity = {**QE_FACTOR_CACHE_INPUT_BINDING, 'input_files_sha256': files}
+    _QE_CACHE_INPUT_STATE = {'identity': identity, 'stats': stats}
+    return identity
+
+def _verify_cache_input_provenance(entry, cache_path):
+    expected = _cache_input_identity()
+    if expected is None:
+        return None
+    if entry.get('qe_input_identity') != expected:
+        raise RuntimeError('qe_factor_cache_input_identity_unverified: rebuild or verify a versioned cache; do not relabel old values')
+    observed = _cache_file_sha256(cache_path)
+    if entry.get('cache_file_sha256') != observed:
+        raise RuntimeError('qe_factor_cache_value_hash_mismatch')
+    return observed
+
+def _factor_cache_paths(factor_name, factor_code):
+    identity = _cache_input_identity()
+    if identity is None:
+        return (os.path.join(FACTOR_CACHE_SINGLE_DIR, factor_name + '.parquet'), FACTOR_CACHE_META)
+    if not FACTOR_CACHE_SINGLE_DIR:
+        return ('', '')
+    # New input/code versions get new paths. Never copy or relabel a legacy cache.
+    payload = {'inputs': identity, 'universe': _expected_universe_meta(), 'factor_name': factor_name,
+               'requested_window': [TRAIN_START, TEST_END]}
+    key = hashlib.sha256(_json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    code_key = hashlib.sha256(factor_code.encode('utf-8')).hexdigest()
+    root = os.path.join(os.path.dirname(FACTOR_CACHE_META), 'qe_versions', key, code_key)
+    return (os.path.join(root, 'single', factor_name + '.parquet'), os.path.join(root, '_meta.json'))
+'''.splitlines())
         lines.append(
             "FACTOR_CACHE_EXPECTED_UNIVERSE_META = "
             + repr(
@@ -5545,7 +5628,7 @@ class ConfigComposer:
         lines.append('')
         lines.append('def _validate_official_cache_hit_contract(factor_name, factor_code):')
         lines.append("    cache_root = os.path.dirname(FACTOR_CACHE_SINGLE_DIR) if FACTOR_CACHE_SINGLE_DIR else ''")
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet') if FACTOR_CACHE_SINGLE_DIR else ''")
+        lines.append("    cache_path, cache_meta = _factor_cache_paths(factor_name, factor_code) if FACTOR_CACHE_SINGLE_DIR else ('', '')")
         lines.append('    miss_reasons = _official_cache_miss_reasons()')
         lines.append('    top_level_errors = []')
         lines.append('    contract = {')
@@ -5555,7 +5638,8 @@ class ConfigComposer:
         lines.append("        'factor_name': factor_name,")
         lines.append("        'cache_root': cache_root,")
         lines.append("        'single_dir': FACTOR_CACHE_SINGLE_DIR,")
-        lines.append("        'meta_path': FACTOR_CACHE_META,")
+        lines.append("        'meta_path': cache_meta,")
+        lines.append("        'cache_path': cache_path,")
         lines.append("        'start_date': TRAIN_START,")
         lines.append("        'end_date': TEST_END,")
         lines.append("        'expected_as_of_date': TEST_END,")
@@ -5574,15 +5658,17 @@ class ConfigComposer:
         lines.append('    if not _is_official_factor_cache_path_shape(FACTOR_CACHE_SINGLE_DIR):')
         lines.append("        top_level_errors.append('non_official_cache_root')")
         lines.append('        return contract')
+        lines.append("    if QE_FACTOR_CACHE_INPUT_BINDING is not None and os.path.exists(cache_path) != os.path.exists(cache_meta):")
+        lines.append("        raise RuntimeError('qe_factor_cache_version_partial_requires_reconciliation')")
         lines.append('    if not os.path.exists(cache_path):')
         lines.append("        miss_reasons['missing_from_cache'].append(factor_name)")
         lines.append('        return contract')
-        lines.append('    if not FACTOR_CACHE_META or not os.path.exists(FACTOR_CACHE_META):')
+        lines.append('    if not cache_meta or not os.path.exists(cache_meta):')
         lines.append("        miss_reasons['missing_meta'].append(factor_name)")
         lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
         lines.append('        return contract')
         lines.append('    try:')
-        lines.append("        with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("        with open(cache_meta, 'r', encoding='utf-8') as _meta_f:")
         lines.append('            meta = _json.load(_meta_f)')
         lines.append('    except Exception as e:')
         lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
@@ -5600,6 +5686,7 @@ class ConfigComposer:
         lines.append("        miss_reasons['missing_meta'].append(factor_name)")
         lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
         lines.append('        return contract')
+        lines.append("    contract['verified_cache_sha256'] = _verify_cache_input_provenance(entry, cache_path)")
         lines.append("    data_mode = entry.get('data_source_mode') or meta.get('data_source_mode') or meta.get('source_system')")
         lines.append("    allowed_modes = {'backtest_factor_data_dir', 'official_offline_backtest_factor_data'}")
         lines.append('    if data_mode and data_mode not in allowed_modes:')
@@ -5653,8 +5740,12 @@ class ConfigComposer:
         lines.append("            contract_payload = _json.dumps(contract, ensure_ascii=False, default=str)")
         lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + contract_payload)")
         lines.append('        return None')
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+        lines.append("    cache_path, _cache_meta = _factor_cache_paths(factor_name, factor_code)")
         lines.append('    df = pd.read_parquet(cache_path)')
+        lines.append("    if QE_FACTOR_CACHE_INPUT_BINDING is not None:")
+        lines.append("        _cache_input_identity()")
+        lines.append("        if _cache_file_sha256(cache_path) != contract['verified_cache_sha256']:")
+        lines.append("            raise RuntimeError('qe_factor_cache_value_changed_during_read')")
         lines.append('    dates = df.index.get_level_values(0)')
         lines.append('    df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]')
         lines.append("    if 'value' in df.columns:")
@@ -5666,8 +5757,11 @@ class ConfigComposer:
         lines.append("    \"\"\"Publish one factor and its metadata atomically while factor lock is held.\"\"\"")
         lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
         lines.append("        return")
-        lines.append("    os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)")
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+        lines.append("    input_identity = _cache_input_identity()")
+        lines.append("    cache_path, cache_meta = _factor_cache_paths(factor_name, factor_code)")
+        lines.append("    if input_identity is not None and (os.path.exists(cache_path) or os.path.exists(cache_meta)):")
+        lines.append("        raise RuntimeError('qe_factor_cache_immutable_version_exists')")
+        lines.append("    os.makedirs(os.path.dirname(cache_path), exist_ok=True)")
         lines.append("    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
         lines.append("    save_df = result_df.copy()")
         lines.append("    if len(save_df.columns) == 1:")
@@ -5681,8 +5775,8 @@ class ConfigComposer:
         lines.append("    d_max = str(dates.max().date())")
         lines.append("    with _exclusive_cache_lock('global_meta'):")
         lines.append("        meta = {}")
-        lines.append("        if os.path.exists(FACTOR_CACHE_META):")
-        lines.append("            with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("        if os.path.exists(cache_meta):")
+        lines.append("            with open(cache_meta, 'r', encoding='utf-8') as _meta_f:")
         lines.append("                meta = _json.load(_meta_f)")
         lines.append("        factors = dict(meta.get('factors', {}))")
         lines.append("        factors[factor_name] = {")
@@ -5696,13 +5790,17 @@ class ConfigComposer:
         lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
         lines.append("        factors[factor_name].update(universe_meta)")
+        lines.append("        if input_identity is not None:")
+        lines.append("            _cache_input_identity()")
+        lines.append("            factors[factor_name]['qe_input_identity'] = input_identity")
+        lines.append("            factors[factor_name]['cache_file_sha256'] = _cache_file_sha256(cache_path)")
         lines.append("        meta['factors'] = factors")
         lines.append(f"        meta['moneyflow_unit_contract_version'] = '{MONEYFLOW_UNIT_CONTRACT_VERSION}'")
         lines.append("        meta['data_source_mode'] = 'official_offline_backtest_factor_data'")
         lines.append("        for _k, _v in universe_meta.items():")
         lines.append("            if _v is not None:")
         lines.append("                meta[_k] = _v")
-        lines.append("        _publish_json_atomic(FACTOR_CACHE_META, meta)")
+        lines.append("        _publish_json_atomic(cache_meta, meta)")
         lines.append("    logger.info(f'  {factor_name}: cache WRITTEN ({len(result_df)} rows, {d_min}~{d_max}, window={TRAIN_START}~{TEST_END})')")
         lines.append("")
         lines.append("")
@@ -5749,6 +5847,7 @@ class ConfigComposer:
         lines.append('    3. 成功后回写缓存')
         lines.append('    """')
         lines.append("    # ── 缓存检查 ──")
+        lines.append("    _cache_input_identity()")
         lines.append("    cached = _try_cache_hit(factor_name, factor_code)")
         lines.append("    if cached is not None:")
         lines.append("        return cached")
@@ -5802,7 +5901,12 @@ class ConfigComposer:
         lines.append("        return None")
         lines.append("    # Official cache publication is part of the execution contract.  Do not")
         lines.append("    # downgrade a failed/partial cache write to a successful factor result.")
+        lines.append("    _cache_input_identity()")
         lines.append("    _write_cache(factor_name, factor_code, df)")
+        lines.append("    if QE_FACTOR_CACHE_INPUT_BINDING is not None:")
+        lines.append("        # Miss and hit expose the same window; full warmup remains in the version cache.")
+        lines.append("        dates = df.index.get_level_values(0)")
+        lines.append("        df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]")
         lines.append("    return df")
         lines.append("")
         lines.append("")

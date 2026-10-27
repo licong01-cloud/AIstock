@@ -1,0 +1,268 @@
+{
+  "actual": "m_sw2_elg_individual_diverge differs on 1105 days and m_sw2_net_vol_momentum on 67 days; cache-hit gate reports passed on both nodes despite differing cache bytes and missing release provenance.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+    "tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2109",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-27T20:13:03.938398Z",
+  "description": "m_sw2_elg_individual_diverge differs on 1105 days and m_sw2_net_vol_momentum on 67 days; cache-hit gate reports passed on both nodes despite differing cache bytes and missing release provenance. Runtime business readback additionally preserves the original completed R1 task and its frozen active-data/execution contract; this GET is not evidence of the new cache guard by itself. Exact guard behavior is verified by the two fresh native generated consumers, and must be repeated against merged source after user runtime activation. No existing Loop is resubmitted. Final repair keys direct-v2 caches by exact input bytes, frozen universe contract, factor name and complete source SHA under new qe_versions paths. Legacy root files are never migrated, relabelled or overwritten. New versions compute from original frozen H5; partial/invalid published versions fail closed. Cold/hit return the same requested window, retaining full warmup in the immutable version. Both native programs prepared 12 factors and exactly matching 5526983 x 11 AF panels, preserving both legacy metadata files; zero model fits, model predictions, backtests or HMM calls. Legacy non-direct-v2 behavior remains covered by the existing regressions.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261027-3d2feb1dac7a",
+      "timestamp": "2026-10-27T20:13:03.938383Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-adaptive-24h-20261028/run_v1/R1_input_audit_v1/comparison.json"
+  ],
+  "expected": "A direct-v2 controlled QE run consumes factor values pinned to its active dataset inputs; absent or mismatching cache input provenance must fail closed or use an explicit isolated calculation without shared-cache mutation.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+      ],
+      "impacted_modules": [
+        "qe.sector_risk_overlay",
+        "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/config_composer.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py"
+    ]
+  },
+  "first_seen_at": "2026-10-27T20:13:03.938398Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6784,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6784",
+  "last_seen_at": "2026-10-27T20:13:03.938398Z",
+  "module": "qe.core",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261028_023509_6f6b/custom-evo-config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "{'command': 'python F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/prepare_versioned_cache_native.py rdagent-node1 AND wsl2-5080', 'result': 'passed: TWO_NODE_FORMAL_PREPARE_EXACT_11_COLUMN_AND_PANEL_MATCH; final source with input/universe/requested-window/full-code version keys; 12 factors per node; exact 5526983 x 11 panel and all column hashes; all legacy metadata retained; zero model fit/predict/backtest or HMM calls', 'evidence_ref': 'F:\\\\Dev\\\\AIstock\\\\tmp\\\\handoff\\\\qe-adaptive-24h-20261028\\\\run_v1\\\\BUG2109_versioned_cache_v3\\\\completion.json', 'evidence_sha256': '5b633dfca26d41f6c95f561a4b3e3c1253281acb66f1ec671bfb0016378303e8', 'source_sha256': 'c7fa614dc14b20fcf19f793a576ae37e79fee129ec8af833e51e1d8971619a1c', 'node_receipts': ['F:\\\\Dev\\\\AIstock\\\\tmp\\\\handoff\\\\qe-adaptive-24h-20261028\\\\run_v1\\\\BUG2109_versioned_cache_v3\\\\rdagent-node1\\\\completion.json', 'F:\\\\Dev\\\\AIstock\\\\tmp\\\\handoff\\\\qe-adaptive-24h-20261028\\\\run_v1\\\\BUG2109_versioned_cache_v3\\\\wsl2-5080\\\\completion.json'], 'tests': 'python -m pytest backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py -q -> 68 passed, 2 skipped', 'source_status': 'not_merged; API activation remains pending user restart'}",
+      "python F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/prepare_versioned_cache_native.py -> passed: BUG2109_versioned_cache_v3 final source; both nodes exact 5526983 x 11; 12 immutable factors each; legacy cache unchanged; zero fits/predictions/accounts"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe.core"
+  ],
+  "title": "QE factor cache accepts unbound divergent input snapshots across nodes",
+  "trigger_condition": {
+    "fingerprint": "3d2feb1dac7aabf1e58855de",
+    "source_event_id": "FE-20261027-3d2feb1dac7a"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.core",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.core",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
