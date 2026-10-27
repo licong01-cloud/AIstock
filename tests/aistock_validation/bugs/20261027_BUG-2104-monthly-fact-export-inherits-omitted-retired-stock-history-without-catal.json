@@ -43,7 +43,6 @@
   "expected": "One full shared factual release retains retired/ST/IPO history independently of PIT; catalogue delta triggers bounded missing-security history capture and materialization; later monthly updates only append the month.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2104-monthly-fact-export-inherits-omitted-retired-stock-history-without-catal.json",
       "backend/services/dataset_release/monthly_build_bridge.py",
       "backend/services/dataset_release/monthly_construction_facts.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
@@ -57,11 +56,11 @@
       "backend/tests/dataset_release/test_monthly_construction_facts.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_fact_history.py"
+      "backend/tests/dataset_release/test_source_fact_history.py",
+      "tests/aistock_validation/bugs/20261027_BUG-2104-monthly-fact-export-inherits-omitted-retired-stock-history-without-catal.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2104-monthly-fact-export-inherits-omitted-retired-stock-history-without-catal.json",
       "backend/services/dataset_release/monthly_build_bridge.py",
       "backend/services/dataset_release/monthly_construction_facts.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
@@ -75,7 +74,8 @@
       "backend/tests/dataset_release/test_monthly_construction_facts.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_fact_history.py"
+      "backend/tests/dataset_release/test_source_fact_history.py",
+      "tests/aistock_validation/bugs/20261027_BUG-2104-monthly-fact-export-inherits-omitted-retired-stock-history-without-catal.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
