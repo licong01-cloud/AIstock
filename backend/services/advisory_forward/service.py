@@ -75,6 +75,7 @@ class AdvisoryForwardService:
         evaluation_market_source: AdvisoryForwardEvaluationMarketSource | Any | None = None,
         entry_price_service: Any | None = None,
         entry_value_service: Any | None = None,
+        lstm_shadow_service: Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
@@ -85,6 +86,7 @@ class AdvisoryForwardService:
         from backend.services.advisory_model_first.entry_price_daily_service import AdvisoryEntryPriceDailyService
         self.entry_price_service = entry_price_service or AdvisoryEntryPriceDailyService(now_provider=now_provider)
         self.entry_value_service = entry_value_service
+        self.lstm_shadow_service = lstm_shadow_service
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
         if after_close_hour is None and after_close_minute is None:
             self.after_close_hour, self.after_close_minute = _after_close_time()
@@ -142,6 +144,7 @@ class AdvisoryForwardService:
                 "results": results,
                 "entry_price": self._entry_price_after_baseline(),
                 "entry_value": self._entry_value_after_baseline(),
+                "lstm_spo_shadow": self._lstm_shadow_after_baseline(),
             }
         decision_date = now.date()
         target_date = self.calendar.next_trading_day(decision_date, inclusive=False)
@@ -178,7 +181,17 @@ class AdvisoryForwardService:
             "results": results,
             "entry_price": self._entry_price_after_baseline(),
             "entry_value": self._entry_value_after_baseline(),
+            "lstm_spo_shadow": self._lstm_shadow_after_baseline(),
         }
+
+    def _lstm_shadow_after_baseline(self) -> dict[str, Any]:
+        try:
+            from backend.services.advisory_model_first.lstm_spo_shadow_v1 import LstmSpoShadowService
+            service = self.lstm_shadow_service or LstmSpoShadowService(now=self.now_provider)
+            return service.run_once()
+        except Exception as exc:
+            LOGGER.exception("LSTM shadow observation failed after native actions")
+            return {"status": "FAILED", "error_type": type(exc).__name__, "message": str(exc)}
 
     def _entry_value_after_baseline(self) -> dict[str, Any]:
         try:
