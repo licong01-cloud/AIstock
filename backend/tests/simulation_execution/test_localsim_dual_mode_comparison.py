@@ -142,3 +142,99 @@ def test_shared_owner_only_code_upgrade_cannot_resume_old_account_prefix(tmp_pat
     root=Path(request.path).parent
     assert not (root/"source_inspection.json").exists()
     assert not list((root/"journals").glob("*/generations/*.json"))
+
+
+def test_fresh_candidate_is_explicitly_pinned_and_reinspected_before_real_accounts(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    original_bytes = Path(request.path).read_bytes()
+    original = read_json(Path(request.path))
+    candidate_path = tmp_path / "authorized-repaired-candidate.json"
+    publish(candidate_path, {"role": "FUNCTIONAL_REPAIRED_CANDIDATE"})
+    candidate = FileRef.model_validate(ref(candidate_path))
+    calls = []
+
+    def inspect_sources(inspected, actual):
+        assert actual == candidate
+        assert inspected["preflight"]["inputs"]["candidate_manifest"] != candidate.model_dump()
+        calls.append(actual)
+
+    monkeypatch.setattr(dual, "inspect_successor_sources", inspect_sources)
+    frozen = dual.freeze_study(source_request=FileRef.model_validate(original["source_request"]),
+                              input_candidate=candidate, output_root=tmp_path / "repaired-study",
+                              producer_commit="3" * 40, matrix="BASIC_2")
+    fresh = FileRef.model_validate(frozen["request"])
+    bound = read_json(Path(fresh.path))
+    assert bound["input_candidate"] == bound["candidate_manifest"] == candidate.model_dump()
+    assert bound["input_successor"] is None
+    assert "input_candidate" not in original
+    assert Path(request.path).read_bytes() == original_bytes
+    assert len(calls) == 1 and not (Path(fresh.path).parent / "journals").exists()
+    result = dual.run_study(fresh)
+    assert result["computed_account_days"] == 2 and len(calls) == 2
+    results = read_json(Path(result["results"]["path"]))
+    inspection = read_json(Path(results["source_inspection"]["path"]))
+    assert inspection["candidate_manifest"] == candidate.model_dump()
+    assert all(a["initial_cash_cny"] == "10000000" for a in results["accounts"])
+    retry = dual.run_study(fresh)
+    assert retry["computed_account_days"] == 0 and retry["results"] == result["results"]
+    assert len(calls) == 3 and Path(request.path).read_bytes() == original_bytes
+    candidate_path.write_bytes(b"changed by a different input owner")
+    from backend.services.position_timing.intraday.store import IntradayError
+    with pytest.raises(IntradayError, match="RESEARCH_SOURCE_IDENTITY_MISMATCH"):
+        dual.run_study(fresh)
+    assert read_json(Path(result["results"]["path"])) == results
+
+
+@pytest.mark.parametrize("reason", ["LOCALSIM_TIMING_SUCCESSOR_PRICE_INPUT_CHANGED", "LOCALSIM_TIMING_SUCCESSOR_QUOTE_SPAN_CHANGED"])
+def test_fresh_candidate_equivalence_failure_leaves_no_new_request_or_accounts(tmp_path, monkeypatch, reason):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    original = read_json(Path(request.path))
+    candidate_path = tmp_path / "incompatible-candidate.json"
+    publish(candidate_path, {"role": "FUNCTIONAL_INCOMPATIBLE_CANDIDATE"})
+
+    def reject(inspected, candidate):
+        raise ValueError(reason)
+
+    monkeypatch.setattr(dual, "inspect_successor_sources", reject)
+    output = tmp_path / "must-not-publish"
+    with pytest.raises(ValueError, match=reason):
+        dual.freeze_study(source_request=FileRef.model_validate(original["source_request"]),
+                          input_candidate=FileRef.model_validate(ref(candidate_path)), output_root=output,
+                          producer_commit="3" * 40)
+    assert not output.exists()
+
+
+def test_fresh_candidate_and_old_successor_are_rejected_before_source_reads(tmp_path):
+    missing = FileRef(path=str(tmp_path / "must-not-read.json"), sha256="a" * 64)
+    with pytest.raises(ValueError, match="INPUT_BINDING_CONFLICT"):
+        dual.freeze_study(source_request=missing, input_successor=missing, input_candidate=missing,
+                          output_root=tmp_path / "must-not-publish", producer_commit="3" * 40)
+    assert not (tmp_path / "must-not-publish").exists()
+
+
+@pytest.mark.parametrize("invalid", [None, {}, "active"])
+def test_malformed_explicit_candidate_never_becomes_an_implicit_original(tmp_path, monkeypatch, invalid):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    changed = read_json(Path(request.path))
+    changed["input_candidate"] = invalid
+    from backend.services.position_timing.intraday.contracts import digest
+    changed["identity"] = digest({k:v for k,v in changed.items() if k not in {"identity", "release_identity"}})
+    changed["release_identity"] = "localsim_dual_mode_v1_" + changed["identity"][:24]
+    path = tmp_path / "malformed.json"
+    publish(path, changed)
+    with pytest.raises(ValueError):
+        dual.run_study(FileRef.model_validate(ref(path)))
+    assert not (tmp_path / "source_inspection.json").exists()
+    assert not (tmp_path / "journals").exists()
+
+
+@pytest.mark.parametrize("flags", [["--candidate", "missing.json"], ["--candidate-sha256", "a" * 64],
+    ["--candidate", "new.json", "--candidate-sha256", "a" * 64,
+     "--input-successor", "old.json", "--input-successor-sha256", "b" * 64]])
+def test_candidate_cli_rejects_incomplete_or_conflicting_bindings(tmp_path, monkeypatch, flags):
+    monkeypatch.setattr("sys.argv", ["dual-mode", "freeze", "--source-request", "source.json",
+        "--source-request-sha256", "c" * 64, "--producer-commit", "d" * 40,
+        "--output-root", str(tmp_path / "must-not-publish"), *flags])
+    with pytest.raises(SystemExit) as exc:
+        dual.main()
+    assert exc.value.code == 2 and not (tmp_path / "must-not-publish").exists()
