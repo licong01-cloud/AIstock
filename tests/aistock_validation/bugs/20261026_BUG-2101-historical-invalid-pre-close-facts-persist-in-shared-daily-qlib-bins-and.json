@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2101",
-  "closed_at": null,
+  "closed_at": "2026-10-27T05:32:36.419202Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -137,10 +137,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\preclose-full-remediation-20261027-r1\\postrestart-BUG-2101.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2101",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "00bc5a2149f74e2eb97245a373358aff5795a3f2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-27T05:31:45.018322Z",
+      "mode": "read_only",
+      "observed_identity": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "35508d3cbc2196d41cef5dbc830a0c1c8ebf788920819299267a071da07e630d",
+      "receipt_sha256": "bbde50d056b1e21b62a86d0a54d4218e033549bed739d25565896aefeb847696",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1312e262e1e71c1cce098773379f5bec58fff37218c3e0c49b86b5c49574770e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -172,7 +194,7 @@
     ],
     "validation_evidence_digest": "8511503dce23cf7f10ee87d8048d0f7b0ae8bc300beaf74b938608b79bcb7e31"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
