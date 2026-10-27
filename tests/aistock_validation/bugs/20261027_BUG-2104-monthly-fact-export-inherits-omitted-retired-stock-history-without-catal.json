@@ -16,6 +16,7 @@
     "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
     "backend/tests/dataset_release/test_source_fact_history.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
     "backend/tests/dataset_release/test_monthly_minute_coverage.py",
     "tests/aistock_validation/bugs/20261027_BUG-2104-monthly-fact-export-inherits-omitted-retired-stock-history-without-catal.json"
   ],
