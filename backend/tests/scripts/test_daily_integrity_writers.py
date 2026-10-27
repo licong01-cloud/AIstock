@@ -47,3 +47,18 @@ def test_cninfo_metadata_only_retry_does_not_dirty_facts(monkeypatch):
     assert "IS DISTINCT FROM" in queries[0] and "RETURNING ann_date" in queries[0]
     assert "last_seen_at=NOW()" in queries[1]
     assert markers == [("anns_metadata", [])]
+
+
+@pytest.mark.parametrize("script", ["scripts/import_minutes_gap.py", "scripts/import_minutes_to_db.py"])
+def test_legacy_minute_import_is_side_effect_free_and_uses_shared_db_configuration(monkeypatch, script):
+    import runpy
+    import sys
+    import psycopg2
+    from backend.db.pg_pool import _db_cfg
+    def forbidden(**_kwargs):
+        raise AssertionError("import must not connect to a database")
+    monkeypatch.setattr(psycopg2, "connect", forbidden)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    namespace = runpy.run_path(script, run_name="legacy_import_test")
+    assert namespace["_db_cfg"] is _db_cfg and "DB_CONFIG" not in namespace
+    assert callable(namespace["main"])

@@ -6,6 +6,8 @@
 
 只导入 DB 中缺失的交易日，跳过北交所。
 """
+import sys
+from pathlib import Path
 import os
 import io
 import zipfile
@@ -13,11 +15,13 @@ import psycopg2
 import psycopg2.extras
 import pandas as pd
 
-DB_CONFIG = dict(host='127.0.0.1', port=5432, dbname='aistock',
-                 user='postgres', password='lc78080808')
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.db.pg_pool import _db_cfg  # noqa: E402
+
 ZIP_DIR = r'F:\Dev\A股历史数据\A股分时数据\A股\1分钟'
 ZIP_ARCHIVE_DIR = r'F:\Dev\A股历史数据\A股分时数据\A股\1分钟_按月归档'
-TUSHARE_CACHE_DIR = r'F:\Dev\AIstock\scripts\tushare_min_cache'
+TUSHARE_CACHE_DIR = str(Path(__file__).resolve().parent / "tushare_min_cache")
 BATCH_SIZE = 50000
 
 
@@ -171,7 +175,7 @@ def insert_batch(conn, rows):
 
 
 def main():
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(**_db_cfg())
     missing = get_missing_dates(conn)
     print(f'DB 缺失交易日: {len(missing)} 天')
 
