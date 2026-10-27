@@ -1044,6 +1044,16 @@ def list_versions(
         _raise_http(exc)
 
 
+@router.get("/programs/{program_id}/reranking-shadow")
+def reranking_shadow(program_id: str, target_trade_date: date | None = Query(None)) -> dict[str, Any]:
+    """Read frozen LSTM parallel predictions; never infer or mutate from a GET."""
+    from backend.services.advisory_model_first.lstm_spo_shadow_v1 import LstmSpoShadowService
+    try:
+        return {"ok": True, **LstmSpoShadowService().status(program_id=program_id, target_date=target_trade_date)}
+    except Exception as exc:
+        return {"ok": False, "status": "FAILED", "error_type": type(exc).__name__, "message": str(exc)}
+
+
 @router.get("/programs/{program_id}/model-shadow")
 def model_shadow(
     program_id: str,
