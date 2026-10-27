@@ -2353,7 +2353,9 @@ class ConfigComposer:
         import uuid as _uuid
 
         from .l2_risk_consumer import apply_study, extract_study
+        from .l2_continuous_consumer import apply_continuous, extract_continuous
 
+        custom_params, continuous_study = extract_continuous(custom_params)
         custom_params, l2_study = extract_study(custom_params)
         experiment_id = str(_uuid.uuid4())[:8]
         if not experiment_name:
@@ -2862,7 +2864,8 @@ class ConfigComposer:
             result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
         if direct_v2_dataset_binding is not None:
             result["direct_v2_dataset_binding"] = direct_v2_dataset_binding.as_dict()
-        return apply_study(result, l2_study, scripts_dir=scripts_dir)
+        result = apply_study(result, l2_study, scripts_dir=scripts_dir)
+        return apply_continuous(result, continuous_study, scripts_dir=scripts_dir)
 
     # ── 内存生成辅助方法 ──
 
