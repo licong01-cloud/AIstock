@@ -1474,6 +1474,30 @@ ORDER BY trade_date
 """
 
 
+def sector_fact_comparison_sql() -> str:
+    """Read-only projection of the SAME activated producer, not a second formula.
+
+    Reject an unexpected statement shape rather than certify rows with an
+    incomplete duplicated join. Values are trusted source constants, not input.
+    """
+    prefix, insert = _BUILD_DAY_SQL.split("INSERT INTO market.sector_data (", 1)
+    columns, select = insert.split(")\nSELECT\n", 1)
+    projection, _update = select.split("\nON CONFLICT (trade_date, ts_code)", 1)
+    projection = projection.replace("%(trade_date)s,\n", "%(trade_date)s::date,\n", 1)
+    names = [name.strip() for name in columns.split(",")]
+    if names[:2] != ["trade_date", "ts_code"] or any(not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in names):
+        raise SectorDataBuildContractError("sector comparison producer projection changed")
+    selected = ",".join(names)
+    expected = ",".join("e."+name for name in names)
+    actual = ",".join("a."+name for name in names)
+    return (prefix + ", expected("+selected+") AS (SELECT\n"+projection+") , actual AS ("
+        "SELECT "+selected+" FROM market.sector_data WHERE trade_date=%(trade_date)s) "
+        "SELECT COALESCE(e.ts_code,a.ts_code) AS ts_code, "
+        "CASE WHEN e.ts_code IS NULL THEN 'UNEXPECTED' WHEN a.ts_code IS NULL THEN 'MISSING' "
+        "ELSE 'INVALID' END AS classification FROM expected e FULL JOIN actual a USING(trade_date,ts_code) "
+        "WHERE ROW("+expected+") IS DISTINCT FROM ROW("+actual+") ORDER BY 1")
+
+
 class SectorDataBuilder:
     """Build market.sector_data from PIT membership and source market facts."""
 
@@ -1528,8 +1552,12 @@ class SectorDataBuilder:
                         unpublished_l2_exempted,
                     )
                 cur.execute(_DELETE_STALE_DAY_SQL, params)
+                deleted = cur.rowcount
                 cur.execute(_BUILD_DAY_SQL, params)
                 rows = cur.rowcount
+                if deleted or rows:
+                    from .data_integrity.repository import mark_changed
+                    mark_changed(conn, "sector_data", [trade_date], reason="derived_sector_changed", source="sector_builder")
                 from .sector_data_repair import clear_revision_date
 
                 clear_revision_date(conn, trade_date, rows)

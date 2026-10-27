@@ -1,6 +1,11 @@
 """强制补齐 2025-03-10 ~ 2025-07-07 期间的分钟线数据
 这些天 DB 中只有极少量股票（1~几十只），需要从 ZIP 月归档补齐全市场"""
-import os, io, zipfile, psycopg2, psycopg2.extras, pandas as pd
+import os
+import io
+import zipfile
+import psycopg2
+import psycopg2.extras
+import pandas as pd
 
 DB_CONFIG = dict(host='127.0.0.1', port=5432, dbname='aistock',
                  user='postgres', password='lc78080808')
@@ -34,7 +39,7 @@ for i, d in enumerate(dates):
             continue
         try:
             df = pd.read_csv(io.BytesIO(z.read(fname)), encoding='utf-8')
-        except:
+        except (ValueError, UnicodeError):
             continue
         if len(df) < 2:
             continue
@@ -56,8 +61,8 @@ for i, d in enumerate(dates):
         df['close_li'] = (df['close'] * 1000).round().astype(int)
         df['volume_hand'] = df['volume'].astype(int)
         df['amount_li'] = (df['amount'] * 1000).round().astype(int)
-        for t, o, h, l, c, v, a in zip(df['trade_time'], df['open_li'], df['high_li'], df['low_li'], df['close_li'], df['volume_hand'], df['amount_li']):
-            all_rows.append((t, ts_code, '1m', o, h, l, c, v, a, 'none', 'tdx_vipdoc'))
+        for t, o, h, low, c, v, a in zip(df['trade_time'], df['open_li'], df['high_li'], df['low_li'], df['close_li'], df['volume_hand'], df['amount_li']):
+            all_rows.append((t, ts_code, '1m', o, h, low, c, v, a, 'none', 'tdx_vipdoc'))
     z.close()
 
     if not all_rows:
@@ -67,8 +72,9 @@ for i, d in enumerate(dates):
     n_stocks = len(set(r[1] for r in all_rows))
     sql = """INSERT INTO market.kline_minute_raw
         (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source)
-        VALUES %s ON CONFLICT DO NOTHING"""
-    psycopg2.extras.execute_values(cur, sql, all_rows, page_size=BATCH_SIZE)
+        VALUES %s ON CONFLICT DO NOTHING RETURNING trade_time::date"""
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, all_rows, dataset="kline_minute_raw", source="archive_gap_import", page_size=BATCH_SIZE)
     conn.commit()
     total_inserted += len(all_rows)
     print(f'[{i+1}/{len(dates)}] {d}: {len(all_rows):,} 行, {n_stocks} 只')

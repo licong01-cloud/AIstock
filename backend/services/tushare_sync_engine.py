@@ -777,20 +777,38 @@ class TushareSyncEngine:
         if not values:
             return 0
         sector_dependency = spec.target_table in {"market.sw_daily", "market.moneyflow_ts"}
-        owns_transaction = sector_dependency and conn.autocommit
-        if sector_dependency:
-            # Identical provider retries do not dirty previously verified dates.
-            table = spec.target_table.rsplit(".", 1)[1]
+        owns_transaction = conn.autocommit
+        # Compare the values actually assigned, not the unmerged provider row.
+        # A NULL-only retry must not dirty unchanged finite local facts.
+        if update_set:
             old_values = ", ".join(f"{table}.{c}" for c in non_pk)
-            new_values = ", ".join(f"EXCLUDED.{c}" for c in non_pk)
-            sql += f" WHERE ({old_values}) IS DISTINCT FROM ({new_values}) RETURNING trade_date"
+            # CASE/COALESCE expressions contain commas: build each assignment
+            # from the same per-column rule rather than parsing SQL text.
+            assignments = []
+            for c in non_pk:
+                if fill_only_reference and c == "pre_close":
+                    assignments.append("CASE WHEN stk_limit.pre_close IS NULL OR stk_limit.pre_close<=0 "
+                        "OR stk_limit.pre_close::text IN ('NaN','Infinity','-Infinity') "
+                        "THEN EXCLUDED.pre_close ELSE stk_limit.pre_close END")
+                elif spec.name in LATE_PUBLICATION_TAIL_DAYS:
+                    assignments.append(f"COALESCE(EXCLUDED.{c}, {table}.{c})")
+                else:
+                    assignments.append(f"EXCLUDED.{c}")
+            assigned = ", ".join(assignments)
+            sql += f" WHERE ROW({old_values}) IS DISTINCT FROM ROW({assigned})"
+        from .data_integrity.catalog import REFERENCE
+        date_key = spec.date_column if spec.date_column in col_names and spec.name not in REFERENCE else None
+        sql += f" RETURNING {date_key or '1'}"
         if owns_transaction:
             conn.autocommit = False
         try:
             with conn.cursor() as cur:
-                changed = pgx.execute_values(cur, sql, values, fetch=True) if sector_dependency else None
-                if not sector_dependency:
-                    pgx.execute_values(cur, sql, values)
+                changed = pgx.execute_values(cur, sql, values, fetch=True)
+            from .data_integrity.catalog import canonical_dataset
+            from .data_integrity.repository import mark_changed
+            changed_dates = [row[0] for row in changed or [] if row[0] is not None] if date_key else [dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()] if changed else []
+            mark_changed(conn, canonical_dataset(spec.name), changed_dates,
+                         reason="provider_upsert", source=spec.tushare_api)
             if sector_dependency:
                 from .sector_data_repair import mark_revision_dates
 
@@ -910,11 +928,24 @@ class TushareSyncEngine:
             if previous_autocommit is not None:
                 conn.autocommit = False
             with conn.cursor() as cur:
+                if rows:
+                    from .data_integrity.provider import row_identity
+                    columns = list(spec.columns)
+                    cur.execute(f"SELECT {','.join(columns)} FROM {spec.target_table} WHERE {spec.date_column}=%s", (trade_date,))
+                    existing = [dict(zip(columns, values)) for values in cur.fetchall()]
+                    if sorted(row_identity(spec, row, columns) for row in existing) == sorted(
+                            row_identity(spec, row, columns) for row in rows):
+                        conn.commit()
+                        return len(rows)
                 cur.execute(
-                    f"DELETE FROM {spec.target_table} WHERE {spec.date_column} = %s",
+                    f"DELETE FROM {spec.target_table} WHERE {spec.date_column} = %s RETURNING {spec.date_column}",
                     (trade_date,),
                 )
+                deleted_dates = [row[0] for row in cur.fetchall()]
             inserted = self._upsert_batch(conn, spec, rows)
+            if deleted_dates:
+                from .data_integrity.repository import mark_changed
+                mark_changed(conn, spec.name, deleted_dates, reason="provider_date_replacement", source=spec.tushare_api)
             conn.commit()
             return inserted
         except Exception:
@@ -1441,6 +1472,8 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                from .data_integrity.provider import provider_scan
+                audit_metadata["provider_scan"] = provider_scan(spec, rows, parameters={spec.date_param_name: ymd})
                 if spec.name == "suspend_d":
                     from backend.data_service.suspension_day_authority import publication_quality as suspension_publication_quality
                     suspension, suspension_quality = suspension_publication_quality(rows, d)
@@ -1632,12 +1665,14 @@ class TushareSyncEngine:
         )
         raw_service = TushareEventRawSyncService()
         errors: list[str] = []
+        period_identities = []
 
         for period in periods:
             try:
                 summary = raw_service.sync_period(logical_dataset, period=period, job_id=job_id)
                 result.inserted_rows += int(summary.written_rows or 0)
                 result.success_batches += 1
+                period_identities.extend(getattr(summary, "source_identities", ()))
                 self._log(
                     conn,
                     job_id,
@@ -1691,13 +1726,16 @@ class TushareSyncEngine:
         for d in _date_range(start_date, end_date):
             row_count = int(row_counts.get(d, 0))
             quality_status = "ok" if row_count > 0 else "empty_valid"
+            from backend.services.data_integrity.provider import provider_scan, value_identity
+            date_rows = [row for row in period_identities if value_identity(row["ann_date"], "date") == str(d)]
+            scan = provider_scan(spec, date_rows, parameters={"periods": periods, "ann_date": str(d)})
             self._refresh_audit.record_success(
                 dataset=spec.name,
                 trade_date=d,
                 row_count=row_count,
                 job_id=str(job_id),
                 data_source="tushare",
-                metadata=metadata,
+                metadata={**metadata, "provider_scan": scan},
                 written_rows=row_count,
                 quality_status=quality_status,
                 conn=conn,
@@ -1711,6 +1749,7 @@ class TushareSyncEngine:
         param_sets = spec.single_call_param_sets or [{}]
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
                             total_batches=len(param_sets))
+        source_rows = []
         for params in param_sets:
             try:
                 rows = self._fetch_from_tushare(spec, params)
@@ -1726,12 +1765,21 @@ class TushareSyncEngine:
                         f"row_limit={spec.row_limit} may indicate truncated Tushare data"
                     )
                 inserted = self._upsert_batch(conn, spec, rows)
+                source_rows.extend(rows)
                 result.inserted_rows += inserted
                 result.success_batches += 1
             except Exception as exc:
                 result.failed_batches += 1
                 result.error = str(exc)
                 self._log(conn, job_id, "error", f"{spec.name} single_call params={params} failed: {exc}")
+
+        if result.ok:
+            from .data_integrity.provider import provider_scan
+            observation_day = dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+            self._refresh_audit.record_success(dataset=spec.name, trade_date=observation_day,
+                row_count=len(source_rows), written_rows=result.inserted_rows, data_source="tushare",
+                job_id=str(job_id), conn=conn, metadata={"mode": spec.query_mode.value,
+                    "provider_scan": provider_scan(spec, source_rows, parameters=param_sets)})
 
         try:
             self._update_progress(conn, job_id, result)
@@ -2027,6 +2075,8 @@ class TushareSyncEngine:
         start_ymd = start_date.strftime("%Y%m%d") if start_date else None
         end_ymd = end_date.strftime("%Y%m%d") if end_date else None
 
+        reference_scans = []
+
         for batch_start in range(0, len(codes), BATCH_SIZE):
             batch = codes[batch_start:batch_start + BATCH_SIZE]
             with get_conn() as conn:           # 每批独立连接，持有 <2min
@@ -2104,6 +2154,9 @@ class TushareSyncEngine:
                             inserted = self._upsert_batch(conn, spec, rows)
                         result.inserted_rows += inserted
                         result.success_batches += 1
+                        if spec.skip_date_params:
+                            from .data_integrity.provider import provider_scan
+                            reference_scans.append(provider_scan(spec, rows, parameters=params))
                     except Exception as exc:
                         result.failed_batches += 1
                         self._log(conn, job_id, "error", f"{spec.name} {code_val} failed: {exc}")
@@ -2122,6 +2175,14 @@ class TushareSyncEngine:
 
         try:
             self._record_by_code_audit(spec, start_date, end_date, job_id, result)
+            if spec.skip_date_params and result.ok:
+                from .data_integrity.provider import merge_scans
+                with get_conn() as conn:
+                    self._refresh_audit.record_success(dataset=spec.name,
+                        trade_date=dt.datetime.now(ZoneInfo("Asia/Shanghai")).date(), row_count=result.inserted_rows,
+                        job_id=str(job_id), data_source="tushare", conn=conn,
+                        metadata={"mode": spec.query_mode.value, "provider_scan": merge_scans(spec, reference_scans,
+                            parameters={"requested_codes": list(codes), "skip_date_params": True})})
         except Exception as exc:
             result.failed_batches += 1
             result.error = f"refresh audit failed: {exc}"

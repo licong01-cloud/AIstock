@@ -7,6 +7,7 @@ outcomes, but it does not schedule, dispatch, or execute sync jobs.
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -88,7 +89,9 @@ class DataSyncTargetRepository:
     def __init__(self, connection_provider: ConnectionProvider = get_conn) -> None:
         self._connection_provider = connection_provider
 
-    def upsert_target(self, record: DataSyncTargetRecord | Mapping[str, Any]) -> dict[str, Any]:
+    def upsert_target(self, record: DataSyncTargetRecord | Mapping[str, Any], *, conn=None) -> dict[str, Any]:
+        if conn is not None and conn.autocommit:
+            raise ValueError("caller-owned target upsert requires a transaction")
         if isinstance(record, Mapping):
             record = DataSyncTargetRecord(**dict(record))
         self._validate_target_status(record.target_status)
@@ -129,6 +132,11 @@ class DataSyncTargetRepository:
         ]
         assignments = ", ".join(
             "metadata = data_sync_targets.metadata || EXCLUDED.metadata" if column == "metadata"
+            else "next_retry_at = CASE WHEN data_sync_targets.data_source='integrity_repair' "
+                 "AND data_sync_targets.target_status IN ('pending','retry') THEN "
+                 "CASE WHEN data_sync_targets.next_retry_at IS NULL THEN NULL "
+                 "ELSE LEAST(data_sync_targets.next_retry_at,EXCLUDED.next_retry_at) END "
+                 "ELSE EXCLUDED.next_retry_at END" if column == "next_retry_at"
             else "required_before = COALESCE(EXCLUDED.required_before, data_sync_targets.required_before)"
             if column == "required_before" else f"{column} = EXCLUDED.{column}"
             for column in update_columns
@@ -141,7 +149,7 @@ class DataSyncTargetRepository:
                 updated_at = NOW()
             RETURNING *
         """
-        with self._connection_provider() as conn:
+        with (self._connection_provider() if conn is None else nullcontext(conn)) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, [self._adapt(column, row[column]) for column in columns])
                 return self._row(cur)
@@ -249,6 +257,7 @@ class DataSyncTargetRepository:
         data_source: str | None = None,
         due_at: datetime | None = None,
         limit: int = 100,
+        exclude_operation: str | None = None,
     ) -> list[dict[str, Any]]:
         due_at = due_at or datetime.now(timezone.utc)
         limit = max(1, min(int(limit or 100), 1000))
@@ -263,6 +272,9 @@ class DataSyncTargetRepository:
         if data_source:
             filters.append("data_source = %s")
             params.append(data_source)
+        if exclude_operation:
+            filters.append("COALESCE(target_scope->>'operation','FETCH') <> %s")
+            params.append(exclude_operation)
         params.append(limit)
         with self._connection_provider() as conn:
             with conn.cursor() as cur:

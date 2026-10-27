@@ -17,7 +17,6 @@ import datetime as dt
 import json
 import os
 import sys
-import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -188,6 +187,9 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
+    from backend.services.data_integrity.contracts import finite_number
+    rows = [{key: (None if key not in {"trade_date", "ts_code"} and value is not None
+                   and not finite_number(value) else value) for key, value in row.items()} for row in rows]
     sql = (
         "INSERT INTO market.moneyflow_ts (trade_date, ts_code, "
         "buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount, "
@@ -243,9 +245,16 @@ def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
         )
     if not values:
         return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.data_service.moneyflow_contract import TUSHARE_MONEYFLOW_AMOUNT_COLUMNS, TUSHARE_MONEYFLOW_VOLUME_COLUMNS
+    from backend.services.data_integrity.writes import changed_values
+    fields = TUSHARE_MONEYFLOW_AMOUNT_COLUMNS + TUSHARE_MONEYFLOW_VOLUME_COLUMNS
+    # Provider retries cannot erase finite history; compare the merged values
+    # so an identical retry does not dirty the canonical date.
+    for field in fields:
+        sql = sql.replace(f"{field}=EXCLUDED.{field}", f"{field}=COALESCE(EXCLUDED.{field},moneyflow_ts.{field})")
+    sql += " WHERE ROW("+",".join("moneyflow_ts."+f for f in fields)+") IS DISTINCT FROM ROW("+",".join(
+        f"COALESCE(EXCLUDED.{f},moneyflow_ts.{f})" for f in fields)+") RETURNING trade_date"
+    return changed_values(conn, sql, values, dataset="moneyflow_ts", source="tushare_moneyflow")
 
 
 def _fetch_moneyflow_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:

@@ -243,7 +243,7 @@ def build_upsert_sql(fill_fields: Sequence[str]) -> str:
     return (
         f"INSERT INTO market.daily_basic AS target ({columns}) VALUES %s "
         "ON CONFLICT (trade_date, ts_code) DO UPDATE SET "
-        f"{assignments} WHERE {predicate}"
+        f"{assignments} WHERE {predicate} RETURNING trade_date"
     )
 
 
@@ -410,7 +410,9 @@ def execute_backfill(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"aistock.daily_basic.backfill:{trade_date.isoformat()}",),
             )
-            execute_values(cur, build_upsert_sql(fill_fields), snapshot_rows(frame, trade_date), page_size=1000)
+            changed = execute_values(cur, build_upsert_sql(fill_fields), snapshot_rows(frame, trade_date), page_size=1000, fetch=True)
+        from backend.services.data_integrity.repository import mark_changed
+        mark_changed(conn, "daily_basic", [r[0] for r in changed], reason="fill_missing_fields", source="tushare_backfill")
         after = preview_database(conn, trade_date, fill_fields)
         verify_after(frame, before, after, fields=fill_fields)
         conn.commit()

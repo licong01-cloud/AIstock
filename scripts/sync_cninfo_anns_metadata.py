@@ -344,15 +344,20 @@ def upsert_rows(
             last_seen_source = EXCLUDED.last_seen_source,
             last_seen_job_id = EXCLUDED.last_seen_job_id,
             updated_at = NOW()
+        WHERE ROW(market.anns.name,market.anns.url,market.anns.rec_time) IS DISTINCT FROM
+            ROW(EXCLUDED.name,EXCLUDED.url,COALESCE(EXCLUDED.rec_time,market.anns.rec_time))
+        RETURNING ann_date
     """
-    with conn.cursor() as cur:
-        pgx.execute_values(
-            cur,
-            sql,
-            observed_rows,
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, observed_rows, dataset="anns_metadata", source=source,
             template="(%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),%s,%s,%s,%s,'LOCAL_FIRST_SEEN')",
-            page_size=1000,
-        )
+            page_size=1000)
+    with conn.cursor() as cur:
+        pgx.execute_values(cur, """UPDATE market.anns a SET last_seen_at=NOW(),
+            last_seen_source=v.source,last_seen_job_id=v.job_id::uuid
+            FROM (VALUES %s) v(ts_code,ann_date,title,source,job_id)
+            WHERE a.ts_code=v.ts_code AND a.ann_date=v.ann_date::date AND a.title=v.title""",
+            [(r[1], r[0], r[3], source, job_id) for r in rows], page_size=1000)
     return len(rows)
 
 
@@ -378,6 +383,8 @@ def sync_one_date(
         )
         touched = upsert_rows(conn, rows, source="cninfo", job_id=job_id)
         db_count_after = db_count_for_date(conn, ann_date)
+        from backend.services.data_integrity.provider import record_ann_scan
+        record_ann_scan(conn, ann_date, rows, audit, source="cninfo", job_id=job_id)
         conn.commit()
         audit.update(
             {

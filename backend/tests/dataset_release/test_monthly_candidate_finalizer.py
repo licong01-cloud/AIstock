@@ -265,6 +265,25 @@ def test_finalizer_seals_all_release_files_and_manifest_identity(tmp_path: Path)
     )
 
 
+def test_finalizer_pins_captured_source_revisions_without_reading_live_db(tmp_path):
+    from backend.services.data_integrity.release import PIN_PATH, PIN_SCHEMA
+    staging, _cas, refs, source_ref, validation = _setup(tmp_path)
+    compiled = _compiled(tmp_path, source_ref)
+    pin = {"dataset": "daily_basic", "fact_date": "2026-09-01", "data_revision": 3,
+           "validated_revision": 3, "validation_id": "v3", "scope_version": "s", "rule_version": "r"}
+    raw = canonical_json_bytes({"integrity_revision_pins": [pin]})+b"\n"
+    compiled.source_bundle_path.write_bytes(raw)
+    compiled = replace(compiled, source_bundle_sha256=hashlib.sha256(raw).hexdigest())
+    result = UnifiedMonthlyCandidateFinalizer(_Shared()).execute(context=_context(tmp_path),
+        staging_root=staging, compiled=compiled, validation_result=validation, stage_refs=refs)
+    receipt = json.loads((staging/PIN_PATH).read_bytes())
+    manifest = json.loads(result.manifest_path.read_bytes())
+    component = next(row for row in manifest["components"].values() if row["path"] == PIN_PATH)
+    assert receipt["schema_version"] == PIN_SCHEMA and receipt["partition_refs"] == [pin]
+    assert component["sha256"] == hashlib.sha256((staging/PIN_PATH).read_bytes()).hexdigest()
+    assert not result.database_read_performed and not result.database_write_performed
+
+
 @pytest.mark.parametrize('drift', [False, True])
 def test_finalizer_pins_quality_report_and_evidence_without_rewriting_data(tmp_path, drift):
     from backend.tests.dataset_release.test_monthly_source_quality import acceptance

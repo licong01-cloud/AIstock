@@ -9,12 +9,9 @@
 import os
 import io
 import zipfile
-import time
 import psycopg2
 import psycopg2.extras
 import pandas as pd
-import numpy as np
-from datetime import datetime
 
 DB_CONFIG = dict(host='127.0.0.1', port=5432, dbname='aistock',
                  user='postgres', password='lc78080808')
@@ -112,11 +109,11 @@ def load_from_zip(date_str):
         # amount: ZIP 元 → DB 厘 (×1000)
         df['amount_li'] = (df['amount'] * 1000).round().astype(int)
 
-        for t, o, h, l, c, v, a in zip(
+        for t, o, h, low, c, v, a in zip(
             df['trade_time'], df['open_li'], df['high_li'], df['low_li'],
             df['close_li'], df['volume_hand'], df['amount_li']
         ):
-            all_rows.append((t, ts_code, '1m', o, h, l, c, v, a, 'none', 'tdx_vipdoc'))
+            all_rows.append((t, ts_code, '1m', o, h, low, c, v, a, 'none', 'tdx_vipdoc'))
 
     z.close()
     return all_rows
@@ -160,15 +157,15 @@ def insert_batch(conn, rows):
     """批量插入"""
     if not rows:
         return 0
-    cur = conn.cursor()
     sql = """
         INSERT INTO market.kline_minute_raw
         (trade_time, ts_code, freq, open_li, high_li, low_li, close_li,
          volume_hand, amount_li, adjust_type, source)
         VALUES %s
-        ON CONFLICT DO NOTHING
+        ON CONFLICT DO NOTHING RETURNING trade_time::date
     """
-    psycopg2.extras.execute_values(cur, sql, rows, page_size=BATCH_SIZE)
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, rows, dataset="kline_minute_raw", source="archive_import", page_size=BATCH_SIZE)
     conn.commit()
     return len(rows)
 
@@ -220,7 +217,7 @@ def main():
 
     conn.close()
 
-    print(f'\n=== 导入完成 ===')
+    print('\n=== 导入完成 ===')
     print(f'  总导入: {total_inserted:,} 行')
     print(f'  ZIP 导入: {zip_days} 天')
     print(f'  Tushare 导入: {tushare_days} 天')

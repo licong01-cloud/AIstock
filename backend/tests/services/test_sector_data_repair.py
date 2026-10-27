@@ -50,6 +50,8 @@ def test_revision_marker_requires_source_transaction_and_retains_racing_future_d
             calls.append((sql, params))
 
         def fetchone(self):
+            if "to_regprocedure" in calls[-1][0]:
+                return (False,)  # legacy schema fixture; canonical writer is covered by DEV tests
             return (date(2026, 7, 3),)
 
     class Connection:
@@ -65,7 +67,7 @@ def test_revision_marker_requires_source_transaction_and_retains_racing_future_d
     assert not calls
     connection.autocommit = False
     mark_revision_dates(connection, [date(2026, 7, 1), date(2026, 7, 1), date(2026, 7, 6)], "sw_daily")
-    assert calls[-1][1] == ("sw_daily", [date(2026, 7, 1), date(2026, 7, 6)])
+    assert any(params == ("sw_daily", [date(2026, 7, 1), date(2026, 7, 6)]) for _, params in calls)
 
 
 def test_dated_projection_rejects_source_hash_drift_and_never_reopens_history():

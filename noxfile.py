@@ -746,6 +746,19 @@ def localsim_dual_mode_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def local_data_integrity_ui(session: nox.Session) -> None:
+    """Calendar UI with existing prebuilt dependencies and X-only test runtime."""
+    if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
+        session.error("Calendar UI requires prebuilt dependencies; no installation is authorized")
+    task_temp = Path(os.environ.get("RUNNER_TEMP") or ("X:/AIstock_temp/DATA_PREPARATION/calendar-ui"
+        if os.name == "nt" else str(ROOT / "tmp" / "calendar-ui")))
+    task_temp.mkdir(parents=True, exist_ok=True)
+    session.run("node", "frontend/node_modules/@playwright/test/cli.js", "test",
+                "--config=frontend/tests/local-data-integrity.config.ts",
+                env=_env({"TEMP": str(task_temp), "TMP": str(task_temp)}), external=True)
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
@@ -1171,10 +1184,16 @@ def advisory_dev_input_onboarding_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def advisory_historical_range_backend(session: nox.Session) -> None:
     """Run the isolated Advisory Phase 1R historical-range foundation tests."""
+    temp_args: list[str] = []
+    if os.name == "nt":
+        temp_root = Path("X:/AIstock_temp/DATA_PREPARATION/advisory-validation")
+        temp_root.mkdir(parents=True, exist_ok=True)
+        temp_args = ["--basetemp", str(temp_root / uuid4().hex)]
     _run_pytest(
         session,
         "backend/tests/advisory_historical_range",
         "backend/tests/test_inference_engine_historical_readonly.py",
+        *temp_args,
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1340,6 +1359,9 @@ def local_data_management_audit(session: nox.Session) -> None:
         session,
         "backend/tests/test_dataset_refresh_audit.py",
         "backend/tests/test_data_sync_targets.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_daily_data_integrity_api.py",
+        "backend/tests/test_daily_data_integrity_inputs.py",
         "backend/tests/test_data_quality_smoke_env.py",
         "-q",
         "-p",
@@ -1368,6 +1390,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "-m",
         "compileall",
         "backend/services/tushare_sync_engine.py",
+        "backend/services/data_integrity",
         "backend/services/tushare_dataset_specs.py",
         "backend/services/report_rc_data.py",
         "backend/services/report_rc_data_delivery.py",
@@ -1406,6 +1429,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         session,
         "backend/tests/data_service/test_frozen_dataset.py",
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_daily_integrity_writers.py",
         "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
         "backend/tests/scripts/test_backfill_raw_volume_precision.py",
         "backend/tests/scripts/test_repair_historical_daily_fact_absence.py",
@@ -1422,6 +1446,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_prepare_etf_share_size_deployment.py",
         "backend/tests/test_local_data_management_facade.py",
         "backend/tests/test_data_sync_targets.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_daily_data_integrity_api.py",
+        "backend/tests/test_daily_data_integrity_inputs.py",
+        "backend/tests/test_daily_data_integrity_dev.py",
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
         "backend/tests/ingestion/test_daily_sync_recovery.py",

@@ -284,12 +284,14 @@ def _insert_adj_factor_init(conn, rows: List[Dict[str, Any]]) -> int:
         adj = r.get("adj_factor")
         if not ts_code or trade_date is None or adj is None:
             continue
+        from backend.services.data_integrity.contracts import finite_number
+        if isinstance(adj, bool) or not finite_number(float(adj), positive=True):
+            raise ValueError("adj_factor source must be finite and positive")
         values.append((ts_code, trade_date, float(adj)))
     if not values:
         return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.services.data_integrity.writes import changed_values
+    return changed_values(conn, sql+" RETURNING trade_date", values, dataset="adj_factor", source="tushare_adj_factor_init")
 
 
 def _upsert_adj_factor(conn, rows: List[Dict[str, Any]]) -> int:
@@ -306,12 +308,15 @@ def _upsert_adj_factor(conn, rows: List[Dict[str, Any]]) -> int:
         adj = r.get("adj_factor")
         if not ts_code or trade_date is None or adj is None:
             continue
+        from backend.services.data_integrity.contracts import finite_number
+        if isinstance(adj, bool) or not finite_number(float(adj), positive=True):
+            raise ValueError("adj_factor source must be finite and positive")
         values.append((ts_code, trade_date, float(adj)))
     if not values:
         return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.services.data_integrity.writes import changed_values
+    sql += " WHERE adj_factor.adj_factor IS DISTINCT FROM EXCLUDED.adj_factor RETURNING trade_date"
+    return changed_values(conn, sql, values, dataset="adj_factor", source="tushare_adj_factor")
 
 
 def _fetch_adj_factor_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:

@@ -1485,6 +1485,16 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - backend/services/data_integrity/**
+      - backend/db/migrations/add_daily_data_integrity_v1.sql
+      - backend/tests/test_daily_data_integrity*.py
+      - frontend/tests/local-data/daily-integrity-calendar.spec.ts
+      - frontend/tests/local-data-integrity.config.ts
+      - scripts/import_minutes_gap.py
+      - scripts/import_minutes_to_db.py
+      - scripts/ingest_tushare_moneyflow_ts.py
+      - scripts/sync_cninfo_anns_metadata.py
+      - backend/tests/scripts/test_daily_integrity_writers.py
       - scripts/repair_local_sync_incident.py
       - backend/tests/scripts/test_repair_local_sync_incident.py
       - scripts/repair_local_data_daily_sync.py

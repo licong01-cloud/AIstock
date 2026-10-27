@@ -258,15 +258,17 @@ def run_plan(env_file, target, source, *, apply=False, sql_output=None):
                 missing = " OR ".join(f"({table}.{field} IS NULL AND EXCLUDED.{field} IS NOT NULL)"
                                       for field in columns if field not in {"trade_date", "ts_code"})
                 conflict += " WHERE " + missing
-            sql = f"INSERT INTO market.{table} ({','.join(columns)}) VALUES %s ON CONFLICT (ts_code,trade_date) {conflict}"
+            sql = f"INSERT INTO market.{table} ({','.join(columns)}) VALUES %s ON CONFLICT (ts_code,trade_date) {conflict} RETURNING trade_date"
             if sql_output and patches:
                 with conn.cursor() as cur:
                     template = "(" + ",".join(["%s"] * len(columns)) + ")"
                     literals = ",\n".join(cur.mogrify(template, [row[c] for c in columns]).decode("utf-8") for row in patches)
-                    statements.append(sql.replace("VALUES %s", "VALUES " + literals) + ";")
+                    from backend.services.data_integrity.writes import tracked_repair_sql
+                    statements.append(tracked_repair_sql(sql.replace("VALUES %s", "VALUES " + literals), table))
             if apply and patches:
-                with conn.cursor() as cur:
-                    pgx.execute_values(cur, sql, [[row[c] for c in columns] for row in patches], page_size=1000)
+                from backend.services.data_integrity.writes import changed_values
+                changed_values(conn, sql, [[row[c] for c in columns] for row in patches],
+                    dataset=table, source="controlled_source_repair", page_size=1000)
                 after = existing_rows(conn, table, columns, rows)
                 remaining, remaining_stats = plan_group(table, columns, rows, after)
                 if remaining:

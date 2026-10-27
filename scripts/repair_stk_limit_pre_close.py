@@ -162,6 +162,10 @@ BEGIN
  UPDATE market.stk_limit t SET pre_close=src.pre_close FROM src
  WHERE t.trade_date=src.trade_date AND t.ts_code=src.ts_code AND t.pre_close IS NULL
  AND t.up_limit=src.up_limit AND t.down_limit=src.down_limit;
+ GET DIAGNOSTICS matched=ROW_COUNT;
+ IF matched>0 AND to_regprocedure('market.mark_data_integrity_changed(text,date,text,text)') IS NOT NULL THEN
+  PERFORM market.mark_data_integrity_changed('stk_limit','{day.isoformat()}'::date,'source_reference_repair','repair_stk_limit_pre_close');
+ END IF;
  WITH src(trade_date,ts_code,pre_close,up_limit,down_limit) AS (VALUES {values})
  SELECT count(*) INTO matched FROM src JOIN market.stk_limit t USING(trade_date,ts_code)
  WHERE t.pre_close=src.pre_close AND t.up_limit=src.up_limit AND t.down_limit=src.down_limit;
@@ -213,6 +217,10 @@ BEGIN
  WHERE t.trade_date=src.trade_date AND t.ts_code=src.ts_code
  AND t.pre_close IS NOT DISTINCT FROM src.old_pre_close
  AND t.up_limit=src.up_limit AND t.down_limit=src.down_limit;
+ GET DIAGNOSTICS matched=ROW_COUNT;
+ IF matched>0 AND to_regprocedure('market.mark_data_integrity_changed(text,date,text,text)') IS NOT NULL THEN
+  PERFORM market.mark_data_integrity_changed('stk_limit','{day.isoformat()}'::date,'source_reference_repair','repair_stk_limit_pre_close');
+ END IF;
  {source}
  SELECT count(*) INTO matched FROM src JOIN market.stk_limit t USING(trade_date,ts_code)
  WHERE t.pre_close=src.pre_close AND t.up_limit=src.up_limit AND t.down_limit=src.down_limit;

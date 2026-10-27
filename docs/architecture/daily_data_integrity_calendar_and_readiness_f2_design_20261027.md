@@ -1,8 +1,8 @@
 # 每日数据完整性台账、交易日日历与共享就绪 F2 详细设计
 
-日期：2026-10-27。交付类型：docs-fast-new / DESIGN-MAIN-001，仅详细设计。
+日期：2026-10-27。设计先经PR #6773合入；实现任务为Feature F2 / Issue #6774。
 
-本次合入不实现功能、不执行采集/补录/导出/预测，不写 DEV 或生产数据库，不激活数据集，不安装依赖，不控制服务。下文新增接口、字段、组件均为待实现合同，不代表当前已经存在或通过生产验收。完整功能须按第12节逐项验收。
+第14节保留原设计阶段的docs-only审核记录。当前实现与源码/DEV验收见第12、15节；生产授权、迁移、用户重启和运行态验收仍独立报告，不能由源码通过推断已上线。本轮未执行生产写入、采集/补录/导出/预测、数据激活、依赖安装或用户服务控制。
 
 ## 1. Background / 背景与现有实现
 
@@ -272,7 +272,7 @@ metadata包含计数定义、合法NA分类、`gap_groups`、来源/attempt引�
 
 ### 11.1 Production gates / 权限与rollout/rollback
 
-本次docs-only：DDL/DML、依赖、数据构建、发布/激活、实验、runtime均noop；不需要后端重启。后续实现迁移先在现有DEV验证，不新建数据库，不要求生产备份/导出。生产表、列、精确迁移和自动修复动作另按既有具体授权执行；源码合入不替代生产授权。
+生产目标和操作见[日度完整性上线手册](../operations/daily_data_integrity_calendar_runbook.md)。迁移已在现有DEV验证，不新建数据库、不要求生产备份/导出；生产DDL/DML仍须具体授权，源码合入不替代生产授权。源码交付的验证范围与上线后真实目标日读回分开，不把用户重启作为再次开发或重新导出数据的理由。
 
 迁移采用additive列/表，旧记录初始化为UNVERIFIED，不默认ready。上线前一次性完成writer与reader兼容：某writer未覆盖时其分区不得声明新版修订已受管，不能出现新页面和旧消费者各选一套成功判定。生产启用、初始补验、消费者读回分开报告，不设置固定等待若干天/手工收据签发后才能使用的额外门禁。
 
@@ -280,36 +280,36 @@ metadata包含计数定义、合法NA分类、`gap_groups`、来源/attempt引�
 
 ## 12. Design Acceptance Index 与 Verification Plan
 
-以下是未来完整功能的稳定条款与可执行场景设计；T编号是本设计测试场景，不是已存在或已执行的测试。相关既有回归入口包括`backend/tests/test_data_sync_targets.py`、`backend/tests/test_local_data_management_facade.py`、`backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py`，新增实现测试应引用本索引。
+以下保留原稳定条款，矩阵已替换为实际实现及可执行验证入口。`source_verified`仅指源码/DEV交付通过，不代表生产运行验收通过；第15节和上线手册分别列出生产授权、应用、读回、运行态状态。
 
 ### 12.1 Design Acceptance Matrix / 开发验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3.1 日期合同 | T01：T+1、跨午夜/周末、7月补录不记10月；拟pytest日期用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-002 | §3.2 义务清单 | T02：稀疏空结果、按需包、缓存/测试不计日义务；拟pytest目录用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-003 | §2/§8 全事实与PIT独立 | T03：ST/退市整理有价、入池前历史、持仓可读且买入规则不变；拟pytest范围用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-004 | §3.2 字段与合法NA | T04：NULL/NaN/无穷/负价格、合法0成交量/暖启动；拟pytest质量用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-005 | §3.2 行业/因子/代码 | T05：历史alias、行业停发与member分离、factor历史修订；拟pytest适配用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-006 | §4.3 等待与告警 | T06：空响应和三次失败不能变absence；超期继续追赶；拟pytest发布策略用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-007 | §4.1/§5.3 同事务 | T07：数据提交前后崩溃，facts/revision/待验target全有或全无；拟DEV事务用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-008 | §4.2 CAS与租约 | T08：旧快照校验与新写入竞态、旧attempt晚完成不能标绿；拟DEV并发用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-009 | §4.2/§5 有效结论 | T09：无变化补采失败不撤ready、事实变化立即待验；拟pytest回归 | pending | 仅设计，代码及运行验收未执行 |
-| F-010 | §4.3 幂等修复 | T10：补空/正式修订、重复执行、有效值保护和所有受管writer；拟DEV读回 | pending | 仅设计，代码及运行验收未执行 |
-| F-011 | §5.3 历史唤醒 | T11：最新日期不变仍处理旧日期、后台中断自动恢复；拟pytest回调用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-012 | §5.1 唯一权威 | T12：多provider success/failed冲突及旧reader适配一致；拟pytest API/health对照 | pending | 仅设计，代码及运行验收未执行 |
-| F-013 | §5.2/§6 修订与聚合 | T13：版本不重复计数、首次历史补验不倒填时间、修复后再缺失退出绿灯；拟pytest状态用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-014 | §7 日历API | T14：全月、非交易日、未知、分页、非法日期及503不冒充成功；拟API合同用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-015 | §7.1 日历UI | T15：六类交易日状态、补齐标记、键盘/主题与详情一致；拟Playwright组件用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-016 | §7.1 刷新错误 | T16：接口失败/切月竞态/隐藏页，无静默旧绿灯；拟前端故障用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-017 | §7.1/§9 源文件分离 | T17：源已补、旧release未包含/截止日之外显示准确；拟API回归 | pending | 仅设计，代码及运行验收未执行 |
-| F-018 | §3.3/§8.1 消费投影 | T18：不用迟到源的包可预测，必需源缺失的包等待，包依赖未知明确报错；拟pytest依赖用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-019 | §8.1 一致输入 | T19：读入中版本变化、多连接/缓存不混用，非因果输入拒绝；拟DEV输入会话用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-020 | §8.1 通知幂等 | T20：重启/重复通知不重复创建预测，不覆盖旧结果或下单；拟消费者合同smoke | pending | 仅设计，代码及运行验收未执行 |
-| F-021 | §8.2 全局兼容 | T21：LocalSIM执行日、HMM预热、QE冻结合同与全局PIT一致；拟有界只读consumer smoke | pending | 仅设计，代码及运行验收未执行 |
-| F-022 | §9 月更接入 | T22：SOURCE同快照匹配、迟到及历史修复、resume保留组件，暂缓不冒充全月完整；拟月更集成用例 | pending | 仅设计，代码及运行验收未执行 |
-| F-023 | §10 性能/隔离 | T23：打开日历无事实表扫描、压缩分钟查询计划、无全史重试、worker故障不拖垮后端；拟DEV性能/故障记录 | pending | 仅设计，代码及运行验收未执行 |
-| F-024 | §11.1 正式交付 | T24：additive DEV迁移/重复执行、授权生产读回、用户重启后真实目标日验收；拟发布检查 | pending | 仅设计，代码及运行验收未执行 |
+| F-001 | data_integrity/catalog.py::Obligation.due_at、writes.py::fact_day | backend/tests/test_daily_data_integrity_api.py::test_tplus1_publication_updates_original_fact_date；backend/tests/test_daily_data_integrity_inputs.py::test_writer_normalizes_actual_fact_day | source_verified | 无 |
+| F-002 | data_integrity/catalog.py::obligations、validation.py::_scan_contract | backend/tests/test_daily_data_integrity_api.py::test_catalogue_nonempty_ignores_maintenance_and_keeps_disabled_history；backend/tests/test_daily_data_integrity.py | source_verified | 无 |
+| F-003 | data_integrity/validation.py::_raw_scheduler/_traded；共享security_source_identity；未变更买入资格 | backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps；backend/tests/data_service/test_security_source_identity.py | source_verified | 无 |
+| F-004 | data_integrity/validation.py::daily_basic_result、contracts.py::finite_number；共享停牌minute端点合同 | backend/tests/test_daily_data_integrity.py::test_daily_basic_admission_ratio_is_not_zero_gap_certification；backend/tests/test_daily_data_integrity.py::test_shared_suspension_minutes_keep_real_unknown_and_regular_boundaries | source_verified | 无 |
+| F-005 | data_integrity/validation.py；adj_factor_history_reconciler.py；sector_data_builder.py::sector_fact_comparison_sql | backend/tests/services/test_adj_factor_history_reconciler.py；backend/tests/services/test_sector_data_builder.py；backend/tests/data_service/test_security_source_identity.py | source_verified | 无 |
+| F-006 | tdx_scheduler.py::_reconcile_recovered_final_targets；data_integrity/provider.py/worker.py | backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_final_target_recovery_sweep_repairs_historical_recovered_family；backend/tests/test_daily_data_integrity_dev.py::test_fetch_retry_cannot_be_postponed_by_repeated_validation | source_verified | 无 |
+| F-007 | migration marker、data_integrity/writes.py；Go raw_rows.go::markRawIntegrity | backend/tests/test_daily_data_integrity_dev.py::test_atomic_rollback_and_historical_date_rearm；go test -count=1 -run TestDEVRawWriteReadbackAndIdempotence .（web目录，现有DEV） | source_verified | 无 |
+| F-008 | data_integrity/repository.py::claim/heartbeat/publish | backend/tests/test_daily_data_integrity_dev.py::test_expired_worker_cannot_publish_even_same_revision；backend/tests/test_daily_data_integrity_dev.py::test_rule_upgrade_fences_old_claim_even_without_new_facts | source_verified | 无 |
+| F-009 | data_refresh_audit.py；contracts.py::effective_partition；writer的实际变化RETURNING | backend/tests/test_dataset_refresh_audit.py::test_refresh_failure_cannot_downgrade_usable_success_evidence；backend/tests/test_daily_data_integrity_api.py::test_unknown_day_and_committed_dirty_revision_not_old_green | source_verified | 无 |
+| F-010 | TushareSyncEngine、Go、受管导入和repair SQL共用同事务协议，清单见上线手册 | backend/tests/test_tushare_sync_engine.py；backend/tests/scripts/test_ingest_tushare_daily_basic.py；backend/tests/test_daily_data_integrity_dev.py；go test -count=1 -run TestDEVRawWriteReadbackAndIdempotence . | source_verified | 无 |
+| F-011 | tdx_scheduler.py::_dispatch_completion_callbacks；worker.py持久target恢复 | backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_historical_revision_wakes_callback_without_advancing_latest_day；backend/tests/test_daily_data_integrity_dev.py::test_atomic_rollback_and_historical_date_rearm | source_verified | 无 |
+| F-012 | data_refresh_audit.py、audit_backed_data_health.py、data_integrity/contracts.py | backend/tests/test_daily_data_integrity_inputs.py::test_monthly_provider_green_cannot_override_dirty_canonical_revision；backend/tests/test_dataset_refresh_audit.py | source_verified | 无 |
+| F-013 | worker.py::rebuild_day；repository.py::append_day；contracts.py::completion_kind | backend/tests/test_daily_data_integrity.py::test_completion_distinguishes_historical_verification_revision_and_actual_recovery；backend/tests/test_daily_data_integrity_api.py::test_unknown_day_and_committed_dirty_revision_not_old_green | source_verified | 无 |
+| F-014 | local_data.py只读四接口、service.py | backend/tests/test_daily_data_integrity_api.py::test_readonly_routes_distinguish_bad_request_failure_and_revision_change；frontend/tests/local-data/daily-integrity-calendar.spec.ts | source_verified | 无 |
+| F-015 | DailyIntegrityCalendar.tsx、独立theme CSS | frontend/tests/local-data/daily-integrity-calendar.spec.ts；validation-receipt: valjob_20261027_120040_28f995e9（2通过） | source_verified | 无 |
+| F-016 | UI AbortController、visibilitychange、view_watermark与读取错误提示 | frontend/tests/local-data/daily-integrity-calendar.spec.ts；backend/tests/test_daily_data_integrity_api.py::test_release_read_failure_never_reports_proven_stale_files | source_verified | 无 |
+| F-017 | data_integrity/release.py；monthly_candidate_finalizer.py | backend/tests/test_daily_data_integrity_inputs.py::test_release_inclusion_is_not_inferred_from_cutoff_or_source_green；backend/tests/dataset_release/test_monthly_candidate_finalizer.py::test_finalizer_pins_captured_source_revisions_without_reading_live_db | source_verified | 无 |
+| F-018 | data_integrity/consumers.py；service.py::readiness | backend/tests/test_daily_data_integrity.py::test_consumer_not_blocked_by_unused_delayed_dataset_and_unknown_not_ready；backend/tests/test_daily_data_integrity_inputs.py::test_dependencies_use_frozen_factor_bytes_and_actual_window | source_verified | 无 |
+| F-019 | pg_pool.py::capture_read_snapshot；InferenceInputSession；inference_engine.py；源修订命名空间cache | backend/tests/test_daily_data_integrity_dev.py::test_actual_nested_readers_and_revision_use_one_short_dev_snapshot；backend/tests/test_daily_data_integrity_inputs.py；validation-receipt: valjob_20261027_114509_99ba600e（564通过） | source_verified | 无 |
+| F-020 | 既有completion callback单航班/重放；仅通知，不新增任务/订单/预测写入口，消费者决策槽位合同保留 | backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_completion_change_dispatches_once_and_explicit_request_recovers；backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_single_flight_preserves_watermark_and_requests_arriving_in_flight | source_verified | 无 |
+| F-021 | 共享canonical audit解释；正式全局PIT resolver；旧文件输入不改绑；已批准未知预热保留 | backend/tests/hmm_data_source；validation-receipt: valjob_20261027_120149_0fdb0cef（324通过、1跳过、6 integration未执行）；backend/tests/advisory_historical_range | source_verified | 无 |
+| F-022 | monthly_postgres_source.py同SOURCE捕获；source_authority.py；finalizer pins/inherit | backend/tests/dataset_release/test_monthly_postgres_source.py::test_frozen_bundle_pins_formal_source_stage_receipt；backend/tests/dataset_release/test_monthly_candidate_finalizer.py；backend/tests/dataset_release/test_monthly_build_resume.py | source_verified | 无 |
+| F-023 | service.py仅小型索引；原分钟精确日期chunk查询；30秒批量去抖；非致命monthly启动 | backend/tests/test_daily_data_integrity_dev.py::test_minute_batches_invalidate_immediately_but_coalesce_physical_checks；backend/tests/test_daily_data_integrity_inputs.py::test_optional_monthly_worker_configuration_failure_does_not_abort_api_startup；DEV元数据读回0.033秒见§15 | source_verified | 无 |
+| F-024 | additive迁移及正式上线/回滚手册；生产状态不由源码合入推断 | backend/tests/test_daily_data_integrity_dev.py（6通过）；artifact: docs/operations/daily_data_integrity_calendar_runbook.md（精确目标、hash、待授权步骤；未宣称生产已应用） | source_verified | 无 |
 
 功能开发阶段必须把每项替换为真实实现位置、可执行测试与真实读回，禁止把拟测试名、文档检查或静态成功当成已完成。测试正常路径与反例并重；真实验收不启动未授权的荐股/模拟盘/QE实验，不为取证终止生产任务。
 
@@ -338,3 +338,41 @@ metadata包含计数定义、合法NA分类、`gap_groups`、来源/attempt引�
 ### 14.2 DESIGN-COMPLIANCE-001
 
 逐项审核完整设计覆盖、显式失败、业务语义不漂移、无私增审批/发布阻断。docs-only检查运行`git diff --check`及F2结构/索引检查；F2完整功能检查会因24项pending、尚无实现证据及未闭合功能差距返回FAIL，这表示功能尚未实现，不能通过填写虚假verified或改验证器变为PASS。文档可合入条件是内容审核通过、引用/结构正确、差异仅约定两份文档及docs CI通过，不是功能验收通过。
+
+## 15. 2026-10-27实现审核与交付状态
+
+Feature Issue：[#6774](https://github.com/licong01-cloud/AIstock/issues/6774)。实现分支`feature/daily-integrity-calendar-20261027`，从设计合入commit `6d3c42330a6ac81e8fe1fa1774d1f4874d1e7cb7`开始。验收矩阵的源码通过与生产完成是不同概念；原第14节描述历史设计交付，不覆盖本节实测结果。
+
+### 15.1 连续自审与修订
+
+没有使用多代理或冒称独立专家审核。本窗口逐轮自审，宽回归交现有Validation Center执行：
+
+1. 事务与并发：修复autocommit默认值、同事务审计/目标、实际变化RETURNING、R相同但lease已过期及规则升级的旧worker发布；实际DEV注入rollback/并发写入并读回。成功/失败attempt与canonical verdict同事务发布。
+2. 业务日期与事实语义：补T+1原日期、reference/event成功空扫、历史alias、正式停牌以及行业停发的独立合同；不从当前选股池或provider返回子集推完整分母。`daily_basic`保留既有采集准入比例，同时逐必需字段显示残余缺口，不把95%称为无缺口；可空估值仍保留NA。
+3. 消费一致性与发布：修复多连接/跨调用cache混用、旧分区开始受管后的cache失效；实际DEV证明一个输入快照读R1期间独立写事务已提交R2，当前读不混入R2，下次捕获可见R2。旧冻结文件/任务不改绑；来源已补、文件未含、文件读失败与截止日之外分别显示。
+4. 性能与故障隔离：分钟每批事实立即变脏，但验证目标按30秒短去抖合并；不为每只股票重复全日扫描。修复反复验收把FETCH的next_retry_at向后推、导致永远不执行的饥饿风险。日历只读取小审计/队列/交易日历和manifest元数据；可选monthly worker配置错误明确ERROR但不阻断整个API启动。
+5. UI与测试接入：完成主题/键盘/未知计数/补齐标记/分页/后台暂停；接口失败标明旧读回，不把全部日子写红。修复测试运行器X盘父目录及旧假cursor/CAS夹具，补齐本模块UI计划注册；没有放宽断言、PIT、覆盖阈值或修改流水线规则。
+
+### 15.2 实测结果及限制
+
+| 验证 | 实际结果 |
+|---|---|
+| 日常同步完整回归 | `valjob_20261027_120037_4819a38a`：1025通过、1跳过；末轮新增单点的正整数revision/冲突停牌回归另通过 |
+| 历史消费者输入 | `valjob_20261027_114509_99ba600e`：564通过、2跳过 |
+| HMM数据源兼容 | `valjob_20261027_120149_0fdb0cef`：324通过、1跳过、6 integration未运行；非正式训练/预测 |
+| 月更/Qlib | `valjob_20261027_120039_ad3d3ce5`：2127通过、86跳过，1个旧CAS夹具失败；补齐夹具后该node的legacy/有pins两分支均通过。最终commit仍须正式CI，不把该整轮记录改成全绿 |
+| 日历UI | `valjob_20261027_120040_28f995e9`：2通过，隔离3012、mock API；没有操作用户backend |
+| 现有DEV | 最新migration重复应用通过，6项事务/租约/缓存/退避/去抖测试通过；Go `TestDEVRawWriteReadbackAndIdempotence`真实DEV通过（临时事实表、marker事务回滚） |
+| 只读元数据性能 | DEV 72个日历键、3个启用schedule、0个新分区/汇总：0.033秒含连接；canonical查询使用`idx_dataset_integrity_canonical_date`。这是小规模DEV数据，不冒称生产吞吐达标 |
+| 静态/注册 | changed-file Ruff、Python编译、原生已安装TypeScript编译、L0、module ownership和catalog完整性通过；RTK的tsc包装器输出不可信，已改用本地真实编译器，未安装依赖 |
+
+受管writer是既有正式入口，不包括任意绕过协议的手工SQL。`sector_data`严格复用已激活producer的现有聚合总体与数值合同，不借本功能改行业资金流计算公式；raw事实分母仍与买入PIT独立。消费者依赖无法确定、历史首次公开时点不明、真实上游缺失均保留UNKNOWN/等待，不自动生成NA豁免。
+
+### 15.3 DESIGN-COMPLIANCE-001与运行边界
+
+1. 禁止简化交付：24项均指向实际源码/可执行验证；不是仅有日历mock，实际DEV迁移、事务并发和Go写入均已验证。生产授权、应用及重启后真实日验收不冒充完成。
+2. 禁止静默错误：未知计数为null、读取异常503、版本分页409；事实变脏立即退出旧绿灯；空结果须有正式扫描，失败不按无记录处理；不会保证任意未知程序错误自行修好。
+3. 禁止改变业务逻辑：没有更改模型、因子、策略、买入PIT、NA/预热豁免、历史任务绑定或交易账户；数据ready不授予执行权限。
+4. 禁止私增门禁：没有新增调度器/队列/环境变量/人工“改绿”流程，没有逐公告/LLM步骤、全史重扫或大型数据源hash相等门禁。生产DDL的具体授权沿用现行安全边界。
+
+生产授权=`pending`、生产DDL/DML=`not_applied`、运行态验收=`pending`；数据集构建/激活/训练/实验=`false`。源码PR/CI/merge以GitHub最终状态为准，上线顺序和回滚见运行手册。Issue在真实上线验收前保持开放。

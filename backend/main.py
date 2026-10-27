@@ -450,17 +450,14 @@ async def _lifespan(app: FastAPI):
 
     # Unified monthly dataset releases use one code-owned child worker.  It is
     # opt-in because an enabled worker must have the complete immutable path,
-    # node and HMM authority configuration.  Explicit enablement fails startup
-    # closed if preflight cannot bind that authority; builds never run in the
-    # request thread.
+    # node and HMM authority configuration. Invalid worker configuration blocks
+    # that worker, not unrelated API startup. Builds never run in this thread.
     from .services.dataset_release.monthly_worker_supervisor import (
-        build_monthly_worker_supervisor_from_env,
+        start_monthly_worker_nonfatal,
     )
 
-    monthly_release_worker_supervisor = build_monthly_worker_supervisor_from_env(
-        project_root=PROJECT_ROOT,
-    )
-    monthly_worker_start = monthly_release_worker_supervisor.start()
+    monthly_release_worker_supervisor, monthly_worker_start = start_monthly_worker_nonfatal(project_root=PROJECT_ROOT)
+    app.state.monthly_release_worker_start = monthly_worker_start
     logging.getLogger(
         "aistock.dataset_release.monthly_worker_supervisor"
     ).info("Monthly release worker lifecycle: %s", monthly_worker_start)
@@ -486,7 +483,8 @@ async def _lifespan(app: FastAPI):
                 task_name="multi-alpha-durable-orchestrator",
             )
         try:
-            monthly_release_worker_supervisor.stop()
+            if monthly_release_worker_supervisor is not None:
+                monthly_release_worker_supervisor.stop()
         except Exception as exc:
             _report_nonfatal_lifecycle_failure(
                 "MONTHLY_RELEASE_WORKER_SHUTDOWN_FAILED",

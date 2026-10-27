@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./localData.module.css";
+import { DailyIntegrityCalendar } from "./components/DailyIntegrityCalendar";
 
 const TDX_BASE =
   process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
@@ -520,6 +521,8 @@ export default function LocalDataPage() {
           </div>
         )}
       </section>
+
+      <DailyIntegrityCalendar backendBase={TDX_BASE} />
 
       {/* Tab 切换 */}
       <section className={styles.sectionBlock}>

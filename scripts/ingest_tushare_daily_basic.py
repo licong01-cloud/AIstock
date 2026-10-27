@@ -384,6 +384,9 @@ def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
         "free_share=COALESCE(EXCLUDED.free_share, target.free_share), "
         "total_mv=COALESCE(EXCLUDED.total_mv, target.total_mv), circ_mv=COALESCE(EXCLUDED.circ_mv, target.circ_mv)"
     )
+    numeric = [column for column in DAILY_BASIC_PROVIDER_FIELDS if column not in {"trade_date", "ts_code"}]
+    sql += " WHERE ROW(" + ",".join("target."+c for c in numeric) + ") IS DISTINCT FROM ROW(" + ",".join(
+        f"COALESCE(EXCLUDED.{c},target.{c})" for c in numeric) + ") RETURNING trade_date"
     values = []
     for r in rows:
         ts_code = (r.get("ts_code") or "").strip()
@@ -416,8 +419,8 @@ def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
         )
     if not values:
         return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, values, dataset="daily_basic", source="tushare_daily_basic_cli")
     return len(values)
 
 

@@ -110,7 +110,8 @@ def test_missing_source_baseline_does_not_invent_schema_or_historical_repairs() 
     assert all(item.start == date(2026, 9, 1) and item.end == date(2026, 9, 30) for item in observed)
 
 
-def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
+@pytest.mark.parametrize("has_revision_pins", [False, True])
+def test_frozen_bundle_pins_formal_source_stage_receipt(has_revision_pins) -> None:
     digest = "a" * 64
     reference = CASRef(digest, 7, f"cas/sha256/aa/{digest}")
     frozen = SimpleNamespace(
@@ -137,7 +138,14 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
         source_as_of="2026-10-01T00:00:00+00:00",
         initial_repair_watermark="repair-1",
     )
-    adapter = SimpleNamespace(profile=SimpleNamespace(profile="qe_hmm_full_v2"))
+    pins = [{"dataset": "daily_basic", "fact_date": "2026-09-30", "data_revision": 7,
+             "validated_revision": 7, "validation_status": "VALID", "validation_id": "div_7",
+             "scope_version": "scope", "rule_version": "rule"}] if has_revision_pins else None
+    def read_audit(ref, *, max_bytes):
+        assert ref is frozen.source_audit_ref
+        return {"integrity_revision_pins": pins} if pins is not None else {}
+    adapter = SimpleNamespace(profile=SimpleNamespace(profile="qe_hmm_full_v2"),
+                              cas=SimpleNamespace(get_json_bounded=read_audit))
 
     bundle = PostgresMonthlySourceAdapter._bundle(
         adapter,
@@ -150,6 +158,7 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
 
     assert bundle["schema_version"] == FROZEN_SOURCE_BUNDLE_SCHEMA
     assert bundle["source_stage_receipt_ref"] == reference.as_dict()
+    assert bundle["integrity_revision_pins"] == pins
 
 
 @pytest.mark.parametrize("repair_kind", ["deferred", "arrived", "no_deferral", "absent", "wrong_date", "wrong_predecessor", "history", "daily_history"])
