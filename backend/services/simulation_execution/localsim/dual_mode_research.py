@@ -77,7 +77,10 @@ def profiles_for(matrix):
                         "rule": r, "delay_seconds": d} for r,d in combinations]
 
 
-def _source_inspect(source_request: FileRef, successor_ref: FileRef | None):
+def _source_inspect(source_request: FileRef, successor_ref: FileRef | None,
+                    input_candidate: FileRef | None = None):
+    if successor_ref is not None and input_candidate is not None:
+        raise ValueError("LOCALSIM_DUAL_MODE_INPUT_BINDING_CONFLICT")
     original = validate_campaign_request(source_request)
     inspected = inspect_price_templates(FileRef.model_validate(original["preflight"]),
                                          FileRef.model_validate(original["price_templates"]))
@@ -93,15 +96,22 @@ def _source_inspect(source_request: FileRef, successor_ref: FileRef | None):
             raise ValueError("LOCALSIM_DUAL_MODE_INPUT_SUCCESSOR_INVALID")
         candidate = FileRef.model_validate(successor["candidate"])
         inspect_successor_sources(inspected, candidate)  # Price/PIT pins; no old account results.
+    if input_candidate is not None:
+        # A fresh study has no economic prefix to migrate. Bind its explicit
+        # candidate only after the same complete price/PIT equivalence check;
+        # neither the source request nor an old run's successor is rewritten.
+        checked_file(input_candidate)
+        inspect_successor_sources(inspected, input_candidate)
+        candidate = input_candidate
     return original, inspected, candidate
 
 
 def freeze_study(*, source_request: FileRef, output_root: Path, producer_commit: str,
                  input_successor: FileRef | None = None, short_window_days: int | None = None,
-                 matrix: str = "FULL_13") -> dict:
+                 matrix: str = "FULL_13", input_candidate: FileRef | None = None) -> dict:
     if not re.fullmatch(r"[a-f0-9]{40}", producer_commit) or matrix not in {"FULL_13", "BASIC_2"}:
         raise ValueError("LOCALSIM_DUAL_MODE_REQUEST_CONFIG_INVALID")
-    original, inspected, candidate = _source_inspect(source_request, input_successor)
+    original, inspected, candidate = _source_inspect(source_request, input_successor, input_candidate)
     days = list(inspected["days"])
     if days != original["trade_dates"] or not days:
         raise ValueError("LOCALSIM_DUAL_MODE_SOURCE_DATES_CONFLICT")
@@ -123,6 +133,8 @@ def freeze_study(*, source_request: FileRef, output_root: Path, producer_commit:
                "comparison": "COMMON_EXOGENOUS_TARGETS_FEEDBACK_DIVERGENT_QUANTITIES",
                "families": ["NATIVE_VS_HUMAN_WORKFLOW", "HUMAN_MATCHED_RULES"],
                "common_terminal_local": "14:57", "max_drawdown_definition": "POSITIVE_PEAK_TO_TROUGH_FRACTION"}
+    if input_candidate is not None:
+        request["input_candidate"] = input_candidate.model_dump()
     request["identity"] = digest(request)
     request["release_identity"] = "localsim_dual_mode_v1_" + request["identity"][:24]
     path = output_root / request["identity"] / "request.json"
@@ -138,7 +150,8 @@ def inspect_study(request_ref: FileRef):
             or request["source_identity"] != implementation_identity()):
         raise ValueError("LOCALSIM_DUAL_MODE_REQUEST_IDENTITY_CONFLICT")
     _, inspected, candidate_ref = _source_inspect(FileRef.model_validate(request["source_request"]),
-                                                FileRef.model_validate(request["input_successor"]) if request["input_successor"] else None)
+                                                FileRef.model_validate(request["input_successor"]) if request["input_successor"] else None,
+                                                FileRef.model_validate(request["input_candidate"]) if "input_candidate" in request else None)
     if (candidate_ref.model_dump() != request["candidate_manifest"]
             or request["initial_cash_cny"] != "10000000" or request["common_terminal_local"] != "14:57"
             or request["manifest_sha256"] != inspected["preflight"]["manifest_sha256"]
@@ -418,6 +431,8 @@ def main():
     freeze.add_argument("--source-request-sha256", required=True)
     freeze.add_argument("--input-successor")
     freeze.add_argument("--input-successor-sha256")
+    freeze.add_argument("--candidate")
+    freeze.add_argument("--candidate-sha256")
     freeze.add_argument("--output-root", type=Path, required=True)
     freeze.add_argument("--producer-commit", required=True)
     freeze.add_argument("--short-window-days", type=int)
@@ -430,8 +445,13 @@ def main():
     if args.command == "freeze":
         if bool(args.input_successor) != bool(args.input_successor_sha256):
             parser.error("input successor path and complete SHA must be supplied together")
+        if bool(args.candidate) != bool(args.candidate_sha256):
+            parser.error("candidate path and complete SHA must be supplied together")
+        if args.input_successor and args.candidate:
+            parser.error("an existing successor and a fresh candidate are mutually exclusive")
         result = freeze_study(source_request=FileRef(path=args.source_request, sha256=args.source_request_sha256),
             input_successor=FileRef(path=args.input_successor, sha256=args.input_successor_sha256) if args.input_successor else None,
+            input_candidate=FileRef(path=args.candidate, sha256=args.candidate_sha256) if args.candidate else None,
             output_root=args.output_root, producer_commit=args.producer_commit,
             short_window_days=args.short_window_days, matrix=args.matrix)
     else:

@@ -30,15 +30,24 @@
   ],
   "expected": "Fresh studies explicitly freeze the repaired candidate after full source equivalence inspection; existing requests and strict drift rejection remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json",
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md",
+      "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md"
+    ],
     "added_files": [
       "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json",
       "backend/services/simulation_execution/localsim/dual_mode_research.py",
       "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
-      "docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md"
+      "docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md",
+      "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_execution/localsim/dual_mode_research.py",
@@ -150,13 +159,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python loaded the tracked offline research adapter and ran 10 direct explicit-candidate tests; X:/AIstock_temp/localsim-human-continuous-20261027/input-binding-direct.xml. No service process control.",
+      "Fresh AIstock Python process loaded tracked dual_mode_research.py and ran the 78-test related matrix, including real native account and explicit candidate contract checks; no backend process control; X:/AIstock_temp/localsim-human-continuous-20261027/input-binding-related.xml",
+      "Fresh AIstock Python process loaded persistent offline adapter; 78 related tests passed including native account candidate binding and exact retry; no production process control; X:/AIstock_temp/localsim-human-continuous-20261027/input-binding-related.xml"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
+    "source_role_review": "CLI-only direct call closure reviewed: this module is referenced only by its __main__ and direct tests; product projection does not import it. Existing catalog backend inference retained; offline research uses fresh processes and does not wait for backend activation. The catalog backend smoke is an existing-account nonregression check; actual explicit-input behavior is proved separately by fresh-process CLI/tests, not an HTTP-200 substitute.",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
