@@ -22,7 +22,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2104",
-  "closed_at": null,
+  "closed_at": "2026-10-27T05:32:25.919439Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -55,6 +55,7 @@
       "backend/services/dataset_release/source_fact_history.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
       "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_source_fact_history.py",
@@ -73,6 +74,7 @@
       "backend/services/dataset_release/source_fact_history.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
       "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_source_fact_history.py",
@@ -225,8 +227,8 @@
   },
   "first_seen_at": "2026-10-27T03:25:52.686204Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+  "fixed_at": "2026-10-27T04:31:30Z",
   "github_issue_number": 6761,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6761",
   "last_seen_at": "2026-10-27T03:25:52.686204Z",
@@ -234,6 +236,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6765",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -246,10 +249,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/health",
+    "business_smoke_ref": "monthly_worker_process.supervision",
     "fresh_process_evidence": [
       "X:/AIstock_temp/DATA_PREPARATION/preclose-full-remediation-20261027-r1/private-catalog-payloads/producer-receipt.json"
     ],
+    "health_ref": "monthly_worker_process.health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
@@ -257,9 +261,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\preclose-full-remediation-20261027-r1\\postrestart-BUG-2104.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2104",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-27T05:31:29.617185Z",
+      "mode": "read_only",
+      "observed_identity": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "fe250b1913f692251366cbbe5f804d0971fd3acd38e08bb5d8f91c909ba934d3",
+      "receipt_sha256": "576d90a975026fb63ad9ebd76ca7a630207a3f2758f373ebcc07b95256dd6e24",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "28c90f49105d299ede717c447c9fda1e8a3f4df611f9b16d5ccf30c4dc2f2000",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -270,7 +297,30 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "The same release daily_pv.h5 already contains all 8702 historical facts. Reuse indexed matching rows, capture only missing-catalog reference facts in SOURCE, carry their CAS ref through the existing bridge, and reuse the missing-only quote correction transaction in BUILD. Existing runner/bridge/correction tests are directly affected; no HMM/QE business files, new framework, or full-history monthly scan.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2104",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1c1cf4f6f4c9cd9a",
+    "recorded_at": "2026-10-27T04:32:08.338455Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b63b586071e6dd9b743d63b336cf31b3405746ed",
+    "source_merge_commit": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6765",
+    "validation_evidence": [
+      "validation-receipt: id=f713d2a93dde58ce commit=b63b586071e6dd9b743d63b336cf31b3405746ed kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=15b77b3585e389c8 commit=b63b586071e6dd9b743d63b336cf31b3405746ed kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py::test_retry_reuses_real_native_bin_and_never_calls_writer_again` result=`2 passed`",
+      "validation-receipt: id=7e3acf5a2f316390 commit=b63b586071e6dd9b743d63b336cf31b3405746ed kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_build_resume.py -k quote` result=`41 passed`"
+    ],
+    "validation_evidence_digest": "2dfefe2e99e3cbb78a9e57aa3bff0697517ac84644f64dfcc13c636c4ab80770"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -279,6 +329,11 @@
     "fingerprint": "1ec3ac6086d53b1095b9f582",
     "source_event_id": "FE-20261027-1ec3ac6086d5"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f713d2a93dde58ce commit=b63b586071e6dd9b743d63b336cf31b3405746ed kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=15b77b3585e389c8 commit=b63b586071e6dd9b743d63b336cf31b3405746ed kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py::test_retry_reuses_real_native_bin_and_never_calls_writer_again` result=`2 passed`",
+    "validation-receipt: id=7e3acf5a2f316390 commit=b63b586071e6dd9b743d63b336cf31b3405746ed kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_build_resume.py -k quote` result=`41 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
