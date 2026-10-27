@@ -8482,6 +8482,17 @@ class SimulationLifecycleScheduler:
         rebased_bindings: list[SimulationReleaseBinding] = []
         for binding in bindings:
             try:
+                binding = self._renew_unattended_localsim_pit_binding(binding=binding, trade_date=trade_date)
+            except (RuntimeConfigInvalidError, InvalidStateTransitionError, DataUnavailableError) as exc:
+                if raise_on_error:
+                    raise
+                lifecycle_skips.append(self._record_pre_run_binding_failure_result(
+                    binding=binding, trade_date=trade_date, data_source=data_source,
+                    created_by=created_by, exc=exc,
+                ))
+                blocked_binding_keys.add((binding.strategy_id, binding.broker_backend))
+                continue
+            try:
                 rebased_bindings.append(
                     self._rebase_unattended_binding_to_authoritative_manifest(
                         binding=binding,
@@ -8637,6 +8648,92 @@ class SimulationLifecycleScheduler:
             if source_binding_id:
                 superseded_ids.add(source_binding_id)
         return [binding for binding in bindings if binding.binding_id not in superseded_ids]
+
+    def _renew_unattended_localsim_pit_binding(
+        self, *, binding: SimulationReleaseBinding, trade_date: date,
+    ) -> SimulationReleaseBinding:
+        """Expire an open live binding's PIT admission, not its account or model."""
+        if (binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM
+                or trade_date != self._scheduler_now().date()):
+            return binding
+        from backend.services.selection_center.canonical_pit_runtime import (
+            CANONICAL_PIT_RUNTIME_LEASE_KEY, SelectionPitRuntimeLease,
+        )
+        from .localsim_input_source_plan import PLAN_KEY
+
+        release = self.repository.get_strategy_runtime_release(binding.release_id)
+        metadata = (release.release_config_json or {}).get("metadata") or {}
+        saved = metadata.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
+        if saved is None or PLAN_KEY in metadata:
+            return binding
+        lease = SelectionPitRuntimeLease.from_mapping(saved)
+        # A business day already admitted under a sufficient frozen lease keeps
+        # its exact identity, even if the global pointer advances later.
+        if trade_date <= lease.coverage_end:
+            self._finish_localsim_pit_supersession(binding=binding, trade_date=trade_date)
+            return binding
+        if (binding.binding_config_json.get("metadata") or {}).get("disable_unattended_roll_forward") is True:
+            return binding
+        existing = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id, binding_id=binding.binding_id, trade_date=trade_date,
+        )
+        if existing is not None and not self._localsim_pit_failure_can_be_superseded(existing):
+            return binding
+        successor = self._roll_forward_unattended_binding(source=binding, trade_date=trade_date)
+        self._finish_localsim_pit_supersession(binding=successor, trade_date=trade_date)
+        return successor
+
+    @staticmethod
+    def _localsim_pit_failure_can_be_superseded(run: SimulationDailyRun) -> bool:
+        payload = run.run_payload_json or {}
+        failure = payload.get("pre_run_failure") or {}
+        return (
+            run.broker_backend is SimulationBrokerBackend.LOCAL_SIM
+            and run.status is SimulationDailyRunStatus.FAILED_RETRYABLE
+            and run.execution_plan_id is None and run.selection_evidence_id is None
+            and payload.get("last_stage") == "PRE_RUN_FAILED"
+            and isinstance(failure, dict)
+            and failure.get("reason_code") == "CANONICAL_PIT_RUNTIME_INVALID"
+            and failure.get("broker_called") is False
+            and type(failure.get("submitted_intents")) is int
+            and failure.get("submitted_intents") == 0
+            and not SimulationLifecycleScheduler._run_has_broker_side_effect_evidence(run)
+            and not payload.get("local_sim_persistence")
+            and not payload.get("orders") and not payload.get("fills")
+        )
+
+    def _finish_localsim_pit_supersession(
+        self, *, binding: SimulationReleaseBinding, trade_date: date,
+    ) -> None:
+        """Retry a published successor's audit step without rerunning economics."""
+        release = self.repository.get_strategy_runtime_release(binding.release_id)
+        metadata = (release.release_config_json or {}).get("metadata") or {}
+        renewal = metadata.get("localsim_daily_pit_renewal_v1") or {}
+        if (renewal.get("trade_date") != trade_date.isoformat()
+                or renewal.get("previous_coverage_end", trade_date.isoformat()) >= trade_date.isoformat()):
+            return
+        source_id = metadata.get("extends_binding_id")
+        if not source_id:
+            return
+        old = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id, binding_id=source_id, trade_date=trade_date,
+        )
+        if old is None or old.status is SimulationDailyRunStatus.CANCELLED:
+            return
+        if not self._localsim_pit_failure_can_be_superseded(old):
+            raise InvalidStateTransitionError(
+                "LocalSIM PIT predecessor cannot be superseded after a plan or broker activity",
+                context={"reason_code": "LOCALSIM_PIT_SUPERSESSION_REQUIRES_RECONCILIATION",
+                         "run_id": old.run_id},
+            )
+        self.repository.update_simulation_daily_run(old.run_id, status=SimulationDailyRunStatus.CANCELLED,
+            payload_patch={"last_stage": "CANCELLED", "localsim_daily_pit_supersession_v1": {
+                "schema_version": "localsim_daily_pit_supersession_v1",
+                "reason_code": "LOCALSIM_PIT_EXPIRED_PRE_RUN_SUPERSEDED",
+                "previous_status": old.status.value, "source_binding_id": source_id,
+                "successor_binding_id": binding.binding_id, "successor_release_id": binding.release_id,
+                "trade_date": trade_date.isoformat(), "broker_called": False,
+            }})
 
     def _rebase_unattended_binding_to_authoritative_manifest(
         self,
@@ -9016,10 +9113,11 @@ class SimulationLifecycleScheduler:
         config = source_release.release_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
         if source_binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
-            from .localsim_pit_migration import POLICY_KEY, refresh_migrated_daily_pit
+            from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
+            from .localsim_pit_migration import POLICY_KEY, refresh_daily_pit
 
-            if POLICY_KEY in metadata:
-                metadata = refresh_migrated_daily_pit(metadata, trade_date=trade_date)
+            if POLICY_KEY in metadata or CANONICAL_PIT_RUNTIME_LEASE_KEY in metadata:
+                metadata = refresh_daily_pit(metadata, trade_date=trade_date)
         created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
         purpose = SimulationLifecycleScheduler._roll_forward_purpose(source_binding.broker_backend)
         metadata.update(
