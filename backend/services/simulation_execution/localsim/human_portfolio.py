@@ -14,6 +14,7 @@ from backend.services.position_timing.intraday.contracts import (
 from backend.services.trading_core.models import OrderStatus, PositionLot
 
 from .human_operation import HumanOperationPolicy, HumanOperationQueue, operation_snapshot
+from .research_performance import VisibleAccountIndex
 from .timing import CLOSED_LOOP_MODE, TimingFacade
 from .timing_portfolio import TERMINAL, _account, _validate_markets, portfolio_day_result
 
@@ -35,7 +36,7 @@ class _Proposal:
 
 
 def run_human_portfolio_day(*, backend, markets, events, initial_marks,
-                            policy: HumanOperationPolicy, run_id: str) -> dict:
+                            policy: HumanOperationPolicy, run_id: str, optimized: bool = False) -> dict:
     """A single account, one operator, native feedback, and an atomic day result.
 
     Full bars are only supplied to native post-interval matching. Core evaluate
@@ -57,6 +58,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
     initial_nav = Decimal(str(backend._ledger.account_snapshot(
         prices={s: float(p) for s, p in marks.items()}, snapshot_time=start).nav))
     views, navs = [(start, initial)], [{"as_of": start.isoformat(), "nav_cny": str(initial_nav)}]
+    account_index = VisibleAccountIndex(views, run_id) if optimized else None
     changes, bars, observations = {}, {}, {}
     for event in sorted(events, key=lambda e: (e.available_at, e.plan.plan_id, e.plan.revision)):
         plan = event.plan
@@ -84,6 +86,8 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
             heapq.heappush(clocks, clock)
 
     def visible(clock):
+        if account_index is not None:
+            return account_index.visible(clock)
         return max((v for v in views if v[0] <= clock), key=lambda v: v[0])
 
     def evaluate_proposal(proposal, clock):
@@ -97,12 +101,14 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                                      available_at=visible_at, confirmed_quantity=0, reserved_quantity=0,
                                      cash_cny=Decimal(account_view["cash_cny"]),
                                      sellable_quantity=account_view["positions"].get(plan.symbol, {}).get("available_quantity", 0),
-                                     source_ref=run_id, feedback_id=digest([run_id, account_view, plan.revision]))
+                                     source_ref=run_id, feedback_id=(account_index.initial_feedback_id(plan.revision)
+                                         if account_index is not None else digest([run_id, account_view, plan.revision])))
         lot = account_view["positions"].get(plan.symbol)
         feedback = feedback.model_copy(update={"cash_cny": Decimal(account_view["cash_cny"]),
                                                "sellable_quantity": lot["available_quantity"] if lot else 0,
                                                "available_at": max(feedback.available_at, visible_at),
-                                               "feedback_id": digest([feedback.feedback_id, account_view])})
+                                               "feedback_id": (account_index.merged_feedback_id(feedback.feedback_id)
+                                                   if account_index is not None else digest([feedback.feedback_id, account_view]))})
         decision = proposal.facade.evaluate(markets[plan.symbol], feedback, clock)
         if decision.status == "UNAVAILABLE":
             # Audited NONE plans were already retained by the native plan
@@ -238,11 +244,14 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                 marks[symbol] = bar.close
         if clock in observations or clock == terminal:
             _, account_view = visible(clock)
-            valuation = deepcopy(backend._ledger)
-            valuation.cash = Decimal(account_view["cash_cny"])
-            valuation.positions = {s: PositionLot.model_validate(p) for s, p in account_view["positions"].items()}
-            navs.append({"as_of": clock.isoformat(), "nav_cny": str(valuation.account_snapshot(
-                prices={s: float(p) for s, p in marks.items()}, snapshot_time=clock).nav)})
+            if account_index is not None:
+                nav = account_index.nav(backend._ledger, marks=marks, clock=clock)
+            else:
+                valuation = deepcopy(backend._ledger)
+                valuation.cash = Decimal(account_view["cash_cny"])
+                valuation.positions = {s: PositionLot.model_validate(p) for s, p in account_view["positions"].items()}
+                nav = valuation.account_snapshot(prices={s: float(p) for s, p in marks.items()}, snapshot_time=clock).nav
+            navs.append({"as_of": clock.isoformat(), "nav_cny": str(nav)})
     executions = [e for p in proposals.values() for e in p.executions]
     for proposal in proposals.values():
         queue.invalidate_plan(proposal.plan.plan_id, kind=None, reason="COMMON_TERMINAL_1457")
