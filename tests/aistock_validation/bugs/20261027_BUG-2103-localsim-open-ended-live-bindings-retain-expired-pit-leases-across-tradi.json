@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2103",
-  "closed_at": null,
+  "closed_at": "2026-10-27T06:23:16.639680Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,24 +33,24 @@
   "expected": "New live business days freeze a same-policy immutable daily PIT release; existing historical identities/economics remain fixed. Only proven zero-effect pre-run retryable failures may be superseded with audit.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json",
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
-      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md"
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md",
+      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json"
     ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
       "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json",
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
-      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md"
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md",
+      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -147,8 +147,8 @@
   },
   "first_seen_at": "2026-10-27T02:56:48.567991Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b68a838b5fbecb8e07566cea29326310eb955789",
+  "fixed_at": "2026-10-27T03:32:06Z",
   "github_issue_number": 6759,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6759",
   "last_seen_at": "2026-10-27T02:56:48.567991Z",
@@ -156,6 +156,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6760",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -182,9 +183,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2103/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2103",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "b68a838b5fbecb8e07566cea29326310eb955789",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-27T06:20:47.562344Z",
+      "mode": "read_only",
+      "observed_identity": "e8d16172b42e117239fa7d8effde1a2f6a95ca7b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3c37b7e4d11d6e214f772a99f387f61e984820b3e889c75237dbd182a3be5b14",
+      "receipt_sha256": "2d00c2ddde55b952c6888776408b9766aa26589fd98e724d4b5dcf4b319ed0c7",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "9f2fabc4a04f98ecadb357d8516c54a3521efcb21d2c1551b225a04199a094bf",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -194,7 +218,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2103",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d8d2cd131df1bcfb",
+    "recorded_at": "2026-10-27T03:32:51.114715Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f776486a8f94f934153b0a9984778f62f470ef19",
+    "source_merge_commit": "b68a838b5fbecb8e07566cea29326310eb955789",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6760",
+    "validation_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py and related matrix -> 54 passed, plus 2 boundary tests passed; CI 40443822054 SUCCESS at f776486a8f94f934153b0a9984778f62f470ef19",
+      "python -m nox -s l0 -- six exact registered paths -> passed, 0 blocking"
+    ],
+    "validation_evidence_digest": "0abce7a5c15cdf7ace678f727fc71e40116e8b62db5023f5bb46bcc13eceb6da"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -203,6 +249,11 @@
     "fingerprint": "cec36d2ae65dc4a781e9cb64",
     "source_event_id": "FE-20261027-cec36d2ae65d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py and related matrix -> 54 passed, plus 2 boundary tests passed; CI 40443822054 SUCCESS at f776486a8f94f934153b0a9984778f62f470ef19",
+    "python -m nox -s l0 -- six exact registered paths -> passed, 0 blocking",
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py backend/tests/simulation_runtime/test_localsim_pit_migration.py -q -> 16 passed from original source verification; X:/AIstock_temp/localsim-human-operation-implementation-20261026/bug2103-direct-r4.xml; fresh runtime identity and semantic receipt passed with zero current-day blockers"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
