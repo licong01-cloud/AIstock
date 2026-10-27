@@ -1,6 +1,6 @@
 # P19 LSTM专属训练人口SPO+（F1）
 
-版本v1.2，2026-10-27，Advisory/model_first。用户按P18建议授权继续，仅一个候选、原预算最多三折3次拟合。首折求解后发布阶段名错误导致未落盘，1 STARTED/0 FINISHED保留，实际累计245＋1；当时未产生经济结论。修复已通过真实阶段发布测试，用户随后明确“允许额外一次恢复拟合”：本轮总预算调整为4次（失败1＋恢复三折3），模型/参数/窗口不变，无最终模型额外fit。授权原文见X根recovery-v2/authorization.json。此P19属于2026-10重排序序列，不与旧2026-10-08固定5TD日频API历史P19混淆。
+版本v1.3，2026-10-27，Advisory/model_first。三折研究和独立算术复核完成，INNER_SUPPORTED / SPECIALIZATION_SUPPORTED_DESCRIPTIVE，尚未独立确认或生产接入。用户原授权最多三折3次；首折求解后发布失败的1 STARTED/0 FINISHED保留。用户随后明确“允许额外一次恢复拟合”，恢复3 STARTED/3 FINISHED，本轮合计4次、累计248＋1，模型/参数/窗口不变，无最终模型额外fit。授权原文见X根recovery-v2/authorization.json，结果见[完整报告](../analysis/advisory_lstm_specialist_spo_20261027.md)。此P19属于2026-10重排序序列，不与旧2026-10-08固定5TD日频API历史P19混淆。
 
 ## Background / Goal / Feature Card
 
@@ -22,9 +22,9 @@
 
 ## Implementation Plan / 预算与阶段
 
-1. 精确source/model/prediction hash、源码闭包、环境、producer和日期预注册；模型预算3，所有STARTED计数，exclusive claim拒绝重试，已有未发布STARTED不自动补fit。先做合成测试再固定producer。
+1. 精确source/model/prediction hash、源码闭包、环境、producer和日期预注册；每次三折attempt模型预算3，所有STARTED计数，exclusive claim拒绝重试，已有未发布STARTED不自动补fit。初次发布失败后用户单独批准1次恢复补偿，本轮总上限4，原失败记录及授权同时绑定恢复协议。先做合成测试再固定producer。
 2. prepared发布原15,250输入；fold1/2/3各一次candidate fit，保存训练投影、support/encoding/证书与模型及原评价预测。三折全部预测及复用共享预测发布后再开始评价。训练数据含较早折已成熟评价日是原扩展窗设定，不是新研究独立性。
-3. evaluated固定三臂共同D，逐折/季度、干预/UNKNOWN、风险和换入换出损益；终态无第四fit或final模型，不据结果再读P18后续窗。
+3. evaluated固定三臂共同D，逐折/季度、干预/UNKNOWN、风险和换入换出损益；恢复三折终态不再追加fit或final模型，不据结果再读P18后续窗。
 4. 真实一次执行，现有WSL `/home/lc999/miniconda3/envs/rdagent/bin/python3.10`，2线程、0GPU、2GiB/30分钟、200MiB输出；只读QE任务状态和资源，不要求停止他人QE、不启动QE。输入/求解失败即停止并保留实际次数。
 
 ## Evaluation / 事前规则与分支
@@ -54,16 +54,16 @@ R1核对新假设、原源/包/模型与窗口、唯一变量及预算；R2合�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-561 | 本文Scope / Inputs | protocol.json / prepared | PENDING | pending execution |
-| F-562 | lstm_specialist_spo_v1.py | direct tests / model audit | PENDING | pending execution |
-| F-563 | lstm_specialist_spo_v1.py / run_once.py | fit_claims / manifests | PENDING | pending execution |
-| F-564 | 本文Evaluation | report.json / arithmetic audit | PENDING | pending execution |
-| F-565 | 本文Verification Plan | research_audit_receipt.json / review_receipt.md | PENDING | pending execution |
-| F-566 | 本文Scope / Implementation | validation_receipt.json | PENDING | pending execution |
+| F-561 | 本文Scope / Inputs；结果报告 | artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/recovery-v2/protocol.json; research_audit_receipt.json | VERIFIED_ORIGINAL_15250_INPUTS_AND_SHARED_REUSE | none |
+| F-562 | backend/services/advisory_model_first/lstm_specialist_spo_v1.py | backend/tests/advisory_model_first/test_lstm_specialist_spo_v1.py; artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/research_audit_receipt.json | VERIFIED_THREE_MODELS_6300_PREDICTIONS_AND_CERTIFICATES | none |
+| F-563 | backend/services/advisory_model_first/lstm_specialist_spo_v1.py；恢复runner | artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/recovery-v2/authorization.json; recovery-v2/run_receipt.json | VERIFIED_FAILED_ONE_PLUS_AUTHORIZED_THREE_TOTAL_FOUR | none |
+| F-564 | 本文Evaluation；结果报告 | artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/recovery-v2/study/evaluated/report.json; research_audit_receipt.json | COMPLETE_INNER_AND_DESCRIPTIVE_SPECIALIZATION_SUPPORTED | none |
+| F-565 | 本文Verification Plan；结果报告审核和下一步 | artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/research_audit_receipt.json; review_receipt.md | VERIFIED_NOT_INDEPENDENT_CONFIRMATION_OR_PRODUCTION | none |
+| F-566 | 本文Scope / Implementation | backend/tests/advisory_model_first/test_lstm_specialist_spo_v1.py; artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/ownership.json; l0.json | VERIFIED_DIRECT_TESTS_AND_BOUNDED_RESOURCES | none |
 
 ## Non-goals / Risks / Production Gates
 
-无新源/研报/现金流/价格/Exit、多包搜索或2026收益复验；无final第4fit、独立确认、生产登记/榜单/DB写/数据集切换/QE或服务任务。production_ddl_gate、dependency/client均noop、backend_restart_required=false。模型在重复开发窗上的改进仍可能是选择效应；完整组监督存在非随机缺失，样本量减少可能更不稳定。研究结束不等于上线，不要求用户重启后端。
+无新源/研报/现金流/价格/Exit、多包搜索或2026收益复验；无最终模型追加fit、独立确认、生产登记/榜单/DB写/数据集切换/QE或服务任务。production_ddl_gate、dependency/client均noop、backend_restart_required=false。模型在重复开发窗上的改进仍可能是选择效应；完整组监督存在非随机缺失，样本量减少可能更不稳定。研究结束不等于上线，不要求用户重启后端。
 
 ## 发布失败与具体恢复修订
 
@@ -72,3 +72,13 @@ R1核对新假设、原源/包/模型与窗口、唯一变量及预算；R2合�
 修复将逻辑阶段映射到`fold1/trained`、`fold2/trained`、`fold3/trained`及`terminal/evaluated`，保留公共发布器及其完整性检查。真实七阶段发布/读回/幂等/冲突拒绝测试通过，WSL新进程验证runner所有阶段路径。原run_once.py/protocol/producer/claims保持不变；修订runner及未来工件在`recovery-v2`，引用原失败记录哈希。
 
 恢复仅补偿上述1次工程失败：原模型/参数/窗口不变，新执行仍三折3次，上限合计4次（失败1＋候选3），无最终模型额外fit。用户已明确批准该预算变更，恢复协议引用授权和原失败记录；不清零计数、不覆盖原工件。
+
+## 实际完成与设计符合性
+
+恢复producer `c05fa7909aebc193299dbd9af9481c24d0283b8f`，实验`advlstmspecialist_465873ce59c88e06d60e13f5`。七阶段完整、三模型证书通过，6,300预测的新进程及独立矩阵复算、训练支持/编码/原始目标、十槽收益和10,000次时间块区间通过；原失败计数另列，累计248＋1。所有原源与闭包hash一致，0旧outer/sealed/其它包收益读取。
+
+126原D/111成熟D/102三臂共同D，专属相对原生+57.277530bps/5TD、三折均正，描述性95%[4.884461,110.711660]；相对共享+8.128272bps、两折正、区间[−6.665815,22.444802]跨零。按原事前规则分别得到INNER_SUPPORTED和SPECIALIZATION_SUPPORTED_DESCRIPTIVE。原共享/原生逐D值保持；旧表101D额外受MSE完整约束，本轮102D不是回选日期。
+
+固定15,250输入、每组50行、明细连接完整KEY且one_to_one，组连接package/D也one_to_one，无多对多扩张。2线程、0GPU、实测6.38秒/386.94MiB，未增加依赖或碰其它QE任务。15项直接验证（原14＋新增真实发布1）、Ruff、ownership及L0零发现通过；F1/F2和CI另见最终交付收据。
+
+四项设计符合性：本轮研究范围完整完成但不冒称最终模型/生产交付；缺失与失败明确保留，不伪成功；原损失/人口规则/费用/主端点不漂移，预算仅按用户明确恢复授权调整；无新包准入/人工审批或自然等待门禁。下一仅设计精确最终模型与新前向确认合同，尚未执行最终fit或前向业务。

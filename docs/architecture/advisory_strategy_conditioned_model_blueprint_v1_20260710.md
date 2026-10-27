@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.51
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.52
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-27
 
-> 2026-10-27最新断点：按用户要求完成P18[父包互补性与LSTM定向验证F1](advisory_lstm_complementarity_v1_f1_design_20261027.md)。原2025期LSTM控制父评分后的偏RankIC +0.073085、三折正，支持继续包专属互补研究；其它包亦有条件信息，不能归因为LSTM架构独有。现有最终SPO+在该LSTM包2026-03-11～08-28已消费开发窗、106共同D相对原生−117.757457bps/5TD，STRESS_NOT_SUPPORTED_CURRENT_PAIR，当前组合不接入生产。下一单候选提案为同一SPO+仅改LSTM训练人口，最多三折3fit，尚未冻结新F1或执行。P16/P17原结论与累计244fit＋1旧index保留；本轮0fit、0独立确认/激活。研报/现金流继续暂停，无服务任务。
+> 2026-10-27最新断点：P19[LSTM专属SPO+ F1](advisory_lstm_specialist_spo_v1_f1_design_20261027.md)三折完成，仅改训练人口，102共同D相对原生+57.277530bps/5TD、三折正；相对共享+8.128272bps、两折正但区间跨零。INNER_SUPPORTED / SPECIALIZATION_SUPPORTED_DESCRIPTIVE，仅探索支持，不证明架构因果或可上线。初始发布失败1fit保留，用户批准额外恢复1次后完成三折3fit，本轮共4、累计248fit＋1旧index。下一唯一任务为精确LSTM最终模型与真正新前向文件确认设计，尚未最终fit/独立确认/激活；P18共享最终模型后续负结果及P16/P17分类不回改。研报/现金流继续暂停，无服务任务。
 
 > 2026-10-23 P9历史断点：用户另行授权的P9[分钟级留一同群同步F1](advisory_intraday_peer_synchrony_top10_5td_v1_f1_design_20261023.md)完成一次六fit内层研究。305D/30,500原行保留，30,417可算；100共同D相对原生+15.682701bps、描述性95%[-22.066937,51.997402]、两折正，按事前产品门INNER_SUPPORTED；相对matched−2.223706bps，不证明同步特征本身增值。累计225实际研究fit＋1旧index，0经济确认/激活/outer。当时report_rc全方向DEFERRED_BY_USER，数据窗口完成不自动恢复；本次用户批准的有限恢复见§6.3.29，P9结果及停止边界不改。
 
@@ -1538,6 +1538,16 @@ clean producer `f17dd87bd256749865e9d0a644e16e7f5a06373a`，implementation SHA `
 
 四不可变阶段、10直接测试与第二算术路径通过，5,900预测/106D均值区间/502组相关独立复算，1,004次描述性投影单列；0新模型fit，累计244＋1。2025折模型与2026最终模型同时改变，不能把差异只归因时间；下尾改善不能代替原ALPHA_RANKING端点。唯一后续研究提案为同一SPO+仅改LSTM训练人口，保持8字段/编码规则/正则/折/Top10/5TD，单候选最多3fit，待另冻结F1；本轮未新增拟合或阈值扫描。前向输入仍是未来确认所需交付，不能伪称已运行影子；原P16/P17分类不回改，生产/DB/服务不变。
 
+### 6.3.39 P19 LSTM专属SPO+训练人口研究（2026-10-27）
+
+[F1](advisory_lstm_specialist_spo_v1_f1_design_20261027.md)及[完整报告](../analysis/advisory_lstm_specialist_spo_20261027.md)：仅训练人口由原LSTM＋TCN改为精确LSTM包，沿同八字段/编码规则/SPO+损失/L2/三折及50→10/5TD。原305D/15,250行不重建；中位数/尺度及训练组权重随人口改变，不能声称已隔离纯网络架构或跨包干扰因果。共享三折模型和预测直接复用、0重fit。
+
+三折监督8,300/9,750/11,850行、166/195/237完整组，均有原精度证书；126D/6,300原评价预测全部保留，111成熟D/102三臂共同D。原生/共享/专属均值86.587407/135.736665/143.864937bps；专属−原生+57.277530、三折+5.422010/+40.436152/+109.599000，描述性95%[4.884461,110.711660]。专属−共享+8.128272，两折正，区间[−6.665815,22.444802]跨零；原生INNER_SUPPORTED与机制SPECIALIZATION_SUPPORTED_DESCRIPTIVE分开，不冒称已确认专属更优。
+
+候选/原生/共享未知163/168/164槽，各150未成熟槽；原生111成熟D全部有干预，下尾改善132.197730bps。三臂原D和前序共享/原生逐D值不变；旧101D统计包含MSE完整要求，本轮替为专属得到102D，不是回选日期。开发重复消费和NON_VINTAGE保留，未读2026/outer/sealed，不修改P18负结果。
+
+初始工程发布失败1 STARTED/0 FINISHED保留；用户明确允许额外1次恢复后，独立recovery-v2完成3 STARTED/3 FINISHED，本轮实际4fit、累计248＋1，无最终模型fit。15直接项、真实七阶段发布/读回、独立6,300预测/训练编码与目标/十槽收益/区间复算通过。恢复实验`advlstmspecialist_465873ce59c88e06d60e13f5`。下一仅设计一个精确LSTM最终模型和新前向文件确认合同；不按开发期正结果直接上线、不添加新候选或恢复其它支线。
+
 ## 7. 荐股产品行为
 
 ### 7.1 多策略包
@@ -2284,6 +2294,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-301 | P16单一SPO+目标：原八字段/人口和5TD，同线性类/正则/监督支持，两臂只改损失；有证书求解、六折内fit及条件一次冻结、原生主端点与完整停止分支 |
 | F-302 | P17全部启用五包冻结核查：原三折模型零fit扩包、缺源包保留，原P16复用，逐包经济/风险/UNKNOWN、先预测后评价及前向缺口与方向调整 |
 | F-303 | P18父包互补与精确LSTM压力检验：条件秩相关、原人口/模型/消费窗固定、0fit、预测先于目标收益、完整经济分支和包专属方向不冒称架构因果 |
+| F-304 | P19仅LSTM训练人口SPO+：同三折/特征/损失、原生主端点和共享机制分态，初始失败保留及明确恢复授权，完整原人口/UNKNOWN、模型证书与算术审核 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2469,6 +2480,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-301 | §6.3.36/§16.0、`docs/architecture/advisory_spo_top10_5td_v1_f1_design_20261026.md` | backend/tests/advisory_model_first/test_spo_top10_5td_v1.py; artifact: X:/AIstock_temp/ADVISORY/p16-spo-top10-20261026/research_audit_receipt.json | COMPLETE_INNER_SUPPORTED_MODEL_FROZEN_NOT_CONFIRMED | none |
 | F-302 | §6.3.37/§16.0、`docs/architecture/advisory_spo_all_packages_validation_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_spo_all_packages_validation_v1.py; artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/research_audit_receipt.json | COMPLETE_FIVE_INPUT_REVIEWS_FOUR_EVALUATED_NO_UNIVERSAL_PROMOTION | none |
 | F-303 | §6.3.38/§16.0、`docs/architecture/advisory_lstm_complementarity_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_complementarity_v1.py; artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/research_audit_receipt.json | COMPLETE_COMPLEMENTARITY_REVIEW_LSTM_STRESS_NOT_SUPPORTED_CURRENT_PAIR | none |
+| F-304 | §6.3.39/§16.0、`docs/architecture/advisory_lstm_specialist_spo_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_specialist_spo_v1.py; artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/research_audit_receipt.json | COMPLETE_INNER_AND_DESCRIPTIVE_SPECIALIZATION_SUPPORTED_NOT_CONFIRMED | none |
 
 
 ## 12. Verification Plan
@@ -2767,7 +2779,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ### 16.0 当前唯一任务队列与真实断点（2026-10-27 接续）
 
-本节是2026-10-27唯一队列。P17全包评审已结束；按用户要求完成P18互补关系诊断与一次零fit的精确LSTM后续开发窗压力检验。2025 LSTM偏RankIC +0.073085支持包专属研究，但当前最终共享SPO+在106共同D相对原生−117.757457bps，当前组合不进入生产，不据此停止LSTM原生包或否定整个方向。下一唯一候选提案：同一SPO+仅改LSTM训练人口，其余8字段/编码规则/损失/正则/折/50→10/5TD不变，先另冻结最多三折3fit及停止条件的F1；尚未执行。未来确认仍需完整前向Top50/特征/时钟交付，不把已消费2026压力窗称为独立OOS。P16 INNER_SUPPORTED、P17不全包推广及累计244实际fit＋1旧index不改；旧单包NOT_EVALUABLE保留，研报/现金流/价格/Exit暂停，无自动追加拟合、sealed读取或服务任务。
+本节是2026-10-27唯一队列。P19仅LSTM训练人口的同一SPO+三折完成，102共同D相对原生+57.277530bps、三折正，相对共享+8.128272bps、两折正但区间跨零，获得内层及描述性机制支持。原失败1次计入、用户授权恢复三折3次，本轮4次，累计248实际fit＋1旧index。下一唯一任务为一个精确LSTM最终模型与真正新前向文件确认设计：冻结单次最终拟合预算、原Top50/D特征/来源时钟、先预测后成熟5TD评价及原生/共享对照；本轮未最终fit或运行前向。不复用已消费2026压力窗当独立确认，不按开发期正结果直接生产替换。P18共享最终组合后续负结果、P16/P17原分类及旧单包NOT_EVALUABLE保留；研报/现金流/价格/Exit暂停，无sealed读取、生产/服务任务或自动扩大候选。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |
 |---|---|---|
@@ -2803,7 +2815,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 | P15方法/确认决策 / 已完成停止分支 | §6.3.35及方法报告；13指定文件hash、事件/状态/单位解释复核和有限确认元数据核查，三轮自审 | NO_CANDIDATE_NOMINATED / CONFIRMATION_NOT_EXECUTABLE；保留旧结果，财务状态暂缓，无新TTL或覆盖试算；未来方案字段与终止分支已明示，无自动执行任务 |
 | P16 / 实现与一次7fit研究完成 | §6.3.36/F1；19直接项、11阶段/7claims审计、全部预测及算术复核；100共同D原生+16.570982bps/三折正，matched+7.921422bps | INNER_SUPPORTED保留；最终探索模型冻结，累计244＋1。用户后续先授权P17扩包，不把本内层结果当全包有效 |
 | P17 / 五包输入核查、四包评价与差异分析完成 | §6.3.37/F1；新增0fit，12,600新原行/25,200预测；四包95共同D−10.427423bps，全部区间跨零；旧单缺历史源 | 保留不全包推广结论；用户后续要求继续LSTM互补研究，见P18。0激活，multi日频缺口交原owner |
-| P18 / 四包关系诊断和LSTM压力检验完成 | §6.3.38/F1；0fit、1,004统计投影、10直接项/第二路径审计；2025条件信息正，后续106D增量−117.757457bps | STRESS_NOT_SUPPORTED_CURRENT_PAIR，当前组合不接入；继续单一LSTM专属SPO+人口假设，最多3fit提案未执行，旧sealed/其它包新期收益未读 |
+| P18 / 四包关系诊断和LSTM压力检验完成 | §6.3.38/F1；0fit、1,004统计投影、10直接项/第二路径审计；2025条件信息正，后续106D增量−117.757457bps | STRESS_NOT_SUPPORTED_CURRENT_PAIR保留，当前共享组合不接入；用户后续授权专属人口研究，见P19，旧sealed/其它包新期收益未读 |
+| P19 / LSTM专属SPO+三折完成 | §6.3.39/F1；失败1＋授权恢复3，本轮4fit；102D原生+57.277530/共享+8.128272bps，15直接项及独立算术复核 | INNER_SUPPORTED / SPECIALIZATION_SUPPORTED_DESCRIPTIVE；仅下一最终模型与新前向确认设计，未final fit/独立确认/激活，累计248＋1 |
 | B4 / 本候选不启动 | 仅未来确实值得确认的新candidate才冻结并一次读取真正未消费历史 | 本轮sealed收益未读；禁止将已消费outer改称确认，不等待自然天数抢救当前失败 |
 | B5 / 本候选不启动 | 仅确认通过的新角色才做最小集成，再逐项研究价格条件集合/退出价值 | 不先造多角色平台；LocalSIM由其owner实施、重启用户所有；未配置角色不阻原包日频 |
 | 条件辅线 | 直接影响日频基线或本次研究的正确性BUG/可复现性能阻塞 | 仅本模块精确修复；共享三模式生产行为若业务需要再按已有接口验证，不为已加载源码重复重启，不代LocalSIM操作 |
