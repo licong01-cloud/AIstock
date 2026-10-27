@@ -13,6 +13,7 @@ from backend.services.strategy_package.execution_policy import local_sim_twap_on
 from backend.services.trading_core.models import MinuteBar, PositionLot
 
 from .runtime import LocalSimBackend
+from .research_performance import VisibleAccountIndex
 from .timing import CLOSED_LOOP_MODE, TimingExecution
 from .timing_portfolio import TERMINAL, _account, _validate_markets, portfolio_day_result
 from .timing_research import fee_model
@@ -119,7 +120,7 @@ class _NativeExecution(TimingExecution):
         return result
 
 
-def run_native_portfolio_day(*, backend, markets, intents, initial_marks, run_id, source_commit):
+def run_native_portfolio_day(*, backend, markets, intents, initial_marks, run_id, source_commit, optimized=False):
     """Drive the same native causal TWAP engine on frozen minutes until 14:57."""
     day = next(iter(markets.values())).trade_date
     start, terminal = (utc(datetime.combine(day, t, CHINA)) for t in (time(9, 30), time(14, 57)))
@@ -147,6 +148,7 @@ def run_native_portfolio_day(*, backend, markets, intents, initial_marks, run_id
                 bars.setdefault(bar.start, {})[symbol] = bar
                 observations.setdefault(available, {})[symbol] = bar
     views, navs = [(start, initial)], [{"as_of": start.isoformat(), "nav_cny": str(initial_nav)}]
+    account_index = VisibleAccountIndex(views, run_id) if optimized else None
     for clock in sorted({terminal} | set(bars) | set(observations)):
         any_fill = False
         for execution in executions:
@@ -158,12 +160,15 @@ def run_native_portfolio_day(*, backend, markets, intents, initial_marks, run_id
         for symbol, bar in observations.get(clock, {}).items():
             marks[symbol] = bar.close
         if clock in observations or clock == terminal:
-            _, visible = max((v for v in views if v[0] <= clock), key=lambda v: v[0])
-            valuation = deepcopy(backend._ledger)
-            valuation.cash = Decimal(visible["cash_cny"])
-            valuation.positions = {s: PositionLot.model_validate(p) for s, p in visible["positions"].items()}
-            navs.append({"as_of": clock.isoformat(), "nav_cny": str(valuation.account_snapshot(
-                prices={s: float(p) for s, p in marks.items()}, snapshot_time=clock).nav)})
+            if account_index is not None:
+                nav = account_index.nav(backend._ledger, marks=marks, clock=clock)
+            else:
+                _, visible = max((v for v in views if v[0] <= clock), key=lambda v: v[0])
+                valuation = deepcopy(backend._ledger)
+                valuation.cash = Decimal(visible["cash_cny"])
+                valuation.positions = {s: PositionLot.model_validate(p) for s, p in visible["positions"].items()}
+                nav = valuation.account_snapshot(prices={s: float(p) for s, p in marks.items()}, snapshot_time=clock).nav
+            navs.append({"as_of": clock.isoformat(), "nav_cny": str(nav)})
     for execution in executions:
         execution.cancel("COMMON_TERMINAL_1457")
         execution.waits = [(f.quantity, Decimal(str((f.trade_time - start).total_seconds()))) for f in execution.fills]

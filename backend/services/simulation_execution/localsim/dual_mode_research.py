@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import ExitStack
 from datetime import date
 from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
 import re
+from time import perf_counter
 
 from filelock import FileLock, Timeout
 
@@ -25,9 +27,10 @@ from .human_operation import HumanOperationPolicy, operation_snapshot, validate_
 from .economic import local_sim_fact_payload
 from .human_portfolio import run_human_portfolio_day
 from .native_research import native_backend_for, run_native_portfolio_day, run_cash_only_portfolio_day
+from .research_performance import ResearchAccountPool, ResearchMarketWorkspace, ResearchPerformanceOptions
 from .timing_campaign import build_timing_plan_events, inspect_price_templates, validate_campaign_request
 from .timing_continuation import inspect_successor_sources
-from .timing_portfolio import attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, validate_day_ledger
+from .timing_portfolio import attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, validate_day_ledger, prepare_portfolio_commit
 from .timing_research import ref, source_identity
 from .timing_store import TimingFileRepository, publish, read_json
 
@@ -39,7 +42,7 @@ RESULT_SCHEMA = "localsim_dual_mode_results_v1"
 def implementation_identity():
     root = Path(__file__).resolve().parents[4]
     names = ["human_operation.py", "human_portfolio.py", "native_research.py", "dual_mode_research.py",
-             "timing_portfolio.py", "timing_campaign.py", "timing_continuation.py"]
+             "timing_portfolio.py", "timing_campaign.py", "timing_continuation.py", "research_performance.py"]
     files = {"native": source_identity(), "dual_mode": {
         name: hashlib.sha256((root / "backend/services/simulation_execution/localsim" / name)
                             .read_bytes().replace(b"\r\n", b"\n")).hexdigest() for name in names}}
@@ -211,18 +214,34 @@ def summarize_accounts(accounts, histories=None):
     return rows
 
 
-def run_study(request_ref: FileRef, *, stop_after_account_days: int | None = None) -> dict:
+def run_study(request_ref: FileRef, *, stop_after_account_days: int | None = None,
+              performance: ResearchPerformanceOptions | None = None, measure_performance: bool = False) -> dict:
+    if performance is not None and not isinstance(performance, ResearchPerformanceOptions):
+        raise ValueError("LOCALSIM_RESEARCH_PERFORMANCE_OPTIONS_INVALID")
+    performance = performance or ResearchPerformanceOptions()
+    if type(measure_performance) is not bool:
+        raise ValueError("LOCALSIM_RESEARCH_PERFORMANCE_OPTIONS_INVALID")
+    metrics = {"source_inspection_seconds": 0.0, "market_preparation_seconds": 0.0, "commit_readback_seconds": 0.0}
+    started = perf_counter()
     root = checked_file(request_ref).parent
     try:
         with FileLock(root / "study-writer.lock", timeout=0):
             try:
-                return _run_study_locked(request_ref, stop_after_account_days=stop_after_account_days)
+                with ResearchAccountPool(performance.account_workers) as pool, ExitStack() as resources:
+                    result = _run_study_locked(request_ref, stop_after_account_days=stop_after_account_days,
+                                                performance=performance, pool=pool, metrics=metrics, resources=resources)
+                if measure_performance:
+                    result = {**result, "performance": {"schema_version": "localsim_research_performance_v1",
+                        "batch_days": performance.batch_days, "account_workers": performance.account_workers,
+                        "optimized": performance.optimized, "wall_seconds": perf_counter() - started,
+                        "account_compute_seconds_sum": pool.compute_seconds, **metrics}}
+                return result
             except Exception as exc:
                 # Bounded, immutable operational evidence, separate from economics.
                 message = str(exc).split(":", 1)[0]
                 reason = message if re.fullmatch(r"[A-Z][A-Z0-9_]{1,150}", message) else "OFFLINE_RESEARCH_ERROR"
                 failure = {"schema_version": "localsim_dual_mode_failure_v1", "request": request_ref.model_dump(),
-                           "exception_type": type(exc).__name__, "reason_code": reason,
+                           "exception_type": getattr(exc, "native_exception_type", type(exc).__name__), "reason_code": reason,
                            "generation_file_count": len(list((root / "journals").glob("*/generations/*.json"))),
                            "economic_result_published": (root / "result_receipt.json").exists()}
                 publish(root / "operational" / (digest(failure) + ".json"), failure)
@@ -231,8 +250,64 @@ def run_study(request_ref: FileRef, *, stop_after_account_days: int | None = Non
         return {"status": "IN_PROGRESS", "computation_performed": False, "outcomes_read": False}
 
 
-def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | None = None) -> dict:
+def _compute_account_day(job: dict) -> dict:
+    """Only compute native facts; a worker cannot publish a journal or result."""
+    initial, prior = job["initial"], job["prior"]
+    markets, projection, cost = job["markets"], job["projection"], job["cost"]
+    day, identity, manifest = job["day"], job["identity"], job["manifest"]
+    account_input = {**initial, "cash_cny": prior["cash_cny"], "positions": prior["positions"]}
+    prices = {s: m.day_facts.reference_price for s, m in markets.items() if m.day_facts.reference_price is not None}
+    prices.update({r["symbol"]: Decimal(str(r["reference_price"])) for r in projection["aggregate_results"]
+                   if r.get("reference_price") is not None})
+    for symbol in prior["positions"]:
+        if symbol not in prices:
+            if not markets[symbol].day_facts.is_suspended or symbol not in prior.get("marks_raw_cny", {}):
+                raise ValueError("LOCALSIM_DUAL_MODE_HELD_MARK_MISSING")
+            prices[symbol] = Decimal(prior["marks_raw_cny"][symbol])
+    if markets:
+        backend, targets, native = compile_native_intents(projection=projection, manifest=manifest,
+            account=account_input, markets=markets, prices=prices, cost=cost)
+    else:
+        clock = projection["runtime_config"]["point_in_time_context"]
+        if (projection.get("valid_no_candidate") is not True or account_input["positions"]
+                or projection["manifest_sha256_by_package"] != {account_input["package_id"]:job["manifest_sha256"]}
+                or clock["effective_trade_date"] != day.isoformat() or clock["cutoff_date"] >= day.isoformat()):
+            raise ValueError("LOCALSIM_DUAL_MODE_EMPTY_MARKET_WITHOUT_AUTHORITY")
+        from backend.services.simulation_runtime.decision import RebalanceIntentService
+        targets = []
+        native = RebalanceIntentService().build_order_intents(package_id=account_input["package_id"],
+            portfolio_id=initial["account_id"], strategy_id=initial["account_id"], trade_date=day, current_positions={},
+            target_positions=[], current_prices={})
+        backend = native_backend_for(account=account_input, markets={}, cost=cost, manifest=manifest,
+                                     source_identity=identity, cash_only_trade_date=day)
+    unavailable = []
+    if not markets:
+        human_policy = HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]) if initial["operation"]["operation_mode"] == "HUMAN_SIM" else None
+        result = run_cash_only_portfolio_day(backend=backend, trade_date=day, human_policy=human_policy)
+    elif initial["operation"]["operation_mode"] == "NATIVE":
+        backend = native_backend_for(account=account_input, markets=markets, cost=cost,
+                                       manifest=manifest, source_identity=identity)
+        result = run_native_portfolio_day(backend=backend, markets=markets, intents=native.order_intents,
+            initial_marks=prices, run_id=job["run_id"], source_commit=job["producer_commit"], optimized=job["optimized"])
+    else:
+        source = job["source"]
+        events, unavailable = build_timing_plan_events(intents=native.order_intents,
+            series=source["series"], rule=initial["rule"], source_commit=job["producer_commit"],
+            day=day, quantity_source=identity, unknown_references=source["unknown_references"])
+        result = run_human_portfolio_day(backend=backend, markets=markets, events=events,
+            initial_marks=prices, policy=HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]),
+            run_id=job["run_id"], optimized=job["optimized"])
+    attach_native_quantity_evidence(result, targets=targets, native=native,
+        projection_ref=job["projection_ref"], price_policy_sha256=job["price_policy_sha256"], unavailable=unavailable)
+    result["account"].update(operation=initial["operation"], rule=initial["rule"], delay_seconds=initial["delay_seconds"])
+    commit = prepare_portfolio_commit(result=result, run_id=job["run_id"], input_identity=identity, day_index=0)
+    return {"account": result["account"], "commit_request": commit}
+
+
+def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | None = None,
+                      performance: ResearchPerformanceOptions, pool: ResearchAccountPool, metrics: dict, resources: ExitStack) -> dict:
     """Resume only complete day journals; exact retry reads immutable results."""
+    inspect_started = perf_counter()
     request, inspected, candidate_ref = inspect_study(request_ref)
     preflight = inspected["preflight"]
     package = read_json(checked_file(FileRef.model_validate(preflight["inputs"]["package"])))["package"]
@@ -241,13 +316,14 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
     manifest = StrategyPackageManifest.model_validate(package["manifest"])
     cost_ref = FileRef.model_validate(preflight["inputs"]["cost_policy"])
     cost = CostContract.model_validate_json(checked_file(cost_ref).read_text(encoding="utf-8"))
-    candidate = CandidateReader(candidate_ref)
+    candidate = resources.enter_context(ResearchMarketWorkspace(CandidateReader(candidate_ref), performance.batch_days))
     root = checked_file(request_ref).parent
     inspection = {"schema_version": "localsim_dual_mode_source_inspection_v1", "request": request_ref.model_dump(),
                   "candidate_manifest": candidate_ref.model_dump(), "stage": "COMPLETE_SOURCE_BATCH_INSPECTED",
                   "source_identity": request["source_identity"], "trade_dates": request["trade_dates"],
                   "price_policy": inspected["templates"].policy_document.model_dump()}
     publish(root / "source_inspection.json", inspection)
+    metrics["source_inspection_seconds"] = perf_counter() - inspect_started
     completed = root / "results.json"
     initials = []
     for profile in request["population"]:
@@ -258,18 +334,52 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
     histories = {i["account_id"]: [] for i in initials}
     references = {i["account_id"]: [] for i in initials}
     computed = 0
+    prepared_projections = {}
     for index, day_string in enumerate(request["trade_dates"]):
+        market_started = perf_counter()
         day = date.fromisoformat(day_string)
         source = inspected["days"][day_string]
         projection_ref = FileRef.model_validate(source["native"]["projection"])
-        projection = read_json(checked_file(projection_ref))
+        projection_path = checked_file(projection_ref)
+        projection = prepared_projections.get(day_string) or read_json(projection_path)
         symbols = {r["symbol"] for r in projection["aggregate_results"]}
         for rows in histories.values():
             if rows:
                 symbols.update(rows[-1]["positions"])
+        if performance.batch_days > 1 and index % performance.batch_days == 0:
+            window = request["trade_dates"][index:index + performance.batch_days]
+            prepared_projections = {}
+            physical_symbols = set(symbols)
+            for future_day in window:
+                future_ref = FileRef.model_validate(inspected["days"][future_day]["native"]["projection"])
+                future_projection = read_json(checked_file(future_ref))
+                prepared_projections[future_day] = future_projection
+                physical_symbols.update(r["symbol"] for r in future_projection["aggregate_results"])
+            candidate.prepare_window(date.fromisoformat(window[0]), date.fromisoformat(window[-1]), sorted(physical_symbols))
         markets = {s: candidate.market(s, day) for s in sorted(symbols)}
         candidate.verify_pins()
+        metrics["market_preparation_seconds"] += perf_counter() - market_started
+        jobs, missing_count = [], 0
+        remaining = None if stop_after_account_days is None else max(0, stop_after_account_days - computed)
         for initial in initials:
+            account_id = initial["account_id"]
+            prior = histories[account_id][-1] if histories[account_id] else initial
+            previous = references[account_id][-1] if references[account_id] else None
+            identity = digest([request["identity"], account_id, day_string, previous])
+            run_id = "lsdm_" + identity[:48]
+            if ((root / "journals" / run_id / "generations/00000001.json").exists()
+                    or remaining is not None and missing_count >= remaining):
+                jobs.append(None)
+                continue
+            missing_count += 1
+            jobs.append({"initial": initial, "prior": prior, "markets": markets, "projection": projection,
+                         "projection_ref": projection_ref.model_dump(), "source": source, "cost": cost,
+                         "manifest": manifest, "manifest_sha256": request["manifest_sha256"],
+                         "producer_commit": request["producer_source_commit"], "day": day,
+                         "identity": identity, "run_id": run_id, "optimized": performance.optimized,
+                         "price_policy_sha256": inspected["templates"].policy_document.sha256})
+        computations = pool.prepare(jobs)
+        for account_index, initial in enumerate(initials):
             account_id = initial["account_id"]
             prior = histories[account_id][-1] if histories[account_id] else initial
             previous = references[account_id][-1] if references[account_id] else None
@@ -298,60 +408,25 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
                     raise ValueError("LOCALSIM_DUAL_MODE_COMMITTED_PREFIX_MISSING")
                 if stop_after_account_days is not None and computed >= stop_after_account_days:
                     return {"status": "CHECKPOINTED", "computed_account_days": computed, "outcomes_read": False}
-                account_input = {**initial, "cash_cny": prior["cash_cny"], "positions": prior["positions"]}
-                prices = {s: m.day_facts.reference_price for s, m in markets.items() if m.day_facts.reference_price is not None}
-                prices.update({r["symbol"]: Decimal(str(r["reference_price"])) for r in projection["aggregate_results"]
-                               if r.get("reference_price") is not None})
-                for symbol in prior["positions"]:
-                    if symbol not in prices:
-                        if not markets[symbol].day_facts.is_suspended or symbol not in prior.get("marks_raw_cny", {}):
-                            raise ValueError("LOCALSIM_DUAL_MODE_HELD_MARK_MISSING")
-                        prices[symbol] = Decimal(prior["marks_raw_cny"][symbol])
-                if markets:
-                    backend, targets, native = compile_native_intents(projection=projection, manifest=manifest,
-                        account=account_input, markets=markets, prices=prices, cost=cost)
-                else:
-                    clock = projection["runtime_config"]["point_in_time_context"]
-                    if (projection.get("valid_no_candidate") is not True or account_input["positions"]
-                            or projection["manifest_sha256_by_package"] != {account_input["package_id"]:request["manifest_sha256"]}
-                            or clock["effective_trade_date"] != day_string or clock["cutoff_date"] >= day_string):
-                        raise ValueError("LOCALSIM_DUAL_MODE_EMPTY_MARKET_WITHOUT_AUTHORITY")
-                    from backend.services.simulation_runtime.decision import RebalanceIntentService
-                    targets = []
-                    native = RebalanceIntentService().build_order_intents(package_id=account_input["package_id"],
-                        portfolio_id=account_id, strategy_id=account_id, trade_date=day, current_positions={},
-                        target_positions=[], current_prices={})
-                    backend = native_backend_for(account=account_input, markets={}, cost=cost, manifest=manifest,
-                        source_identity=identity, cash_only_trade_date=day)
-                unavailable = []
-                if not markets:
-                    human_policy = HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]) if initial["operation"]["operation_mode"] == "HUMAN_SIM" else None
-                    result = run_cash_only_portfolio_day(backend=backend, trade_date=day, human_policy=human_policy)
-                elif initial["operation"]["operation_mode"] == "NATIVE":
-                    backend = native_backend_for(account=account_input, markets=markets, cost=cost,
-                                                   manifest=manifest, source_identity=identity)
-                    result = run_native_portfolio_day(backend=backend, markets=markets, intents=native.order_intents,
-                        initial_marks=prices, run_id=store.run_id, source_commit=request["producer_source_commit"])
-                else:
-                    events, unavailable = build_timing_plan_events(intents=native.order_intents,
-                        series=source["series"], rule=initial["rule"], source_commit=request["producer_source_commit"],
-                        day=day, quantity_source=identity, unknown_references=source["unknown_references"])
-                    result = run_human_portfolio_day(backend=backend, markets=markets, events=events,
-                        initial_marks=prices, policy=HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]), run_id=store.run_id)
-                attach_native_quantity_evidence(result, targets=targets, native=native,
-                    projection_ref=projection_ref.model_dump(), price_policy_sha256=inspected["templates"].policy_document.sha256,
-                    unavailable=unavailable)
-                result["account"].update(operation=initial["operation"], rule=initial["rule"], delay_seconds=initial["delay_seconds"])
+                result = computations.result(account_index)
+                commit_started = perf_counter()
+                account_result = result["account"]
+                if (account_result["portfolio_id"] != account_id or account_result["package_id"] != initial["package_id"]
+                        or account_result["trade_date"] != day_string or account_result["operation"] != initial["operation"]
+                        or account_result["rule"] != initial["rule"] or account_result["delay_seconds"] != initial["delay_seconds"]):
+                    raise ValueError("LOCALSIM_RESEARCH_WORKER_ACCOUNT_SCOPE_CONFLICT")
+                commit = result["commit_request"]
                 # A failed replay must not publish even a completed-day journal.
                 validate_day_ledger({"checkpoint":{"account":result["account"]}, "facts":{
-                    "fills":{f.fill_id:local_sim_fact_payload(f, fact_type="fill") for f in backend._ledger.fills},
-                    "cash_entries":{e.fill_id:local_sim_fact_payload(e, fact_type="cash_entry") for e in backend._ledger.cash_entries}}},
+                    "fills":{f.fill_id:local_sim_fact_payload(f, fact_type="fill") for f in commit.fills},
+                    "cash_entries":{e.fill_id:local_sim_fact_payload(e, fact_type="cash_entry") for e in commit.cash_entries}}},
                     initial=initial, cost=cost)
                 commit_portfolio_day(store=store, result=result, input_identity=identity, day_index=0)
                 record = store.latest()
                 validate_day_ledger(record, initial=initial, cost=cost)
                 account = record["checkpoint"]["account"]
                 computed += 1
+                metrics["commit_readback_seconds"] += perf_counter() - commit_started
             summary = {"schema_version": "localsim_dual_mode_day_v1", "study_identity": request["identity"],
                        "account_id": account_id, "day_index": index, "previous_day": previous,
                        "account_receipt": ref(store.root / "generations/00000001.json"), **account,
@@ -441,6 +516,10 @@ def main():
     run.add_argument("--request", required=True)
     run.add_argument("--request-sha256", required=True)
     run.add_argument("--stop-after-account-days", type=int)
+    run.add_argument("--batch-days", type=int, default=1)
+    run.add_argument("--account-workers", type=int, default=1)
+    run.add_argument("--optimized", action="store_true")
+    run.add_argument("--measure-performance", action="store_true")
     args = parser.parse_args()
     if args.command == "freeze":
         if bool(args.input_successor) != bool(args.input_successor_sha256):
@@ -456,7 +535,10 @@ def main():
             short_window_days=args.short_window_days, matrix=args.matrix)
     else:
         result = run_study(FileRef(path=args.request, sha256=args.request_sha256),
-                           stop_after_account_days=args.stop_after_account_days)
+                           stop_after_account_days=args.stop_after_account_days,
+                           performance=ResearchPerformanceOptions(batch_days=args.batch_days,
+                               account_workers=args.account_workers, optimized=args.optimized),
+                           measure_performance=args.measure_performance)
     print(json.dumps(result, ensure_ascii=False))
 
 

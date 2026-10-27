@@ -303,7 +303,7 @@ def validate_day_ledger(record: dict, *, initial: dict, cost) -> None:
 
 def commit_portfolio_day(*, store, result: dict, input_identity: str, day_index: int):
     """Commit every parent's actual facts in one existing coordinator scope."""
-    account, sessions, backend = result["account"], result["sessions"], result["backend"]
+    account = result["account"]
     previous = store.latest()
     expected_index = previous["checkpoint"]["extra"]["day_index"] + 1 if previous else 0
     if day_index != expected_index:
@@ -313,9 +313,31 @@ def commit_portfolio_day(*, store, result: dict, input_identity: str, day_index:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PREFIX_CONFLICT")
     if previous and previous["checkpoint"]["extra"]["input_identity"] != input_identity:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_CHANGED")
+    request = result.get("commit_request")
+    if request is None:
+        request = prepare_portfolio_commit(result=result, run_id=store.run_id,
+                                           input_identity=input_identity, day_index=day_index)
+    if (not isinstance(request, LocalSimEconomicCommitRequest)
+            or request.run_id != store.run_id or request.binding_id != account["portfolio_id"]
+            or request.trade_date != datetime.fromisoformat(account["terminal_as_of"]).astimezone(CHINA).date()
+            or request.plan_id != "campaign_day_" + digest([input_identity, day_index])
+            or request.economic_facts != {"account_sha256": digest(account), "input_identity": input_identity, "day_index": day_index}
+            or request.projection_payload != {"account": account, "extra": {"input_identity": input_identity, "day_index": day_index}}
+            or request.status != "OFFLINE_RESEARCH_DAY_COMPLETE"
+            or request.expected_versions != {state.state_id: None for state in request.states}
+            or request.payload_patch or request.payload_unset or request.on_created is not None):
+        raise ValueError("LOCALSIM_RESEARCH_WORKER_COMMIT_IDENTITY_CONFLICT")
+    receipt = store.coordinator.commit(request)
+    return {"status": "MATERIALIZED", "generation": store.latest()["generation"],
+            "receipt_id": receipt.receipt.receipt_id}
+
+
+def prepare_portfolio_commit(*, result: dict, run_id: str, input_identity: str, day_index: int):
+    """Transport native facts from pure computation; only the coordinator writes."""
+    account, sessions, backend = result["account"], result["sessions"], result["backend"]
     states = tuple(s.execution_state for s in sessions)
-    request = LocalSimEconomicCommitRequest(
-        run_id=store.run_id, binding_id=backend.portfolio_id,
+    return LocalSimEconomicCommitRequest(
+        run_id=run_id, binding_id=backend.portfolio_id,
         trade_date=datetime.fromisoformat(account["terminal_as_of"]).astimezone(CHINA).date(),
         plan_id="campaign_day_" + digest([input_identity, day_index]), states=states,
         expected_versions={state.state_id: None for state in states},
@@ -327,6 +349,3 @@ def commit_portfolio_day(*, store, result: dict, input_identity: str, day_index:
         events=tuple(event for s in sessions for event in s.events),
         cash_entries=tuple(backend._ledger.cash_entries),
     )
-    receipt = store.coordinator.commit(request)
-    return {"status": "MATERIALIZED", "generation": store.latest()["generation"],
-            "receipt_id": receipt.receipt.receipt_id}
