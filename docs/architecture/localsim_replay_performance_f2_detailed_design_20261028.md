@@ -28,6 +28,7 @@
 - `backend/services/simulation_execution/localsim/timing_portfolio.py`
 - `backend/tests/simulation_execution/test_localsim_replay_performance.py`
 - `backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py`
+- `backend/tests/simulation_runtime/test_daily_trading_context.py`??????DEV??????????????????/???????
 
 任务记录、基准输入引用及回执仅写`X:/AIstock_temp/localsim-replay-performance-20261028/`；WSL使用`/mnt/x/AIstock_temp/localsim-replay-performance-20261028/`。不复制大型数据或模型。
 

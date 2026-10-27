@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+import os
+import sys
 
 import psycopg2
 import pytest
@@ -361,7 +363,10 @@ def test_daily_context_readback_rejects_hash_drift() -> None:
 
 
 def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
-    """Read-only DEV proof: two readiness probes plus three set-based facts."""
+    """Explicit DEV rollback proof: two readiness probes plus three facts."""
+
+    if os.getenv("AISTOCK_DEV_DB_E2E") != "1":
+        pytest.skip("existing DEV rollback-DML validation requires explicit AISTOCK_DEV_DB_E2E=1")
 
     try:
         dsn = _dev_dsn()
@@ -488,3 +493,26 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
                 assert cursor.fetchone() == (0, 0, 0, 0)
         finally:
             raw_conn.close()
+
+
+@pytest.mark.parametrize("authorization", [None, "0", "1"])
+def test_dev_query_budget_requires_explicit_authorization_before_target_resolution(monkeypatch, authorization):
+    if authorization is None:
+        monkeypatch.delenv("AISTOCK_DEV_DB_E2E", raising=False)
+    else:
+        monkeypatch.setenv("AISTOCK_DEV_DB_E2E", authorization)
+
+    def target_probe():
+        raise RuntimeError("AUTHORIZED_DEV_TARGET_PROBE")
+
+    def unexpected_connection(*_args, **_kwargs):
+        pytest.fail("source validation must not open a database connection")
+
+    monkeypatch.setattr(sys.modules[__name__], "_dev_dsn", target_probe)
+    monkeypatch.setattr(psycopg2, "connect", unexpected_connection)
+    if authorization == "1":
+        with pytest.raises(RuntimeError, match="AUTHORIZED_DEV_TARGET_PROBE"):
+            test_dev_daily_context_query_budget_is_dataset_constant()
+    else:
+        with pytest.raises(pytest.skip.Exception, match="explicit AISTOCK_DEV_DB_E2E=1"):
+            test_dev_daily_context_query_budget_is_dataset_constant()
