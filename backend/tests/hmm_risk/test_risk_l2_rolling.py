@@ -1,6 +1,7 @@
 """Quarterly contracts: mature labels, immutable versions and bounded execution."""
 
 from copy import deepcopy
+import hashlib
 
 import pandas as pd
 import pytest
@@ -251,3 +252,65 @@ def test_paired_evaluation_preserves_unmatured_dates_and_explicit_model_anchor(s
     assert result["M1_predictions"][0]["target_first_return_date"] == "2026-04-02"
     assert result["M1_predictions"][-1]["vintage_id"] == "2026Q3"
     assert not result["automatic_promotion"] and not result["historical_as_known"]
+
+
+def test_prepare_carries_reader_verified_pins_to_feature_boundary(sample, monkeypatch, tmp_path):
+    features, _ = sample
+    calendar = pd.bdate_range("2021-01-01", "2026-09-30").strftime("%Y-%m-%d").tolist()
+    days = [d for d in calendar if "2026-04-01" <= d <= "2026-09-30"][:125]
+    plans = {
+        "2026Q2": dict(train=["2026-03-16"], fit=["2026-03-16"], predict=days[:60]),
+        "2026Q3": dict(train=["2026-06-15"], fit=["2026-06-15"], predict=days[60:]),
+    }
+    monkeypatch.setattr(h, "schedule", lambda _, vintage: plans[vintage["id"]])
+    candidate = tmp_path / "candidate"
+    calendar_path = candidate / "components/daily_bin_candidate/calendars/day.txt"
+    calendar_path.parent.mkdir(parents=True)
+    calendar_path.write_text("\n".join(calendar) + "\n", encoding="utf-8")
+    source = {**features["source"], "candidate_root": str(candidate), "work_parent": str(tmp_path / "work")}
+    request = receipt(dict(source=source, decision_dates=days, model_assets=dict.fromkeys(h.BASE_MODEL_FIELDS, "unit")))
+    request_path = tmp_path / "request.json"
+    write_once(request_path, request)
+    monkeypatch.setattr(h.core, "validate_request", lambda _: None)
+    monkeypatch.setattr(h.core, "date_plan", lambda _: None)
+    monkeypatch.setattr(h.core, "model_source", lambda _: ({"catalog": features["catalog"]}, {}, {}))
+    # The actual bounded reader returns lineage, not the four request authority pins.
+    raw_identity = dict(release_identity=features["inference_identity"]["release_identity"],
+                        source_facts_sha256="1" * 64, structural_membership={}, domain_reasons={})
+
+    def bounded(frozen, passed_source, **kwargs):
+        assert frozen["industry_authority"] == source["industry_authority"]
+        assert kwargs["expected_calendar_sha256"] == source["calendar_sha256"]
+        assert kwargs["release_binding"] == source["release_binding"]
+        return {"benchmark": {}}, [], [], raw_identity
+
+    monkeypatch.setattr(h.core, "_bounded_l2_stock_facts", bounded)
+
+    class FeatureBoundaryReached(Exception):
+        pass
+
+    def capture(*args, **kwargs):
+        identity = args[9]
+        for key in ("calendar_sha256", "security_identity_sha256", "provider_absence_sha256"):
+            assert identity[key] == source[key]
+        assert identity["industry_authority_sha256"] == canonical_sha256(source["industry_authority"])
+        assert identity["source_facts_sha256"] == raw_identity["source_facts_sha256"]
+        assert "structural_membership" not in identity and "domain_reasons" not in identity
+        raise FeatureBoundaryReached
+
+    monkeypatch.setattr(h.core, "features_from_aggregates", capture)
+    with pytest.raises(FeatureBoundaryReached):
+        h.prepare(request_path, hashlib.sha256(request_path.read_bytes()).hexdigest(), tmp_path / "out", "a" * 40)
+
+
+def test_missing_or_drifting_source_pins_are_typed_failures(sample):
+    features, _ = sample
+    for key in ("calendar_sha256", "industry_authority_sha256", "security_identity_sha256", "provider_absence_sha256"):
+        for missing in (True, False):
+            broken = deepcopy(features)
+            if missing:
+                del broken["inference_identity"][key]
+            else:
+                broken["inference_identity"][key] = "0" * 64
+            with pytest.raises(FormalStateError, match="feature source identity differs"):
+                h.validate_features(reseal(broken))

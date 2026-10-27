@@ -127,7 +127,13 @@ def prepare(source_request, source_sha256, output, source_commit):
         aggregates,
         assets["benchmark"],
         as_of,
-        {k: v for k, v in identity.items() if k not in {"structural_membership", "domain_reasons"}},
+        {
+            **{k: v for k, v in identity.items() if k not in {"structural_membership", "domain_reasons"}},
+            "calendar_sha256": source["calendar_sha256"],
+            "industry_authority_sha256": canonical_sha256(source["industry_authority"]),
+            "security_identity_sha256": source["security_identity_sha256"],
+            "provider_absence_sha256": source["provider_absence_sha256"],
+        },
         identity["domain_reasons"],
         version=VERSION,
     )
@@ -141,6 +147,8 @@ def prepare(source_request, source_sha256, output, source_commit):
             "source_request_sha256": source_sha256,
         }
     )
+    # Close the producer/child contract before publishing a prepared carrier.
+    validate_features(features)
     returns = {d.isoformat(): {c: None for c in frozen["catalog"]} for d in window}
     for aggregate in aggregates:
         value = float(aggregate.l1_return)
@@ -214,12 +222,14 @@ def validate_features(features):
     source, data = features["source"], features["inference_identity"]
     binding = source["release_binding"]
     require(
-        data["release_identity"]["frozen_release_binding_sha256"] == canonical_sha256(binding)
-        and data["release_identity"]["dataset_manifest_sha256"] == binding["manifest_sha256"]
-        and data["calendar_sha256"] == source["calendar_sha256"]
-        and data["industry_authority_sha256"] == canonical_sha256(source["industry_authority"])
-        and data["security_identity_sha256"] == source["security_identity_sha256"]
-        and data["provider_absence_sha256"] == source["provider_absence_sha256"],
+        isinstance(data, dict)
+        and isinstance(data.get("release_identity"), dict)
+        and data["release_identity"].get("frozen_release_binding_sha256") == canonical_sha256(binding)
+        and data["release_identity"].get("dataset_manifest_sha256") == binding["manifest_sha256"]
+        and data.get("calendar_sha256") == source["calendar_sha256"]
+        and data.get("industry_authority_sha256") == canonical_sha256(source["industry_authority"])
+        and data.get("security_identity_sha256") == source["security_identity_sha256"]
+        and data.get("provider_absence_sha256") == source["provider_absence_sha256"],
         "feature source identity differs",
         "identity_mismatch",
     )
