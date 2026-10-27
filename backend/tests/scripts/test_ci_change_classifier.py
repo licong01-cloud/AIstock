@@ -812,7 +812,7 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path, mo
 
     _assert_fields(payload,
         classification='frontend_ci_required', workflow_gate='passed', frontend_required=True,
-        backend_required=False, frontend_test_targets=['tests/paper-v2/paper-v2-advisory-ui.spec.ts'], unmapped_code_files=[],
+        backend_required=False, frontend_test_targets=['tests/paper-v2/paper-v2-advisory-ui.spec.ts', 'tests/paper-v2/advisory-workbench.spec.ts'], unmapped_code_files=[],
     )
     assert payload['unexecuted_test_files'] == []
     assert payload['dev_db_required'] is False
@@ -822,11 +822,26 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path, mo
     noxfile.advisory_mocked_ui(SimpleNamespace(run=lambda *args, **kwargs: calls.append(args)))
     assert len(calls) == 1 and '--config=frontend/tests/advisory-mocked.config.ts' in calls[0]
     plan = classifier.flow.validation_catalog_snapshot().plans['advisory_mocked_ui']
-    assert plan['frontend_test_path'] == payload['frontend_test_targets'][0]
+    assert plan['frontend_test_path'] in payload['frontend_test_targets']
     assert plan['requires_backend'] is False and plan['writes_database'] is False
     config = 'frontend/tests/advisory-mocked.config.ts'
     _write_test_file(tmp_path, config)
     assert classifier.classify_changed_files([config], repo_root=tmp_path)['frontend_test_targets'] == payload['frontend_test_targets']
+
+
+def test_advisory_workbench_new_tests_have_executable_direct_plans(monkeypatch) -> None:
+    changed = ["backend/services/advisory_workbench/service.py", "backend/tests/advisory_workbench/test_service.py",
+               "frontend/tests/paper-v2/advisory-workbench.spec.ts"]
+    payload = classifier.classify_changed_files(changed)
+    assert payload['workflow_gate'] == 'passed', payload
+    assert payload['unmapped_code_files'] == [] and payload['unexecuted_test_files'] == []
+    assert 'tests/paper-v2/advisory-workbench.spec.ts' in payload['frontend_test_targets']
+    assert payload['dev_db_required'] is False
+    import noxfile
+    calls = []
+    monkeypatch.setattr(noxfile, '_run_pytest', lambda _session, *args: calls.append(args))
+    noxfile.advisory_workbench_backend(SimpleNamespace())
+    assert calls[0][:2] == ('backend/tests/advisory_workbench', 'backend/tests/advisory_historical_range/test_program_performance.py')
 
 
 @pytest.mark.parametrize('path,targets,unexecuted', [

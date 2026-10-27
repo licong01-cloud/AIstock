@@ -826,6 +826,13 @@ def hmm_risk_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_workbench_backend(session: nox.Session) -> None:
+    """Read-only workbench projection, query and canonical performance contracts."""
+    _run_pytest(session, "backend/tests/advisory_workbench",
+                "backend/tests/advisory_historical_range/test_program_performance.py", "-q", "-p", "no:cacheprovider")
+
+
+@nox.session(venv_backend="none")
 def advisory_mocked_ui(session: nox.Session) -> None:
     """Run only mocked Advisory UI with X-only runner-owned frontend/browser."""
     if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):

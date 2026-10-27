@@ -98,6 +98,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_hmm_risk_ui": "hmm_risk_ui",
     "nox_local_data_integrity_ui": "local_data_integrity_ui",
     "nox_advisory_mocked_ui": "advisory_mocked_ui",
+    "nox_advisory_workbench_backend": "advisory_workbench_backend",
     "nox_watchlist_backend": "watchlist_backend",
     "nox_watchlist_ui": "watchlist_ui",
     "nox_qlib_data_backend": "qlib_data_backend",

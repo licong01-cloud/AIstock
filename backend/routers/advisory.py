@@ -67,8 +67,10 @@ from backend.services.advisory_universe import (
     AdvisoryUniverseContractError,
     advisory_universe_catalog,
 )
+from backend.routers.advisory_workbench import router as workbench_router
 
 router = APIRouter(prefix="/advisory", tags=["advisory"])
+router.include_router(workbench_router)
 LOGGER = logging.getLogger(__name__)
 
 

@@ -1,0 +1,31 @@
+import { apiFetch } from "./selectionCenter";
+
+export type Params = Record<string, string | number | undefined | null>;
+export type Program = { program_id: string; program_name: string; status: string; enabled_since: string | null; target_count: number; package_ids: string[] };
+export type Binding = { binding_version_id: string; program_version: number; activation_status: string; effective_from_trade_date: string | null };
+export type Version = { list_version_id: string; binding_version_id: string; trade_date: string; created_at: string; version_status: string; active_count: number; entered_count: number; held_count: number; exited_count: number; waiting_count: number; date_context: { selection_as_of_trade_date?: string; decision_as_of_trade_date?: string } | null };
+export type Metrics = { active_count: number; entered_episode_count: number; metric_evaluable_count: number; win_rate: number | null; avg_return_bps: number | null; median_return_bps: number | null; max_drawdown_bps: number | null; avg_holding_days: number | null; take_profit_count: number; stop_loss_count: number; metric_status: string; metric_as_of_trade_date: string; metric_mark_trade_date: string | null; missing_open_mark_count: number; coverage?: { settled_count?: number; due_count?: number; settled_coverage?: number }; unrealized?: { gross?: { avg_return_bps?: number | null; sample_count?: number } }; settled?: { gross?: { win_count?: number; loss_count?: number; flat_count?: number; payoff_ratio?: number | null; profit_factor?: number | null } } };
+export type Envelope = { schema_version: string; program_id: string; binding_version_id: string | null; target_date: string; list_version_id: string | null; snapshot_id: string; generated_at: string };
+export type Summary = Envelope & { package_models?: Array<{ package_id: string; alpha_mode: string; model_types: string[] }>; program: Program; active_binding: Binding | null; bindings: Binding[]; metrics: Metrics; runtime: { data_date?: string; state: string; reason: string | null; settlement: string | null; target_date?: string; updated_at?: string }; selected: Version | null; latest: Version | null; default_target_date: string; coverage: { first_published_target_date: string | null; through: string; missing_dates: string[]; status: string; missing_count?: number }; date_options: string[]; source_counts: Record<string, number>; versions_count: number };
+export type OverviewResponse = { schema_version: string; generated_at: string; items: Summary[]; count: number; status_counts: Record<string, number> };
+export type Episode = { selected_membership?: string; episode_id: string; symbol: string; stock_name: string | null; status: string; signal_date: string; effective_entry_date: string | null; effective_exit_date: string | null; exit_signal_date: string | null; entry_price: number | null; exit_price: number | null; entry_rank: number | null; current_rank: number | null; exit_reason: string | null; holding_trading_days: number | null; performance_state: string; performance_reason_code: string | null; return_bps: number | null; return_kind: string; progress: string; mark_date: string | null; mark_price: number | null; source: string; binding_version_id: string | null; metric_as_of_trade_date: string };
+export type DailyItem = { symbol: string; stock_name: string | null; episode_id?: string | null; rank: number | null; previous_rank?: number | null; membership: string; change: string; progress: string; consecutive_days: number | null; reason_code?: string | null; reference_price: number | null; reference_date: string | null; episode?: Episode };
+export type Decision = { symbol: string; stock_name?: string | null; episode_id: string | null; trade_date: string; action: string; reason_code: string; review_status: string; current_price: number | null; observed_at: string | null };
+export type Page<T> = Envelope & { items: T[]; total_count: number; limit: number; offset: number };
+export type DailyPage = Page<DailyItem> & { status: string; data_date?: string; summary: { in_scope: number; new: number; continuing: number; removed: number; unknown_change: number; observation: number; outside_pending: number; outside_exit?: number; unknown: number; previous_count: number | null; comparison_known: boolean } | null; latest?: Version | null };
+export type EpisodeDetail = Page<Decision> & { episode: Episode };
+export type Readiness = { program_id: string; data_date: string; generated_at: string; status: string; items: Array<{ consumer_ready?: boolean; prediction_ready?: boolean; all_sync_complete?: boolean; reason?: string; reason_code?: string; status?: string; daily_integrity_id?: string | null; revision?: number }>; errors: Array<{ message: string }> };
+export type ShadowPrediction = { symbol?: string; ts_code?: string; instrument?: string; stock_code?: string; selection_effective_rank?: number; advisory_rank?: number; selected?: boolean; native_rank?: number; parent_rank?: number; policy_rank?: number; candidate_rank?: number; rank?: number; native_selected?: boolean; policy_selected?: boolean; [key: string]: unknown };
+export type Shadow = { ok: boolean; program_id: string; status: string; captured_days?: number; complete_days?: number; mean_delta_bps?: number | null; independent_economic_confirmation?: boolean; production_ranking_replaced?: boolean; message?: string; days?: Array<{ target_date: string; observed_at: string; evaluation: { status: string; delta_bps?: number } }>; selected?: { predictions: ShadowPrediction[]; observed_at: string; target_date: string } | null; last_failure?: { reason_code?: string; message?: string } | null };
+
+export function path(resource: string, params: Params = {}): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value != null && value !== "") query.set(key, String(value));
+  return `/advisory/workbench${resource}${query.size ? `?${query}` : ""}`;
+}
+export const programPath = (id: string, resource = "") => `/programs/${encodeURIComponent(id)}${resource}`;
+export async function read<T>(url: string, signal: AbortSignal): Promise<T> {
+  const result = await apiFetch<T>(url, { signal, cache: "no-store" });
+  if (result && typeof result === "object" && "ok" in result && result.ok === false) throw new Error("读取失败，请查看运行与数据状态。");
+  return result;
+}
