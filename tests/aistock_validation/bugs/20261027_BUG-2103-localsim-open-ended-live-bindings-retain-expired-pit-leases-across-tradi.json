@@ -33,24 +33,24 @@
   "expected": "New live business days freeze a same-policy immutable daily PIT release; existing historical identities/economics remain fixed. Only proven zero-effect pre-run retryable failures may be superseded with audit.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json",
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
-      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md"
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md",
+      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json"
     ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
       "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json",
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
-      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md"
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "docs/analysis/localsim_daily_pit_roll_forward_fix_20261027.md",
+      "tests/aistock_validation/bugs/20261027_BUG-2103-localsim-open-ended-live-bindings-retain-expired-pit-leases-across-tradi.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -147,8 +147,8 @@
   },
   "first_seen_at": "2026-10-27T02:56:48.567991Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b68a838b5fbecb8e07566cea29326310eb955789",
+  "fixed_at": "2026-10-27T03:32:06Z",
   "github_issue_number": 6759,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6759",
   "last_seen_at": "2026-10-27T02:56:48.567991Z",
@@ -156,6 +156,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6760",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -183,6 +184,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -194,7 +196,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2103",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d8d2cd131df1bcfb",
+    "recorded_at": "2026-10-27T03:32:51.114715Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f776486a8f94f934153b0a9984778f62f470ef19",
+    "source_merge_commit": "b68a838b5fbecb8e07566cea29326310eb955789",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6760",
+    "validation_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py and related matrix -> 54 passed, plus 2 boundary tests passed; CI 40443822054 SUCCESS at f776486a8f94f934153b0a9984778f62f470ef19",
+      "python -m nox -s l0 -- six exact registered paths -> passed, 0 blocking"
+    ],
+    "validation_evidence_digest": "0abce7a5c15cdf7ace678f727fc71e40116e8b62db5023f5bb46bcc13eceb6da"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -203,6 +227,10 @@
     "fingerprint": "cec36d2ae65dc4a781e9cb64",
     "source_event_id": "FE-20261027-cec36d2ae65d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py and related matrix -> 54 passed, plus 2 boundary tests passed; CI 40443822054 SUCCESS at f776486a8f94f934153b0a9984778f62f470ef19",
+    "python -m nox -s l0 -- six exact registered paths -> passed, 0 blocking"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
