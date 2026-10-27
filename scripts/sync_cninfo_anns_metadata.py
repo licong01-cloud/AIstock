@@ -397,14 +397,16 @@ def sync_one_date(
     except Exception as exc:  # noqa: BLE001
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_error:
+            raise RuntimeError("announcement transaction rollback failed") from rollback_error
         return {
             "ann_date": ann_date.isoformat(),
             "status": "failed",
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+    finally:
+        conn.close()
 
 
 def missing_dates(start: dt.date, end: dt.date) -> List[dt.date]:

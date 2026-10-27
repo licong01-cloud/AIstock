@@ -171,7 +171,7 @@ def _clean_value(value: Any) -> Any:
 
         if pd.isna(value):
             return None
-    except Exception:
+    except (ImportError, TypeError, ValueError):
         pass
     if hasattr(value, "to_pydatetime"):
         value = value.to_pydatetime()

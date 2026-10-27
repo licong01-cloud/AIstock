@@ -307,12 +307,11 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
         try:
             _update_job_progress(conn, job_id, stats)
             conn.commit()
-        except Exception as exc:  # noqa: BLE001
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            print(f"[WARN] failed to update job progress: {exc}")
+        except Exception:
+            # Facts, revisions and progress did not commit. Never report a
+            # successful day after rollback, or swallow a rollback failure.
+            conn.rollback()
+            raise
     return stats
 
 

@@ -62,3 +62,36 @@ def test_legacy_minute_import_is_side_effect_free_and_uses_shared_db_configurati
     namespace = runpy.run_path(script, run_name="legacy_import_test")
     assert namespace["_db_cfg"] is _db_cfg and "DB_CONFIG" not in namespace
     assert callable(namespace["main"])
+
+
+def test_moneyflow_commit_failure_is_not_returned_as_success(monkeypatch):
+    class FailingConnection:
+        rollbacks = 0
+        def commit(self):
+            raise OSError("commit failed")
+        def rollback(self):
+            self.rollbacks += 1
+    conn = FailingConnection()
+    monkeypatch.setattr(moneyflow, "_fetch_moneyflow_for_date", lambda *_a: [])
+    monkeypatch.setattr(moneyflow, "_upsert_moneyflow", lambda *_a: 0)
+    monkeypatch.setattr(moneyflow, "_update_job_progress", lambda *_a: None)
+    with pytest.raises(OSError, match="commit failed"):
+        moneyflow.run_ingestion(conn, None, "incremental", date(2026, 9, 1), date(2026, 9, 1), None)
+    assert conn.rollbacks == 1
+
+
+def test_cninfo_rollback_failure_is_loud_and_connection_is_closed(monkeypatch):
+    class FailingConnection:
+        closed = False
+        def rollback(self):
+            raise OSError("connection lost")
+        def close(self):
+            self.closed = True
+    conn = FailingConnection()
+    monkeypatch.setattr(cninfo, "get_conn", lambda **_kw: conn)
+    def failed_scan(**_kw):
+        raise RuntimeError("page failed")
+    monkeypatch.setattr(cninfo, "fetch_cninfo_date", failed_scan)
+    with pytest.raises(RuntimeError, match="rollback failed"):
+        cninfo.sync_one_date(date(2026, 9, 1), 0, 1, False)
+    assert conn.closed
