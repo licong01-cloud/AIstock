@@ -8,6 +8,75 @@ from backend.services.dataset_release.source_authority import MonthlySourceAutho
 from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
 
 
+@pytest.mark.parametrize('layout', ['direct', 'unified'])
+def test_catalog_delta_captures_only_absent_equity_history_in_same_snapshot(tmp_path, layout):
+    from unittest.mock import MagicMock
+    from backend.services.dataset_release import monthly_construction_facts as subject
+
+    provider = tmp_path / ('day' if layout == 'direct' else 'daily_bin/qlib')
+    (provider / 'instruments').mkdir(parents=True)
+    (provider / 'calendars').mkdir()
+    (provider / 'instruments/all.txt').write_text('000001.SZ\t2018-08-01\t2026-08-31\n')
+    (provider / 'calendars/day.txt').write_text('2018-08-01\n2026-08-31\n')
+    pins = {'day_meta_export': {'path':'day/meta.json'}} if layout == 'direct' else {
+        'daily_bin__qlib__meta_export.json': {'path':'daily_bin/qlib/meta_export.json'}}
+    prefix = SimpleNamespace(root=tmp_path, cutoff=date(2026,8,31), manifest={'components': pins})
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = ('aistock','snapshot-1')
+    cursor.fetchall.return_value = [('000585.SZ',date(2018,8,1),10.,11.,9.)]
+    captured = subject.capture_daily_catalog_history(prefix=prefix, fact_stock_codes=(
+        '000001.SZ','000585.SZ','301999.SZ','072452.SZ'), cutoff=date(2026,9,30),connection=connection)
+    assert captured['stock_days'] == 1 and captured['codes'] == ['000585.SZ']
+    assert captured['database_snapshot'] == 'snapshot-1' and captured['database_write'] is False
+    sql, parameters = cursor.execute.call_args.args
+    assert '::bpchar[]' in sql and parameters[0] == ['000585.SZ','301999.SZ']
+    assert parameters[1:] == (date(2018,8,1),date(2026,8,31))
+    assert not connection.commit.called and not connection.close.called
+    cursor.fetchall.return_value = []
+    assert subject.capture_daily_catalog_history(prefix=prefix,fact_stock_codes=('000585.SZ',),
+        cutoff=date(2026,9,30),connection=connection) is None
+
+
+@pytest.mark.parametrize('defect',[None,'duplicate','missing_factor_row','existing_file'])
+def test_catalog_delta_uses_same_frozen_pv_for_all_twelve_daily_fields(tmp_path, defect):
+    import numpy as np
+    import pandas as pd
+    from backend.services.dataset_release import monthly_construction_facts as subject
+    from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
+
+    factor_path = tmp_path/'daily_pv.h5'
+    frame = pd.DataFrame({'open':[5.], 'high':[5.5], 'low':[4.5], 'close':[5.],
+        'volume':[2000.], 'amount':[10000.], 'factor':[.5]}, index=pd.MultiIndex.from_tuples(
+            [(pd.Timestamp('2018-08-01'),'000585.SZ')],names=['datetime','instrument']))
+    frame.to_hdf(factor_path,key='data',format='table',data_columns=True)
+    provider = tmp_path/'provider'
+    (provider/'features').mkdir(parents=True)
+    facts = [dict(ts_code='000585.SZ',trade_date='2018-08-01',pre_close=10.,up_limit=11.,down_limit=9.)]
+    if defect == 'duplicate':
+        facts *= 2
+    elif defect == 'missing_factor_row':
+        facts[0]['trade_date'] = '2018-08-02'
+    elif defect == 'existing_file':
+        target=provider/'features/000585.sz/close.day.bin'
+        target.parent.mkdir()
+        target.write_bytes(np.array([0,99],dtype='<f4').tobytes())
+    kwargs=dict(factor_path=factor_path,provider=provider,calendar=['2018-08-01','2018-08-02'],facts=facts)
+    if defect is not None:
+        with pytest.raises(ValueError):
+            subject.daily_catalog_feature_payloads(**kwargs)
+        return
+    payloads=subject.daily_catalog_feature_payloads(**kwargs)
+    assert len(payloads)==len(QLIB_STOCK_FIELDS)==12
+    for row in payloads:
+        assert row['original_sha256'] is None and row['relative_path'].startswith('daily_bin/qlib/features/000585.sz/')
+        values=np.frombuffer(row['payload'],dtype='<f4')
+        assert len(values)==2 and values[0]==0 and np.isfinite(values).all()
+    result={row['relative_path'].split('/')[-1].split('.')[0]:np.frombuffer(row['payload'],dtype='<f4')[1] for row in payloads}
+    assert result['close']==5 and result['factor']==.5 and result['volume']==2000
+    assert result['prev_close']==10 and result['up_limit_price']==11 and result['down_limit_price']==9
+
+
 @pytest.mark.parametrize("cancel_at_tail", [False, True])
 def test_construction_progress_uses_real_durable_source_contract(tmp_path, monkeypatch, cancel_at_tail):
     import hashlib

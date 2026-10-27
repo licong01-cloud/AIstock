@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "18"
+POSTGRES_SOURCE_ADAPTER_VERSION = "19"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -675,8 +675,16 @@ class PostgresMonthlySourceAdapter:
         from .monthly_build_bridge import load_monthly_predecessor_prefix
 
         prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
+        from .monthly_construction_facts import capture_daily_catalog_history
+        historical_daily = capture_daily_catalog_history(
+            prefix=prefix, fact_stock_codes=fact_stock_codes, cutoff=target_cutoff,
+            connection=connection, checkpoint=checkpoint,
+        ) if prefix is not None else None
+        historical_daily_ref = self.cas.put_json(historical_daily) if historical_daily is not None else None
         historical_minutes = capture_historical_coverage(
             prefix=prefix, pit=frozen.pit_snapshot, cutoff=target_cutoff, connection=connection,
+            additional_quote_days=() if historical_daily is None else tuple(
+                (row['ts_code'],row['trade_date']) for row in historical_daily['facts']),
         ) if prefix is not None else None
         historical_minutes_ref = self.cas.put_json(historical_minutes) if historical_minutes is not None else None
         checkpoint()
@@ -693,6 +701,8 @@ class PostgresMonthlySourceAdapter:
         bundle["monthly_repair_inputs"] = repair_inputs
         if historical_minutes_ref is not None:
             bundle["historical_minute_coverage_ref"] = historical_minutes_ref.as_dict()
+        if historical_daily_ref is not None:
+            bundle['historical_daily_catalog_ref'] = historical_daily_ref.as_dict()
         repair_payload_ref = None
         if repair_inputs is not None:
             # Typed deferrals bind this exact canonical payload, not the outer
@@ -713,6 +723,8 @@ class PostgresMonthlySourceAdapter:
             artifacts.append(_cas_artifact(self.cas, repair_payload_ref))
         if historical_minutes_ref is not None:
             artifacts.append(_cas_artifact(self.cas, historical_minutes_ref))
+        if historical_daily_ref is not None:
+            artifacts.append(_cas_artifact(self.cas, historical_daily_ref))
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)
