@@ -15,6 +15,9 @@ from backend.services.qe_archive.models import normalize_json
 
 logger = logging.getLogger(__name__)
 
+QE_WORKSPACE_CONFIG_READ_POLICY = "qe_workspace_config_get_retry_v1"
+QE_WORKSPACE_CONFIG_READ_ATTEMPTS = 3
+
 
 class QEWorkspaceResultReadUnavailable(RuntimeError):
     """A bounded GET exhausted transient failures; execution is not failed."""
@@ -1864,17 +1867,34 @@ class QEWorkspaceClient:
             raise
         
     async def get_workspace_config(self) -> Dict[str, Any]:
-        """
-        获取 RDAgent 侧的工作区配置（路径等），用于动态生成 WSL 命令。
-        """
+        """Read node metadata with bounded GET-only transient retries."""
         url = f"{self.base_url}/config"
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to get workspace config: {e}")
-            raise
+        for attempt in range(QE_WORKSPACE_CONFIG_READ_ATTEMPTS):
+            try:
+                response = await self.client.get(url)
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or not payload:
+                    raise ValueError("QE workspace config must be a nonempty JSON object")
+                return payload
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in {429, 502, 503, 504}:
+                    raise
+                transient_error = exc
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                transient_error = exc
+            if attempt == QE_WORKSPACE_CONFIG_READ_ATTEMPTS - 1:
+                logger.error(
+                    "Workspace config GET exhausted: node=%s error_type=%s attempts=%s",
+                    self.node_id, type(transient_error).__name__, QE_WORKSPACE_CONFIG_READ_ATTEMPTS,
+                )
+                raise transient_error
+            delay = attempt + 1
+            logger.warning(
+                "Workspace config GET transient failure: node=%s error_type=%s attempt=%s retry_in=%ss",
+                self.node_id, type(transient_error).__name__, attempt + 1, delay,
+            )
+            await asyncio.sleep(delay)
 
     async def download_group_predictions(
         self, task_id: str, loop_id: str, group_name: str

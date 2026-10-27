@@ -2084,6 +2084,30 @@ def _filter_node_parallelism_for_scope(
         )
     return filtered
 
+@router.get("/workspace-preflight/{node_id}", summary="Read-only QE node workspace preflight")
+async def get_workspace_preflight(node_id: str):
+    """Exercise the actual config reader without creating or submitting work."""
+    from ..services.quantevolver.qe_workspace_client import (
+        QE_WORKSPACE_CONFIG_READ_ATTEMPTS,
+        QE_WORKSPACE_CONFIG_READ_POLICY,
+    )
+
+    node_id = node_id.strip()
+    if not node_id:
+        raise HTTPException(status_code=400, detail="QE_NODE_ID_EMPTY")
+    try:
+        await preflight_qe_nodes([node_id])
+    except QENodePreflightError as exc:
+        raise HTTPException(status_code=503, detail=exc.to_detail()) from exc
+    return {
+        "status": "ready",
+        "node_id": node_id,
+        "workspace_config_read_policy": QE_WORKSPACE_CONFIG_READ_POLICY,
+        "max_read_attempts": QE_WORKSPACE_CONFIG_READ_ATTEMPTS,
+        "submission_performed": False,
+    }
+
+
 @router.get("/execution-policy", summary="Read the code-owned QE batch execution policy")
 def get_batch_execution_policy():
     from ..services.quantevolver.qe_batch_execution_policy import (

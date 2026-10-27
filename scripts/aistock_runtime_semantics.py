@@ -1830,6 +1830,26 @@ def _validate_qe_batch_execution_policy(payload: Any) -> tuple[str, str | None, 
     return "passed", None, expected
 
 
+def _validate_qe_workspace_preflight(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Require the actual loaded metadata-read contract, not HTTP-only success."""
+    expected = {
+        "status": "ready",
+        "workspace_config_read_policy": "qe_workspace_config_get_retry_v1",
+        "max_read_attempts": 3,
+        "submission_performed": False,
+    }
+    if not isinstance(payload, dict) or set(payload) != set(expected) | {"node_id"}:
+        return "failed", "QE workspace preflight payload fields are incomplete or unknown", {}
+    node_id = payload.get("node_id")
+    if not isinstance(node_id, str) or not node_id.strip() or node_id != node_id.strip():
+        return "failed", "QE workspace preflight node_id is invalid", {}
+    if type(payload["max_read_attempts"]) is not int or payload["submission_performed"] is not False:
+        return "failed", "QE workspace preflight read/submission contract is invalid", {}
+    if any(payload.get(field) != value for field, value in expected.items()):
+        return "failed", "QE workspace preflight loaded contract does not match", {}
+    return "passed", None, {**expected, "node_id": node_id}
+
+
 def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """The OpenAPI document smoke must prove the app serves its route schema."""
     if not isinstance(payload, dict):
