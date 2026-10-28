@@ -53,6 +53,10 @@ async function mockPage(page: Page, state: MockState = {}) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     requests.push(`${request.method()} ${path}`);
+    if (path.endsWith("/workbench/quotes") && request.method() === "GET") {
+      const symbols = (new URL(request.url()).searchParams.get("symbols") || "").split(",");
+      return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: 12.34, kind: "CLOSE", trade_date: "2026-10-28", observed_at: "2026-10-28T16:00:00+08:00" }])) });
+    }
     if (path.endsWith("/universe-options")) return json(route, { ok: true, schema_version: "advisory_universe_catalog_v1", default_selection: { mode: "stock_universe", pool_ids: [] }, modes: ["stock_universe", "single_index", "index_union"], pools: [] });
     if (path.endsWith("/historical-range-options")) return json(route, { ok: true, data: {
       existing_programs: [{ program_id: PROGRAM_ID, name: "Existing Program R5", version: 3, active_binding_version_id: "advbind_r5_3", package_id: "pkg_single", target_count: 20, review_policy_summary: {} }],

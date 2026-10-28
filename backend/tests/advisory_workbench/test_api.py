@@ -43,5 +43,5 @@ def test_snapshot_conflict_and_source_errors_are_not_empty_success():
 def test_operator_routes_never_offer_mutation_or_inference():
     app = client(SimpleNamespace()).app
     routes = [r for r in app.routes if r.path.startswith("/workbench")]
-    assert len(routes) == 8 and all(r.methods == {"GET"} for r in routes)
+    assert len(routes) == 9 and all(r.methods == {"GET"} for r in routes)
     assert client(SimpleNamespace()).post("/workbench/overview").status_code == 405
