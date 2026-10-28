@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2109",
-  "closed_at": null,
+  "closed_at": "2026-10-28T02:45:20.038204Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -137,10 +137,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2109/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2109",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "0087836011383dd50b56b1228ed316232f3a0aba9053f91a92a9a5fd7a2126e4",
+      "expected_identity": "6e23df049997c0f4c15438d3c0bc1bb4379cf73d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-28T02:44:17.539716Z",
+      "mode": "read_only",
+      "observed_identity": "bf3f4c79cf963e02d06a260200556efed49a46a3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7c3652da1b81ab5088cb8821e9cbad4400eab649bc5ad72d8a5cf0298f17067f",
+      "receipt_sha256": "a8624b8e5791bddf214ab678d166c8d58e36948cdd3f822bb5266467381c8af4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "dbc4dc97231774c27edce11e45d0c4ad140ab63c7d753f0ebfa45239973843df",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -171,7 +193,7 @@
     ],
     "validation_evidence_digest": "2117d85e3f947be18fccdd843cc3b9e5a1b976aa1b5d8dcf63c865e177eeb929"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.core"
   ],
@@ -181,7 +203,8 @@
     "source_event_id": "FE-20261027-3d2feb1dac7a"
   },
   "validation_evidence": [
-    "validation-receipt: id=f89906237782063b commit=12b651abfd03e6091af3f675bc2aa6648d08775e kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json` result=`passed: 0 blocking findings; direct pytest 68 passed and 2 skipped; native two-node exact AF input and immutable versions verified`"
+    "validation-receipt: id=f89906237782063b commit=12b651abfd03e6091af3f675bc2aa6648d08775e kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py tests/aistock_validation/bugs/20261027_BUG-2109-qe-factor-cache-accepts-unbound-divergent-input-snapshots-across-nodes.json` result=`passed: 0 blocking findings; direct pytest 68 passed and 2 skipped; native two-node exact AF input and immutable versions verified`",
+    "PR6786 CI verdict SUCCESS; native cache proof BUG2109_versioned_cache_v3/completion.json two-node exact 5526983x11; 68 passed 2 skipped; user restart source-merge ancestry and business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
