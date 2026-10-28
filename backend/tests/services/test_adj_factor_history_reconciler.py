@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from collections import defaultdict
 from decimal import Decimal
+from fractions import Fraction
 from typing import Any, Sequence
 
 import pytest
@@ -48,11 +49,12 @@ class _Repository:
         self.price_dates = price_dates
         self.staged: dict[str, AdjFactorSnapshot] = {}
         self.apply_calls = 0
+        self.basis_normalizations: list[dict[str, Any]] = []
 
     def list_symbol_scopes(self, *, end_date: dt.date, symbols: Sequence[str] | None = None) -> Sequence[SymbolScope]:
         requested = set(symbols or self.snapshots)
         return [
-            SymbolScope(symbol, min(self.price_dates[symbol] or {self.snapshots[symbol].first_date}))
+            SymbolScope(symbol, min({self.snapshots[symbol].first_date, *self.price_dates[symbol]}))
             for symbol in sorted(requested)
         ]
 
@@ -78,8 +80,10 @@ class _Repository:
         end_date: dt.date,
         expected_local_sha256: dict[str, str],
         expected_row_counts: dict[str, int],
+        basis_normalizations: Sequence[dict[str, Any]] = (),
     ) -> int:
         self.apply_calls += 1
+        self.basis_normalizations.extend(basis_normalizations)
         for symbol in symbols:
             assert self.snapshots[symbol].canonical_sha256 == expected_local_sha256[symbol]
             assert len(self.staged[symbol].rows) == expected_row_counts[symbol]
@@ -248,6 +252,115 @@ def test_reconcile_new_trade_date_stages_only_append_suffix() -> None:
     assert receipt["changes"][0]["staged_row_count"] == 1
     assert receipt["written_row_count"] == 1
     assert len(repository.snapshots[symbol].rows) == 3
+    assert receipt["downstream_invalidation"]["required"] is False
+
+
+def test_independent_reconcile_commits_good_symbol_and_returns_exact_failure() -> None:
+    good, bad = "300506.SZ", "688109.SH"
+    repository = _Repository(
+        {code: _snapshot(code, _rows(code, [(DAY_1, "1")])) for code in (good, bad)},
+        {code: frozenset({DAY_1}) for code in (good, bad)},
+    )
+    provider = _SequencedProvider({
+        good: [_provider_rows(good, [(DAY_1, "2")])],
+        bad: [_provider_rows(bad, [(DAY_1, "2")]), _provider_rows(bad, [(DAY_1, "3")])],
+    })
+    progress = []
+    receipt = _reconciler(repository, provider).reconcile(
+        end_date=DAY_1, independent=True, progress=progress.append,
+    )
+    assert receipt["status"] == "partial"
+    assert receipt["failed_symbols"] == [bad]
+    assert receipt["completed_symbols"] == [good]
+    assert repository.snapshots[good].rows[0].value == 2
+    assert repository.snapshots[bad].rows[0].value == 1
+    assert repository.apply_calls == 1
+    assert len(progress) == 2 and receipt["written_row_count"] == 1
+
+
+def test_qfq_restatement_is_not_inferred_from_uniform_factor_rescaling() -> None:
+    symbol = "920047.BJ"
+    repository = _Repository(
+        {symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "433.618"), (DAY_2, "433.618")]))},
+        {symbol: frozenset({DAY_1, DAY_2, DAY_3})},
+    )
+    provider = _SequencedProvider({symbol: [_provider_rows(symbol, [(d, "1") for d in (DAY_1, DAY_2, DAY_3)])]})
+    receipt = _reconciler(repository, provider).reconcile(end_date=DAY_3)
+    assert receipt["full_replace_symbol_count"] == 1
+    assert receipt["downstream_invalidation"]["required"] is False
+
+
+def test_independent_dry_run_does_not_apply_good_or_bad_histories() -> None:
+    symbol = "300506.SZ"
+    repository = _Repository(
+        {symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "1")]))},
+        {symbol: frozenset({DAY_1})},
+    )
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [_provider_rows(symbol, [(DAY_1, "2")])]})).reconcile(
+        end_date=DAY_1, independent=True, dry_run=True,
+    )
+    assert receipt["status"] == "dry_run"
+    assert receipt["database_write_performed"] is False
+    assert repository.apply_calls == 0
+
+
+@pytest.mark.parametrize("local_changed", [False, True])
+def test_independent_resume_reuses_only_the_exact_committed_local_snapshot(local_changed) -> None:
+    symbol = "300506.SZ"
+    verified = _snapshot(symbol, _rows(symbol, [(DAY_1, "1")]))
+    current = _snapshot(symbol, _rows(symbol, [(DAY_1, "2" if local_changed else "1")]))
+    repository = _Repository({symbol: current}, {symbol: frozenset({DAY_1})})
+    provider = _SequencedProvider({symbol: [_provider_rows(symbol, [(DAY_1, "1")])]})
+    receipt = _reconciler(repository, provider).reconcile(
+        end_date=DAY_1, independent=True, completed={symbol: verified.canonical_sha256},
+    )
+    assert provider.call_counts[symbol] == (2 if local_changed else 0)
+    assert receipt["resumed_symbols"] == ([] if local_changed else [symbol])
+    assert repository.snapshots[symbol].canonical_sha256 == verified.canonical_sha256
+
+
+def test_independent_provider_library_error_does_not_discard_other_commits(monkeypatch) -> None:
+    good, bad = "300506.SZ", "688109.SH"
+    repository = _Repository(
+        {code: _snapshot(code, _rows(code, [(DAY_1, "1")])) for code in (good, bad)},
+        {code: frozenset({DAY_1}) for code in (good, bad)},
+    )
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _: None)
+    receipt = _reconciler(repository, _SequencedProvider({
+        good: [_provider_rows(good, [(DAY_1, "2")])], bad: [RuntimeError("provider unavailable")],
+    })).reconcile(end_date=DAY_1, independent=True)
+    assert receipt["status"] == "partial" and receipt["failed_symbols"] == [bad]
+    assert repository.snapshots[good].rows[0].value == 2
+
+
+def test_real_new_factor_event_reprices_existing_dates_but_constant_extension_does_not() -> None:
+    symbol = "000970.SZ"
+    repository = _Repository({symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "1")]))},
+                             {symbol: frozenset({DAY_1, DAY_2})})
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [
+        _provider_rows(symbol, [(DAY_1, "1"), (DAY_2, "1.2")]),
+    ]})).reconcile(end_date=DAY_2)
+    assert receipt["append_symbol_count"] == 1 and receipt["downstream_invalidation"]["required"]
+
+
+def test_existing_qfq_ratio_comparison_is_exact_beyond_default_decimal_precision() -> None:
+    from backend.services.adj_factor_history_reconciler import _existing_qfq_changed
+    symbol = "300506.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.00000000000000000000000000001"), (DAY_2, "1")]))
+    provider = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.00000000000000000000000000002"), (DAY_2, "1")]))
+    assert _existing_qfq_changed(local, provider)
+
+
+def test_newly_available_historical_date_requires_refresh_even_without_qfq_repricing() -> None:
+    symbol = "300506.SZ"
+    repository = _Repository({symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "1"), (DAY_3, "1")]))},
+                             {symbol: frozenset({DAY_1, DAY_2, DAY_3})})
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [
+        _provider_rows(symbol, [(d, "1") for d in (DAY_1, DAY_2, DAY_3)]),
+    ]})).reconcile(end_date=DAY_3)
+    assert receipt["changes"][0]["qfq_changed"] is False
+    assert receipt["changes"][0]["historical_coverage_extended"] is True
+    assert receipt["downstream_invalidation"]["required"] is True
 
 
 def test_reconcile_fails_closed_when_provider_changes_between_reads() -> None:
@@ -391,6 +504,89 @@ def test_reconcile_rejects_a_history_start_that_differs_from_official_listing(
 
     with pytest.raises(AdjFactorHistoryReconcileError, match="official listing start"):
         _reconciler(repository, _ListingProvider(symbol, listing_date=DAY_3)).reconcile(end_date=DAY_3)
+
+
+def test_predecessor_basis_normalization_preserves_history_and_is_idempotent():
+    symbol = "920047.BJ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "30"), (DAY_2, "433.618"), (DAY_3, "433.618")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_2, DAY_3})})
+    provider = _ListingProvider(symbol, listing_date=DAY_2)
+    reconciler = _reconciler(repository, provider)
+    receipt = reconciler.reconcile(end_date=DAY_3, independent=True)
+
+    assert receipt["failures"] == []
+    assert receipt["basis_normalization_count"] == 1
+    proof = receipt["basis_normalizations"][0]
+    assert (proof["scale_numerator"], proof["scale_denominator"]) == ("500", "216809")
+    assert proof["overlap_row_count"] == 2
+    assert proof["original_rows"] == [
+        {"ts_code": r.symbol, "trade_date": r.trade_date.isoformat(), "adj_factor": str(r.value)}
+        for r in local.rows
+    ]
+    assert repository.basis_normalizations == [proof]
+    normalized = repository.snapshots[symbol]
+    assert {r.trade_date for r in normalized.rows} == {DAY_1, DAY_2, DAY_3}
+    assert float(normalized.rows[0].value) == float(Fraction(30) * Fraction(500, 216809))
+    assert normalized.rows[-1].value == Decimal(1)
+    assert receipt["downstream_invalidation"]["required"] is False  # units, not account economics
+    repeat = reconciler.reconcile(end_date=DAY_3, independent=True)
+    assert repeat["failures"] == [] and repeat["written_row_count"] == 0
+    assert repeat["basis_normalization_count"] == 0
+    assert repeat["retained_predecessor_row_count"] == 1
+    assert repository.snapshots[symbol] == normalized
+
+
+@pytest.mark.parametrize("missing_kind", ["no_boundary", "nonconstant_overlap", "one_overlap", "traded_hole"])
+def test_predecessor_basis_does_not_authorize_unexplained_gaps(missing_kind, monkeypatch):
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _: None)
+    symbol = "920047.BJ"
+    day4 = DAY_3 + dt.timedelta(days=1)
+    values = [(DAY_1, "30"), (DAY_2, "433.618"), (DAY_3, "433.618")]
+    if missing_kind == "nonconstant_overlap":
+        values[-1] = (DAY_3, "434")
+    if missing_kind == "one_overlap":
+        values = values[:2]
+    if missing_kind == "traded_hole":
+        values.append((day4, "433.618"))
+    local = _snapshot(symbol, _rows(symbol, values))
+    repository = _Repository({symbol: local}, {symbol: frozenset({d for d, _ in values})})
+    provider = (_SequencedProvider({symbol: [_provider_rows(symbol, [(DAY_2, "1"), (DAY_3, "1")])]})
+                if missing_kind == "no_boundary" else _ListingProvider(symbol, listing_date=DAY_2))
+    receipt = _reconciler(repository, provider).reconcile(end_date=day4, independent=True)
+    assert receipt["failed_symbols"] == [symbol]
+    assert receipt["written_row_count"] == 0
+    assert repository.snapshots[symbol] == local
+    assert repository.basis_normalizations == []
+
+
+@pytest.mark.parametrize("latest_factor,invalidated", [("1", False), ("2", True)])
+def test_predecessor_basis_allows_real_append_but_not_a_fake_factor_jump(latest_factor, invalidated):
+    symbol = "920047.BJ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "30"), (DAY_2, "433.618"), (DAY_3, "433.618")]))
+    day4 = DAY_3 + dt.timedelta(days=1)
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_2, DAY_3, day4})})
+
+    class Provider(_ListingProvider):
+        def adj_factor(self, **_kwargs):
+            return _provider_rows(symbol, [(DAY_2, "1"), (DAY_3, "1"), (day4, latest_factor)])
+
+    receipt = _reconciler(repository, Provider(symbol, listing_date=DAY_2)).reconcile(end_date=day4)
+    assert receipt["written_row_count"] == 4
+    assert receipt["changes"][0]["qfq_changed"] is invalidated
+    assert receipt["changes"][0]["local_sha256"] == local.canonical_sha256
+    assert repository.snapshots[symbol].rows[-1].value == Decimal(latest_factor)
+
+
+def test_predecessor_normalization_dry_run_keeps_originals():
+    symbol = "920047.BJ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "30"), (DAY_2, "433.618"), (DAY_3, "433.618")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_2, DAY_3})})
+    receipt = _reconciler(repository, _ListingProvider(symbol, listing_date=DAY_2)).reconcile(
+        end_date=DAY_3, dry_run=True)
+    assert receipt["basis_normalization_count"] == 1
+    assert receipt["written_row_count"] == 0
+    assert repository.snapshots[symbol] == local
+    assert repository.basis_normalizations == []
 
     assert repository.apply_calls == 0
 

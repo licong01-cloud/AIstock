@@ -1,0 +1,332 @@
+{
+  "actual": "2026-10-27上游5580条可取而生产0条；全市场单事务被920047.BJ的2010-01-04历史边界冲突阻断。另发现追加误使历史分区失效、日期扩展误判QFQ重算、跨日期回写风险及空逐日响应可算成功。",
+  "allowed_write_scope": [
+    "scripts/ingest_tushare_adj_factor.py",
+    "backend/services/adj_factor_history_reconciler.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/services/test_adj_factor_history_reconciler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+    "backend/services/data_integrity/validation.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "tests/aistock_validation/bugs/20260917_BUG-1570-adj-factor-daily-ingestion-couples-full-history-audit-and-permits-duplic.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1570",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-17T16:29:04.470901Z",
+  "description": "incremental 唯一路径每天执行全市场完整历史双读，且 audit 未落账前 auto-retry 会启动重复子任务，造成 2-3 小时延迟和并发提交风险。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260917-2b4bb38ce3e6",
+      "timestamp": "2026-09-17T16:29:04.470901Z"
+    }
+  ],
+  "evidence_uris": [
+    "market.ingestion_jobs:d3c93ad8-cd42-4063-b204-051c91dee662",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-validation-receipt.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-quality-receipt.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-resume-job-receipt.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/basis-dev-validation-receipt.json"
+  ],
+  "expected": "2026-10-28用户审核后修订：保留adj_factor每日完整历史稳定读取；按股原子提交、隔离失败并保留恢复进度；跨日期单写入owner；只追加真实新日期或替换真实重述；对已确认前身历史，依据完整稳定重合区间的严格固定比例统一到当前来源基准，保留全部原日期，并将原值和有理换算关系与事实原子持久化；非固定比例不得冒充换基。精确区分原始事实变化、已有日期QFQ变化及日期扩展；空响应和历史冲突不得显示完整。先完成现有DEV验证，生产写入和部署待单独决定。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20260917_BUG-1570-adj-factor-daily-ingestion-couples-full-history-audit-and-permits-duplic.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20260917_BUG-1570-adj-factor-daily-ingestion-couples-full-history-audit-and-permits-duplic.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/ingest_tushare_adj_factor.py",
+        "backend/services/adj_factor_history_reconciler.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/services/test_adj_factor_history_reconciler.py",
+        "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/ingest_tushare_adj_factor.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/adj_factor_history_reconciler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/services/test_adj_factor_history_reconciler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/ingest_tushare_adj_factor.py",
+        "backend/services/adj_factor_history_reconciler.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/services/test_adj_factor_history_reconciler.py",
+        "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/ingest_tushare_adj_factor.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ingest_tushare_adj_factor.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+    ]
+  },
+  "first_seen_at": "2026-09-17T16:29:04.470901Z",
+  "fix_branch": "bug/BUG-1570-adj-factor-safe-daily-20261028-20261028",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4908,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4908",
+  "last_seen_at": "2026-09-17T16:29:04.470901Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "本轮仅现有DEV验证；不合入部署到生产、不写生产事实、不修改数据集/profile。",
+    "920047.BJ在2009年已挂牌，2020年为精选层起点；不删除前身历史；整序列统一基准已获DEV实施授权，不由factor比例推断账户公司行动，不以非固定比例修订外推未知前身。"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/ingest_tushare_adj_factor.py --mode incremental --start-date 2026-09-17 --end-date 2026-09-17 --history-reconcile-workers 16 --history-reconcile-rate-per-minute 480",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded tracked reconciliation source; real existing DEV writes/readback matched frozen stable provider responses for 300506.SZ/688109.SH, second run 0 writes; production conflict reproduced only in DEV temporary tables and preserved; source receipt dev-validation-receipt.json.",
+      "Fresh process verified real DEV verdict SQL and stale-lease fencing with full rollback; real DEV durable-job helper resumed exact committed hashes, 0 duplicate provider calls/fact writes, progress 100%; no production data/service action.",
+      "Fresh AIstock Python imported task worktree source and ran X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/validate_basis.py; real existing DEV PostgreSQL transactions, rollback and repeated zero-write readback passed; production apply=false, merge=false, runtime_action=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "adj_factor daily ingestion couples full-history audit and permits duplicate same-date retries",
+  "trigger_condition": {
+    "fingerprint": "2b4bb38ce3e62148b7890f5e",
+    "source_event_id": "FE-20260917-2b4bb38ce3e6"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -29,6 +29,20 @@ def test_disjoint_counts_and_no_unknown_to_zero():
         ValidationResult(PartitionState.VALID, (), {})
 
 
+@pytest.mark.parametrize("state,failed,expected", [
+    ("COMPLETE", [], PartitionState.VALID),
+    ("PARTIAL", ["300506.SZ"], PartitionState.INCOMPLETE),
+    ("PARTIAL", ["688109.SH"], PartitionState.VALID),
+    ("RUNNING", [], PartitionState.UNVERIFIED),
+    ("INTERRUPTED", [], PartitionState.UNVERIFIED),
+])
+def test_adj_factor_baseline_conflict_is_not_hidden_by_positive_latest_value(state, failed, expected):
+    from backend.services.data_integrity.validation import adj_factor_result
+    result = adj_factor_result({"300506.SZ"}, {"300506.SZ": {"adj_factor": 1}},
+                               {"status": state, "failed_symbols": failed})
+    assert result.state == expected
+
+
 def test_dirty_revision_or_rule_never_reuses_old_green():
     row = {"data_revision": 8, "validated_revision": 8, "scope_version": "s1", "rule_version": "r1",
            "validation_status": "VALID", "validation_id": "v1"}

@@ -178,6 +178,12 @@ def _is_auto_retry_excluded_dataset(dataset: str) -> bool:
     return ds in _AUTO_RETRY_EXCLUDED_DATASETS or ds.startswith(_AUTO_RETRY_EXCLUDED_PREFIXES)
 
 
+def _terminal_adj_factor_history(outcome: Dict[str, Any]) -> bool:
+    history = outcome.get("history_reconciliation") or {}
+    failures = history.get("failures") or []
+    return bool(failures) and all(f.get("retryable") is False for f in failures)
+
+
 def _coerce_int(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -888,7 +894,7 @@ class TDXScheduler:
     def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
         rows = self._fetchall(
             """
-            SELECT status,
+            SELECT status,summary->'history_reconciliation' AS history_reconciliation,
                    COALESCE(
                        summary->>'inserted_rows',
                        summary#>>'{stats,inserted_rows}',
@@ -2404,8 +2410,25 @@ class TDXScheduler:
         target_date = self._target_date_for_retry(health_dataset, options)
         recovered = False
         failure_category = "not_ready_after_retry"
+        history_failed = False
+        if health_dataset == "adj_factor" and options.get("job_id"):
+            try:
+                outcome = self._job_update_outcome(uuid.UUID(str(options["job_id"])))
+                history_failed = bool((outcome.get("history_reconciliation") or {}).get("failures"))
+                if _terminal_adj_factor_history(outcome):
+                    context = {"job_id": options["job_id"], "failure_category": "adj_factor_history_conflict",
+                               "history_reconciliation": outcome["history_reconciliation"]}
+                    repo.mark_final_blocked(target_id, reason="adj_factor_history_conflict", context=context)
+                    repo.record_attempt(DataSyncAttemptRecord(target_id=target_id, status="final_blocked",
+                        job_id=options["job_id"], trigger_source="data_sync_target_retry", finished_at=now,
+                        error_message="adj_factor_history_conflict", context_json=context))
+                    return
+            except Exception as exc:
+                history_failed = True
+                error_message = error_message or str(exc)
+                failure_category = "adj_factor_history_outcome_unavailable"
         try:
-            readiness = self._check_dataset_recovered(health_dataset, target_date)
+            readiness = None if history_failed else self._check_dataset_recovered(health_dataset, target_date)
             if readiness is not None and getattr(readiness, "status", None) == "ok":
                 recovered = True
             elif readiness is not None and getattr(readiness, "failure_category", None):
@@ -4522,13 +4545,28 @@ class TDXScheduler:
                                 fut.result(timeout=600)
                                 _log.info("auto-retry L%d: %s attempt %d completed",
                                           layer_idx, ds, attempt + 1)
+                            except TimeoutError as wait_exc:
+                                if ds == "adj_factor" and not fut.done():
+                                    entry["retry_status"] = "waiting_active"
+                                    _log.info("adj_factor history owner remains active; preserve it without duplicate retry")
+                                    break
+                                _log.warning("auto-retry L%d: %s failed: %s", layer_idx, ds, wait_exc)
                             except Exception as wait_exc:
                                 _log.warning("auto-retry L%d: %s attempt %d wait failed: %s",
                                             layer_idx, ds, attempt + 1, wait_exc)
 
                         # Re-check freshness after retry
                         try:
-                            r = self._check_dataset_recovered(ds)
+                            outcome = self._job_update_outcome(retry_job_id) if ds == "adj_factor" else {}
+                            if ds == "adj_factor" and _terminal_adj_factor_history(outcome):
+                                entry["retry_status"] = "blocked_history_conflict"
+                                entry["failure_category"] = "adj_factor_history_conflict"
+                                if target_id:
+                                    DataSyncTargetRepository().mark_final_blocked(target_id,
+                                        reason="adj_factor_history_conflict", context={"job_id": str(retry_job_id)})
+                                break
+                            history_failed = bool((outcome.get("history_reconciliation") or {}).get("failures"))
+                            r = None if history_failed else self._check_dataset_recovered(ds)
                             if r is not None:
                                 if r.status == "ok":
                                     _log.info("auto-retry L%d: %s RECOVERED on attempt %d",
@@ -4601,7 +4639,7 @@ class TDXScheduler:
                     # After all attempts: check if exhausted
                     if delayed_no_update:
                         continue
-                    if entry.get("retry_status") == "skipped_duplicate_recent":
+                    if entry.get("retry_status") in {"skipped_duplicate_recent", "waiting_active", "blocked_history_conflict"}:
                         continue
                     if not recovered:
                         _log.error("auto-retry L%d: %s EXHAUSTED after %d attempts",
