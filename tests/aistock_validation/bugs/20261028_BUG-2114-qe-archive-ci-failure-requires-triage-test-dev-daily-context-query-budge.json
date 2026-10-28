@@ -240,5 +240,39 @@
         "scripts/qe_archive_data_quality_smoke.py"
       ]
     }
+  },
+  "nightly_ui_repair_20261028": {
+    "failure_run_id": 40566184878,
+    "source_issue": 6782,
+    "direct_tests_passed": 125,
+    "catalog_tests_passed": 8,
+    "browser_tests_passed": 2,
+    "browser_seconds": 25.5,
+    "non_x_guard": "rejected as required",
+    "prebuilt_lock_sha256": "01f44efd6117f40da159cf791d28c777e89347493684504fc08d4bb2a5d4f865",
+    "review_rounds": [
+      {
+        "round": 1,
+        "scope": "exact failure and ownership",
+        "result": "RUNNER_TEMP overwrote verified X-only TEMP; no business source needed"
+      },
+      {
+        "round": 2,
+        "scope": "regression and fail-closed contract",
+        "result": "125 tests passed; non-X storage still rejected; prebuilt dependencies remain required"
+      },
+      {
+        "round": 3,
+        "scope": "real browser reproduction",
+        "result": "Existing calendar cases both pass with RUNNER_TEMP on F and verified TEMP/TMP/TMPDIR on X; no user backend control, DB writes or dependency installation"
+      }
+    ],
+    "design_compliance_review": {
+      "no_partial_delivery": true,
+      "no_silent_success": true,
+      "business_semantics_unchanged": true,
+      "no_extra_gate": true
+    },
+    "full_nightly_rerun": false
   }
 }
