@@ -6,7 +6,7 @@
 
 只在原CandidateReader增加物理读取优化，不创建第二Reader，不改变逐日MarketView、原始价格恢复、停牌投影、可见时间、来源SHA或交易策略。LocalSIM #6785已提供消费接缝；完整批量账户验收由LocalSIM窗口负责。本轮独立短窗口只验证已合入消费入口，不操作活动181日研究。
 
-精确写入：`backend/services/position_timing/intraday/research_inputs.py`；`backend/tests/position_timing/test_intraday_reader_window.py`；本设计；`docs/analysis/position_timing_bounded_reader_delivery_20261028.md`。临时脚本和性能回执仅在`X:/AIstock_temp/position-timing-bounded-reader-20261028/`，WSL对应`/mnt/x`；不复制大型数据。
+精确写入：`backend/services/position_timing/intraday/research_inputs.py`；`backend/tests/position_timing/test_intraday_reader_window.py`；本设计；`docs/analysis/position_timing_bounded_reader_delivery_20261028.md`。CI首轮发现旧隔离测试与已批准分钟蓝图§2的LocalSIM→纯SDK方向冲突，因此在实施前扩入同模块直接测试`backend/tests/position_timing/test_isolation.py`：仅允许LocalSIM使用明确的纯SDK/冻结研究公共入口，不允许其他业务模块反向导入，不放开日频内部实现或store等内部模块。临时脚本和性能回执仅在`X:/AIstock_temp/position-timing-bounded-reader-20261028/`，WSL对应`/mnt/x`；不复制大型数据。
 
 ## Architecture / Contracts
 
@@ -33,6 +33,7 @@
 - F-003：必要输入错误和内容修订fail closed；未消费股票/日期/字段缺价不新增失败；UNKNOWN/NONE不变。
 - F-004：只读数组、未来窗口不进入当前决策；资源释放和缓存预算可观察。
 - F-005：冻结文件WSL来源检查/准备/端到端计时、RSS/FD及冷热说明；LocalSIM现有入口消费命令和独立短窗口结果。
+- F-006：隔离测试对齐既有分钟蓝图授权的LocalSIM公共SDK消费方向；其余业务和日频内部边界仍禁止。
 
 ## Rollout / Rollback / Risks / Production Gates
 
@@ -47,3 +48,4 @@
 | F-003 | research_inputs.py::file/verify_pins | backend/tests/position_timing/test_intraday_reader_window.py | VERIFIED | none |
 | F-004 | research_inputs.py::prepare_window/close | backend/tests/position_timing/test_intraday_reader_window.py | VERIFIED | none |
 | F-005 | docs/analysis/position_timing_bounded_reader_delivery_20261028.md | artifact: X:/AIstock_temp/position-timing-bounded-reader-20261028/comparison-v1.json | VERIFIED | none |
+| F-006 | backend/tests/position_timing/test_isolation.py | backend/tests/position_timing/test_isolation.py | VERIFIED | none |

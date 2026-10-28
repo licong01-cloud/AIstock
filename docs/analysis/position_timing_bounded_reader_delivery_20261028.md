@@ -81,6 +81,8 @@ WSL使用现成LocalSIM Python：`/mnt/x/AIstock_temp/localsim-position-timing/w
 
 三轮复核：接口/资源与原算法；失败/来源/因果/未消费输入；真实完整对象/LocalSIM接缝/测量口径及保护产物。DESIGN-COMPLIANCE-001逐项：共享接口范围完整而不冒认完整账户接入；无吞错/填价；业务规则/比较器/账本不变；无新增审批或等待未来交易日的门槛。
 
+首轮CI `40623518445`：461 passed、1 failed。唯一失败是既有`test_isolation.py`一律禁止所有业务模块导入择时，与已批准分钟蓝图§2的LocalSIM→纯SDK方向不一致。已先扩入本模块直接测试写入范围，再将例外限定为LocalSIM目录和明确公共SDK/冻结研究模块；QE/Advisory等仍禁直接导入，LocalSIM也不能导入日频内部实现、intraday store或从包根偷渡内部模块。失败点及新增边界保护2项通过；Reader实现及WSL实测SHA未改变。最终CI以修订后的HEAD为准，不重跑或改写既有实测数据。
+
 已执行的接缝复现命令（label须使用新名称，旧证据不可覆盖）：
 
 ```bash
