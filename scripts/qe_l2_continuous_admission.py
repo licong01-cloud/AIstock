@@ -37,12 +37,33 @@ def validate_admission(manifest):
         raise L2AdmissionError("QE_L2_CONTINUOUS_ASSET_ADMISSION_UNKNOWN", str(version))
     expected = dict(ADMISSIONS[version])
     af = expected.pop("AF_predictions_by_seed")
+    projections = expected.pop("AF_projection_by_seed", {})
     if identity(manifest) != expected:
         raise L2AdmissionError("QE_L2_CONTINUOUS_ASSET_ADMISSION_MISMATCH", version)
     seed = manifest.get("seed")
     if type(seed) is not int or af.get(str(seed)) != manifest["assets"]["prediction"]["sha256"]:
         raise L2AdmissionError("QE_L2_CONTINUOUS_AF_IDENTITY_MISMATCH")
+    projection = manifest.get("prediction_projection")
+    if projection != projections.get(str(seed)):
+        raise L2AdmissionError("QE_L2_CONTINUOUS_AF_PROJECTION_ADMISSION_MISMATCH")
+    if projection is not None:
+        validate_projection(projection, source_sha256=af[str(seed)])
     return version
+
+
+def validate_projection(value, *, source_sha256):
+    """A source-reviewed date projection; never an arbitrary runtime filter."""
+    import re
+
+    fields = {"schema_version", "source_prediction_sha256", "source_start", "source_end", "start", "end", "panel_sha256"}
+    if (not isinstance(value, dict) or set(value) != fields
+            or value["schema_version"] != "qe_l2_af_projection_v1"
+            or value["source_prediction_sha256"] != source_sha256
+            or (value["source_start"], value["source_end"]) != ("2026-01-05", "2026-09-30")
+            or (value["start"], value["end"]) != ("2026-03-31", "2026-09-30")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value["panel_sha256"]))):
+        raise L2AdmissionError("QE_L2_CONTINUOUS_AF_PROJECTION_INVALID")
+    return value
 
 
 def validate_reference(ref, manifest, as_of):

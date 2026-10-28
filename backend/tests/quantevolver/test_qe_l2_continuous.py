@@ -19,6 +19,8 @@ from qe_l2_continuous_consumer import (
     ContinuousMixin,
     adjust_targets,
     validate_reference,
+    project_prediction,
+    prediction_panel_sha256,
 )
 from qe_l2_continuous_plan import build_plan, exposure_reference, baseline_contract
 from backend.services.quantevolver.l2_continuous_consumer import extract_continuous, apply_continuous
@@ -111,6 +113,124 @@ def test_missing_whole_AF_signal_date_never_shrinks_window(data):
     _write(data.root / "manifest.json", data.manifest)
     with pytest.raises(ValueError, match="PREDICTION_DATE_GRID"):
         ContinuousInputs(data.root / "manifest.json")
+
+
+def _projection_case():
+    calendar = pd.bdate_range("2026-01-05", "2026-09-30")
+    index = pd.MultiIndex.from_product([calendar, ["SH600000", "SZ000001"]], names=["datetime", "instrument"])
+    source = pd.DataFrame({"score": np.arange(len(index), dtype=float) / 1000}, index=index)
+    target = source.loc[source.index.get_level_values("datetime") >= "2026-03-31"]
+    projection = dict(schema_version="qe_l2_af_projection_v1", source_prediction_sha256="a" * 64,
+                      source_start="2026-01-05", source_end="2026-09-30", start="2026-03-31", end="2026-09-30",
+                      panel_sha256=prediction_panel_sha256(target))
+    return source, target, projection, calendar
+
+
+def test_projection_keeps_every_source_value_and_security_in_declared_window():
+    source, expected, projection, calendar = _projection_case()
+    before = source.copy(deep=True)
+    actual = project_prediction(source, projection, source_sha256="a" * 64, calendar=calendar)
+    pd.testing.assert_frame_equal(actual, expected)
+    pd.testing.assert_frame_equal(source, before)
+
+
+@pytest.mark.parametrize("change", ["missing_day", "missing_stock", "nan", "reordered", "values", "pin", "shortened"])
+def test_projection_cannot_hide_missing_data_or_change_the_plan(change):
+    source, expected, projection, calendar = _projection_case()
+    if change == "missing_day":
+        source = source.loc[source.index.get_level_values("datetime") != "2026-08-03"]
+    elif change == "missing_stock":
+        source = source.drop(source.index[-1])
+    elif change == "nan":
+        source.iloc[-1, 0] = np.nan
+    elif change == "reordered":
+        source = source.iloc[::-1]
+    elif change == "values":
+        source.iloc[-1, 0] += 0.1
+    elif change == "pin":
+        projection["source_prediction_sha256"] = "b" * 64
+    else:
+        projection["end"] = "2026-09-29"
+    with pytest.raises(ValueError, match="QE_L2_CONTINUOUS_"):
+        project_prediction(source, projection, source_sha256="a" * 64, calendar=calendar)
+
+
+def test_projection_must_be_reviewed_for_this_seed(data, monkeypatch):
+    _, _, projection, _ = _projection_case()
+    projection["source_prediction_sha256"] = data.manifest["assets"]["prediction"]["sha256"]
+    manifest = {**data.manifest, "prediction_projection": projection}
+    with pytest.raises(ValueError, match="PROJECTION_ADMISSION_MISMATCH"):
+        admission.validate_admission(manifest)
+    record = {**data.record, "AF_projection_by_seed": {"42": projection}}
+    monkeypatch.setattr(admission, "ADMISSIONS", {"TEST_ONLY": record})
+    admission.validate_admission(manifest)
+    changed = deepcopy(manifest)
+    changed["prediction_projection"]["panel_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="PROJECTION_ADMISSION_MISMATCH"):
+        admission.validate_admission(changed)
+
+
+def test_legacy_reader_still_rejects_unapproved_extra_source_dates(data):
+    import hashlib
+
+    path = Path(data.manifest["assets"]["prediction"]["path"])
+    pred = pd.read_pickle(path)
+    extra = pred.iloc[:1].copy()
+    extra.index = pd.MultiIndex.from_tuples([(pd.Timestamp("2026-01-05"), "000001.SZ")], names=pred.index.names)
+    pd.concat([extra, pred]).sort_index().to_pickle(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    data.manifest["assets"]["prediction"]["sha256"] = digest
+    data.record["AF_predictions_by_seed"] = {"42": digest}
+    _write(data.root / "manifest.json", data.manifest)
+    with pytest.raises(ValueError, match="PREDICTION_DATE_GRID"):
+        ContinuousInputs(data.root / "manifest.json")
+
+
+def test_complete_reader_explicit_projection_preserves_full_parent_asset(data, monkeypatch):
+    import hashlib
+
+    m = data.manifest
+    calendar_path = Path(m["assets"]["calendar"]["path"])
+    prefix = pd.bdate_range("2026-01-05", "2026-03-30")
+    calendar = prefix.append(data.calendar)
+    calendar_path.write_text("\n".join(str(d.date()) for d in calendar) + "\n", encoding="utf-8")
+    calendar_sha = hashlib.sha256(calendar_path.read_bytes()).hexdigest()
+    m["assets"]["calendar"]["sha256"] = calendar_sha
+    m["dataset_binding"]["day_pins"]["calendar_sha256"] = calendar_sha
+    m["release_identity"]["metadata_sha256"]["calendar"] = calendar_sha
+    record = deepcopy(data.record)
+    record["dataset_binding_sha256"] = admission.canonical_sha(admission.physical_binding(m["dataset_binding"]))
+    record["release_identity_sha256"] = admission.canonical_sha(m["release_identity"])
+    for arm in ("M0", "M1"):
+        risk = deepcopy(data.risks[arm])
+        risk["input_identity"]["calendar_sha256"] = calendar_sha
+        for index, bundle in enumerate(risk["model_bundles"]):
+            bundle["training_input_identity"]["calendar_sha256"] = calendar_sha
+            risk["model_bundles"][index] = _seal({k: v for k, v in bundle.items() if k != "receipt_sha256"})
+        ref = _write(data.root / f"{arm}.json", _seal({k: v for k, v in risk.items() if k != "receipt_sha256"}))
+        m["assets"][arm] = ref
+        record[arm + "_sha256"] = ref["sha256"]
+    path = Path(m["assets"]["prediction"]["path"])
+    target = pd.read_pickle(path)
+    extra_index = pd.MultiIndex.from_product([prefix, ["000001.SZ"]], names=target.index.names)
+    extra = pd.DataFrame({"score": np.full(len(extra_index), 0.1)}, index=extra_index)
+    pd.concat([extra, target]).sort_index().to_pickle(path)
+    parent_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    m["assets"]["prediction"]["sha256"] = parent_sha
+    projection = dict(schema_version="qe_l2_af_projection_v1", source_prediction_sha256=parent_sha,
+                      source_start="2026-01-05", source_end="2026-09-30", start="2026-03-31", end="2026-09-30",
+                      panel_sha256=prediction_panel_sha256(target))
+    record["AF_predictions_by_seed"] = {"42": parent_sha}
+    record["AF_projection_by_seed"] = {"42": projection}
+    m["prediction_projection"] = projection
+    monkeypatch.setattr(admission, "ADMISSIONS", {"TEST_ONLY": record})
+    _write(data.root / "manifest.json", m)
+    inputs = ContinuousInputs(data.root / "manifest.json")
+    assert len(inputs.mapping) == len(target) == 126
+    assert inputs.receipt["days"] == 125 and inputs.receipt["catalog_count"] == 131
+    assert inputs.receipt["prediction_projection"] == projection
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == parent_sha
+    assert len(pd.read_pickle(path)) > 126
 
 
 def test_absolute_targets_cash_no_normalization_or_compounding():
