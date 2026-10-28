@@ -268,6 +268,20 @@ def test_source_rejects_invalid_stored_publication(trial, publication_reader, in
     assert publication_reader.calls == []
 
 
+def test_old_publication_without_input_pin_cannot_acquire_new_completeness(trial, publication_reader, monkeypatch):
+    from backend.services.selection_center.repository import SelectionCenterRepository
+    from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactRepository
+    from backend.services.data_integrity.inputs import InputReadinessError
+    from backend.services.advisory_model_first.generic_daily_db_input_v1 import GenericDailyReadonlyDBInputV1
+    run = NS(runtime_config={"package_runtime_configs": {app.TARGET["package_id"]: {}}},
+             trade_date=date(2026, 10, 28), data_source="DB_HISTORICAL", completed_at=trial.now[0])
+    monkeypatch.setattr(SelectionCenterRepository, "get_run", lambda *_: run)
+    monkeypatch.setattr(StrategyPackageSelectionArtifactRepository, "get", lambda *_, **kw: NS(created_at=trial.now[0]))
+    monkeypatch.setattr(GenericDailyReadonlyDBInputV1, "load_day", lambda *_, **kw: pytest.fail("unbound publication cannot read new features"))
+    with pytest.raises(InputReadinessError):
+        publication_reader.source.inputs(trial.publication)
+
+
 def test_calendar_check_precedes_mature_market_reads_and_real_valuation(trial):
     days = [d.date() for d in pd.bdate_range("2026-10-27", periods=6)]
     calls = []

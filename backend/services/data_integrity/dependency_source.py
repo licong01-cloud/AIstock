@@ -86,6 +86,17 @@ def factor_fields(source, mapping):
     values, frames, found, derived = {}, set(), set(), defaultdict(dict)
     ambiguous = set()
     assignments = sorted((n for n in nodes if isinstance(n, ast.Assign)), key=lambda n: n.lineno)
+    # Existing packaged factors use this exact module-relative data root. An
+    # arbitrary external root with the same basename is not equivalent.
+    pathlib_path = any(isinstance(n, ast.ImportFrom) and n.module == "pathlib" and
+        any(a.name == "Path" and a.asname in {None, "Path"} for a in n.names) for n in nodes)
+    writes = defaultdict(list)
+    for assignment in assignments:
+        for target in assignment.targets:
+            if isinstance(target, ast.Name):
+                writes[target.id].append(assignment.value)
+    frozen_roots = {name for name, definitions in writes.items() if pathlib_path and "Path" not in writes
+        and len(definitions) == 1 and ast.unparse(definitions[0]) == "Path(__file__).resolve().parent.parent"}
     for node in nodes:
         if isinstance(node, ast.Call):
             name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else ""
@@ -111,7 +122,8 @@ def factor_fields(source, mapping):
         for call in readers:
             path = call.args[0] if call.args else None
             filename = literal(path, values)
-            if isinstance(path, ast.BinOp) and isinstance(path.op, ast.Div):
+            if (isinstance(path, ast.BinOp) and isinstance(path.op, ast.Div)
+                    and isinstance(path.left, ast.Name) and path.left.id in frozen_roots):
                 filename = literal(path.right, values)
             if filename not in FILES:
                 raise DependencyUnknown(f"unresolved factor input file at line {call.lineno}")
@@ -189,6 +201,9 @@ def factor_fields(source, mapping):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in {"getattr", "eval", "exec"}
                 and any(isinstance(v, ast.Name) and v.id in frames for v in ast.walk(n))):
             raise DependencyUnknown(f"reflected source access at line {n.lineno}")
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in {"eval", "query"}
+                and isinstance(n.func.value, ast.Name) and n.func.value.id in frames):
+            raise DependencyUnknown(f"dynamic frame expression at line {n.lineno}")
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id not in functions
                 and any(isinstance(arg, ast.Name) and arg.id in frames for arg in n.args)):
             raise DependencyUnknown(f"unresolved function consumes source frame at line {n.lineno}")
@@ -225,7 +240,7 @@ def factor_fields(source, mapping):
 def factor_window(source):
     """Propagate finite rolling/lag requirements through assignments and lambdas."""
     tree = ast.parse(source)
-    values, depths = {}, {}
+    values, depths, ambiguous = {}, {}, set()
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.args.defaults:
             for arg, default in zip(node.args.args[-len(node.args.defaults):], node.args.defaults, strict=True):
@@ -236,7 +251,10 @@ def factor_window(source):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     value = literal(node.value, values)
-                    if type(value) is int:
+                    if type(value) is not int or (target.id in values and values[target.id] != value):
+                        ambiguous.add(target.id)
+                        values.pop(target.id, None)
+                    elif target.id not in ambiguous:
                         values[target.id] = value
     def depth(node, env):
         if isinstance(node, ast.Name):

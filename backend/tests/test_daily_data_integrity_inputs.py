@@ -218,11 +218,25 @@ result = c.rolling(20).mean() / joined["db_volume_ratio"]
     assert factor_window(source) == 272
 
 
-@pytest.mark.parametrize("expression", ["df[field]", "getattr(df, field)", "df.loc[:, field]", "df.values"])
+@pytest.mark.parametrize("expression", ["df[field]", "getattr(df, field)", "df.loc[:, field]", "df.values", 'df.eval("hidden_field + close")'])
 def test_partial_known_source_cannot_conceal_dynamic_dependency(expression):
     from backend.services.data_integrity.dependency_source import DependencyUnknown, factor_fields, field_sources
     with pytest.raises(DependencyUnknown):
         factor_fields(f'df = pd.read_hdf("daily_pv.h5")\nx = df["close"]\ny = {expression}', field_sources())
+
+
+def test_dynamic_file_root_cannot_be_certified_from_its_basename():
+    from backend.services.data_integrity.dependency_source import DependencyUnknown, factor_fields, field_sources
+    with pytest.raises(DependencyUnknown, match="input file"):
+        factor_fields('df = pd.read_hdf(external_root / "daily_pv.h5")\nx = df["close"]', field_sources())
+    assert factor_fields('from pathlib import Path\nDATA_DIR = Path(__file__).resolve().parent.parent\n'
+                         'df = pd.read_hdf(DATA_DIR / "daily_pv.h5")\nx = df["close"]', field_sources()) == {"close"}
+
+
+def test_dynamic_window_reassignment_cannot_reuse_an_old_literal():
+    from backend.services.data_integrity.dependency_source import DependencyUnknown, factor_window
+    with pytest.raises(DependencyUnknown, match="dynamic"):
+        factor_window('window = 20\nwindow = choose_window()\nresult = data["close"].rolling(window).mean()')
 
 
 def _dataset_pickle(length=20, *, extra=b"", root="TSDatasetH"):

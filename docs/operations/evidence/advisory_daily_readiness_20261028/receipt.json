@@ -3,12 +3,12 @@
   "observed_at": "2026-10-28T05:42:34.377464+00:00",
   "design_pr": 6799,
   "base_commit": "e94e6b3c31a9ac66781440b3c6f5bf535631d059",
-  "source_pr": null,
+  "source_pr": 6808,
   "source_merge": "PENDING_CI",
   "runtime_activation": "PENDING_USER_RESTART",
   "audit_kind": "NEW_SOURCE_INDEPENDENT_PROCESS_READ_ONLY",
   "audit_data_date": "2026-10-27",
-  "full_readback_sha256": "b27ccb5f041f9253d4897eb8d58b22316ef86024664d9aee68dac248e4a1b973",
+  "full_readback_sha256": "0a5fd550c812475f2937fab8c88528c6a49a258f0c5ce6eccbcdca2a27564f13",
   "packages": [
     {
       "package_id": "pkg_ma_8ec5e389fa2c5e484a1ac7e9",
@@ -336,10 +336,11 @@
     "ruff": "PASS",
     "typescript_syntax_files": 4,
     "l0": "PASS_0_BLOCKING",
-    "f2": "PASS_10_ITEMS_0_WARNINGS"
+    "f2": "PASS_10_ITEMS_0_WARNINGS",
+    "additional_boundary_tests": 4
   },
   "delegated_validation": {
-    "ci": "PENDING_SOURCE_PR",
+    "ci": "PENDING_LATEST_SOURCE_HEAD",
     "requested": [
       "advisory_modeling_backend",
       "local_data_integrity_backend",

@@ -1,6 +1,6 @@
 # Advisory 每日输入就绪消费交付
 
-日期：2026-10-28。设计PR [#6799](https://github.com/licong01-cloud/AIstock/pull/6799) 已合入。设计：[F2详细设计](../architecture/advisory_daily_readiness_consumption_f2_design_20261028.md)；[三轮审核](../analysis/advisory_daily_readiness_review_20261028.md)；[机器回执](evidence/advisory_daily_readiness_20261028/receipt.json)。
+日期：2026-10-28。设计PR [#6799](https://github.com/licong01-cloud/AIstock/pull/6799) 已合入；源码PR [#6808](https://github.com/licong01-cloud/AIstock/pull/6808) 的合入/CI状态以GitHub回执为准。设计：[F2详细设计](../architecture/advisory_daily_readiness_consumption_f2_design_20261028.md)；[三轮审核](../analysis/advisory_daily_readiness_review_20261028.md)；[机器回执](evidence/advisory_daily_readiness_20261028/receipt.json)。
 
 ## 实现结果
 
@@ -36,7 +36,7 @@ UNVERIFIED主要在D以前；10月27日`adj_factor`与`daily_basic`为INCOMPLETE
 
 ## 验证与运行接续
 
-本地最小直接合同集85通过，现有DEV修订锁/回滚测试1通过；Ruff、前端语法编译和L0通过。源码PR CI负责较宽模块和UI回归；本机缺LightGBM的旧训练辅助测试不冒称通过。
+本地最小直接合同集85通过，增量边界反例4通过，现有DEV修订锁/回滚测试1通过；Ruff、前端语法编译和L0通过。源码PR CI负责较宽模块和UI回归；本机缺LightGBM的旧训练辅助测试不冒称通过。
 
 生产DDL=noop；生产DML=未执行；DEV=仅独立测试键及临时表，准确清理/连接关闭；模型拟合=0；QE=0；收益标签读取=0；生产预测启动=0；数据集切换=0；服务控制=0。用户重启后核对runtime身份、五包readiness、forward状态及影子状态；数据未就绪时保持等待，不能以固定21:00或源码合入替代数据证明。
 

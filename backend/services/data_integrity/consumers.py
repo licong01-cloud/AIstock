@@ -99,7 +99,13 @@ def package_dependencies(manifest, asset_store) -> ConsumerDependencies:
             schema = json.loads(_asset(alpha, asset_store))
             if schema["aliases"] != list(alpha.aliases):
                 raise ValueError("Alpha158 alias order differs")
-            expressions = schema["loader_node"]["kwargs"]["config"]["feature"][0]
+            features = schema["loader_node"]["kwargs"]["config"]["feature"]
+            if not isinstance(features, list) or len(features) != 2 or features[1] != schema["aliases"]:
+                raise ValueError("Alpha158 loader alias order differs")
+            expressions = features[0]
+            if (not isinstance(expressions, list) or len(expressions) != len(schema["aliases"])
+                    or not expressions or not all(isinstance(expr, str) and expr.strip() for expr in expressions)):
+                raise ValueError("Alpha158 expressions unavailable")
             for expression in expressions:
                 for name in re.findall(r"\$([A-Za-z_][A-Za-z_0-9]*)", expression):
                     if name not in mapping:
