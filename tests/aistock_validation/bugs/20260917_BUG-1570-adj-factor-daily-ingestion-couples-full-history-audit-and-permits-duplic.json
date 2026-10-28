@@ -37,15 +37,28 @@
   ],
   "expected": "2026-10-28用户审核后修订：保留adj_factor每日完整历史稳定读取；按股原子提交、隔离失败并保留恢复进度；跨日期单写入owner；只追加真实新日期或替换真实重述；对已确认前身历史，依据完整稳定重合区间的严格固定比例统一到当前来源基准，保留全部原日期，并将原值和有理换算关系与事实原子持久化；非固定比例不得冒充换基。精确区分原始事实变化、已有日期QFQ变化及日期扩展；空响应和历史冲突不得显示完整。先完成现有DEV验证，生产写入和部署待单独决定。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20260917_BUG-1570-adj-factor-daily-ingestion-couples-full-history-audit-and-permits-duplic.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/ingest_tushare_adj_factor.py",
-      "backend/services/adj_factor_history_reconciler.py",
       "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20260917_BUG-1570-adj-factor-daily-ingestion-couples-full-history-audit-and-permits-duplic.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_adj_factor.py",
@@ -178,16 +191,18 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "fresh_process_evidence": [
       "Fresh Python process loaded tracked reconciliation source; real existing DEV writes/readback matched frozen stable provider responses for 300506.SZ/688109.SH, second run 0 writes; production conflict reproduced only in DEV temporary tables and preserved; source receipt dev-validation-receipt.json.",
-      "Fresh process verified real DEV verdict SQL and stale-lease fencing with full rollback; real DEV durable-job helper resumed exact committed hashes, 0 duplicate provider calls/fact writes, progress 100%; no production data/service action."
+      "Fresh process verified real DEV verdict SQL and stale-lease fencing with full rollback; real DEV durable-job helper resumed exact committed hashes, 0 duplicate provider calls/fact writes, progress 100%; no production data/service action.",
+      "Fresh AIstock Python imported task worktree source and ran X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/validate_basis.py; real existing DEV PostgreSQL transactions, rollback and repeated zero-write readback passed; production apply=false, merge=false, runtime_action=false"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
