@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2115",
-  "closed_at": null,
+  "closed_at": "2026-10-28T05:43:41Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -110,8 +110,8 @@
   },
   "first_seen_at": "2026-10-28T05:19:11.419791Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2631b6da37663e46e3b8553860bbb25f3d9821f5",
+  "fixed_at": "2026-10-28T05:43:41Z",
   "github_issue_number": 6801,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6801",
   "last_seen_at": "2026-10-28T05:19:11.419791Z",
@@ -124,11 +124,27 @@
       "qe_or_training": false,
       "service_control": false
     },
+    "ci_budget_repair": {
+      "ast_assertions_unchanged": true,
+      "gate_passed": true,
+      "gate_test": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
+      "initial_failed_ci": "40638731653",
+      "over_budget_sloc": 0,
+      "production_sloc": 47665,
+      "test_sloc": 14292,
+      "test_to_production_ratio": 0.2998426518409735,
+      "threshold": 0.3
+    },
     "design_compliance": {
       "business_semantics_unchanged": true,
       "complete_in_scope": true,
       "no_false_success": true,
       "no_unapproved_gates_or_relaxation": true
+    },
+    "followup_targeted_tests": {
+      "additional_unique_case": 1,
+      "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -k nightly_issue_binding -q -p no:cacheprovider",
+      "passed": 6
     },
     "live_replay": {
       "artifacts": "tmp/issue_workflow/ci-issue-6782 and ci-issue-6783",
@@ -157,40 +173,25 @@
         "round": 3
       },
       {
-        "round": 4,
         "focus": "Positive failure evidence",
-        "result": "A session command alone cannot establish a failed session. Require its own failed node or error signature; added negative case passed with the five identity/provenance cases (6 passed). L0 and lint rechecked."
+        "result": "A session command alone cannot establish a failed session. Require its own failed node or error signature; added negative case passed with the five identity/provenance cases (6 passed). L0 and lint rechecked.",
+        "round": 4
       },
       {
-        "round": 5,
         "focus": "CI budget and fixture maintenance",
-        "result": "CI 40638731653 had 774 passed and one honest production denominator ratio failure (30.2108%). Deduplicate Actions payload fixtures and parameterize invalid identities. AST comparison preserves every test function and assertion; all 101 parser/intake tests and the unchanged budget gate passed. No ratio threshold, ownership, production padding, skip, or test deletion."
+        "result": "CI 40638731653 had 774 passed and one honest production denominator ratio failure (30.2108%). Deduplicate Actions payload fixtures and parameterize invalid identities. AST comparison preserves every test function and assertion; all 101 parser/intake tests and the unchanged budget gate passed. No ratio threshold, ownership, production padding, skip, or test deletion.",
+        "round": 5
       }
     ],
     "targeted_tests": {
       "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider",
       "passed": 101
-    },
-    "followup_targeted_tests": {
-      "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -k nightly_issue_binding -q -p no:cacheprovider",
-      "passed": 6,
-      "additional_unique_case": 1
-    },
-    "ci_budget_repair": {
-      "production_sloc": 47665,
-      "test_sloc": 14292,
-      "over_budget_sloc": 0,
-      "test_to_production_ratio": 0.2998426518409735,
-      "threshold": 0.3,
-      "gate_test": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
-      "gate_passed": true,
-      "ast_assertions_unchanged": true,
-      "initial_failed_ci": "40638731653"
     }
   },
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6806",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -208,6 +209,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -217,7 +219,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2115",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7a60ddf9c879028b",
+    "recorded_at": "2026-10-28T05:44:43.027860Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a8e878140da07efe502d065db67b55d4b1e94f0a",
+    "source_merge_commit": "2631b6da37663e46e3b8553860bbb25f3d9821f5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6806",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed (4 explicit files)",
+      "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -> passed (101 tests)",
+      "python -m pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> passed",
+      "python scripts/aistock_issue_workflow.py workflow-smoke -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "499ae740ba2972b90ed9ce5b79cc955b7e8fe21c602fd4f30f77edf7ff46a8c3"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -226,6 +253,13 @@
     "fingerprint": "c4c34e3a06c2429136c0eeaf",
     "source_event_id": "FE-20261028-c4c34e3a06c2"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed (4 explicit files)",
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -> passed (101 tests)",
+    "python -m pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
