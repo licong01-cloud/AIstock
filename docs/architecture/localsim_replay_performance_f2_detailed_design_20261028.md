@@ -1,6 +1,6 @@
 # LocalSIM 连续离线回放性能 F2 详细设计
 
-日期：2026-10-28。Feature tier：F2；风险：T3。状态：设计及实现中。
+日期：2026-10-28。Feature tier：F2；风险：T3。状态：源码已分阶段交付；共享批量账户复验中（BUG-2112）。
 
 用户授权：按批量行情准备、重复计算优化、独立账户并行的顺序开发，完成多轮审核、定向回归、L0及最终HEAD CI后可以直接提交合入。当前181日研究继续使用其冻结工作树，不热更、停止、迁移或重置。
 
@@ -38,6 +38,8 @@
 
 用户随后明确选择“共享接口仍交择时窗口实现”。因此本PR交付LocalSIM消费接缝、计算优化、账户并行及各自完整验收；共享Reader的真实批量读取实现和其提速验收由owner独立PR交付。F-002按消费侧已完成范围核验，外部生产能力不伪报完成；缺接口时显式不可用的行为是正式合同，不是逐日静默降级。整体跨模块批量优化仍保持待owner交付状态。
 
+2026-10-28后续交付：共享Reader已通过PR #6791合入，正式合同见`docs/analysis/position_timing_bounded_reader_delivery_20261028.md`。LocalSIM现有接缝实际消费通过。完整三日FULL_13对照发现BUG-2112：前日物理FileRef及其处理时钟SHA进入账户日身份，使独立输出目录产生不同计划顺序和排队峰值。该差异必须修复并重新冻结研究复验，不能将只有读取接缝通过表述为完整账户状态通过。旧证据保留，活动181日任务不迁移。
+
 ## 3. Non-goals / 边界
 
 不改TWAP默认政策、费用、OMS、撮合、现金、持仓、T+1、停牌及方向性涨跌停语义；不创建第二套账户或撮合。不改选股算法、QE、Advisory、HMM或StrategyPackage资产；不训练、不补数、不写DB、不抓行情、不控制用户backend/worker/scheduler。人工提醒不等于成交。不把批量物理读取变成跨日资格或账户结果复用。
@@ -72,6 +74,8 @@
 旧CLI默认仍使用既有串行路径。新增显式离线性能选项：batch_days、account_workers及优化开关；合法范围与并发预算严格校验，未知值报错。这些是计算资源参数，不改变交易政策或既有研究人口；写独立操作回执，经济结果不掺计时/资源噪声。同一冻结request在不同合法资源参数下必须生成相同经济事实及exact retry结果。
 
 源码身份包含新增性能模块；旧冻结研究继续由旧工作树运行，不能拿新源码恢复旧前缀。新进程加载、后端运行态和经济支持分别报告。
+
+BUG-2112补充合同：账户日逻辑身份绑定冻结request、账户、交易日及账户计算实际消费的前日现金、持仓和参考价。物理输出路径、含处理时钟的前日日报SHA、排队审计指标均不进入该身份。前日FileRef的完整内容SHA、原生journal、开盘资金/持仓核对及不可变日报发布仍承担完整前缀与恢复校验；不能为固定身份而跳过它们。命名空间升级仅作用于新源码冻结的新研究，旧request的源码身份保护保持。相同冻结request在独立输出目录和合法资源配置下，计划、订单、成交、队列及完整经济业务事实应一致；仅原生处理时钟、原生随机撤拒事件ID和物理收据引用按既有审计规则分开核验。
 
 ### 5.3 计算与提交分离
 
@@ -145,7 +149,7 @@
 | F-007 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-008 | research_performance.py?dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-009 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py?artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-continuation-receipt.json | verified | - |
-| F-010 | dual_mode_research.py | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
+| F-010 | dual_mode_research.py::_account_day_identity；test_localsim_replay_performance.py | docs/analysis/localsim_batch_reader_acceptance_20261028.md；既有单日证据保留 | pending_real_multiday_revalidation | BUG-2112跨目录多日反例及修复后完整账户复验 |
 | F-011 | research_performance.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-012 | docs/analysis/localsim_replay_performance_implementation_acceptance_20261028.md | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
 | F-013 | ????3/?8????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
