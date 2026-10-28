@@ -27,33 +27,19 @@
     "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/new-conflicts-diagnosis.json"
   ],
   "expected": "Certified boundary segmented rebase preserves predecessor history and all current provider facts, reports real normalized changes and is idempotent.",
-  "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
-    "backend_restart_required": true,
-    "backend_restart_owner": "user",
-    "target_id": "backend-main",
-    "target_ids": ["backend-main"],
-    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "not_required",
-    "persistence_basis": "git_tracked_source",
-    "provisional": false,
-    "inference_basis": "actual_changed_files",
-    "fresh_process_evidence": [
-      "Fresh AIstock Python ran X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/segmented_operator.py dev with the tracked follow-up module; 10 cached real complete histories matched source hashes, preserved every legacy prefix date, matched every current provider value, passed 10 atomic original-value rollback tests and repeated zero writes. Receipt segmented-dev-validation.json. Production write=false, dataset/profile write=false, runtime_action=false."
-    ],
-    "runtime_identity_match": "pending",
-    "post_restart_effective_gate": "pending_user_restart"
-  },
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2119-adj-factor-predecessor-basis-rejects-authoritative-nonproportional-overl.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/adj_factor_history_reconciler.py",
-      "backend/tests/services/test_adj_factor_history_reconciler.py"
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2119-adj-factor-predecessor-basis-rejects-authoritative-nonproportional-overl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/adj_factor_history_reconciler.py",
@@ -113,8 +99,8 @@
   },
   "first_seen_at": "2026-10-28T06:54:36.946441Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "61410e4584027a058bb8745985e32e2a05c28fa8",
+  "fixed_at": "2026-10-28T07:04:30Z",
   "github_issue_number": 6816,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6816",
   "last_seen_at": "2026-10-28T06:54:36.946441Z",
@@ -122,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6817",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -132,9 +119,54 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python ran X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/segmented_operator.py dev with the tracked follow-up module; 10 cached real complete histories matched source hashes, preserved every legacy prefix date, matched every current provider value, passed 10 atomic original-value rollback tests and repeated zero writes. Receipt segmented-dev-validation.json. Production write=false, dataset/profile write=false, runtime_action=false."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2119",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9ac2dc2b9da2d900",
+    "recorded_at": "2026-10-28T07:05:05.194437Z",
+    "runtime_contract_digest": "6812216685f8a2fd14ae789baac8685b14dd64cf7788dc390f62490fb2323bfd",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7fb106479397bde8c6f45f8e4f834b1505e7b92f",
+    "source_merge_commit": "61410e4584027a058bb8745985e32e2a05c28fa8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6817",
+    "validation_evidence": [
+      "python -m nox -s l0 --no-venv -> passed",
+      "python -m pytest backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py backend/tests/test_daily_data_integrity.py -q --tb=short -o addopts= --no-header -> 95 passed"
+    ],
+    "validation_evidence_digest": "480cffd558041ad7845ff8fdd386c2ad0b75c600074e6fb83320a62095fb9491"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -143,6 +175,10 @@
     "fingerprint": "9f4bc0cef1eb79a700a47a7f",
     "source_event_id": "FE-20261028-9f4bc0cef1eb"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --no-venv -> passed",
+    "python -m pytest backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py backend/tests/test_daily_data_integrity.py -q --tb=short -o addopts= --no-header -> 95 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
