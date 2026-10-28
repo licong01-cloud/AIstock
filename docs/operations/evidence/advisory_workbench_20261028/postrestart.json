@@ -733,10 +733,20 @@
     "request_count": 33,
     "screenshots": {
       "live-overview.png": "44bbb0411c4052c70994f849883d3b36052fb00719bda8c9cc78dbb9b9900210",
-      "live-daily.png": "e1610ab5ac9cf0e042da53196f028d322e33b3bf93cb4083624b98d6b59e1a5d",
-      "live-history-detail.png": "4cdb5c55c016c11b817464164954da258557b7130976c2392c750b78985c65a1"
+      "live-history-detail.png": "4cdb5c55c016c11b817464164954da258557b7130976c2392c750b78985c65a1",
+      "live-daily-settled.png": "6cdd5c02bbe8b61ff33f0d4f8e0b754fd307e20d4d75eef9b1a5d2c9ee5ad40f"
     },
-    "screenshot_location": "F:\\Dev\\AIstock\\tmp\\handoff\\advisory-workbench-postrestart-20261028"
+    "screenshot_location": "F:\\Dev\\AIstock\\tmp\\handoff\\advisory-workbench-postrestart-20261028",
+    "new_filter_settled": {
+      "status": "PASS",
+      "observed_at": "2026-10-28T03:01:15.108Z",
+      "new_rows": 7,
+      "changes": [
+        "NEW"
+      ],
+      "mocked_responses": 0
+    },
+    "screenshot_note": "The initial NEW-filter screenshot captured a loading state. Rechecked only that filter after response/render completion; seven NEW rows verified and replacement screenshot recorded."
   },
   "cleanup": [
     {
@@ -842,7 +852,8 @@
     },
     "workflow_smoke": "PASS",
     "l0": "PASS",
-    "semantic_tests": "13 passed"
+    "semantic_tests": "13 passed",
+    "adjacent_entry_probe_tests": "10 passed"
   },
   "boundaries": {
     "database_writes": 0,
