@@ -536,14 +536,43 @@ def test_predecessor_basis_normalization_preserves_history_and_is_idempotent():
     assert repository.snapshots[symbol] == normalized
 
 
-@pytest.mark.parametrize("missing_kind", ["no_boundary", "nonconstant_overlap", "one_overlap", "traded_hole"])
+@pytest.mark.parametrize("boundary_value", ["433.618", "1"])
+def test_predecessor_boundary_preserves_real_provider_restatements(boundary_value):
+    symbol = "920047.BJ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "30"), (DAY_2, boundary_value), (DAY_3, "434")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_2, DAY_3})})
+    reconciler = _reconciler(repository, _ListingProvider(symbol, listing_date=DAY_2))
+
+    dry = reconciler.reconcile(end_date=DAY_3, independent=True, dry_run=True)
+    assert dry["failures"] == []
+    assert repository.snapshots[symbol] == local and repository.basis_normalizations == []
+    receipt = reconciler.reconcile(end_date=DAY_3, independent=True)
+    assert receipt["failures"] == []
+    actual = repository.snapshots[symbol]
+    assert actual.rows[0].value == Decimal(str(float(Fraction(30) / Fraction(boundary_value))))
+    assert [r.value for r in actual.rows[1:]] == [Decimal(1), Decimal(1)]
+    assert receipt["changes"][0]["qfq_changed"] is True
+    proof = receipt["basis_normalizations"][0]
+    assert proof["policy"] == "certified_boundary_rebase_and_provider_restatement_v1"
+    assert proof["boundary_date"] == DAY_2.isoformat()
+    assert proof["boundary_local_value"] == boundary_value
+    assert proof["boundary_provider_value"] == "1"
+    assert proof["restated_overlap_row_count"] == 1
+    assert proof["original_rows"][-1]["adj_factor"] == "434"
+    assert repository.basis_normalizations == [proof]
+    repeat = reconciler.reconcile(end_date=DAY_3, independent=True)
+    assert repeat["failures"] == [] and repeat["written_row_count"] == 0
+    assert repeat["basis_normalization_count"] == 0
+
+
+@pytest.mark.parametrize("missing_kind", ["no_boundary", "missing_boundary_row", "one_overlap", "traded_hole"])
 def test_predecessor_basis_does_not_authorize_unexplained_gaps(missing_kind, monkeypatch):
     monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _: None)
     symbol = "920047.BJ"
     day4 = DAY_3 + dt.timedelta(days=1)
     values = [(DAY_1, "30"), (DAY_2, "433.618"), (DAY_3, "433.618")]
-    if missing_kind == "nonconstant_overlap":
-        values[-1] = (DAY_3, "434")
+    if missing_kind == "missing_boundary_row":
+        values = [(DAY_1, "30"), (DAY_3, "433.618"), (day4, "433.618")]
     if missing_kind == "one_overlap":
         values = values[:2]
     if missing_kind == "traded_hole":
@@ -552,6 +581,8 @@ def test_predecessor_basis_does_not_authorize_unexplained_gaps(missing_kind, mon
     repository = _Repository({symbol: local}, {symbol: frozenset({d for d, _ in values})})
     provider = (_SequencedProvider({symbol: [_provider_rows(symbol, [(DAY_2, "1"), (DAY_3, "1")])]})
                 if missing_kind == "no_boundary" else _ListingProvider(symbol, listing_date=DAY_2))
+    if missing_kind == "missing_boundary_row":
+        provider.adj_factor = lambda **_: _provider_rows(symbol, [(d, "1") for d in (DAY_2, DAY_3, day4)])
     receipt = _reconciler(repository, provider).reconcile(end_date=day4, independent=True)
     assert receipt["failed_symbols"] == [symbol]
     assert receipt["written_row_count"] == 0
