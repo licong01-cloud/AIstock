@@ -5,14 +5,14 @@
     "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
   ],
-  "assigned_agent": null,
   "approved_precision_contract": {
     "approval": "User approved the recommended precision normalization in this task on 2026-10-28.",
-    "ohlc": "Unique positive integer-li source price within independently rounded float32 price/factor intervals; reject no solution or ambiguity.",
-    "reference_prices": "Shortest decimal preserving the same float32 encoding; never force round(2) or claim recovery of arbitrary pre-encoding digits.",
     "invariants": "No return epsilon, formula/threshold/model changes, new fit, database write, or overwrite of delivered M0/M1 assets.",
-    "merge_authorization": "User authorized commit, push, PR and merge after at least two reviews, tests and green CI; cleanup is separately scoped."
+    "merge_authorization": "User authorized commit, push, PR and merge after at least two reviews, tests and green CI; cleanup is separately scoped.",
+    "ohlc": "Unique positive integer-li source price within independently rounded float32 price/factor intervals; reject no solution or ambiguity.",
+    "reference_prices": "Shortest decimal preserving the same float32 encoding; never force round(2) or claim recovery of arbitrary pre-encoding digits."
   },
+  "assigned_agent": null,
   "bug_id": "BUG-2113",
   "closed_at": null,
   "closure_requirements": [
@@ -35,12 +35,18 @@
   ],
   "expected": "Equivalent valid market facts have consistent flat/up/down and breadth semantics across file/database inputs; true price changes remain identifiable, invalid or ambiguous reconstruction fails explicitly.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -108,10 +114,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
