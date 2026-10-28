@@ -32,20 +32,20 @@
   "expected": "Completed formal index queries and actual changed dates are revision-bound; catalog request membership alone never proves a required quote; unknown remains unknown and real absent returned keys fail.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json",
       "backend/services/data_integrity/validation.py",
       "backend/tests/scripts/test_daily_integrity_writers.py",
       "backend/tests/test_daily_data_integrity.py",
       "scripts/ingest_tushare_index_daily.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json",
       "backend/services/data_integrity/validation.py",
       "backend/tests/scripts/test_daily_integrity_writers.py",
       "backend/tests/test_daily_data_integrity.py",
       "scripts/ingest_tushare_index_daily.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
@@ -133,9 +133,9 @@
   },
   "first_seen_at": "2026-10-28T02:45:50.421838Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "aab07802e95d80bb87f446b2da6d84cfdb16f203",
   "fix_summary": "Keep the existing shared completed-query contract: certify returned index keys only after all requests complete, check finite quote fields, retain unknown/partial scopes, and mark actual index writes in the caller transaction. Preserve valid values against NULL/NaN and propagate commit failures. No new business gate, publication authority or global rule migration.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-28T03:10:05Z",
   "github_issue_number": 6789,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6789",
   "last_seen_at": "2026-10-28T02:45:50.421838Z",
@@ -143,6 +143,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6793",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -175,6 +176,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -186,7 +188,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2110",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7ce05500a43d24ad",
+    "recorded_at": "2026-10-28T03:10:47.911137Z",
+    "runtime_contract_digest": "6812216685f8a2fd14ae789baac8685b14dd64cf7788dc390f62490fb2323bfd",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bbd9a2ad0f742e286708cb99206737aecfa2b4e7",
+    "source_merge_commit": "aab07802e95d80bb87f446b2da6d84cfdb16f203",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6793",
+    "validation_evidence": [
+      "python -m nox -s data_sync_autonomy_backend -> passed: 1049 passed 7 skipped; Validation Center valjob_20261028_030542_d6380430 at bbd9a2ad0f742e286708cb99206737aecfa2b4e7",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 tests",
+      "python -m nox -s l0 -> passed: exact four changed Python files"
+    ],
+    "validation_evidence_digest": "5220db1c794aec358371afc36d66034de83039c31e712619841c01d189b6dd02"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -195,6 +220,11 @@
     "fingerprint": "b1e75fa197b86c175c786d63",
     "source_event_id": "FE-20261028-b1e75fa197b8"
   },
+  "validation_evidence": [
+    "python -m nox -s data_sync_autonomy_backend -> passed: 1049 passed 7 skipped; Validation Center valjob_20261028_030542_d6380430 at bbd9a2ad0f742e286708cb99206737aecfa2b4e7",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests",
+    "python -m nox -s l0 -> passed: exact four changed Python files"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
