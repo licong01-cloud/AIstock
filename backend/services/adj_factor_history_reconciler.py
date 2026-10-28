@@ -14,10 +14,11 @@ any persistent row is changed.
 from __future__ import annotations
 
 import datetime as dt
+from contextlib import contextmanager
 import threading
 import time
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 import psycopg2.extras as pgx
@@ -30,6 +31,7 @@ SOURCE_API = "tushare.adj_factor"
 DOWNSTREAM_COMPONENTS = ("daily_bin", "factor_h5_static", "minute_bin")
 _STAGE_TABLE = "aistock_adj_factor_history_stage"
 _EMPTY_PAGE_MAX_ATTEMPTS = 8
+WRITER_LOCK = "aistock.market.adj_factor.writer.v1"
 
 
 class AdjFactorHistoryReconcileError(RuntimeError):
@@ -210,6 +212,7 @@ def _fetch_complete_history(
     values: dict[dt.date, AdjFactorRow] = {}
     cursor = end_date
     calls = 0
+    listing_start = None
     for _ in range(max_pages):
         page: tuple[AdjFactorRow, ...] = ()
         for empty_attempt in range(_EMPTY_PAGE_MAX_ATTEMPTS):
@@ -242,18 +245,24 @@ def _fetch_complete_history(
         earliest = min(row.trade_date for row in page)
         if earliest <= expected_start:
             break
+        if listing_start is None and callable(getattr(provider, "stock_basic", None)):
+            listing_start, listing_calls = _fetch_provider_listing_start(provider, symbol=symbol, limiter=limiter)
+            calls += listing_calls
+        if earliest == listing_start:
+            # The official start proves completion. Do not spend eight empty
+            # retries probing before a verified listing boundary, twice per run.
+            break
         next_cursor = earliest - dt.timedelta(days=1)
         if next_cursor >= cursor:
             raise AdjFactorHistoryReconcileError(f"{symbol}: provider pagination did not advance")
         cursor = next_cursor
     snapshot = _snapshot(symbol, values.values(), provider_call_count=calls)
     if snapshot.first_date > expected_start:
-        listing_start, listing_calls = _fetch_provider_listing_start(
-            provider,
-            symbol=symbol,
-            limiter=limiter,
-        )
-        calls += listing_calls
+        if listing_start is None:
+            listing_start, listing_calls = _fetch_provider_listing_start(
+                provider, symbol=symbol, limiter=limiter,
+            )
+            calls += listing_calls
         if listing_start != snapshot.first_date:
             raise AdjFactorHistoryReconcileError(
                 f"{symbol}: provider history begins {snapshot.first_date} after required {expected_start}; "
@@ -390,15 +399,59 @@ def _strict_append_rows(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -
     return additions
 
 
+def _existing_qfq_changed(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> bool:
+    """A longer date domain is not a repricing of the already published dates."""
+    if not local.rows:
+        return False
+    current = {row.trade_date: row.value for row in provider.rows}
+    old_anchor, new_anchor = local.rows[-1].value, provider.rows[-1].value
+    # Compare ratios without rounded Decimal division (uniform rebasing is legal).
+    with localcontext() as context:
+        context.prec = max(28, 2 * max(len(row.value.as_tuple().digits)
+                                     for row in (*local.rows, *provider.rows)) + 2)
+        return any(row.trade_date not in current or
+                   row.value * new_anchor != current[row.trade_date] * old_anchor for row in local.rows)
+
+
+def _failure(symbol: str, exc: Exception) -> dict[str, Any]:
+    transient = (not isinstance(exc, AdjFactorHistoryReconcileError)
+                 or "changed between stability reads" in str(exc)
+                 or "changed while reconciliation" in str(exc)
+                 or "newer than the repair cutoff" in str(exc))
+    return {"symbol": symbol, "error": str(exc), "error_type": type(exc).__name__,
+            "retryable": transient}
+
+
 class PostgresAdjFactorHistoryRepository:
     """Session-scoped staging plus one atomic production-table replacement."""
 
     def __init__(self, conn: Any) -> None:
         self.conn = conn
 
+    @contextmanager
+    def writer_lock(self):
+        """One session owner across dates, init, repair, and scheduler retries."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0))", (WRITER_LOCK,))
+            acquired = cur.fetchone()[0]
+        if not acquired:
+            raise AdjFactorHistoryReconcileError("adj_factor writer is already active; no source work started")
+        try:
+            yield
+        finally:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (WRITER_LOCK,))
+
     def list_symbol_scopes(self, *, end_date: dt.date, symbols: Sequence[str] | None = None) -> Sequence[SymbolScope]:
         requested = tuple(sorted({str(value).strip().upper() for value in symbols or () if value}))
-        params: list[Any] = [end_date, end_date]
+        params: list[Any] = [end_date]
+        source_predicate = ""
+        if requested:
+            source_predicate = "AND ts_code = ANY(%s)"
+            params.append(list(requested))
+        params.append(end_date)
+        if requested:
+            params.append(list(requested))
         predicate = ""
         if requested:
             predicate = "WHERE ts_code = ANY(%s)"
@@ -410,11 +463,13 @@ class PostgresAdjFactorHistoryRepository:
                     SELECT upper(ts_code) AS ts_code, min(trade_date) AS first_date
                     FROM market.adj_factor
                     WHERE trade_date <= %s
+                      {source_predicate}
                     GROUP BY upper(ts_code)
                     UNION ALL
                     SELECT upper(ts_code) AS ts_code, min(trade_date) AS first_date
                     FROM market.kline_daily_raw
                     WHERE trade_date <= %s
+                      {source_predicate}
                       AND (volume_hand > 0 OR amount_li > 0)
                     GROUP BY upper(ts_code)
                 ), scoped AS (
@@ -541,6 +596,12 @@ class PostgresAdjFactorHistoryRepository:
                 self.conn.autocommit = False
             with self.conn.cursor() as cur:
                 cur.execute("LOCK TABLE market.adj_factor IN SHARE ROW EXCLUSIVE MODE")
+                cur.execute("SELECT EXISTS (SELECT 1 FROM market.adj_factor "
+                            "WHERE ts_code=ANY(%s) AND trade_date>%s)", (list(ordered), end_date))
+                if cur.fetchone()[0]:
+                    raise AdjFactorHistoryReconcileError(
+                        "local factor suffix is newer than the repair cutoff; reconcile through the current suffix"
+                    )
             for symbol in ordered:
                 current = self.load_snapshot(symbol, end_date=end_date)
                 if current.canonical_sha256 != expected_local_sha256[symbol]:
@@ -551,15 +612,18 @@ class PostgresAdjFactorHistoryRepository:
                 from .data_integrity.repository import schema_installed
                 changed_dates = []
                 if schema_installed(self.conn):
-                    cur.execute(f"""WITH original AS (
-                        SELECT ts_code,trade_date,adj_factor FROM market.adj_factor
-                        WHERE ts_code=ANY(%s) AND trade_date<=%s), staged AS (
+                    cur.execute(f"""WITH staged AS (
                         SELECT ts_code,trade_date,adj_factor FROM {_STAGE_TABLE}
                         WHERE ts_code=ANY(%s) AND trade_date<=%s)
-                        SELECT DISTINCT COALESCE(a.trade_date,b.trade_date) AS day
-                        FROM original a FULL JOIN staged b USING(ts_code,trade_date)
-                        WHERE a.adj_factor IS DISTINCT FROM b.adj_factor ORDER BY 1""",
-                        (list(ordered), end_date, list(ordered), end_date))
+                        SELECT DISTINCT day FROM (
+                          SELECT s.trade_date AS day FROM staged s LEFT JOIN market.adj_factor a
+                            USING(ts_code,trade_date)
+                          WHERE a.adj_factor IS DISTINCT FROM s.adj_factor
+                          UNION ALL
+                          SELECT a.trade_date AS day FROM market.adj_factor a LEFT JOIN staged s
+                            USING(ts_code,trade_date)
+                          WHERE a.ts_code=ANY(%s) AND a.trade_date<=%s AND s.trade_date IS NULL
+                        ) changed ORDER BY 1""", (list(ordered), end_date, list(replace), end_date))
                     changed_dates = [r[0] for r in cur.fetchall()]
                 if replace:
                     cur.execute(
@@ -647,15 +711,99 @@ class AdjFactorHistoryReconciler:
         )
 
     def reconcile(
-        self,
-        *,
-        end_date: dt.date,
-        symbols: Sequence[str] | None = None,
-        dry_run: bool = False,
+        self, *, end_date: dt.date, symbols: Sequence[str] | None = None,
+        dry_run: bool = False, independent: bool = False,
+        progress: Callable[[dict[str, Any]], None] | None = None,
+        completed: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
+        """Keep the atomic API; daily orchestration opts into independent securities."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         scopes = tuple(self.repository.list_symbol_scopes(end_date=end_date, symbols=symbols))
+        if not independent:
+            return self._reconcile_atomic(end_date=end_date, scopes=scopes, dry_run=dry_run)
+        successes: dict[str, str] = {}
+        failures: list[dict[str, Any]] = []
+        receipts: list[dict[str, Any]] = []
+        resumed: list[str] = []
+        remaining: list[SymbolScope] = []
+        for scope in scopes:
+            expected = (completed or {}).get(scope.symbol)
+            if expected and self.repository.load_snapshot(scope.symbol, end_date=end_date).canonical_sha256 == expected:
+                successes[scope.symbol] = expected
+                resumed.append(scope.symbol)
+            else:
+                remaining.append(scope)
+
+        def report():
+            if progress is not None:
+                progress({"end_date": end_date.isoformat(), "total": len(scopes),
+                          "completed": dict(successes), "failures": list(failures),
+                          "written_row_count": sum(r["written_row_count"] for r in receipts)})
+
+        batch_size = max(self.workers * 4, self.workers)
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            for offset in range(0, len(remaining), batch_size):
+                futures = {pool.submit(self._stable_provider_snapshot, scope, end_date=end_date): scope
+                           for scope in remaining[offset:offset+batch_size]}
+                for future in as_completed(futures):
+                    scope = futures[future]
+                    try:
+                        snapshot = future.result()
+                    except Exception as exc:
+                        # Provider libraries also raise their own timeout/rate-limit
+                        # exception types. Never classify those as a successful day.
+                        failures.append(_failure(scope.symbol, exc))
+                        report()
+                        continue
+                    try:
+                        receipt = self._reconcile_atomic(end_date=end_date, scopes=(scope,), dry_run=dry_run,
+                                                         snapshots={scope.symbol: snapshot})
+                    except (AdjFactorHistoryReconcileError, TimeoutError, ConnectionError) as exc:
+                        failures.append(_failure(scope.symbol, exc))
+                    else:
+                        receipts.append(receipt)
+                        if not dry_run:
+                            successes[scope.symbol] = receipt["verified_histories"][scope.symbol]
+                    report()
+        if resumed and not remaining:
+            report()
+        failures.sort(key=lambda item: item["symbol"])
+        changes = sorted((c for r in receipts for c in r["changes"]), key=lambda c: c["symbol"])
+        qfq_symbols = [c["symbol"] for c in changes if c["qfq_changed"] or c["historical_coverage_extended"]]
+        written = sum(r["written_row_count"] for r in receipts)
+        identities = {symbol: value for r in receipts for symbol, value in r["verified_histories"].items()}
+        identities.update({s: successes[s] for s in resumed})
+        return {"schema_version": "adj_factor_per_security_reconciliation_receipt_v1", "source_api": SOURCE_API,
+                "end_date": end_date.isoformat(), "stable_read_count": 2,
+                "status": ("partial" if failures else "dry_run" if dry_run else "reconciled" if written else "unchanged"),
+                "scanned_symbol_count": len(scopes), "completed_symbols": sorted(successes),
+                "completed": successes, "failed_symbols": [f["symbol"] for f in failures],
+                "failures": failures, "resumed_symbols": resumed, "changes": changes,
+                "changed_symbols": [c["symbol"] for c in changes], "changed_symbol_count": len(changes),
+                "append_symbol_count": sum(c["write_mode"] == "append" for c in changes),
+                "full_replace_symbol_count": sum(c["write_mode"] == "full_replace" for c in changes),
+                "provider_call_count": None if failures else sum(r["provider_call_count"] for r in receipts),
+                "provider_call_count_complete": not failures,
+                "verified_histories": identities,
+                "verified_snapshot_sha256": sha256_hex(canonical_json_bytes(identities)),
+                "retained_nontrading_row_count": sum(r["retained_nontrading_row_count"] for r in receipts),
+                "pre_authority_price_exclusion_count": sum(r["pre_authority_price_exclusion_count"] for r in receipts),
+                "written_row_count": written, "database_write_performed": bool(written),
+                "downstream_invalidation": {"required": bool(qfq_symbols),
+                    "components": list(DOWNSTREAM_COMPONENTS) if qfq_symbols else [], "instruments": qfq_symbols},
+                "llm_used": False, "online_search_used": False}
+
+    def _reconcile_atomic(
+        self,
+        *,
+        end_date: dt.date,
+        scopes: Sequence[SymbolScope],
+        dry_run: bool = False,
+        snapshots: Mapping[str, AdjFactorSnapshot] | None = None,
+    ) -> dict[str, Any]:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         self.repository.begin_stage()
         changes: list[dict[str, Any]] = []
         expected_local: dict[str, str] = {}
@@ -663,6 +811,7 @@ class AdjFactorHistoryReconciler:
         provider_identities: list[dict[str, Any]] = []
         pre_authority_price_exclusions: list[dict[str, Any]] = []
         retained_nontrading_rows: list[dict[str, str]] = []
+        verified_histories: dict[str, str] = {}
         provider_calls = 0
 
         # Bound outstanding histories so a fast provider cannot retain the full
@@ -671,9 +820,16 @@ class AdjFactorHistoryReconciler:
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             for offset in range(0, len(scopes), batch_size):
                 batch = scopes[offset : offset + batch_size]
-                futures = {
-                    pool.submit(self._stable_provider_snapshot, scope, end_date=end_date): scope for scope in batch
-                }
+                if snapshots is None:
+                    futures = {pool.submit(self._stable_provider_snapshot, scope, end_date=end_date): scope
+                               for scope in batch}
+                else:
+                    from concurrent.futures import Future
+                    futures = {}
+                    for scope in batch:
+                        done = Future()
+                        done.set_result(snapshots[scope.symbol])
+                        futures[done] = scope
                 for future in as_completed(futures):
                     scope = futures[future]
                     source_provider = future.result()
@@ -710,6 +866,7 @@ class AdjFactorHistoryReconciler:
                             f"{scope.symbol}: provider history omits required traded price dates "
                             f"(price={len(missing_prices)})"
                         )
+                    verified_histories[scope.symbol] = provider.canonical_sha256
                     retained_nontrading_rows.extend(
                         {
                             "symbol": row.symbol,
@@ -742,7 +899,10 @@ class AdjFactorHistoryReconciler:
                     append_rows = _strict_append_rows(local, provider)
                     write_mode = "append" if append_rows is not None else "full_replace"
                     staged_rows = append_rows if append_rows is not None else provider.rows
-                    qfq_changed = provider.qfq_sha256 != local.qfq_sha256
+                    qfq_changed = _existing_qfq_changed(local, provider)
+                    local_dates = {row.trade_date for row in local.rows}
+                    historical_coverage_extended = bool(local.rows) and any(
+                        row.trade_date <= local.last_date and row.trade_date not in local_dates for row in provider.rows)
                     self.repository.stage_rows(staged_rows)
                     expected_local[scope.symbol] = local.canonical_sha256
                     expected_rows[scope.symbol] = len(staged_rows)
@@ -758,6 +918,7 @@ class AdjFactorHistoryReconciler:
                             "local_qfq_sha256": local.qfq_sha256,
                             "provider_qfq_sha256": provider.qfq_sha256,
                             "qfq_changed": qfq_changed,
+                            "historical_coverage_extended": historical_coverage_extended,
                             "difference_start": difference_start.isoformat(),
                             "difference_end": difference_end.isoformat(),
                             "invalidation_start": invalidation_start.isoformat(),
@@ -771,7 +932,8 @@ class AdjFactorHistoryReconciler:
         retained_nontrading_rows.sort(key=lambda item: (item["symbol"], item["trade_date"]))
         changed_symbols = [item["symbol"] for item in changes]
         replaced_symbols = [item["symbol"] for item in changes if item["write_mode"] == "full_replace"]
-        qfq_changed_symbols = [item["symbol"] for item in changes if item["qfq_changed"]]
+        qfq_changed_symbols = [item["symbol"] for item in changes
+                               if item["qfq_changed"] or item["historical_coverage_extended"]]
         written = 0
         if changed_symbols and not dry_run:
             written = self.repository.apply_staged(
@@ -795,6 +957,7 @@ class AdjFactorHistoryReconciler:
             "append_symbol_count": len(changed_symbols) - len(replaced_symbols),
             "full_replace_symbol_count": len(replaced_symbols),
             "changes": changes,
+            "verified_histories": verified_histories,
             "provider_snapshot_sha256": sha256_hex(canonical_json_bytes(provider_identities)),
             "pre_authority_price_exclusion_count": sum(
                 int(item["excluded_date_count"]) for item in pre_authority_price_exclusions

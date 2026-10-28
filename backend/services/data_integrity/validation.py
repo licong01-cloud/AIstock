@@ -45,6 +45,22 @@ def key_result(expected, facts, *, required_fields=(), positive_fields=(), check
                             (counts,), {**(checks or {}), "physical_rows": len(facts)}, gaps)
 
 
+def adj_factor_result(expected, facts, history=None):
+    """A finite latest value cannot certify a known unresolved factor baseline."""
+    result = key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
+    history = history or {}
+    state = history.get("status")
+    if state in {"RUNNING", "INTERRUPTED"}:
+        return unverified("adj_factor_history_not_completed", physical_rows=len(facts), history_status=state)
+    blocked = set(history.get("failed_symbols", ())) & set(expected)
+    if state == "PARTIAL" and blocked:
+        return ValidationResult(PartitionState.INCOMPLETE, result.counts + (
+            CheckCounts("history_baseline", len(blocked), 0, 0, 0, len(blocked), 0),),
+            {**result.checks, "history_status": state}, result.gaps + (
+                {"classification": "HISTORY_CONFLICT", "symbols": sorted(blocked)},))
+    return result
+
+
 def daily_basic_result(expected, facts):
     """Keep ingestion's admission ratio, but never call residual gaps complete.
 
@@ -196,7 +212,11 @@ class PhysicalValidator:
                 from backend.data_service.moneyflow_contract import TUSHARE_MONEYFLOW_AMOUNT_COLUMNS, TUSHARE_MONEYFLOW_VOLUME_COLUMNS
                 return key_result(expected, facts, required_fields=TUSHARE_MONEYFLOW_AMOUNT_COLUMNS+TUSHARE_MONEYFLOW_VOLUME_COLUMNS,
                     checks={"source_units": {"amount": "10k_cny", "volume": "hand"}, "alias_authority": "shared_security_source_identity"})
-            return key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
+            history_rows = rows(conn, """SELECT metadata->'adj_factor_history' AS history
+                FROM market.dataset_date_refresh_audit WHERE dataset='adj_factor'
+                  AND trade_date=%s AND data_source='canonical_db'""", (day,))
+            history = history_rows[0].get("history") if history_rows else None
+            return adj_factor_result(expected, facts, history)
         if dataset == "index_daily":
             # index_basic is a request catalogue (including nonquoted variants),
             # not a dated publication authority. Never turn it into fake gaps.

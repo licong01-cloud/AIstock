@@ -248,6 +248,115 @@ def test_reconcile_new_trade_date_stages_only_append_suffix() -> None:
     assert receipt["changes"][0]["staged_row_count"] == 1
     assert receipt["written_row_count"] == 1
     assert len(repository.snapshots[symbol].rows) == 3
+    assert receipt["downstream_invalidation"]["required"] is False
+
+
+def test_independent_reconcile_commits_good_symbol_and_returns_exact_failure() -> None:
+    good, bad = "300506.SZ", "688109.SH"
+    repository = _Repository(
+        {code: _snapshot(code, _rows(code, [(DAY_1, "1")])) for code in (good, bad)},
+        {code: frozenset({DAY_1}) for code in (good, bad)},
+    )
+    provider = _SequencedProvider({
+        good: [_provider_rows(good, [(DAY_1, "2")])],
+        bad: [_provider_rows(bad, [(DAY_1, "2")]), _provider_rows(bad, [(DAY_1, "3")])],
+    })
+    progress = []
+    receipt = _reconciler(repository, provider).reconcile(
+        end_date=DAY_1, independent=True, progress=progress.append,
+    )
+    assert receipt["status"] == "partial"
+    assert receipt["failed_symbols"] == [bad]
+    assert receipt["completed_symbols"] == [good]
+    assert repository.snapshots[good].rows[0].value == 2
+    assert repository.snapshots[bad].rows[0].value == 1
+    assert repository.apply_calls == 1
+    assert len(progress) == 2 and receipt["written_row_count"] == 1
+
+
+def test_qfq_restatement_is_not_inferred_from_uniform_factor_rescaling() -> None:
+    symbol = "920047.BJ"
+    repository = _Repository(
+        {symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "433.618"), (DAY_2, "433.618")]))},
+        {symbol: frozenset({DAY_1, DAY_2, DAY_3})},
+    )
+    provider = _SequencedProvider({symbol: [_provider_rows(symbol, [(d, "1") for d in (DAY_1, DAY_2, DAY_3)])]})
+    receipt = _reconciler(repository, provider).reconcile(end_date=DAY_3)
+    assert receipt["full_replace_symbol_count"] == 1
+    assert receipt["downstream_invalidation"]["required"] is False
+
+
+def test_independent_dry_run_does_not_apply_good_or_bad_histories() -> None:
+    symbol = "300506.SZ"
+    repository = _Repository(
+        {symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "1")]))},
+        {symbol: frozenset({DAY_1})},
+    )
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [_provider_rows(symbol, [(DAY_1, "2")])]})).reconcile(
+        end_date=DAY_1, independent=True, dry_run=True,
+    )
+    assert receipt["status"] == "dry_run"
+    assert receipt["database_write_performed"] is False
+    assert repository.apply_calls == 0
+
+
+@pytest.mark.parametrize("local_changed", [False, True])
+def test_independent_resume_reuses_only_the_exact_committed_local_snapshot(local_changed) -> None:
+    symbol = "300506.SZ"
+    verified = _snapshot(symbol, _rows(symbol, [(DAY_1, "1")]))
+    current = _snapshot(symbol, _rows(symbol, [(DAY_1, "2" if local_changed else "1")]))
+    repository = _Repository({symbol: current}, {symbol: frozenset({DAY_1})})
+    provider = _SequencedProvider({symbol: [_provider_rows(symbol, [(DAY_1, "1")])]})
+    receipt = _reconciler(repository, provider).reconcile(
+        end_date=DAY_1, independent=True, completed={symbol: verified.canonical_sha256},
+    )
+    assert provider.call_counts[symbol] == (2 if local_changed else 0)
+    assert receipt["resumed_symbols"] == ([] if local_changed else [symbol])
+    assert repository.snapshots[symbol].canonical_sha256 == verified.canonical_sha256
+
+
+def test_independent_provider_library_error_does_not_discard_other_commits(monkeypatch) -> None:
+    good, bad = "300506.SZ", "688109.SH"
+    repository = _Repository(
+        {code: _snapshot(code, _rows(code, [(DAY_1, "1")])) for code in (good, bad)},
+        {code: frozenset({DAY_1}) for code in (good, bad)},
+    )
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _: None)
+    receipt = _reconciler(repository, _SequencedProvider({
+        good: [_provider_rows(good, [(DAY_1, "2")])], bad: [RuntimeError("provider unavailable")],
+    })).reconcile(end_date=DAY_1, independent=True)
+    assert receipt["status"] == "partial" and receipt["failed_symbols"] == [bad]
+    assert repository.snapshots[good].rows[0].value == 2
+
+
+def test_real_new_factor_event_reprices_existing_dates_but_constant_extension_does_not() -> None:
+    symbol = "000970.SZ"
+    repository = _Repository({symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "1")]))},
+                             {symbol: frozenset({DAY_1, DAY_2})})
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [
+        _provider_rows(symbol, [(DAY_1, "1"), (DAY_2, "1.2")]),
+    ]})).reconcile(end_date=DAY_2)
+    assert receipt["append_symbol_count"] == 1 and receipt["downstream_invalidation"]["required"]
+
+
+def test_existing_qfq_ratio_comparison_is_exact_beyond_default_decimal_precision() -> None:
+    from backend.services.adj_factor_history_reconciler import _existing_qfq_changed
+    symbol = "300506.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.00000000000000000000000000001"), (DAY_2, "1")]))
+    provider = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.00000000000000000000000000002"), (DAY_2, "1")]))
+    assert _existing_qfq_changed(local, provider)
+
+
+def test_newly_available_historical_date_requires_refresh_even_without_qfq_repricing() -> None:
+    symbol = "300506.SZ"
+    repository = _Repository({symbol: _snapshot(symbol, _rows(symbol, [(DAY_1, "1"), (DAY_3, "1")]))},
+                             {symbol: frozenset({DAY_1, DAY_2, DAY_3})})
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [
+        _provider_rows(symbol, [(d, "1") for d in (DAY_1, DAY_2, DAY_3)]),
+    ]})).reconcile(end_date=DAY_3)
+    assert receipt["changes"][0]["qfq_changed"] is False
+    assert receipt["changes"][0]["historical_coverage_extended"] is True
+    assert receipt["downstream_invalidation"]["required"] is True
 
 
 def test_reconcile_fails_closed_when_provider_changes_between_reads() -> None:
