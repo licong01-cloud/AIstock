@@ -945,6 +945,11 @@ async function mockAdvisoryApis(page: Page, options: {
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
 
+    if (path.endsWith("/api/v1/advisory/workbench/quotes") && method === "GET") {
+      const symbols = (url.searchParams.get("symbols") || "").split(",");
+      return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: 12.34, kind: "CLOSE", trade_date: "2026-10-28", observed_at: "2026-10-28T16:00:00+08:00" }])) });
+    }
+
     if (path.endsWith("/api/v1/advisory/trading-days/defaults")) return route.fallback();
 
     if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {

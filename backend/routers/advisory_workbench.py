@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.advisory_workbench.projection import WorkbenchError
 from backend.services.advisory_workbench.service import WorkbenchService
+from backend.services.advisory_workbench.quotes import quote_service
 
 router = APIRouter(prefix="/workbench", tags=["advisory-workbench"])
 LOG = logging.getLogger(__name__)
@@ -14,6 +15,15 @@ LOG = logging.getLogger(__name__)
 
 def get_service():
     return WorkbenchService()
+
+
+def get_quotes():
+    return quote_service
+
+
+@router.get("/quotes")
+def quotes(symbols: str = Query(..., min_length=1, max_length=1000), service=Depends(get_quotes)):
+    return invoke(service.get, symbols)
 
 
 def invoke(function, *args, **kwargs):

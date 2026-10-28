@@ -26,6 +26,10 @@ async function setup(page: Page, state: State) {
     state.seen.push(`${request.method()} ${url.pathname}${url.search}`);
     expect(request.method()).toBe("GET");
     const resource = url.pathname.replace("/api/v1", "");
+    if (resource === api + "/quotes") {
+      const symbols = (url.searchParams.get("symbols") || "").split(",");
+      return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null }])) });
+    }
     if (resource.includes("/integrity/days/")) return json(route, { fact_date: target, all_sync_complete: false });
     if (resource.endsWith("/reranking-shadow")) return json(route, { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, last_waiting: state.waiting ? { results: [{ status: "WAITING_DATA", decision_date: "2026-10-27", message: "输入分区未验证或已修订", context: { dataset: "index_daily", fact_date: "2026-10-27" } }] } : null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
     if (!resource.startsWith(api)) return json(route, { count: 0, items: [] });
@@ -61,6 +65,35 @@ async function setup(page: Page, state: State) {
   });
 }
 const main = (page: Page) => page.getByTestId("advisory-workbench");
+
+test("TDX current prices and reference changes include pending entries without inventing episode returns", async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  const row = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "当日股票 A", exact: true }) });
+  await expect(row.getByTestId("advisory-current-price")).toContainText("¥46.40");
+  await expect(row.getByTestId("advisory-current-price")).toContainText("最近收盘");
+  await expect(row.getByTestId("advisory-reference-change")).toContainText("+10.00%");
+  await expect(row).toContainText("待进入确认，尚无过程收益");
+  const missing = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "当日股票 C", exact: true }) });
+  await expect(missing.getByTestId("advisory-current-price")).toContainText("TDX暂无收盘价");
+  await expect(missing.getByTestId("advisory-reference-change")).toContainText("等待有效行情");
+  expect(state.seen.filter(s => s.includes("/quotes")).every(s => s.startsWith("GET "))).toBe(true);
+  await main(page).getByRole("button", { name: "历史记录", exact: true }).click();
+  const old = main(page).getByRole("row").filter({ hasText: "重复入选股票" }).first();
+  await expect(old.getByTestId("advisory-current-price")).toContainText("¥46.40");
+  await expect(old).toContainText("+6.20%");
+  await expect(old).toContainText("已结束参考收益");
+});
+
+test("quote request failures remain visible and do not hide recommendation rows", async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.route("**/advisory/workbench/quotes?**", route => json(route, { detail: "TDX unavailable" }, 503));
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  const row = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "当日股票 A", exact: true }) });
+  await expect(row.getByTestId("advisory-current-price")).toContainText("TDX行情暂不可用");
+  await expect(row.getByTestId("advisory-reference-change")).toContainText("等待有效行情");
+  await expect(row.getByRole("button", { name: "当日股票 A", exact: true })).toBeVisible();
+});
 
 test("model waiting shows precise source reason without a task action", async ({ page }) => {
   const state: State = { seen: [], waiting: true }; await setup(page, state);

@@ -80,6 +80,7 @@ rules:
       - frontend/src/app/paper-v2/advisory/**
       - frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts
       - frontend/tests/paper-v2/advisory-workbench.spec.ts
+      - frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts
       - frontend/src/components/advisory/**
       - frontend/src/lib/api/advisoryWorkbench.ts
     primary_module: advisory.ui

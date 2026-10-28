@@ -1,4 +1,5 @@
 "use client";
+import { QuoteCell, QuoteProvider } from "./LiveQuotes";
 
 import { Fragment, Suspense, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
@@ -730,12 +731,12 @@ const EpisodeReturnsTable = memo(function EpisodeReturnsTable({ rows }: { rows: 
   return <>
     <div className="pv2-table-wrap">
       <table className="pv2-table" data-testid="advisory-returns-table">
-        <thead><tr><th>股票</th><th>入选口径</th><th>入选生效日</th><th>退出原因</th><th>涨跌幅</th><th>胜负</th><th>回撤</th></tr></thead>
+        <thead><tr><th>股票</th><th>当前最新价</th><th>入选口径</th><th>入选生效日</th><th>退出原因</th><th>涨跌幅</th><th>胜负</th><th>回撤</th></tr></thead>
         <tbody>
           {visibleRows.map((row) => (
-            <tr key={row.episode_id}><td>{stockLabel(row)}</td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
+            <tr key={row.episode_id}><td>{stockLabel(row)}</td><td><QuoteCell symbol={row.symbol} /></td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
           ))}
-          {!rows.length ? <tr><td colSpan={7}>暂无 episode 收益。</td></tr> : null}
+          {!rows.length ? <tr><td colSpan={8}>暂无 episode 收益。</td></tr> : null}
         </tbody>
       </table>
     </div>
@@ -2236,7 +2237,7 @@ function AdvisoryPageContent() {
                 </div>
                 <div className="pv2-table-wrap" style={{ marginTop: 10 }} data-testid="advisory-forward-prediction-table">
                   <table className="pv2-table">
-                    <thead><tr><th>模型排名</th><th>股票</th><th>建议周期</th><th>5日收益区间</th><th>买入区间</th><th>止盈区间</th><th>止损区间</th></tr></thead>
+                    <thead><tr><th>模型排名</th><th>股票</th><th>当前最新价</th><th>建议周期</th><th>5日收益区间</th><th>买入区间</th><th>止盈区间</th><th>止损区间</th></tr></thead>
                     <tbody>
                       {latestForwardPrediction.candidates
                         .filter((candidate) => candidate.is_top5)
@@ -2248,7 +2249,7 @@ function AdvisoryPageContent() {
                           return (
                             <tr key={candidate.symbol} data-testid="advisory-forward-prediction-row">
                               <td>{candidate.advisory_model_rank}</td>
-                              <td><strong>{candidate.symbol}</strong></td>
+                              <td><strong>{candidate.symbol}</strong></td><td><QuoteCell symbol={candidate.symbol} /></td>
                               <td>{outcomeCandidate ? `${outcomeCandidate.holding_period.range_low_days}-${outcomeCandidate.holding_period.range_high_days}日` : "-"}</td>
                               <td>{horizon ? `${fmtPct(horizon.excess_return_calibrated_q10 ?? horizon.excess_return_q10)} - ${fmtPct(horizon.excess_return_calibrated_q90 ?? horizon.excess_return_q90)}` : "-"}</td>
                               <td>{fmtPriceBand(price?.calibrated_entry_price_range ?? price?.entry_price_range)}</td>
@@ -2347,11 +2348,11 @@ function AdvisoryPageContent() {
           {modelShadow?.entry_price?.candidates.length ? (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left text-sm" data-testid="advisory-entry-price-table">
-                <thead><tr className="border-b"><th className="p-2">股票</th><th className="p-2">参考收盘 / 日期</th><th className="p-2">开盘价格区间 / 中位</th><th className="p-2">止盈 / 止损</th><th className="p-2">状态</th></tr></thead>
+                <thead><tr className="border-b"><th className="p-2">股票</th><th className="p-2">当前最新价</th><th className="p-2">参考收盘 / 日期</th><th className="p-2">开盘价格区间 / 中位</th><th className="p-2">止盈 / 止损</th><th className="p-2">状态</th></tr></thead>
                 <tbody>{modelShadow.entry_price.candidates.map((candidate) => {
                   const band = candidate.entry_price.calibrated_range ?? candidate.entry_price.raw_range;
                   return <tr key={candidate.symbol} className="border-b" data-testid="advisory-entry-price-row">
-                    <td className="p-2">{candidate.symbol}</td>
+                    <td className="p-2">{candidate.symbol}</td><td className="p-2"><QuoteCell symbol={candidate.symbol} /></td>
                     <td className="p-2">{fmtPrice(candidate.decision_reference_price)} / {candidate.decision_price_trade_date || "-"}</td>
                     <td className="p-2">{candidate.entry_price.status === "AVAILABLE" && band ? `${fmtPriceBand(band)} / ${fmtPrice(band.mid)}` : "不可用"}</td>
                     <td className="p-2">{candidate.take_profit.status === "AVAILABLE" ? fmtPriceBand(candidate.take_profit.payload) : "止盈未验证"} / {candidate.stop_loss.status === "AVAILABLE" ? fmtPriceBand(candidate.stop_loss.payload) : "止损未验证"}</td>
@@ -2398,11 +2399,11 @@ function AdvisoryPageContent() {
               </div>
               <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
                 <table className="pv2-table" data-testid="advisory-model-shadow-table">
-                  <thead><tr><th>股票</th><th>原排名</th><th>模型排名</th><th>模型分</th><th>Top5</th><th>主要贡献</th></tr></thead>
+                  <thead><tr><th>股票</th><th>当前最新价</th><th>原排名</th><th>模型排名</th><th>模型分</th><th>Top5</th><th>主要贡献</th></tr></thead>
                   <tbody>
                     {modelShadow.candidates.map((candidate) => (
                       <tr key={candidate.symbol} data-testid="advisory-model-shadow-row">
-                        <td>{candidate.symbol}</td>
+                        <td>{candidate.symbol}</td><td><QuoteCell symbol={candidate.symbol} /></td>
                         <td>{candidate.selection_effective_rank} / {fmtNumber(candidate.selection_score, 4)}</td>
                         <td>{candidate.advisory_model_rank}</td>
                         <td>{fmtNumber(candidate.advisory_model_score, 6)}</td>
@@ -2456,7 +2457,7 @@ function AdvisoryPageContent() {
                     <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
                       <table className="pv2-table" data-testid="advisory-outcome-table">
                         <thead>
-                          <tr><th>股票</th><th>M2排名</th><th>超额收益 q10 / q50 / q90</th><th>正收益</th><th>信号存活</th><th>MFE q50 / q90</th><th>MAE q50 / q90</th><th>持股范围</th></tr>
+                          <tr><th>股票</th><th>当前最新价</th><th>M2排名</th><th>超额收益 q10 / q50 / q90</th><th>正收益</th><th>信号存活</th><th>MFE q50 / q90</th><th>MAE q50 / q90</th><th>持股范围</th></tr>
                         </thead>
                         <tbody>
                           {modelShadow.outcome.candidates.map((candidate) => {
@@ -2464,7 +2465,7 @@ function AdvisoryPageContent() {
                             const rank = modelShadow.candidates.find((item) => item.symbol === candidate.symbol)?.advisory_model_rank;
                             return (
                               <tr key={candidate.symbol} data-testid="advisory-outcome-row">
-                                <td>{candidate.symbol}</td>
+                                <td>{candidate.symbol}</td><td><QuoteCell symbol={candidate.symbol} /></td>
                                 <td>{rank ?? "-"}</td>
                                 <td>{horizon ? calibratedMetric(horizon.return_interval_calibration_state, <>{fmtPct(horizon.excess_return_calibrated_q10)} / {fmtPct(horizon.excess_return_calibrated_q50)} / {fmtPct(horizon.excess_return_calibrated_q90)}</>, <>{fmtPct(horizon.excess_return_q10)} / {fmtPct(horizon.excess_return_q50)} / {fmtPct(horizon.excess_return_q90)}</>) : "-"}</td>
                                 <td>{horizon ? calibratedMetric(horizon.positive_probability_calibration_state, fmtPct(horizon.positive_probability_calibrated), fmtPct(horizon.positive_probability)) : "-"}</td>
@@ -2512,12 +2513,12 @@ function AdvisoryPageContent() {
                   <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
                     <table className="pv2-table" data-testid="advisory-price-range-table">
                       <thead>
-                        <tr><th>股票</th><th>目标交易日</th><th>决策参考价</th><th>次日开盘区间</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
+                        <tr><th>股票</th><th>当前最新价</th><th>目标交易日</th><th>决策参考价</th><th>次日开盘区间</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
                       </thead>
                       <tbody>
                         {modelShadow.price_range.candidates.map((candidate) => (
                           <tr key={candidate.symbol} data-testid="advisory-price-range-row">
-                            <td>{candidate.symbol}</td>
+                            <td>{candidate.symbol}</td><td><QuoteCell symbol={candidate.symbol} /></td>
                             <td>{modelShadow.price_range?.target_trade_date || "-"}</td>
                             <td>{fmtPrice(candidate.decision_reference_price)}</td>
                             <td>{candidate.calibrated_entry_price_range ? <>{fmtPriceBand(candidate.calibrated_entry_price_range)}（中位 {fmtPrice(candidate.calibrated_entry_price_range.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price_range ? fmtPriceBand(candidate.entry_price_range) : "-"}</span></> : candidate.entry_price_range ? `${fmtPriceBand(candidate.entry_price_range)}（中位 ${fmtPrice(candidate.entry_price_range.mid)}）` : "-"}</td>
@@ -2538,11 +2539,11 @@ function AdvisoryPageContent() {
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table" data-testid="advisory-list-items-table">
-            <thead><tr><th>股票</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>
+            <thead><tr><th>股票</th><th>当前最新价</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>
             <tbody>
               {visibleListItems.map((item) => (
                 <tr key={item.list_item_id}>
-                  <td>{stockLabel(item)}</td>
+                  <td>{stockLabel(item)}</td><td><QuoteCell symbol={item.symbol} /></td>
                   <td>{item.item_state}</td>
                   <td>{item.action}</td>
                   <td>{item.rank ?? "-"} / {fmtNumber(item.score, 3)}</td>
@@ -2552,7 +2553,7 @@ function AdvisoryPageContent() {
                   <td>{item.reason_code}</td>
                 </tr>
               ))}
-              {!visibleListItems.length ? <tr><td colSpan={8}>暂无列表版本明细；执行预览或复评后会显示 ENTER/HOLD/EXIT/WAITING 调整方案。</td></tr> : null}
+              {!visibleListItems.length ? <tr><td colSpan={9}>暂无列表版本明细；执行预览或复评后会显示 ENTER/HOLD/EXIT/WAITING 调整方案。</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -2611,7 +2612,7 @@ function AdvisoryPageContent() {
             <table className="pv2-table" data-testid="advisory-active-table">
               <thead>
                 <tr>
-                  {activeColumns.map((column) => (
+                  <th>当前最新价</th>{activeColumns.map((column) => (
                     <th key={column.key}><SortHeader column={column} sort={activeSort} onClick={() => setActiveSort((current) => nextSort(current, column.key))} /></th>
                   ))}
                 </tr>
@@ -2619,10 +2620,10 @@ function AdvisoryPageContent() {
               <tbody>
                 {sortedActivePool.map((row) => (
                   <tr data-testid="advisory-active-row" key={row.episode_id}>
-                    {activeColumns.map((column) => <td data-testid={`advisory-active-cell-${column.key}`} key={column.key}>{column.render(row)}</td>)}
+                    <td><QuoteCell symbol={row.symbol} /></td>{activeColumns.map((column) => <td data-testid={`advisory-active-cell-${column.key}`} key={column.key}>{column.render(row)}</td>)}
                   </tr>
                 ))}
-                {!activePool.length ? <tr><td colSpan={activeColumns.length}>当前任务暂无活跃荐股。</td></tr> : null}
+                {!activePool.length ? <tr><td colSpan={activeColumns.length + 1}>当前任务暂无活跃荐股。</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -2640,12 +2641,12 @@ function AdvisoryPageContent() {
           </div>
           <div className="pv2-table-wrap">
             <table className="pv2-table" data-testid="advisory-review-table">
-              <thead><tr><th>日期</th><th>股票</th><th>动作</th><th>原因</th><th>状态</th><th>排名</th></tr></thead>
+              <thead><tr><th>日期</th><th>股票</th><th>当前最新价</th><th>动作</th><th>原因</th><th>状态</th><th>排名</th></tr></thead>
               <tbody>
                 {pagedReviews.map((row, index) => (
-                  <tr data-testid="advisory-review-row" key={`${row.trade_date}-${row.symbol}-${row.action}-${row.episode_id || index}`}><td>{row.trade_date}</td><td>{stockLabel(row)}</td><td>{row.action}</td><td>{row.reason_code}</td><td>{row.review_status}</td><td>{row.rank ?? "-"}</td></tr>
+                  <tr data-testid="advisory-review-row" key={`${row.trade_date}-${row.symbol}-${row.action}-${row.episode_id || index}`}><td>{row.trade_date}</td><td>{stockLabel(row)}</td><td><QuoteCell symbol={row.symbol} /></td><td>{row.action}</td><td>{row.reason_code}</td><td>{row.review_status}</td><td>{row.rank ?? "-"}</td></tr>
                 ))}
-                {!reviews.length ? <tr><td colSpan={6}>暂无复评记录。</td></tr> : null}
+                {!reviews.length ? <tr><td colSpan={7}>暂无复评记录。</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -2672,11 +2673,11 @@ function AdvisoryPageContent() {
         </div>
         <div className="pv2-table-wrap">
           <table className="pv2-table">
-            <thead><tr><th>股票</th><th>交易日</th><th>当前价</th><th>最高买入价</th><th>动作</th><th>原因</th><th>日低</th><th>日高</th><th>分层标签</th><th>操作</th></tr></thead>
+            <thead><tr><th>股票</th><th>当前最新价</th><th>交易日</th><th>当前价</th><th>最高买入价</th><th>动作</th><th>原因</th><th>日低</th><th>日高</th><th>分层标签</th><th>操作</th></tr></thead>
             <tbody>
               {qualityRows.map((row) => (
                 <tr key={row.rowId}>
-                  <td><input className="pv2-input" value={row.code} onChange={(event) => updateQualityRow(row.rowId, { code: event.target.value })} placeholder="000001.SZ" /></td>
+                  <td><input className="pv2-input" value={row.code} onChange={(event) => updateQualityRow(row.rowId, { code: event.target.value })} placeholder="000001.SZ" /></td><td><QuoteCell symbol={row.code.trim().toUpperCase()} /></td>
                   <td><input className="pv2-input" type="date" value={row.tradeDate} onChange={(event) => updateQualityRow(row.rowId, { tradeDate: event.target.value })} /></td>
                   <td><input className="pv2-input" type="number" value={row.currentPrice} onChange={(event) => updateQualityRow(row.rowId, { currentPrice: event.target.value })} /></td>
                   <td><input className="pv2-input" type="number" value={row.maxBuyPrice} onChange={(event) => updateQualityRow(row.rowId, { maxBuyPrice: event.target.value })} /></td>
@@ -2708,7 +2709,7 @@ function AdvisoryPageContent() {
 export default function PaperV2AdvisoryPage() {
   return (
     <Suspense fallback={<main className="pv2-main"><section className="pv2-card">荐股中心加载中...</section></main>}>
-      <AdvisoryPageContent />
+      <QuoteProvider><AdvisoryPageContent /></QuoteProvider>
     </Suspense>
   );
 }
