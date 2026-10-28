@@ -1,6 +1,7 @@
 """Optional compose boundary for the independent continuous L2 contract."""
 
 from copy import deepcopy
+import ast
 import base64
 import hashlib
 import json
@@ -14,6 +15,76 @@ from scripts.qe_l2_continuous_admission import CONTRACT, validate_admission, val
 
 PARAM = "qe_l2_continuous_manifest"
 MANIFEST = "qe_l2_continuous_manifest.json"
+
+
+def bind_base_target_hooks(source):
+    """Instrument the selected AF source without replacing its trading rules.
+
+    Older catalog V2 sources predate the two no-op extension hooks. The L2
+    consumer needs those hooks; substituting the repository's newer strategy
+    would also change selection, hold rules and backup candidates. Only the
+    two explicit extension sites below are added to the actual selected source.
+    """
+    tree = ast.parse(source)
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ScoreWeightedTopkStrategyV2"]
+    if len(classes) != 1:
+        raise ValueError("QE_L2_CONTINUOUS_BASE_SOURCE_UNSUPPORTED")
+    cls = classes[0]
+    methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+    decision = methods.get("generate_trade_decision")
+    if decision is None:
+        raise ValueError("QE_L2_CONTINUOUS_BASE_DECISION_MISSING")
+    hooks = {"_adjust_target_weight_map", "_build_additional_rebalance_orders"}
+    calls = {n.func.attr for n in ast.walk(decision) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    if hooks <= calls and hooks <= methods.keys():
+        return source, {"schema_version": "qe_l2_base_target_hooks_v1", "mode": "existing_hooks",
+                        "original_source_sha256": hashlib.sha256(source.encode()).hexdigest()}
+    if hooks & (calls | methods.keys()):
+        raise ValueError("QE_L2_CONTINUOUS_BASE_PARTIAL_HOOKS")
+    original = ast.dump(tree, include_attributes=False)
+    maps = [n for n in decision.body if isinstance(n, ast.For) and any(
+        isinstance(x, ast.Assign) and any(isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                                         and t.value.id == "weight_map" for t in x.targets)
+        for x in ast.walk(n))]
+    expected_return = ast.parse("return TradeDecisionWO(sell_orders + buy_orders, self)").body[0]
+    if len(maps) != 1 or ast.dump(decision.body[-1], include_attributes=False) != ast.dump(expected_return, include_attributes=False):
+        raise ValueError("QE_L2_CONTINUOUS_BASE_EXTENSION_SITES_UNSUPPORTED")
+    assignments = {n.id for n in ast.walk(decision) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    if not {"weight_map", "sell_orders", "buy_orders", "total_account_value", "current_holdings",
+            "trade_step", "trade_start_time", "trade_end_time"} <= assignments:
+        raise ValueError("QE_L2_CONTINUOUS_BASE_CONTEXT_UNSUPPORTED")
+    target_hook = ast.parse("weight_map = self._adjust_target_weight_map(weight_map, trade_start_time)").body
+    order_hook = ast.parse("""
+additional_orders = self._build_additional_rebalance_orders(
+    weight_map=weight_map, current_holdings=current_holdings,
+    existing_sell_ids={str(order.stock_id) for order in sell_orders},
+    planned_buy_orders=buy_orders, total_account_value=total_account_value,
+    trade_step=trade_step, trade_start_time=trade_start_time, trade_end_time=trade_end_time)
+sell_orders.extend(order for order in additional_orders if order.direction == OrderDir.SELL)
+buy_orders.extend(order for order in additional_orders if order.direction == OrderDir.BUY)
+""").body
+    defaults = ast.parse("""
+def _adjust_target_weight_map(self, weight_map, trade_start_time):
+    return dict(weight_map)
+def _build_additional_rebalance_orders(self, **kwargs):
+    return []
+""").body
+    map_index = decision.body.index(maps[0]) + 1
+    decision.body[map_index:map_index] = target_hook
+    decision.body[-1:-1] = order_hook
+    cls.body.extend(defaults)
+    adapted = ast.unparse(ast.fix_missing_locations(tree)) + "\n"
+    # Removing only our exact added nodes must recover every original AST node.
+    for node in target_hook + order_hook:
+        decision.body.remove(node)
+    for node in defaults:
+        cls.body.remove(node)
+    if ast.dump(tree, include_attributes=False) != original:
+        raise ValueError("QE_L2_CONTINUOUS_BASE_SEMANTIC_DRIFT")
+    return adapted, {"schema_version": "qe_l2_base_target_hooks_v1", "mode": "legacy_source_instrumented",
+                     "original_source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                     "adapted_source_sha256": hashlib.sha256(adapted.encode()).hexdigest(),
+                     "original_AST_preserved_after_removing_hooks": True}
 
 
 def extract_continuous(custom_params):
@@ -127,6 +198,10 @@ def apply_continuous(result, manifest, *, scripts_dir):
         raise ValueError("QE_L2_CONTINUOUS_EXECUTION_CONTRACT_INVALID")
     if executor["class"] != "NestedExecutor" or executor["kwargs"]["inner_executor"]["class"] != "SimulatorExecutor":
         raise ValueError("QE_L2_CONTINUOUS_EXECUTOR_INVALID")
+    if "custom_strategy.py" not in files:
+        raise ValueError("QE_L2_CONTINUOUS_SELECTED_BASE_SOURCE_MISSING")
+    files["custom_strategy.py"], base_receipt = bind_base_target_hooks(files["custom_strategy.py"])
+    files["qe_l2_continuous_base_adapter.json"] = json.dumps(base_receipt, sort_keys=True)
     backtest["start_time"] = "2026-04-01"
     executor.update({"class": "BoundedTerminalNestedExecutor", "module_path": "qe_terminal_interval_executor"})
     executor["kwargs"]["inner_executor"].update(

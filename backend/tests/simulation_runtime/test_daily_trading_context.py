@@ -372,10 +372,14 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
         dsn = _dev_dsn()
     except DevDbTargetMisconfigured as exc:
         pytest.skip(str(exc))
+    from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+    from backend.services.data_refresh_audit import DataRefreshAuditRepository
+
     raw_conn = psycopg2.connect(**dsn)
     trade_date = date(2099, 1, 5)
     symbols = [f"0099{index:02d}.SZ" for index in range(1, 9)]
     try:
+        assert raw_conn.autocommit is False
         with raw_conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -459,22 +463,82 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
                 return CountingCursor(self._connection.cursor(*args, **kwargs), self)
 
         counted = CountingConnection(raw_conn)
-        context = DailyTradingContextProvider(conn_factory=lambda: counted).load(
-            symbols=symbols,
-            trade_date=trade_date,
-            as_of_time=datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=10),
-            calendar_service_snapshot={"is_trading_day": True, "as_of_date": trade_date.isoformat()},
-            binding_identity="dev-readonly-binding",
-            package_identity="dev-readonly-package",
-            release_identity="dev-readonly-release",
-        )
+        def load_context(requested_symbols):
+            return DailyTradingContextProvider(conn_factory=lambda: counted).load(
+                symbols=requested_symbols, trade_date=trade_date,
+                as_of_time=datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=10),
+                calendar_service_snapshot={"is_trading_day": True, "as_of_date": trade_date.isoformat()},
+                binding_identity="dev-readonly-binding", package_identity="dev-readonly-package",
+                release_identity="dev-readonly-release",
+            )
 
-        assert len(counted.queries) == 5
-        assert sum("dataset_date_refresh_audit" in query for query in counted.queries) == 2
-        assert sum("FROM market.stk_limit" in query for query in counted.queries) == 1
-        assert sum("FROM market.suspend_d" in query for query in counted.queries) == 1
-        assert sum("FROM market.stock_st" in query for query in counted.queries) == 1
-        assert set(context.symbols) == set(symbols)
+        audit = DataRefreshAuditRepository(conn_factory=lambda: counted)
+        legacy = audit.get_latest_status(dataset="stk_limit", trade_date=trade_date)
+        assert legacy is not None and legacy.failure_category == "canonical_partition_missing"
+        with pytest.raises(DataUnavailableError, match="waiting for dataset refresh"):
+            load_context(symbols)
+
+        # Consumer-contract fixture for these synthetic DEV rows, not a claim
+        # that a future real-market partition has passed producer validation.
+        with raw_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO market.dataset_date_refresh_audit (
+                    dataset, trade_date, data_source, job_id, status, row_count,
+                    refreshed_at, metadata, written_rows, expected_rows, coverage_ratio,
+                    quality_status, data_revision, validated_revision, validation_status,
+                    validation_id, scope_version, rule_version
+                )
+                SELECT dataset, %s, 'canonical_db', gen_random_uuid(), 'success', row_count,
+                       NOW(), '{"scope":"rollback_only","fixture":"BUG-2117"}'::jsonb,
+                       row_count, row_count, 1, 'ok', 1, 1, 'VALID',
+                       gen_random_uuid()::text, %s, %s
+                FROM (VALUES
+                    ('stk_limit'::text, (SELECT count(*) FROM market.stk_limit WHERE trade_date=%s)::int),
+                    ('suspend_d'::text, (SELECT count(*) FROM market.suspend_d WHERE trade_date=%s)::int)
+                ) AS seed(dataset, row_count)
+                """,
+                (trade_date, SCOPE_VERSION, RULE_VERSION, trade_date, trade_date),
+            )
+        canonical = {}
+        for dataset, expected_rows in (("stk_limit", len(symbols)), ("suspend_d", 1)):
+            status = audit.require_success(dataset=dataset, trade_date=trade_date)
+            assert status.data_source == "canonical_db" and status.quality_status == "ok"
+            assert status.row_count == status.written_rows == status.expected_rows == expected_rows
+            canonical[dataset] = status
+
+        for requested in (symbols[:1], symbols):
+            counted.queries.clear()  # Count only the consumer load, excluding fixture preparation.
+            context = load_context(requested)
+            assert len(counted.queries) == 5
+            assert sum("dataset_date_refresh_audit" in query for query in counted.queries) == 2
+            assert sum("FROM market.stk_limit" in query for query in counted.queries) == 1
+            assert sum("FROM market.suspend_d" in query for query in counted.queries) == 1
+            assert sum("FROM market.stock_st" in query for query in counted.queries) == 1
+            assert set(context.symbols) == set(requested)
+
+        valid = {key: getattr(canonical["stk_limit"], key) for key in (
+            "quality_status", "data_revision", "validated_revision", "validation_status",
+            "scope_version", "rule_version", "validation_id",
+        )}
+        for changed in ({"quality_status": "unproven"}, {"data_revision": 2},
+                        {"validation_status": "UNVERIFIED"}, {"scope_version": "stale-fixture"},
+                        {"rule_version": "stale-fixture"}, {"validation_id": None}):
+            with raw_conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE market.dataset_date_refresh_audit SET
+                        quality_status=%(quality_status)s, data_revision=%(data_revision)s,
+                        validated_revision=%(validated_revision)s, validation_status=%(validation_status)s,
+                        scope_version=%(scope_version)s, rule_version=%(rule_version)s,
+                        validation_id=%(validation_id)s
+                        WHERE dataset='stk_limit' AND trade_date=%(trade_date)s AND data_source='canonical_db'""",
+                    {**valid, **changed, "trade_date": trade_date},
+                )
+            counted.queries.clear()
+            with pytest.raises(DataUnavailableError, match="waiting for dataset refresh"):
+                load_context(symbols)
+            assert len(counted.queries) == 1
+            assert "dataset_date_refresh_audit" in counted.queries[0]
     finally:
         raw_conn.rollback()
         try:
@@ -485,8 +549,9 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
                       (SELECT count(*) FROM market.stk_limit WHERE trade_date = %s AND ts_code = ANY(%s)),
                       (SELECT count(*) FROM market.stock_st WHERE ann_date = %s AND ts_code = ANY(%s)),
                       (SELECT count(*) FROM market.suspend_d WHERE trade_date = %s AND ts_code = ANY(%s)),
-                      (SELECT count(*) FROM market.dataset_date_refresh_audit
-                       WHERE trade_date = %s AND data_source = 'codex_bug_1143_dev_validation')
+                       (SELECT count(*) FROM market.dataset_date_refresh_audit
+                        WHERE trade_date = %s AND dataset IN ('stk_limit', 'suspend_d')
+                          AND data_source IN ('codex_bug_1143_dev_validation', 'canonical_db'))
                     """,
                     (trade_date, symbols, trade_date, symbols, trade_date, symbols, trade_date),
                 )
