@@ -49,7 +49,10 @@ def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary
     assert "needs.dr-snapshot.result == 'failure'" in failure["if"]
     assert "needs.dr-validate.result == 'failure'" in failure["if"]
     for key, job in (("L3_RESULT", "nightly-l3"), ("DR_RESULT", "dr-snapshot"), ("DR_VALIDATE_RESULT", "dr-validate")):
-        assert failure["env"][key] == ("${{ needs." + job + ".outputs.background_admitted == 'false' && 'deferred' || needs."
+        # L3 additionally preserves exhausted artifact transport as a failure.
+        transport = "steps.exhausted_nightly_transport.outcome == 'failure' && 'failure' || " if key == "L3_RESULT" else ""
+        assert failure["env"][key] == ("${{ " + transport + "needs." + job
+                                      + ".outputs.background_admitted == 'false' && 'deferred' || needs."
                                       + job + ".result }}")
 
 

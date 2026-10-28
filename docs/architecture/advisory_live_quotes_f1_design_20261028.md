@@ -72,3 +72,7 @@
 第三轮实现审核：扩展管理页嵌入证券表；未成交快照不伪造源交易日期；批次超时清除未完成批次旧值；行情错误不隐藏原名单；已结束收益日期使用实际退出日。直接后端合同30项及补充未成交反例1项通过，真实TDX三股日K/快照价格一致；TypeScript、changed-file lint和L0通过（既有管理页两条Hook提示保留）。UI回归交PR CI，运行加载待用户重启。
 
 第四轮：新纳入执行的历史展示spec仍访问工作台改版前路径；改为现有`/paper-v2/advisory/manage?view=...`管理入口，保留全部历史研究业务断言，继续执行完整UI回归。
+
+CI执行检查：现有frontend dispatch只将两个荐股spec路由到隔离mock配置，新纳入的历史spec会落入通用浏览器配置。允许对`.github/workflows/test.yml`已有同一分支增加该精确spec，保持单job、原policy循环、runner和门禁不变；不增加工作流或业务服务启动。既有工作台11项UI已通过，历史与管理UI以最终提交CI为准。
+
+工作流回归发现主线既有Nightly合同测试遗漏已合入的transport失败前缀（政策扫描本身PASS）。允许同步`backend/tests/scripts/test_ci_workflow_policy_scan.py`该断言，严格核对包含transport失败优先级的完整表达式；不修改Nightly实现、时钟、任务或运行策略，不跳过失败测试。
