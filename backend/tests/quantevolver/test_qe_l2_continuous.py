@@ -23,7 +23,9 @@ from qe_l2_continuous_consumer import (
     prediction_panel_sha256,
 )
 from qe_l2_continuous_plan import build_plan, exposure_reference, baseline_contract
-from backend.services.quantevolver.l2_continuous_consumer import extract_continuous, apply_continuous
+from backend.services.quantevolver.l2_continuous_consumer import (
+    extract_continuous, apply_continuous, bind_base_target_hooks,
+)
 from backend.services.quantevolver.l2_continuous_evaluation import evaluate
 
 
@@ -326,7 +328,10 @@ def test_compose_all_five_arms_and_default_identity(data):
             )
         conf = _conf(manifest)
         original = {
-            "experiment_files": {"conf.yaml": yaml.safe_dump(conf)},
+            "experiment_files": {
+                "conf.yaml": yaml.safe_dump(conf),
+                "custom_strategy.py": (ROOT / "scripts/score_weighted_strategy_v2.py").read_text(encoding="utf-8"),
+            },
             "direct_v2_dataset_binding": deepcopy(manifest["dataset_binding"]),
             "wsl_command": "python qrun_limit_minute.py conf.yaml",
         }
@@ -566,3 +571,85 @@ def test_untradable_or_missing_quote_is_audited_not_filled(strategy):
 def test_fresh_process_real_qlib_strategy_and_fee_cash_closure(data, monkeypatch):
     pytest.importorskip("qlib")
     validate_native(data, monkeypatch)
+
+
+LEGACY_BASE_SOURCE = '''
+class ScoreWeightedTopkStrategyV2:
+    def generate_trade_decision(self):
+        trade_step = self.day
+        trade_start_time, trade_end_time = self.day, self.day
+        current_holdings = list(self.holdings)
+        final_holdings = ['A', 'B']
+        weights = [0.6, 0.35]
+        weight_map = {}
+        for i, sid in enumerate(final_holdings):
+            weight_map[sid] = weights[i]
+        sell_orders = []
+        total_account_value = 1000.0
+        buy_orders = [Order(sid, total_account_value * weight_map[sid], OrderDir.BUY)
+                      for sid in final_holdings if sid not in current_holdings]
+        self.backup_candidates = ['C', 'D']
+        return TradeDecisionWO(sell_orders + buy_orders, self)
+'''
+
+
+def _load_legacy_base(source):
+    from collections import namedtuple
+
+    namespace = {
+        "Order": namedtuple("Order", "stock_id amount direction"),
+        "OrderDir": types.SimpleNamespace(BUY=1, SELL=0),
+        "TradeDecisionWO": lambda orders, _strategy: orders,
+    }
+    exec(compile(source, "selected_strategy.py", "exec"), namespace)
+    return namespace["ScoreWeightedTopkStrategyV2"]
+
+
+def test_selected_legacy_base_orders_and_backups_preserved_across_held_day():
+    adapted, receipt = bind_base_target_hooks(LEGACY_BASE_SOURCE)
+    assert receipt["mode"] == "legacy_source_instrumented"
+    assert receipt["original_AST_preserved_after_removing_hooks"] is True
+    old, new = _load_legacy_base(LEGACY_BASE_SOURCE)(), _load_legacy_base(adapted)()
+    for day, holdings in [(0, []), (1, ["A", "B"]), (2, ["A"])]:
+        old.day = new.day = day
+        old.holdings = new.holdings = holdings
+        assert old.generate_trade_decision() == new.generate_trade_decision()
+        assert old.backup_candidates == new.backup_candidates == ["C", "D"]
+
+
+def test_selected_legacy_source_invokes_both_hooks_even_without_new_buys():
+    source, _ = bind_base_target_hooks(LEGACY_BASE_SOURCE)
+
+    class Consumer(_load_legacy_base(source)):
+        def _adjust_target_weight_map(self, weights, day):
+            self.target_days.append(day)
+            return {stock: weight * 0.5 for stock, weight in weights.items()}
+
+        def _build_additional_rebalance_orders(self, **kwargs):
+            self.rebalance_days.append(kwargs["trade_step"])
+            assert sum(kwargs["weight_map"].values()) == pytest.approx(0.475)
+            assert kwargs["current_holdings"] == self.holdings
+            return []
+
+    obj = Consumer()
+    obj.target_days, obj.rebalance_days = [], []
+    for obj.day, obj.holdings in [(0, []), (1, ["A", "B"])]:
+        orders = obj.generate_trade_decision()
+        assert sum(order.amount for order in orders) == (475.0 if obj.day == 0 else 0.0)
+    assert obj.target_days == obj.rebalance_days == [0, 1]
+
+
+@pytest.mark.parametrize("source", [
+    "class Other: pass",
+    LEGACY_BASE_SOURCE.replace("return TradeDecisionWO(sell_orders + buy_orders, self)", "return None"),
+    LEGACY_BASE_SOURCE + "\n    def _adjust_target_weight_map(self, weights, day): return weights\n",
+])
+def test_unknown_or_partial_base_strategy_rejected(source):
+    with pytest.raises(ValueError, match="QE_L2_CONTINUOUS_BASE_"):
+        bind_base_target_hooks(source)
+
+
+def test_selected_repository_base_with_existing_hooks_is_not_replaced():
+    source = (ROOT / "scripts/score_weighted_strategy_v2.py").read_text(encoding="utf-8")
+    adapted, receipt = bind_base_target_hooks(source)
+    assert adapted == source and receipt["mode"] == "existing_hooks"
