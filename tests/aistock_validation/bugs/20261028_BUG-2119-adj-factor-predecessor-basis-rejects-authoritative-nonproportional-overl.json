@@ -39,6 +39,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
     "persistence_basis": "git_tracked_source",
+    "provisional": false,
+    "inference_basis": "actual_changed_files",
     "fresh_process_evidence": [
       "Fresh AIstock Python ran X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/segmented_operator.py dev with the tracked follow-up module; 10 cached real complete histories matched source hashes, preserved every legacy prefix date, matched every current provider value, passed 10 atomic original-value rollback tests and repeated zero writes. Receipt segmented-dev-validation.json. Production write=false, dataset/profile write=false, runtime_action=false."
     ],
@@ -130,20 +132,6 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
-  "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
-  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
