@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2117",
-  "closed_at": null,
+  "closed_at": "2026-10-28T06:50:11Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -88,8 +88,8 @@
   },
   "first_seen_at": "2026-10-28T06:12:57.808314Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "79a9d2952eee739f9194ab6f518355a560284a94",
+  "fixed_at": "2026-10-28T06:50:11Z",
   "github_issue_number": 6783,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6783",
   "last_seen_at": "2026-10-28T06:12:57.808314Z",
@@ -97,6 +97,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6814",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -114,6 +115,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -123,7 +125,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2117",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "aea034aa88f32a66",
+    "recorded_at": "2026-10-28T06:50:59.657284Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "139b19d9bc0620bfd20e444a59f0cfc27f0ed236",
+    "source_merge_commit": "79a9d2952eee739f9194ab6f518355a560284a94",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6814",
+    "validation_evidence": [
+      "nox -s l0 -- backend/tests/simulation_runtime/test_daily_trading_context.py tests/aistock_validation/bugs/20261028_BUG-2117-paper-v2-selection-center-ci-failure-requires-triage-test-dev-daily-cont.json tests/aistock_validation/bugs/.bug_id_allocator.json -> passed: both scanners zero findings and zero blocking",
+      "rtk pytest backend/tests/simulation_runtime/test_daily_trading_context.py -q -p no:cacheprovider --basetemp X:/AIstock_temp/localsim-nightly-6783-20261028/pytest-matrix --junitxml X:/AIstock_temp/localsim-nightly-6783-20261028/final-directed-matrix.xml -> passed: 14 tests; XML X:/AIstock_temp/localsim-nightly-6783-20261028/final-directed-matrix.xml",
+      "rtk ruff check --no-cache backend/tests/simulation_runtime/test_daily_trading_context.py -> passed: no issues",
+      "rtk git diff --check -> passed: clean"
+    ],
+    "validation_evidence_digest": "453c42934c2658a7797b0c3494a7a38a5328b9a44cde20b2c288ec9e166098ab"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2_selection_center"
   ],
@@ -132,6 +158,12 @@
     "fingerprint": "decb19b4a789314c55b8fe78",
     "source_event_id": "FE-20261028-decb19b4a789"
   },
+  "validation_evidence": [
+    "nox -s l0 -- backend/tests/simulation_runtime/test_daily_trading_context.py tests/aistock_validation/bugs/20261028_BUG-2117-paper-v2-selection-center-ci-failure-requires-triage-test-dev-daily-cont.json tests/aistock_validation/bugs/.bug_id_allocator.json -> passed: both scanners zero findings and zero blocking",
+    "rtk pytest backend/tests/simulation_runtime/test_daily_trading_context.py -q -p no:cacheprovider --basetemp X:/AIstock_temp/localsim-nightly-6783-20261028/pytest-matrix --junitxml X:/AIstock_temp/localsim-nightly-6783-20261028/final-directed-matrix.xml -> passed: 14 tests; XML X:/AIstock_temp/localsim-nightly-6783-20261028/final-directed-matrix.xml",
+    "rtk ruff check --no-cache backend/tests/simulation_runtime/test_daily_trading_context.py -> passed: no issues",
+    "rtk git diff --check -> passed: clean"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
