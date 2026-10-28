@@ -38,7 +38,7 @@ async function mockPage(page: Page, state: MockState = {}) {
   const runStatus = state.runStatus || "PARTIAL";
   const recoverableProgramCount = state.recoverableProgramCount ?? 0;
   await page.route("**/api/ingestion/**", (route) => json(route, { count: 0, alerts: [] }));
-  await page.route("**/api/v1/paper-v2/trading-days/defaults**", (route) => json(route, {
+  await page.route("**/api/v1/advisory/trading-days/defaults**", (route) => json(route, {
     as_of_date: "2026-07-24",
     trading_day_status: { is_trading_day: true },
     lookback_trading_days: 10,
@@ -53,6 +53,7 @@ async function mockPage(page: Page, state: MockState = {}) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     requests.push(`${request.method()} ${path}`);
+    if (path.endsWith("/trading-days/defaults")) return route.fallback();
     if (path.endsWith("/workbench/quotes") && request.method() === "GET") {
       const symbols = (new URL(request.url()).searchParams.get("symbols") || "").split(",");
       return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: 12.34, kind: "CLOSE", trade_date: "2026-10-28", observed_at: "2026-10-28T16:00:00+08:00" }])) });

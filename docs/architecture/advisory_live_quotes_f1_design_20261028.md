@@ -76,3 +76,5 @@
 CI执行检查：现有frontend dispatch只将两个荐股spec路由到隔离mock配置，新纳入的历史spec会落入通用浏览器配置。允许对`.github/workflows/test.yml`已有同一分支增加该精确spec，保持单job、原policy循环、runner和门禁不变；不增加工作流或业务服务启动。既有工作台11项UI已通过，历史与管理UI以最终提交CI为准。
 
 工作流回归发现主线既有Nightly合同测试遗漏已合入的transport失败前缀（政策扫描本身PASS）。允许同步`backend/tests/scripts/test_ci_workflow_policy_scan.py`该断言，严格核对包含transport失败优先级的完整表达式；不修改Nightly实现、时钟、任务或运行策略，不跳过失败测试。
+
+第五轮CI：61项后端、33项管理UI和11项工作台UI通过；历史UI两项暴露旧日历fixture（paper-v2已迁到advisory），同步精确路由且保留无console错误断言。允许同步`backend/tests/scripts/test_ci_change_classifier.py`中的精确frontend target列表，新增第三个历史spec，不放宽断言。最终完整CI必须在这些修复后的提交通过。

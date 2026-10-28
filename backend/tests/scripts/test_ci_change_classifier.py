@@ -812,7 +812,7 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path, mo
 
     _assert_fields(payload,
         classification='frontend_ci_required', workflow_gate='passed', frontend_required=True,
-        backend_required=False, frontend_test_targets=['tests/paper-v2/paper-v2-advisory-ui.spec.ts', 'tests/paper-v2/advisory-workbench.spec.ts'], unmapped_code_files=[],
+        backend_required=False, frontend_test_targets=['tests/paper-v2/paper-v2-advisory-ui.spec.ts', 'tests/paper-v2/advisory-workbench.spec.ts', 'tests/paper-v2/paper-v2-advisory-historical-range.spec.ts'], unmapped_code_files=[],
     )
     assert payload['unexecuted_test_files'] == []
     assert payload['dev_db_required'] is False
