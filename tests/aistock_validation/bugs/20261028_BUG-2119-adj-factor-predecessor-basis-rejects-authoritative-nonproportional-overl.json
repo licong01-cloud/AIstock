@@ -27,6 +27,24 @@
     "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/new-conflicts-diagnosis.json"
   ],
   "expected": "Certified boundary segmented rebase preserves predecessor history and all current provider facts, reports real normalized changes and is idempotent.",
+  "runtime_contract": {
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "backend",
+    "backend_restart_required": true,
+    "backend_restart_owner": "user",
+    "target_id": "backend-main",
+    "target_ids": ["backend-main"],
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "persistence_basis": "git_tracked_source",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python ran X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/segmented_operator.py dev with the tracked follow-up module; 10 cached real complete histories matched source hashes, preserved every legacy prefix date, matched every current provider value, passed 10 atomic original-value rollback tests and repeated zero writes. Receipt segmented-dev-validation.json. Production write=false, dataset/profile write=false, runtime_action=false."
+    ],
+    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "pending_user_restart"
+  },
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
