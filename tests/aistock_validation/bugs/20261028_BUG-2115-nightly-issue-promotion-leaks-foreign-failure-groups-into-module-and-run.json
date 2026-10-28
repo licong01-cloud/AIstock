@@ -160,16 +160,32 @@
         "round": 4,
         "focus": "Positive failure evidence",
         "result": "A session command alone cannot establish a failed session. Require its own failed node or error signature; added negative case passed with the five identity/provenance cases (6 passed). L0 and lint rechecked."
+      },
+      {
+        "round": 5,
+        "focus": "CI budget and fixture maintenance",
+        "result": "CI 40638731653 had 774 passed and one honest production denominator ratio failure (30.2108%). Deduplicate Actions payload fixtures and parameterize invalid identities. AST comparison preserves every test function and assertion; all 101 parser/intake tests and the unchanged budget gate passed. No ratio threshold, ownership, production padding, skip, or test deletion."
       }
     ],
     "targeted_tests": {
       "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider",
-      "passed": 100
+      "passed": 101
     },
     "followup_targeted_tests": {
       "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -k nightly_issue_binding -q -p no:cacheprovider",
       "passed": 6,
       "additional_unique_case": 1
+    },
+    "ci_budget_repair": {
+      "production_sloc": 47665,
+      "test_sloc": 14292,
+      "over_budget_sloc": 0,
+      "test_to_production_ratio": 0.2998426518409735,
+      "threshold": 0.3,
+      "gate_test": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
+      "gate_passed": true,
+      "ast_assertions_unchanged": true,
+      "initial_failed_ci": "40638731653"
     }
   },
   "non_goals": [

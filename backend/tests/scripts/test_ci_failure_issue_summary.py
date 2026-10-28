@@ -8,6 +8,21 @@ import pytest
 
 from scripts import ci_failure_issue_summary as summary
 
+
+def _github_json(payload):
+    return {"ok": True, "stdout": json.dumps(payload), "stderr": ""}
+
+
+def _actions_run_response(**overrides):
+    return _github_json({
+        "databaseId": 300, "workflowName": "AIstock CI", "displayTitle": "CI",
+        "event": "pull_request", "headBranch": "bug/example", "headSha": "abcdef1234567890",
+        "status": "in_progress", "conclusion": None,
+        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
+        "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
+        **overrides,
+    })
+
 def _ci_summary(failed_jobs, *, run_id="26378872481", commit="62dc1b12", **overrides):
     return summary.finalize_summary({
         "schema_version": "aistock_ci_failure_summary_v1", "severity": "P1",
@@ -161,30 +176,19 @@ def test_nightly_issue_intake_isolates_buffered_session_logs(monkeypatch, module
         assert payload["failed_jobs"][0]["pytest_summary"] == "1 failed, 17 passed in 18.75s"
 
 
-@pytest.mark.parametrize("change", ["fingerprint", "module", "session", "missing_run", "short_sha", "ambiguous", "malformed", "duplicate_run", "duplicate_commit", "duplicate_marker"])
-def test_nightly_issue_group_rejects_invalid_published_identity(change):
-    body = _group_issue_body()
-    if change == "fingerprint":
-        digest = hashlib.sha256(b"module=local_data|group_kind=module").hexdigest()[:16]
-        body = body.replace(digest, "0" * 16)
-    elif change == "module":
-        body = body.replace("module=`local_data`", "module=`qe_archive`")
-    elif change == "session":
-        body = body.replace("local_data_integrity_ui", "simulation_core_l2")
-    elif change == "missing_run":
-        body = body.replace("40566184878", "unknown")
-    elif change == "short_sha":
-        body = body.replace("a" * 40, "a" * 8)
-    elif change == "ambiguous":
-        body += "- module=`local_data`; sessions=`local_data_integrity_ui`\n"
-    elif change == "malformed":
-        body = body.replace("nightly-group-", "nightly-group-invalid-")
-    elif change == "duplicate_run":
-        body += "<!-- aistock-issue-on-test-fail:40566184879 -->\n"
-    elif change == "duplicate_commit":
-        body += f"- Commit: `{'b' * 40}`\n"
-    else:
-        body += body.splitlines()[0] + "\n"
+@pytest.mark.parametrize("old,new,suffix", [
+    (hashlib.sha256(b"module=local_data|group_kind=module").hexdigest()[:16], "0" * 16, ""),
+    ("module=`local_data`", "module=`qe_archive`", ""),
+    ("local_data_integrity_ui", "simulation_core_l2", ""),
+    ("40566184878", "unknown", ""), ("a" * 40, "a" * 8, ""),
+    ("", "", "- module=`local_data`; sessions=`local_data_integrity_ui`\n"),
+    ("nightly-group-", "nightly-group-invalid-", ""),
+    ("", "", "<!-- aistock-issue-on-test-fail:40566184879 -->\n"),
+    ("", "", f"- Commit: `{'b' * 40}`\n"),
+    ("", "", _group_issue_body().splitlines()[0] + "\n"),
+], ids=["fingerprint", "module", "session", "missing_run", "short_sha", "ambiguous", "malformed", "duplicate_run", "duplicate_commit", "duplicate_marker"])
+def test_nightly_issue_group_rejects_invalid_published_identity(old, new, suffix):
+    body = _group_issue_body().replace(old, new) + suffix
     with pytest.raises(ValueError):
         summary.nightly_issue_group(body)
 
@@ -883,24 +887,7 @@ def test_actions_run_wait_defers_issue_when_logs_not_ready(monkeypatch: pytest.M
 
     def fake_run(args: list[str], **_: object) -> dict[str, object]:
         calls.append(args)
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 300,
-                    "workflowName": "AIstock CI",
-                    "displayTitle": "CI",
-                    "event": "pull_request",
-                    "headBranch": "bug/example",
-                    "headSha": "abcdef1234567890",
-                    "status": "in_progress",
-                    "conclusion": None,
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
-                }
-            ),
-            "stderr": "",
-        }
+        return _actions_run_response()
 
     monkeypatch.setattr(summary, "_run", fake_run)
     payload = summary.summarize_actions_run(
@@ -934,41 +921,16 @@ def test_actions_run_transport_failures_fall_back_to_rest_run_jobs_and_log(
         if args[:3] == ["gh", "run", "view"]:
             return {"ok": False, "stdout": "", "stderr": "Post graphql: EOF"}
         if args[:2] == ["gh", "api"] and args[2].endswith("/actions/runs/300"):
-            return {
-                "ok": True,
-                "stdout": json.dumps(
-                    {
-                        "id": 300,
-                        "name": "AIstock CI",
-                        "display_title": "failure",
-                        "event": "pull_request",
-                        "head_branch": "bug/test",
-                        "head_sha": "a" * 40,
-                        "status": "completed",
-                        "conclusion": "failure",
-                        "html_url": "https://github.example/actions/runs/300",
-                    }
-                ),
-                "stderr": "",
-            }
+            return _github_json({
+                "id": 300, "name": "AIstock CI", "display_title": "failure", "event": "pull_request",
+                "head_branch": "bug/test", "head_sha": "a" * 40, "status": "completed",
+                "conclusion": "failure", "html_url": "https://github.example/actions/runs/300",
+            })
         if args[:2] == ["gh", "api"] and "/actions/runs/300/jobs?" in args[2]:
-            return {
-                "ok": True,
-                "stdout": json.dumps(
-                    {
-                        "total_count": 1,
-                        "jobs": [
-                            {
-                                "id": 9,
-                                "name": "paper_v2_l3",
-                                "conclusion": "failure",
-                                "html_url": "https://github.example/jobs/9",
-                            }
-                        ],
-                    }
-                ),
-                "stderr": "",
-            }
+            return _github_json({"total_count": 1, "jobs": [{
+                "id": 9, "name": "paper_v2_l3", "conclusion": "failure",
+                "html_url": "https://github.example/jobs/9",
+            }]})
         if args[:2] == ["gh", "api"] and args[2].endswith("/actions/jobs/9/logs"):
             return {"ok": True, "stdout": PAPER_V2_PLAYWRIGHT_LOG, "stderr": ""}
         raise AssertionError(args)
@@ -1005,24 +967,7 @@ def test_actions_run_defers_issue_when_job_log_is_unavailable(monkeypatch: pytes
                 "stdout": "",
                 "stderr": "run 300 is still in progress; logs will be available when it is complete",
             }
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 300,
-                    "workflowName": "AIstock CI",
-                    "displayTitle": "CI",
-                    "event": "pull_request",
-                    "headBranch": "bug/example",
-                    "headSha": "abcdef1234567890",
-                    "status": "in_progress",
-                    "conclusion": None,
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
-                }
-            ),
-            "stderr": "",
-        }
+        return _actions_run_response()
 
     monkeypatch.setattr(summary, "_run", fake_run)
     payload = summary.summarize_actions_run(repo="licong01-cloud/AIstock", run_id="300")
@@ -1047,24 +992,7 @@ def test_actions_run_retries_job_log_until_available(monkeypatch: pytest.MonkeyP
                     "stderr": "run 300 is still in progress; logs will be available when it is complete",
                 }
             return {"ok": True, "stdout": CI_LOG, "stderr": ""}
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 300,
-                    "workflowName": "AIstock CI",
-                    "displayTitle": "CI",
-                    "event": "pull_request",
-                    "headBranch": "bug/example",
-                    "headSha": "abcdef1234567890",
-                    "status": "completed",
-                    "conclusion": "failure",
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
-                }
-            ),
-            "stderr": "",
-        }
+        return _actions_run_response(status="completed", conclusion="failure")
 
     monkeypatch.setattr(summary, "_run", fake_run)
     monkeypatch.setattr(summary.time, "sleep", lambda _: None)
@@ -1221,31 +1149,14 @@ def test_locate_last_green_run_finds_previous_success() -> None:
 
     def fake_run(args: list[str], **_: object) -> dict[str, object]:
         assert args[:3] == ["gh", "run", "list"]
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                [
-                    {
-                        "databaseId": 200,
-                        "workflowName": "AIstock CI",
-                        "headSha": "abcdef1234567890",
-                        "headBranch": "main",
-                        "conclusion": "failure",
-                        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
-                    },
-                    {
-                        "databaseId": 198,
-                        "workflowName": "AIstock CI",
-                        "headSha": "1234567890abcdef",
-                        "headBranch": "main",
-                        "conclusion": "success",
-                        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/198",
-                        "createdAt": "2026-06-01T00:00:00Z",
-                    },
-                ]
-            ),
-            "stderr": "",
-        }
+        return _github_json([
+            {"databaseId": 200, "workflowName": "AIstock CI", "headSha": "abcdef1234567890",
+             "headBranch": "main", "conclusion": "failure",
+             "url": "https://github.com/licong01-cloud/AIstock/actions/runs/200"},
+            {"databaseId": 198, "workflowName": "AIstock CI", "headSha": "1234567890abcdef",
+             "headBranch": "main", "conclusion": "success", "createdAt": "2026-06-01T00:00:00Z",
+             "url": "https://github.com/licong01-cloud/AIstock/actions/runs/198"},
+        ])
 
     locator = summary.locate_last_green_run(payload, repo="licong01-cloud/AIstock", run_provider=fake_run)
 
@@ -1286,26 +1197,11 @@ def test_locate_last_green_run_transport_failure_uses_rest() -> None:
         commands.append(args)
         if args[:3] == ["gh", "run", "list"]:
             return {"ok": False, "stdout": "", "stderr": "TLS handshake timeout"}
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "workflow_runs": [
-                        {
-                            "id": 99,
-                            "name": "AIstock CI",
-                            "head_sha": "b" * 40,
-                            "head_branch": "main",
-                            "conclusion": "success",
-                            "status": "completed",
-                            "html_url": "https://github.example/actions/runs/99",
-                            "created_at": "2026-08-27T00:00:00Z",
-                        }
-                    ]
-                }
-            ),
-            "stderr": "",
-        }
+        return _github_json({"workflow_runs": [{
+            "id": 99, "name": "AIstock CI", "head_sha": "b" * 40, "head_branch": "main",
+            "conclusion": "success", "status": "completed",
+            "html_url": "https://github.example/actions/runs/99", "created_at": "2026-08-27T00:00:00Z",
+        }]})
 
     locator = summary.locate_last_green_run(
         {"run_id": "100", "workflow": "AIstock CI", "branch": "main", "commit": "a" * 40},
