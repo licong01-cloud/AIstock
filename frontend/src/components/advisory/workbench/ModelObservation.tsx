@@ -14,6 +14,7 @@ export default function ModelObservation({ programId, target, refresh }: { progr
         <div className={styles.tableWrap}><table><thead><tr><th>股票</th><th>原生排名</th><th>重排排名</th></tr></thead><tbody>{data.selected.predictions.map((row, i) => <tr key={i}><td>{String(row.symbol || row.ts_code || row.instrument || row.stock_code || "证券名称待核验")}</td><td>{number(row.selection_effective_rank ?? row.native_rank ?? row.parent_rank ?? row.rank)}</td><td>{number(row.advisory_rank ?? row.policy_rank ?? row.candidate_rank)}</td></tr>)}</tbody></table></div>
       </>}
       {!!data.days?.length && <div className={styles.tableWrap}><table><thead><tr><th>目标日</th><th>评价状态</th><th>配对差值</th></tr></thead><tbody>{data.days.map(row => <tr key={row.target_date}><td>{row.target_date}</td><td>{text(row.evaluation.status)}</td><td>{bps(row.evaluation.delta_bps)}</td></tr>)}</tbody></table></div>}
+      {data.last_waiting && <div className={styles.notice}>等待输入数据完成验证。{data.last_waiting.results.filter(row => row.status === "WAITING_DATA").map((row, i) => <p key={i}>决策日 {row.decision_date || "待确认"} · {row.message} {row.context?.dataset && `（${row.context.dataset} ${row.context.fact_date || ""}）`}</p>)}就绪后由每日任务重试；超过目标日开盘截止时间将记为错过捕获。</div>}
       {data.last_failure && <div className={styles.notice}>最近一次模型观察失败；已有预测不会被失败结果覆盖，请核对运行记录。</div>}
     </>}
   </section>;

@@ -144,3 +144,107 @@ def test_dependencies_use_frozen_factor_bytes_and_actual_window(tmp_path, dynami
     manifest.model_asset[0].model_type = "GeneralPTNN"
     with pytest.raises(DependencyUnknown, match="sequence window"):
         package_dependencies(manifest, store)
+
+
+def ready_example(package="pkg_test"):
+    from backend.services.data_integrity.consumers import ConsumerDependencies, project_readiness
+    from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+    from backend.services.data_integrity.inputs import ready_binding
+    days = [date(2026, 8, 13), date(2026, 8, 14)]
+    rows = {(d, "kline_daily_raw"): {"dataset": "kline_daily_raw", "trade_date": str(d),
+        "data_revision": 2, "validated_revision": 2, "validation_status": "VALID", "validation_id": str(d),
+        "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION} for d in days}
+    ready = project_readiness(ConsumerDependencies(("kline_daily_raw",), ("close",), 2, "dependency"), days,
+        rows, pit_binding={"universe_key": "canonical", "rule_version": "v2"})
+    ready.update(binding_id=package, manifest_sha256="a"*64, data_date=str(days[-1]), all_sync_complete=False)
+    binding = ready_binding(ready)
+    capture = dict(start=str(days[0]), end=str(days[-1]), ledger_available=True, partition_refs=list(rows.values()),
+        snapshot_kind="REPEATABLE_READ_READ_ONLY", external_fallback_allowed=False,
+        pit_identity=ready["global_pit"], readiness_binding_sha256=binding["binding_sha256"])
+    return ready, binding, capture
+
+
+def test_binding_ignores_global_completion_and_clock_but_changes_artifact_key_on_revision():
+    from copy import deepcopy
+    from backend.services.data_integrity.inputs import ready_binding, verify_capture
+    from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash_v2
+    ready, binding, capture = ready_example()
+    verify_capture(binding, capture)
+    assert ready_binding({**ready, "as_of": "another observation", "all_sync_complete": True}) == binding
+    changed = deepcopy(ready)
+    changed["partition_refs"][0]["data_revision"] += 1
+    second = ready_binding(changed)
+    def key(b): return selection_artifact_runtime_hash_v2({"selection_artifact_config": {"input_readiness_by_package": {"pkg_test": b}}})
+    assert key(binding) != key(second)
+
+
+@pytest.mark.parametrize("kind", ["missing", "dirty", "revision", "validation", "scope", "fallback", "window", "pit", "untracked"])
+def test_actual_capture_rejects_source_drift(kind):
+    from backend.services.data_integrity.inputs import InputReadinessError, verify_capture
+    _, binding, capture = ready_example()
+    if kind == "missing":
+        capture["partition_refs"].pop()
+    if kind == "dirty":
+        capture["partition_refs"][0]["validated_revision"] = 1
+    if kind == "revision":
+        capture["partition_refs"][0].update(data_revision=3, validated_revision=3)
+    if kind == "validation":
+        capture["partition_refs"][0]["validation_status"] = "ERROR"
+    if kind == "scope":
+        capture["partition_refs"][0]["scope_version"] = "foreign"
+    if kind == "fallback":
+        capture["external_fallback_allowed"] = True
+    if kind == "window":
+        capture["start"] = "2026-08-14"
+    if kind == "pit":
+        capture["pit_identity"] = {"universe_key": "legacy"}
+    if kind == "untracked":
+        capture["ledger_available"] = False
+    with pytest.raises(InputReadinessError):
+        verify_capture(binding, capture)
+
+
+def test_static_alias_join_and_chained_window_without_executing_code():
+    from backend.services.data_integrity.dependency_source import factor_fields, factor_window, field_sources
+    source = '''
+raise RuntimeError("no execution")
+a = pd.read_hdf("daily_pv.h5", key="data")
+b = pd.read_parquet("static_factors.parquet", columns=["db_volume_ratio"])
+joined = a.join(b)
+c = joined["close"].rolling(250).max().shift(3)
+result = c.rolling(20).mean() / joined["db_volume_ratio"]
+'''
+    assert factor_fields(source, field_sources()) == {"close", "db_volume_ratio"}
+    assert factor_window(source) == 272
+
+
+@pytest.mark.parametrize("expression", ["df[field]", "getattr(df, field)", "df.loc[:, field]", "df.values"])
+def test_partial_known_source_cannot_conceal_dynamic_dependency(expression):
+    from backend.services.data_integrity.dependency_source import DependencyUnknown, factor_fields, field_sources
+    with pytest.raises(DependencyUnknown):
+        factor_fields(f'df = pd.read_hdf("daily_pv.h5")\nx = df["close"]\ny = {expression}', field_sources())
+
+
+def _dataset_pickle(length=20, *, extra=b"", root="TSDatasetH"):
+    import pickle
+    return (b"\x80\x02cqlib.data.dataset\n" + root.encode() + b"\n)\x81}(X\x08\x00\x00\x00step_len" +
+            pickle.dumps(length, protocol=2)[2:-1] + extra + b"ub.")
+
+
+def test_inert_metadata_never_calls_pickle_globals(monkeypatch):
+    import builtins
+    import pickle
+    from backend.services.data_integrity.frozen_metadata import dataset_sequence_length
+    monkeypatch.setattr(pickle, "loads", lambda *_: pytest.fail("unpickler invoked"))
+    monkeypatch.setattr(builtins, "eval", lambda *_: pytest.fail("pickle callback invoked"))
+    extra = b"X\x06\x00\x00\x00opaque" + b"cbuiltins\neval\nX\x03\x00\x00\x001/0\x85R"
+    assert dataset_sequence_length(_dataset_pickle(extra=extra)) == 20
+
+
+@pytest.mark.parametrize("raw", [_dataset_pickle(0), _dataset_pickle(True), _dataset_pickle(-1),
+    _dataset_pickle(root="OtherDataset"), _dataset_pickle()+b"extra",
+    b"\x80\x02cqlib.data.dataset\nTSDatasetH\n)\x81}b."])
+def test_inert_metadata_rejects_ambiguous_or_unbound_length(raw):
+    from backend.services.data_integrity.frozen_metadata import dataset_sequence_length
+    with pytest.raises(ValueError):
+        dataset_sequence_length(raw)

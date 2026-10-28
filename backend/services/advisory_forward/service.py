@@ -76,6 +76,7 @@ class AdvisoryForwardService:
         entry_price_service: Any | None = None,
         entry_value_service: Any | None = None,
         lstm_shadow_service: Any | None = None,
+        input_readiness: Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
@@ -87,6 +88,8 @@ class AdvisoryForwardService:
         self.entry_price_service = entry_price_service or AdvisoryEntryPriceDailyService(now_provider=now_provider)
         self.entry_value_service = entry_value_service
         self.lstm_shadow_service = lstm_shadow_service
+        from .input_readiness import AdvisoryInputReadiness
+        self.input_readiness = input_readiness or AdvisoryInputReadiness()
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
         if after_close_hour is None and after_close_minute is None:
             self.after_close_hour, self.after_close_minute = _after_close_time()
@@ -483,11 +486,14 @@ class AdvisoryForwardService:
                 "unpublished advisory forward attempt identity differs from the current Program binding"
             )
         publication_payload: dict[str, Any] | None = None
+        input_bindings = None
         try:
+            input_bindings = self.input_readiness.prepare(initial_binding["package_ids"], decision_date)
             program, binding, selection_run, runtime_config = self.program_service.prepare_forward_selection(
                 program_id,
                 decision_as_of_trade_date=decision_date,
                 target_trade_date=target_date,
+                input_bindings=input_bindings,
             )
             if (
                 program.version != initial_program.version
@@ -547,6 +553,8 @@ class AdvisoryForwardService:
                 finished_at=None,
                 created_by="advisory_forward",
             )
+            from .input_readiness import summaries
+            list_version.summary_json["input_readiness"] = summaries(input_bindings)
             try:
                 model_resolution = self._freeze_model_resolution(
                     program=program,
@@ -584,7 +592,9 @@ class AdvisoryForwardService:
                 "active_episode_state_hash": _active_episode_state_hash(active_episodes),
                 "program_snapshot": program_to_dict(program),
                 "items": [list_item_to_dict(item) for item in items],
+                "input_readiness": summaries(input_bindings),
             }
+            self.input_readiness.recheck(input_bindings)
             committed = self.repository.commit_publication(
                 forward_run_id=str(persisted["forward_run_id"]),
                 expected_program_version=program.version,
@@ -596,6 +606,16 @@ class AdvisoryForwardService:
                 publication_payload=publication_payload,
             )
         except Exception as exc:
+            if input_bindings and not isinstance(exc, DataUnavailableError):
+                from backend.services.data_integrity.inputs import InputReadinessError
+                try:
+                    self.input_readiness.recheck(input_bindings)
+                except InputReadinessError as changed:
+                    # A remote inference wrapper may report a generic provider
+                    # failure when a writer invalidated the captured version.
+                    exc = changed
+                except Exception:
+                    LOGGER.exception("input recheck failed while recording forward publication failure")
             failed = self.repository.mark_failure(
                 forward_run_id=str(persisted["forward_run_id"]),
                 stage="AFTER_CLOSE_PUBLISH",
@@ -609,7 +629,7 @@ class AdvisoryForwardService:
             )
             if _published_publication_matches(failed, publication_payload):
                 return self._resume_published_observation(failed)
-            raise
+            raise exc
         try:
             observation = self._model_observation(
                 forward_run_id=str(committed["forward_run_id"]),

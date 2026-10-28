@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from contextlib import contextmanager
 from typing import Any, Mapping, Sequence
 
 import psycopg2.extras
@@ -56,6 +57,26 @@ def is_retryable_model_observation(observation: Mapping[str, Any]) -> bool:
 class AdvisoryForwardPGRepository:
     def __init__(self, *, conn_factory: Any | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
+
+    @contextmanager
+    def _publication_connection(self):
+        # get_conn defaults to autocommit. Publication and its source locks must
+        # share a real transaction; an injected transaction keeps its ownership.
+        with self._conn_factory() as conn:
+            owns_transaction = getattr(conn, "autocommit", False)
+            if owns_transaction:
+                conn.autocommit = False
+            try:
+                yield conn
+                if owns_transaction:
+                    conn.commit()
+            except BaseException:
+                if owns_transaction:
+                    conn.rollback()
+                raise
+            finally:
+                if owns_transaction:
+                    conn.autocommit = True
 
     def begin_attempt(self, run: AdvisoryForwardRunV1) -> dict[str, Any]:
         with self._conn_factory() as conn:
@@ -195,7 +216,7 @@ class AdvisoryForwardPGRepository:
         publication_payload: dict[str, Any],
     ) -> dict[str, Any]:
         payload_hash = canonical_json_sha256(publication_payload)
-        with self._conn_factory() as conn:
+        with self._publication_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     "SELECT * FROM app.advisory_forward_run WHERE forward_run_id = %s FOR UPDATE",
@@ -230,6 +251,13 @@ class AdvisoryForwardPGRepository:
                 )
                 if cur.fetchone() is None:
                     raise InvalidStateTransitionError("advisory binding changed during forward publication")
+                bindings = (review_run.runtime_config_json.get("selection_artifact_config") or {}).get("input_readiness_by_package")
+                if publication_payload.get("input_readiness"):
+                    from .input_readiness import summaries
+                    from backend.services.data_integrity.inputs import InputReadinessError, verify_current
+                    if not bindings or summaries(bindings) != publication_payload["input_readiness"]:
+                        raise InputReadinessError("publication input binding summary differs")
+                    verify_current(conn, bindings, lock=True)
                 cur.execute(
                     """
                     INSERT INTO app.advisory_review_run (

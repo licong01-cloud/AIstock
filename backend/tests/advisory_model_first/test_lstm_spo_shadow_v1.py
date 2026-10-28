@@ -36,7 +36,8 @@ def trial(tmp_path, monkeypatch):
                        target_date="2026-10-28", list_version_id="advlv_test", selection_run_id="sel_test",
                        created_at="2026-10-27T08:45:00+00:00")
     now = [datetime(2026, 10, 27, 9, tzinfo=timezone.utc)]
-    source = NS(publications=lambda: [publication], inputs=lambda p: (rows, {}), finance=lambda p: None)
+    source = NS(publications=lambda: [publication], inputs=lambda p: (rows, {}), finance=lambda p: None,
+                verify_capture=lambda receipt: None)
     service = app.LstmSpoShadowService(root=tmp_path, source=source, now=lambda: now[0])
     service.root.mkdir()
     (service.root / "model.json").write_bytes(raw)
@@ -81,6 +82,39 @@ def test_late_capture_never_publishes_or_reads_inputs(trial):
     assert trial.service.run_once()["results"][0]["status"] == "MISSED_CAPTURE_WINDOW"
     assert not trial.path.exists()
     assert len(trial.service.status(program_id=app.PROGRAM)["missed"]) == 1
+
+
+@pytest.mark.parametrize("phase", ["read", "post_compute"])
+def test_waiting_is_durable_retries_without_fit_and_clears_after_capture(trial, phase):
+    from backend.services.data_integrity.inputs import InputReadinessError
+    original = trial.source.inputs
+    def waiting(*_): raise InputReadinessError("benchmark revision is unverified", context={"dataset": "index_daily"})
+    if phase == "read":
+        trial.source.inputs = waiting
+    else:
+        trial.source.verify_capture = waiting
+    assert trial.service.run_once()["results"][0]["status"] == "WAITING_DATA"
+    assert not trial.path.exists()
+    status = trial.service.status(program_id=app.PROGRAM)
+    assert status["last_waiting"] and status["last_failure"] is None
+    trial.source.inputs, trial.source.verify_capture = original, lambda *_: None
+    assert trial.service.run_once()["results"][0]["status"] == "PREDICTED"
+    assert trial.service.status(program_id=app.PROGRAM)["last_waiting"] is None
+
+
+def test_extra_twenty_sessions_require_benchmark_and_adjustments(monkeypatch):
+    from backend.services.advisory_model_first import lstm_spo_shadow_source_v1 as source
+    from backend.services.data_integrity.inputs import InputReadinessError
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    days = list(pd.bdate_range("2026-09-01", periods=20).date)
+    rows = [{"trade_date": str(d), "dataset": ds, "data_revision": 1, "validated_revision": 1,
+             "validation_status": "VALID", "validation_id": "v", "scope_version": SCOPE_VERSION,
+             "rule_version": RULE_VERSION} for d in days for ds in source.EXTRA_DATASETS]
+    monkeypatch.setattr(source, "partition_pins", lambda *_: rows)
+    assert len(source.extra_input_capture(object(), days)["partition_refs"]) == 60
+    rows[-1]["validated_revision"] = 0
+    with pytest.raises(InputReadinessError):
+        source.extra_input_capture(object(), days)
 
 
 def test_crossing_open_never_publishes_as_prospective(trial):
