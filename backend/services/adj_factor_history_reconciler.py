@@ -19,6 +19,8 @@ import threading
 import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
+from fractions import Fraction
+import math
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 import psycopg2.extras as pgx
@@ -84,6 +86,7 @@ class AdjFactorHistoryRepository(Protocol):
         end_date: dt.date,
         expected_local_sha256: Mapping[str, str],
         expected_row_counts: Mapping[str, int],
+        basis_normalizations: Sequence[dict[str, Any]] = (),
     ) -> int: ...
 
 
@@ -384,6 +387,59 @@ def _retain_bounded_nontrading_rows(
     )
 
 
+def _normalize_predecessor_basis(
+    local: AdjFactorSnapshot, provider: AdjFactorSnapshot,
+) -> tuple[AdjFactorSnapshot, AdjFactorSnapshot, dict[str, Any] | None, int]:
+    """Keep legacy history across a provider coverage/basis boundary.
+
+    stock_basic.list_date proves the *current feed* boundary, not the first
+    quotation of a predecessor. Never delete earlier local history. A basis
+    conversion is allowed only if the complete stable overlap has one exact
+    positive ratio. Missing interior/traded rows still go through the ordinary
+    omission checks; non-proportional revisions cannot determine legacy units.
+    """
+    prefix = tuple(r for r in local.rows if r.trade_date < provider.first_date)
+    if not prefix or provider.provider_listing_start != provider.first_date:
+        return local, provider, None, 0
+    current = {r.trade_date: r.value for r in provider.rows}
+    overlap = tuple(r for r in local.rows if r.trade_date in current)
+    if len(overlap) < 2:
+        raise AdjFactorHistoryReconcileError(f"{local.symbol}: predecessor basis has insufficient overlap")
+    scale = Fraction(current[overlap[0].trade_date]) / Fraction(overlap[0].value)
+    if any(Fraction(current[r.trade_date]) != Fraction(r.value) * scale for r in overlap):
+        raise AdjFactorHistoryReconcileError(f"{local.symbol}: predecessor overlap is not a constant basis conversion")
+
+    def convert(row: AdjFactorRow) -> AdjFactorRow:
+        if scale == 1:
+            return row
+        if row.trade_date in current:
+            return AdjFactorRow(row.symbol, row.trade_date, current[row.trade_date])
+        # market.adj_factor is binary64. Round *once* to its durable format so
+        # the next day's readback does not rewrite rounded legacy rows again.
+        value = float(Fraction(row.value) * scale)
+        if not math.isfinite(value) or value <= 0:
+            raise AdjFactorHistoryReconcileError(f"{local.symbol}: normalized factor is outside storage range")
+        return AdjFactorRow(row.symbol, row.trade_date, Decimal(str(value)))
+
+    normalized = _snapshot(local.symbol, (convert(r) for r in local.rows)) if scale != 1 else local
+    merged = _snapshot(local.symbol, (*provider.rows, *(convert(r) for r in prefix)),
+                       provider_call_count=provider.provider_call_count)
+    proof = None
+    if scale != 1:
+        proof = {
+            "schema_version": "adj_factor_basis_normalization_v1", "symbol": local.symbol,
+            "policy": "whole_series_constant_overlap_to_provider_basis_v1",
+            "source_api": SOURCE_API, "provider_coverage_start": provider.first_date.isoformat(),
+            "provider_coverage_end": provider.last_date.isoformat(),
+            "provider_sha256": provider.canonical_sha256, "local_sha256": local.canonical_sha256,
+            "scale_numerator": str(scale.numerator), "scale_denominator": str(scale.denominator),
+            "overlap_row_count": len(overlap), "overlap_start": overlap[0].trade_date.isoformat(),
+            "overlap_end": overlap[-1].trade_date.isoformat(), "retained_predecessor_row_count": len(prefix),
+            "numeric_format": "ieee754_binary64_roundtrip", "original_rows": _rows_payload(local.rows),
+        }
+    return normalized, merged, proof, len(prefix)
+
+
 def _strict_append_rows(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> tuple[AdjFactorRow, ...] | None:
     """Return only a new suffix when every existing local row is unchanged."""
 
@@ -575,6 +631,7 @@ class PostgresAdjFactorHistoryRepository:
         end_date: dt.date,
         expected_local_sha256: Mapping[str, str],
         expected_row_counts: Mapping[str, int],
+        basis_normalizations: Sequence[dict[str, Any]] = (),
     ) -> int:
         ordered = tuple(sorted(set(symbols)))
         replace = tuple(sorted(set(replace_symbols)))
@@ -650,6 +707,22 @@ class PostgresAdjFactorHistoryRepository:
                 from .data_integrity.repository import mark_changed
                 mark_changed(self.conn, "adj_factor", changed_dates,
                              reason="authoritative_history_restatement", source="adj_factor_history_reconciler")
+            if basis_normalizations:
+                # Original values and exact conversion live in the existing
+                # dated audit, in the SAME transaction as factors. No DDL,
+                # sidecar dependency or post-commit provenance-loss window.
+                from .data_integrity.repository import IntegrityRepository
+                IntegrityRepository().ensure_partition(self.conn, "adj_factor", end_date)
+                with self.conn.cursor() as cur:
+                    for proof in basis_normalizations:
+                        identity = sha256_hex(canonical_json_bytes(proof))
+                        cur.execute("""UPDATE market.dataset_date_refresh_audit SET metadata=
+                            COALESCE(metadata,'{}'::jsonb)||jsonb_build_object('adj_factor_basis_normalizations',
+                                COALESCE(metadata->'adj_factor_basis_normalizations','{}'::jsonb)||%s::jsonb)
+                            WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db'""",
+                            (pgx.Json({identity: proof}), end_date))
+                        if cur.rowcount != 1:
+                            raise AdjFactorHistoryReconcileError("factor basis provenance was not persisted")
             self.conn.commit()
             return inserted
         except Exception:
@@ -788,6 +861,9 @@ class AdjFactorHistoryReconciler:
                 "verified_histories": identities,
                 "verified_snapshot_sha256": sha256_hex(canonical_json_bytes(identities)),
                 "retained_nontrading_row_count": sum(r["retained_nontrading_row_count"] for r in receipts),
+                "basis_normalization_count": sum(r["basis_normalization_count"] for r in receipts),
+                "basis_normalizations": [p for r in receipts for p in r["basis_normalizations"]],
+                "retained_predecessor_row_count": sum(r["retained_predecessor_row_count"] for r in receipts),
                 "pre_authority_price_exclusion_count": sum(r["pre_authority_price_exclusion_count"] for r in receipts),
                 "written_row_count": written, "database_write_performed": bool(written),
                 "downstream_invalidation": {"required": bool(qfq_symbols),
@@ -812,6 +888,8 @@ class AdjFactorHistoryReconciler:
         pre_authority_price_exclusions: list[dict[str, Any]] = []
         retained_nontrading_rows: list[dict[str, str]] = []
         verified_histories: dict[str, str] = {}
+        basis_normalizations: list[dict[str, Any]] = []
+        retained_predecessor_count = 0
         provider_calls = 0
 
         # Bound outstanding histories so a fast provider cannot retain the full
@@ -854,9 +932,13 @@ class AdjFactorHistoryReconciler:
                             }
                         )
                     traded_price_dates = frozenset(set(all_traded_price_dates) - set(predecessor_dates))
+                    normalized_local, combined, basis_proof, predecessor_count = _normalize_predecessor_basis(
+                        local, source_provider,
+                    )
+                    retained_predecessor_count += predecessor_count
                     provider, retained = _retain_bounded_nontrading_rows(
-                        local,
-                        source_provider,
+                        normalized_local,
+                        combined,
                         traded_price_dates=traded_price_dates,
                     )
                     provider_dates = {row.trade_date for row in provider.rows}
@@ -866,6 +948,9 @@ class AdjFactorHistoryReconciler:
                             f"{scope.symbol}: provider history omits required traded price dates "
                             f"(price={len(missing_prices)})"
                         )
+                    if basis_proof is not None:
+                        basis_proof["result_sha256"] = provider.canonical_sha256
+                        basis_normalizations.append(basis_proof)
                     verified_histories[scope.symbol] = provider.canonical_sha256
                     retained_nontrading_rows.extend(
                         {
@@ -899,7 +984,7 @@ class AdjFactorHistoryReconciler:
                     append_rows = _strict_append_rows(local, provider)
                     write_mode = "append" if append_rows is not None else "full_replace"
                     staged_rows = append_rows if append_rows is not None else provider.rows
-                    qfq_changed = _existing_qfq_changed(local, provider)
+                    qfq_changed = _existing_qfq_changed(normalized_local, provider)
                     local_dates = {row.trade_date for row in local.rows}
                     historical_coverage_extended = bool(local.rows) and any(
                         row.trade_date <= local.last_date and row.trade_date not in local_dates for row in provider.rows)
@@ -942,6 +1027,7 @@ class AdjFactorHistoryReconciler:
                 end_date=end_date,
                 expected_local_sha256=expected_local,
                 expected_row_counts=expected_rows,
+                basis_normalizations=basis_normalizations,
             )
 
         return {
@@ -958,6 +1044,9 @@ class AdjFactorHistoryReconciler:
             "full_replace_symbol_count": len(replaced_symbols),
             "changes": changes,
             "verified_histories": verified_histories,
+            "basis_normalization_count": len(basis_normalizations),
+            "basis_normalizations": basis_normalizations,
+            "retained_predecessor_row_count": retained_predecessor_count,
             "provider_snapshot_sha256": sha256_hex(canonical_json_bytes(provider_identities)),
             "pre_authority_price_exclusion_count": sum(
                 int(item["excluded_date_count"]) for item in pre_authority_price_exclusions

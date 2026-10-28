@@ -32,9 +32,10 @@
     "market.ingestion_jobs:d3c93ad8-cd42-4063-b204-051c91dee662",
     "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-validation-receipt.json",
     "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-quality-receipt.json",
-    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-resume-job-receipt.json"
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/dev-resume-job-receipt.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/basis-dev-validation-receipt.json"
   ],
-  "expected": "2026-10-28用户审核后修订：保留adj_factor每日完整历史稳定读取；按股原子提交、隔离失败并保留恢复进度；跨日期单写入owner；只追加真实新日期或替换真实重述；精确区分原始事实变化、已有日期QFQ变化及日期扩展；空响应和历史冲突不得显示完整。先完成现有DEV验证，生产写入和部署待单独决定。",
+  "expected": "2026-10-28用户审核后修订：保留adj_factor每日完整历史稳定读取；按股原子提交、隔离失败并保留恢复进度；跨日期单写入owner；只追加真实新日期或替换真实重述；对已确认前身历史，依据完整稳定重合区间的严格固定比例统一到当前来源基准，保留全部原日期，并将原值和有理换算关系与事实原子持久化；非固定比例不得冒充换基。精确区分原始事实变化、已有日期QFQ变化及日期扩展；空响应和历史冲突不得显示完整。先完成现有DEV验证，生产写入和部署待单独决定。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -160,7 +161,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval.",
     "本轮仅现有DEV验证；不合入部署到生产、不写生产事实、不修改数据集/profile。",
-    "920047.BJ在2009年已挂牌，2020年为精选层起点；不删除前身历史，不自动进行未经确认的基准换算。"
+    "920047.BJ在2009年已挂牌，2020年为精选层起点；不删除前身历史；整序列统一基准已获DEV实施授权，不由factor比例推断账户公司行动，不以非固定比例修订外推未知前身。"
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
