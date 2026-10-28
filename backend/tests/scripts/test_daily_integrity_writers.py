@@ -95,3 +95,88 @@ def test_cninfo_rollback_failure_is_loud_and_connection_is_closed(monkeypatch):
     with pytest.raises(RuntimeError, match="rollback failed"):
         cninfo.sync_one_date(date(2026, 9, 1), 0, 1, False)
     assert conn.closed
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_index_writer_preserves_values_and_tracks_actual_dates(monkeypatch, changed):
+    from scripts import ingest_tushare_index_daily as index_daily
+    statements, markers = [], []
+    def execute(_cur, query, values, **_options):
+        statements.append((query, values))
+        return [(date(2026, 10, 27),)] if changed else []
+    monkeypatch.setattr(writes.extras, "execute_values", execute)
+    monkeypatch.setattr(writes, "mark_changed", lambda _c, ds, days, **_kw: markers.append((ds, days)))
+    assert index_daily._upsert_index_daily(Connection(), [{"ts_code": "000300.SH", "trade_date": date(2026, 10, 27),
+        "open": 2, "close": float("nan")}]) == 1
+    query, values = statements[0]
+    assert "COALESCE(EXCLUDED.close,index_daily.close)" in query
+    assert "IS DISTINCT FROM" in query and "RETURNING trade_date" in query
+    assert values[0][2] is None
+    assert markers == [("index_daily", [date(2026, 10, 27)] if changed else [])]
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_index_completed_scan_records_dates_without_inventing_empty_quotes(monkeypatch, complete):
+    from scripts import ingest_tushare_index_daily as index_daily
+    from backend.services.data_refresh_audit import DataRefreshAuditRepository
+    first, second = date(2026, 10, 26), date(2026, 10, 27)
+    records = []
+    class Cursor:
+        def execute(self, query, _params=()):
+            self.calendar = "trading_calendar" in query
+        def fetchall(self):
+            return [(first,), (second,)] if self.calendar else [("000300.SH",), ("000985.CSI",)]
+    class Conn(Connection):
+        @contextmanager
+        def cursor(self):
+            yield Cursor()
+    monkeypatch.setattr(DataRefreshAuditRepository, "record_success", lambda _self, **kw: records.append(kw))
+    codes = [("000300.SH", "SSE")]+([("000985.CSI", "CSI")] if complete else [])
+    index_daily._record_index_scans(Conn(), {first: [{"ts_code": "000300.SH", "trade_date": first}]},
+        start_date=first, end_date=second, codes=codes, markets=None, job_id=None)
+    assert [r["trade_date"] for r in records] == [first, second]
+    assert all(r["metadata"]["provider_query_scope_complete"] is complete for r in records)
+    assert records[0]["metadata"]["provider_scan"]["entries"]
+    assert records[1]["metadata"]["provider_scan"]["entries"] == []
+    assert records[1]["quality_status"] == "empty_valid" and records[1]["row_count"] == 0
+
+
+@pytest.mark.parametrize("failure", ["source", "truncated", "wrong_key", "commit", "none"])
+def test_index_scan_published_only_after_all_queries_and_commits_succeed(monkeypatch, failure):
+    from scripts import ingest_tushare_index_daily as index_daily
+    import pandas as pd
+    calls, writes_seen = [], []
+    day = date(2026, 10, 27)
+    class Cursor:
+        def execute(self, *_a):
+            pass
+    class Conn(Connection):
+        rollbacks = 0
+        @contextmanager
+        def cursor(self):
+            yield Cursor()
+        def commit(self):
+            if failure == "commit":
+                raise OSError("commit failed")
+        def rollback(self):
+            self.rollbacks += 1
+    class Provider:
+        def index_daily(self, **_kw):
+            if failure == "source":
+                raise RuntimeError("provider failure")
+            code = "WRONG" if failure == "wrong_key" else "000300.SH"
+            return pd.DataFrame([{"ts_code": code, "trade_date": "20261027"}]* (8000 if failure == "truncated" else 1))
+    monkeypatch.setattr(index_daily, "_fetch_index_codes", lambda *_a: [("000300.SH", "SSE")])
+    monkeypatch.setattr(index_daily, "_log", lambda *_a: None)
+    monkeypatch.setattr(index_daily, "_upsert_index_daily", lambda *_a: writes_seen.append(True) or 1)
+    monkeypatch.setattr(index_daily, "_record_index_scans", lambda _conn, data, **_kw: calls.append(data))
+    conn = Conn()
+    args = dict(conn=conn, pro=Provider(), mode="init", start_date=day, end_date=day, markets=None, job_id=None, batch_sleep=0)
+    if failure == "none":
+        assert index_daily.run_ingestion(**args)["done_ts"] == 1 and len(calls) == 1
+    else:
+        with pytest.raises((RuntimeError, ValueError, OSError)):
+            index_daily.run_ingestion(**args)
+        assert not calls
+        if failure != "commit":
+            assert not writes_seen

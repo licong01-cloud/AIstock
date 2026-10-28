@@ -148,3 +148,43 @@ def test_consumer_not_blocked_by_unused_delayed_dataset_and_unknown_not_ready():
 def test_completion_distinguishes_historical_verification_revision_and_actual_recovery(previous, expected):
     kind, on_time = completion_kind(previous, as_of=datetime.now(timezone.utc), due_at=None, timing_known=False)
     assert kind == expected and on_time is None
+
+
+@pytest.mark.parametrize("state", [PartitionState.UNVERIFIED, PartitionState.VALID])
+def test_index_request_catalogue_is_not_a_required_quote_universe(monkeypatch, state):
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.validation import PhysicalValidator
+    validator = PhysicalValidator()
+    result = ValidationResult(state, (CheckCounts("contract_check", 1, 1 if state == PartitionState.VALID else 0,
+        0, 0, 0, 1 if state == PartitionState.UNVERIFIED else 0),), {})
+    monkeypatch.setattr(validator, "_scan_contract", lambda *_a: result)
+    assert validator.validate(None, Obligation("index_daily", "daily_series", "16:50"), date(2026, 10, 27), 1) is result
+
+
+@pytest.mark.parametrize("mutation,expected", [("valid", PartitionState.VALID),
+    ("missing", PartitionState.INCOMPLETE), ("nan", PartitionState.INCOMPLETE),
+    ("partial_query", PartitionState.UNVERIFIED), ("old_revision", PartitionState.UNVERIFIED)])
+def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypatch, mutation, expected):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    day = date(2026, 10, 27)
+    facts = [{"ts_code": code, "trade_date": day, "open": 1, "high": 2, "low": 1,
+              "close": 2, "vol": 0, "amount": 0} for code in ["000300.SH", "000985.CSI"]]
+    scan = provider_scan(INDEX_DAILY, facts, parameters={"index_markets": None})
+    source = {"status": "success", "quality_status": "ok", "data_source": "tushare",
+        "metadata": {"integrity_observed_revision": 1, "provider_query_scope_complete": mutation != "partial_query",
+                     "provider_scan": scan}}
+    actual = [dict(r) for r in facts]
+    if mutation == "missing":
+        actual.pop()
+    if mutation == "nan":
+        actual[0]["close"] = float("nan")
+    if mutation == "old_revision":
+        source["metadata"]["integrity_observed_revision"] = 0
+    monkeypatch.setattr(validation, "rows", lambda _c, query, _p=(): [source]
+        if "dataset_date_refresh_audit" in str(query) else actual)
+    result = validation.PhysicalValidator()._scan_contract(None, Obligation("index_daily", "daily_series", "16:50"), day, 1)
+    assert result.state == expected
+    if mutation == "valid":
+        assert result.checks["coverage_basis"] == "complete_query_returned_keys_not_catalogue_availability"
