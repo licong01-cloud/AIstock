@@ -63,7 +63,36 @@ DESIGN-COMPLIANCE-001 四项核对：14 项均有实现与直接证据；无错�
 ## 发布、运行与残余状态
 
 - `production_ddl_gate=noop`；`production_dml=not_requested`；数据库写入 0；依赖变化 noop。
-- 源码合入与 root 同步按既有授权执行，工作树与分支保留，不做未授权清理。
+- 初次交付时源码合入与 root 同步，工作树与分支保留；用户后续授权的重启验证及精确清理结果见下节。
 - `backend_restart_owner=user`，目标为 `backend-main`，参见 [用户重启 runbook](backend_main_runtime_restart_runbook.md) 和 [runtime targets](../standards/aistock_runtime_targets_v1.yaml)。没有执行用户服务启停或后端启动脚本。
 - 用户重启后先读 `/api/v1/runtime-identity` 核对合入身份，再读 `/api/v1/advisory/workbench/overview`、LSTM 当日名单/历史和父包阻断状态；前端激活单独核对导航与页面。重启前不声明生产页面已生效。
 - 父包冻结资产阻断、数据依赖未知、模型影子观察成熟度和经济效果保留各自状态；本次 UI 不解除它们。重排序仍是影子观察，没有替换生产排名或追加训练。
+
+## 2026-10-28 重启后正式环境验收与后续修复
+
+紧凑证据：[postrestart.json](evidence/advisory_workbench_20261028/postrestart.json)。本节是实际运行中的 8001 API 与 3000 页面验收，不复用此前捕获响应模拟生产。观察时间约 10:45—10:47（北京时间）。运行身份 `bf3f4c79cf963e02d06a260200556efed49a46a3` 与当时干净 main 相同，包含实现 PR #6780 的 merge `9dd71bfb18e3a14a77d1caf7df24c11da3fe025e`。37 个原交付文件中 36 个摘要一致；唯一变化是随后 PR #6781 修改的共享 ownership 目录，无 Advisory 实现漂移。此后其他窗口推进 main 不等于运行进程自动更新。
+
+- 37 次 GET 验证通过：五包摘要、当日名单、历史详情/分页、跨包 404、错误快照 409、数据就绪与重排序状态。浏览器直接消费生产 API，0 mock、0页面异常，验证左侧导航、五张卡片、LSTM 当日/新加入筛选、历史分页/详情/键盘关闭、模型观察及父包阻断；没有提交写请求或触发模型推理。
+- 四包名单目标日均为 10月28日；LGB/LSTM/TCN/单 Alpha 范围内分别 25/21/24/20。LSTM 新加入7、继续14、移出7。父包仍 `ASSET_BLOCKED`，最新有效日10月9日，当前页不会用旧名单替代。
+- 四包发布状态是 `PUBLISHED`，目标开盘结算另为 `WAITING_DATA / DATA_UNAVAILABLE`。名单已发布不等于当日已结算，也不证明原发布时所有数据已经完整。
+- 两个任务工作树及其本地/远端分支已按用户授权完成清理：`docs/advisory-workbench-20261028`、`feat/advisory-workbench-20261028`。官方 workflow 均返回 `cleanup_done`，四态读回通过；临时缓存按清单移除，共享 node_modules 的 junction 未跟随删除。正式证据已在 main 保存，新的现场摘要保存在本次 BUG PR。
+
+### BUG-2111：影子观察发布时间比较
+
+实际 LSTM 观察捕获0天、成熟0天，D=10月27日/T=28日已经 `MISSED_CAPTURE_WINDOW`。最后失败是 `original publication reference differs`，不是模型效果负结论。
+
+只读核对同一 list_version：数据库列返回 `2026-10-27T16:43:45.417784+08:00`，原始载荷返回 `2026-10-27T08:43:45.417784+00:00`。程序、绑定、selection、D/T、发布状态均一致；字符串不同但绝对时刻相同。修复把字符串比较改为带时区 datetime 比较，并拒绝无时区时间。未更改已有发布、模型、预测、漏采或评价文件。
+
+两轮自审分别检查时钟/身份拒绝路径和前向不可回填边界；24项直接测试、Ruff及独立新进程真实元数据核对通过。新进程在通过原发布身份校验后即停止，未读取分数/特征/收益，也未执行预测。四项 DESIGN-COMPLIANCE-001 核对：既有 F-571/F-573/F-575 契约保持，错误仍可见，原Top50/Top10/5TD及零拟合边界保持，没有新增审批或研究门禁。源码修复与生产加载分态；本次用户重启发生在该修复之前，BUG 修复合入后仍需用户加载新版本，不能用旧运行收据关闭新 BUG。
+
+第三轮检查发现 runtime workflow 未登记 `reranking-shadow` 语义契约，因此在 BUG 明确扩展文件范围后补齐精确接口登记和直接反例验证。验收要求实际存在开盘前捕获、数量/程序/冻结零拟合身份一致，最近失败后已有成功捕获；0捕获、仅配置成功、暂停、错误时钟和真实失败不能用 HTTP 200 关闭问题。契约不要求已经取得成熟收益，不新增模型晋升或经济优胜条件。
+
+### 后续执行顺序与数据窗口交接
+
+1. 完成 BUG-2111 审核/CI及合入，随后按既有后端 runbook 由用户重启；只读核对运行身份。下一次原生发布应在真实 T 开盘前保存首份合法前向预测，固定50行人口和原模型。过去漏采不补作前向。
+2. 数据准备窗口确认完成标识及包依赖解析。当前 D=10月27日 `PARTIAL / all_sync_complete=false`，五包均 `consumer_ready=false / prediction_ready=false / UNKNOWN`。不能凭“晚上9点”推断就绪，也不能从清单状态推断所有源表真的零行。
+3. 首份合法预测落盘后才进入既有5TD成熟观察；当前无可报告的新前向经济增量，不追加拟合、不替换正式榜单。父包资产恢复由资产 owner 延续既有工作，不把它混入本次时区修复。研报、现金流、价格/Exit和多包新研究继续搁置。
+
+可交给数据准备窗口的精确提示词（本窗口未代发消息、未触发采集）：
+
+> 请接续每日数据完成标识核验，先只读检查 `GET /api/v1/local-data/integrity/days/2026-10-27` 及既存5包 ADVISORY readiness。10月28日10:45快照为 PARTIAL，all_sync_complete=false；确认 failed/缺分区属于源缺失、质量检查失败还是完成回执未闭合，不把 row_count=0 直接当作源表为空。依赖解析首个未解析因子：父包 RevenueYOY_Momentum；LGB m_drawdown_from_high；LSTM/TCN m_turnover_percentile_250d；单Alpha neg_mf_main_net_amt_std_5d。请按正式因子定义和资产身份追溯完整依赖，不按名称猜测或写死白名单；交付精确包/manifest、因子到数据集映射及D日 consumer_ready/prediction_ready读回。保留UNKNOWN，原窗口已有修复授权按其边界执行。不得替 Advisory 回填预测、改榜、拟合、启动QE或恢复研究流水线。完成后给出实际可消费D及标识，不仅给预计同步时刻。

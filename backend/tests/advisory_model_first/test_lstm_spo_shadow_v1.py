@@ -161,6 +161,79 @@ def test_original_score_top50_not_truncated_native_list(trial):
         top50(run, artifact, trial.publication)
 
 
+@pytest.fixture
+def publication_reader(trial, monkeypatch):
+    from backend.services.advisory_program import AdvisoryProgramPGRepository
+    from backend.services.selection_center.repository import SelectionCenterRepository
+
+    class AssetReadReached(RuntimeError):
+        pass
+
+    calls = []
+
+    class Session:
+        @contextmanager
+        def connection(self):
+            yield object()
+
+        def close(self):
+            pass
+
+    version = NS(program_id=app.PROGRAM, binding_version_id=app.BINDING,
+        version_status="PUBLISHED", created_at=datetime.fromisoformat(trial.publication["created_at"]),
+        summary_json={"selection_run_id": "sel_test", "advisory_date_context": {
+            "decision_as_of_trade_date": "2026-10-27", "target_trade_date": "2026-10-28"}})
+    monkeypatch.setattr(AdvisoryProgramPGRepository, "get_list_version", lambda *_: version)
+
+    def get_run(_repo, run_id):
+        calls.append(run_id)
+        raise AssetReadReached("publication accepted before any score or feature read")
+
+    monkeypatch.setattr(SelectionCenterRepository, "get_run", get_run)
+    return NS(source=LstmSpoShadowSource(session_factory=Session, now=lambda: trial.now[0]),
+              version=version, calls=calls, accepted=AssetReadReached)
+
+
+@pytest.mark.parametrize("stamp", ["2026-10-27T16:45:00+08:00", "2026-10-27T14:15:00+05:30",
+                                  "2026-10-27T08:45:00Z"])
+def test_source_accepts_same_publication_instant_across_timezones(trial, publication_reader, stamp):
+    trial.publication["created_at"] = stamp
+    with pytest.raises(publication_reader.accepted):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == ["sel_test"]
+
+
+@pytest.mark.parametrize("stamp", ["2026-10-27T16:45:00.000001+08:00", "2026-10-27T08:45:00",
+                                  "not-a-time"])
+def test_source_rejects_changed_or_ambiguous_clock_before_asset_reads(trial, publication_reader, stamp):
+    trial.publication["created_at"] = stamp
+    with pytest.raises(ValueError):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == []
+
+
+@pytest.mark.parametrize("field", ["program_id", "binding_version_id", "selection_run_id", "decision_date", "target_date"])
+def test_equivalent_clock_does_not_relax_publication_identity(trial, publication_reader, field):
+    trial.publication["created_at"] = "2026-10-27T16:45:00+08:00"
+    trial.publication[field] = "changed"
+    with pytest.raises(ValueError, match="original publication reference differs"):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == []
+
+
+@pytest.mark.parametrize("invalid", ["future", "naive_stored", "unpublished"])
+def test_source_rejects_invalid_stored_publication(trial, publication_reader, invalid):
+    if invalid == "future":
+        trial.now[0] = datetime(2026, 10, 27, 8, tzinfo=timezone.utc)
+    elif invalid == "naive_stored":
+        publication_reader.version.created_at = publication_reader.version.created_at.replace(tzinfo=None)
+    else:
+        publication_reader.version.version_status = "FAILED"
+    with pytest.raises(ValueError, match="original publication reference differs"):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == []
+
+
 def test_calendar_check_precedes_mature_market_reads_and_real_valuation(trial):
     days = [d.date() for d in pd.bdate_range("2026-10-27", periods=6)]
     calls = []

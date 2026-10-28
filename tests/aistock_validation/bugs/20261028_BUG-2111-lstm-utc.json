@@ -5,7 +5,10 @@
     "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
     "docs/operations/advisory_workbench_delivery_20261028.md",
     "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
-    "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json"
+    "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json",
+    "scripts/aistock_runtime_semantics.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2111",
@@ -16,7 +19,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-28T02:48:53.739673Z",
-  "description": "original publication reference differs阻断正常前向观察",
+  "description": "???????????????????????????UTC?isoformat??????????????datetime???????????????????",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,19 +29,34 @@
     }
   ],
   "evidence_uris": [
-    "tmp/handoff/advisory-workbench-postrestart-20261028/shadow_identity_diagnosis.json"
+    "docs/operations/evidence/advisory_workbench_20261028/postrestart.json"
   ],
   "expected": "同一绝对时刻的不同有效时区表示可通过；无时区、无效、未来或真实不同的发布时间及其他身份错配均拒绝。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json",
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/operations/advisory_workbench_delivery_20261028.md",
+      "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py"
+    ],
     "added_files": [
       "docs/operations/evidence/advisory_workbench_20261028/postrestart.json"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json",
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
-      "docs/operations/advisory_workbench_delivery_20261028.md"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/operations/advisory_workbench_delivery_20261028.md",
+      "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
@@ -96,14 +114,20 @@
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "docs/operations/advisory_workbench_delivery_20261028.md",
-      "docs/operations/evidence/advisory_workbench_20261028/postrestart.json"
+      "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "docs/operations/advisory_workbench_delivery_20261028.md",
-      "docs/operations/evidence/advisory_workbench_20261028/postrestart.json"
+      "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
   },
   "first_seen_at": "2026-10-28T02:48:53.739673Z",
@@ -121,7 +145,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py -q",
   "required_verification": [
     "l0",
     "advisory_modeling_backend"
@@ -129,11 +153,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_ed918504a02f4b15892f0dba65da139b/reranking-shadow",
+    "fresh_process_evidence": [
+      "24 direct tests passed; independent Python loaded changed source a9be40719b185e7112ce33936bc939afc4ab2dc9ace4e5c0f07e878892c7ade3, real publication metadata accepted; stopped before asset/input/model reads. Durable evidence: docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
+      "Independent Python loaded patched source and verified real publication metadata, stopping before assets/features/model calls; docs/operations/evidence/advisory_workbench_20261028/postrestart.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -142,6 +176,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Finish found no registered reranking-shadow runtime semantic contract. Register exact read-only status validator and direct tests so source merge is allowed while zero captures/failures cannot falsely close runtime verification.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [

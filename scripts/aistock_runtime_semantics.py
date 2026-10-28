@@ -841,6 +841,60 @@ def _validate_advisory_historical_operations(
     }
 
 
+def _validate_advisory_lstm_shadow_capture(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Require an actual prospective capture; a configured model alone is not runtime proof."""
+    facts: dict[str, Any] = {}
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return "failed", "shadow status requires ok=true without errors", facts
+    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/reranking-shadow", urllib.parse.urlsplit(url).path)
+    if not match or payload.get("program_id") != urllib.parse.unquote(match.group(1)):
+        return "failed", "shadow program identity differs", facts
+    if (payload.get("status") != "SHADOW_ONLY" or payload.get("production_ranking_replaced") is not False
+            or payload.get("independent_economic_confirmation") is not False):
+        return "failed", "shadow must remain active observation without production or economic promotion", facts
+    release, days = payload.get("release"), payload.get("days")
+    if (not isinstance(release, dict) or release.get("schema") != "lstm_spo_shadow_v1"
+            or release.get("program_id") != payload["program_id"] or release.get("mode") != "SHADOW_ONLY"
+            or type(release.get("physical_fit_count")) is not int or release["physical_fit_count"] != 0
+            or not all(re.fullmatch(r"[0-9a-f]{64}", str(release.get(k, ""))) for k in ("sha256", "model_sha256"))):
+        return "failed", "shadow frozen release identity is invalid", facts
+    captured, complete = payload.get("captured_days"), payload.get("complete_days")
+    if (not isinstance(days, list) or type(captured) is not int or type(complete) is not int
+            or captured != len(days) or not 0 <= complete <= captured):
+        return "failed", "shadow capture counts are inconsistent", facts
+    facts.update(program_id=payload["program_id"], captured_days=captured, complete_days=complete,
+                 release_sha256=release["sha256"], economic_confirmation=False)
+    if not days:
+        return "failed", "no prospective capture yet; configured status is insufficient", facts
+    try:
+        instants = []
+        decision_dates = set()
+        for day in days:
+            decision = datetime.fromisoformat(day["decision_date"]).date()
+            target = datetime.fromisoformat(day["target_date"]).date()
+            observed = datetime.fromisoformat(day["observed_at"])
+            local = observed.astimezone(timezone(timedelta(hours=8)))
+            opened = datetime.combine(target, datetime.min.time(), tzinfo=local.tzinfo) + timedelta(hours=9, minutes=30)
+            closed = datetime.combine(decision, datetime.min.time(), tzinfo=local.tzinfo) + timedelta(hours=15)
+            if (observed.utcoffset() is None or decision >= target or not closed <= local < opened
+                    or day["decision_date"] in decision_dates
+                    or not re.fullmatch(r"[0-9a-f]{64}", day["prediction_sha256"])):
+                return "failed", "shadow capture identity or prospective clock is invalid", facts
+            decision_dates.add(day["decision_date"])
+            instants.append(observed)
+        if sum(day.get("evaluation", {}).get("status") == "COMPLETE" for day in days) != complete:
+            return "failed", "shadow complete count differs from persisted days", facts
+        failure = payload.get("last_failure")
+        if failure is not None:
+            failed_at = datetime.fromisoformat(failure["observed_at"])
+            if failed_at.utcoffset() is None or failed_at >= max(instants):
+                return "failed", "shadow has no successful capture after its last failure", facts
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "failed", "shadow capture evidence is malformed", facts
+    facts["latest_capture_at"] = max(instants).isoformat()
+    return "passed", None, facts
+
+
 def _validate_advisory_entry_price_status(
     payload: Any,
     *,

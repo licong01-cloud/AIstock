@@ -1023,6 +1023,42 @@ def test_runtime_task_card_bounds_source_output_without_losing_attribution():
     assert "runtime_source_count: `12`" in text and "new_11.py" not in text
 
 
+@pytest.mark.parametrize("case", ["valid", "empty", "wrong_program", "paused", "promoted", "fit", "count",
+                                 "late", "naive", "duplicate", "malformed", "recent_failure", "old_failure"])
+def test_advisory_lstm_shadow_capture_semantic_contract(case):
+    day = {"decision_date": "2026-10-27", "target_date": "2026-10-28", "observed_at": "2026-10-27T22:00:00+08:00",
+           "prediction_sha256": "a" * 64, "evaluation": {"status": "IMMATURE_OR_PENDING"}}
+    payload = {"ok": True, "program_id": "advp_test", "status": "SHADOW_ONLY", "production_ranking_replaced": False,
+               "independent_economic_confirmation": False, "captured_days": 1, "complete_days": 0, "days": [day],
+               "release": {"schema": "lstm_spo_shadow_v1", "program_id": "advp_test", "mode": "SHADOW_ONLY",
+                           "physical_fit_count": 0, "sha256": "b" * 64, "model_sha256": "c" * 64}}
+    if case == "empty":
+        payload.update(days=[], captured_days=0)
+    elif case == "wrong_program":
+        payload["program_id"] = "another"
+    elif case == "paused":
+        payload["status"] = "PAUSED"
+    elif case == "promoted":
+        payload["production_ranking_replaced"] = True
+    elif case == "fit":
+        payload["release"]["physical_fit_count"] = 1
+    elif case == "count":
+        payload["complete_days"] = 1
+    elif case == "late":
+        day["observed_at"] = "2026-10-28T09:30:00+08:00"
+    elif case == "naive":
+        day["observed_at"] = "2026-10-27T22:00:00"
+    elif case == "duplicate":
+        payload.update(days=[day, day], captured_days=2)
+    elif case == "malformed":
+        payload["days"] = [None]
+    elif case.endswith("failure"):
+        payload["last_failure"] = {"observed_at": "2026-10-27T23:00:00+08:00" if case == "recent_failure" else "2026-10-27T21:00:00+08:00"}
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/reranking-shadow", payload, "e" * 64)
+    assert semantic["contract_id"] == "advisory_lstm_shadow_capture"
+    assert semantic["verdict"] == ("passed" if case in {"valid", "old_failure"} else "failed")
+
+
 def _entry_price_payload(configured=False):
     return {
         "ok": True,

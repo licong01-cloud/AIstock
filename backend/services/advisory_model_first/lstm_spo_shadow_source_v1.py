@@ -134,6 +134,7 @@ class LstmSpoShadowSource:
             StrategyPackageSelectionArtifactRepository, selection_artifact_runtime_hash_v2,
         )
         started = self.now()
+        published = datetime.fromisoformat(publication["created_at"])
         with self.connection() as connection:
             @contextmanager
             def pinned():
@@ -147,7 +148,8 @@ class LstmSpoShadowSource:
                     or version.summary_json.get("selection_run_id") != publication["selection_run_id"]
                     or context.get("decision_as_of_trade_date") != publication["decision_date"]
                     or context.get("target_trade_date") != publication["target_date"]
-                    or version.created_at.isoformat() != publication["created_at"]
+                    or published.utcoffset() is None or version.created_at.utcoffset() is None
+                    or version.created_at != published
                     or version.created_at > started):
                 raise ValueError("original publication reference differs")
             run = SelectionCenterRepository(conn_factory=pinned).get_run(publication["selection_run_id"])
