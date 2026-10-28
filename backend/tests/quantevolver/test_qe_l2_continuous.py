@@ -426,6 +426,11 @@ def test_actual_account_net_and_exposure_pairing_no_double_fees(data):
     row = result["accounts"][0]["periods"]["full"]
     assert row["net_return"] == pytest.approx(1.001**125 - 1)
     assert row["fees_currency"] == 12500.0
+    july_august = result["accounts"][0]["periods"]["2026-07_08"]
+    expected_days = int(((dates >= "2026-07-01") & (dates <= "2026-08-31")).sum())
+    assert july_august["days"] == expected_days
+    assert july_august["net_return"] == pytest.approx(1.001**expected_days - 1)
+    assert july_august["fees_currency"] == 100.0 * expected_days
     actions[42, "X0"][0]["target_exposure"] = 0.4
     actions[42, "X0"][0]["target_weights"] = {"A": 0.4}
     with pytest.raises(ValueError, match="REFERENCE_EXPOSURE_MISMATCH"):

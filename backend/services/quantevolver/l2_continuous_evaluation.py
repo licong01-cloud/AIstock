@@ -37,6 +37,7 @@ def evaluate(accounts, actions, calendar, benchmarks, *, signal_diagnostics=None
         "full": ("2026-04-01", "2026-09-30"),
         "2026Q2": ("2026-04-01", "2026-06-30"),
         "2026Q3": ("2026-07-01", "2026-09-30"),
+        "2026-07_08": ("2026-07-01", "2026-08-31"),
     }
     for month in range(4, 10):
         start = pd.Timestamp(2026, month, 1)
