@@ -221,9 +221,17 @@ elif not _require_bound_recorder:
     print("Warning: no bound recorder id found; using legacy latest-recorder fallback for old experiments")
 
 # Check if the latest recorder is found
+def _require_finished_recorder(recorder):
+    """A failed native runner must never become a successful result export."""
+    status = str(recorder.info.get("status") or "").upper()
+    if status != "FINISHED":
+        raise RuntimeError(f"QE_RESULT_RECORDER_NOT_FINISHED: status={status or 'MISSING'}")
+
+
 if latest_recorder is None:
     print("No recorders found")
 else:
+    _require_finished_recorder(latest_recorder)
     print(f"Latest recorder: {latest_recorder}")
     _write_extracted_recorder_ref(latest_recorder, experiment_name or "", _binding)
 

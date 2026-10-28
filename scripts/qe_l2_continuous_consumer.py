@@ -384,6 +384,13 @@ class ContinuousMixin:
         self._continuous_seen = set()
         self._continuous_reduced = set()
         self._continuous_day = None
+        parent = super()
+        require(
+            all(callable(getattr(parent, name, None)) for name in (
+                "_adjust_target_weight_map", "_build_additional_rebalance_orders"
+            )),
+            "QE_L2_CONTINUOUS_BASE_HOOKS_MISSING",
+        )
         super().__init__(*args, **kwargs)
 
     def _adjust_target_weight_map(self, weight_map, trade_start_time):
@@ -556,6 +563,7 @@ class ContinuousMixin:
         self._continuous_day = None
         decision = super().generate_trade_decision(execute_result)
         if self._continuous_day is None:
+            require(not decision.get_decision(), "QE_L2_CONTINUOUS_BASE_TARGET_MISSING_WITH_ORDERS")
             require(not self.trade_position.get_stock_list(), "QE_L2_CONTINUOUS_BASE_TARGET_UNAVAILABLE_WITH_HOLDINGS")
             require(
                 inputs.manifest["arm"] not in ("X0", "X1") or inputs.references[day] == 0,
