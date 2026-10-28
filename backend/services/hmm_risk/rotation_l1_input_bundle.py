@@ -891,14 +891,44 @@ def _preflight_qlib_feature_inventory(
     }
 
 
+def _float32_source_interval(value: float) -> tuple[float, float]:
+    """Conservative pre-cast bounds, not a configurable return tolerance."""
+    encoded = np.float32(value)
+    with np.errstate(over="ignore"):
+        previous = float(np.nextafter(encoded, np.float32(-np.inf)))
+        following = float(np.nextafter(encoded, np.float32(np.inf)))
+    lower, upper = (previous + value) / 2, (value + following) / 2
+    if not (math.isfinite(lower) and math.isfinite(upper) and lower > 0):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib price/factor has no bounded positive float32 interval")
+    return lower, upper
+
+
+def _raw_qlib_price(value: float, factor_bounds: tuple[float, float]) -> float:
+    """Recover the unique integer-li source price (exporter unit: 1/1000 CNY).
+
+    Both adjusted OHLC and factor are independently rounded to float32.
+    A wider interval must not be resolved by choosing the nearest price.
+    Outward float64 rounding also keeps boundary cases conservative.
+    """
+    lower, upper = _float32_source_interval(value)
+    factor_lower, factor_upper = factor_bounds
+    lower = math.nextafter(lower / factor_upper, -math.inf)
+    upper = math.nextafter(upper / factor_lower, math.inf)
+    lower = math.nextafter(lower * 1000, -math.inf)
+    upper = math.nextafter(upper * 1000, math.inf)
+    if not (math.isfinite(lower) and math.isfinite(upper)):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib raw-price interval is non-finite")
+    first, last = math.ceil(lower), math.floor(upper)
+    if first != last or first <= 0:
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib raw price is not uniquely recoverable in integer li")
+    return first / 1000
+
+
 def _raw_qlib_values(raw: np.void) -> dict[str, float]:
     values = {field: float(raw[field]) for field in QLIB_STOCK_FIELDS}
     factor = values["factor"]
     if not math.isfinite(factor) or factor <= 0:
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib adjustment factor must be finite and positive")
-    for field in ("open", "high", "low", "close"):
-        values[field] = values[field] / factor
-    values["volume"] = values["volume"] * factor
     if any(not math.isfinite(values[field]) for field in QLIB_STOCK_FIELDS):
         raise _fail(REASON_NON_FINITE, "Qlib required stock values contain non-finite data")
     if any(
@@ -910,6 +940,17 @@ def _raw_qlib_values(raw: np.void) -> dict[str, float]:
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib volume/amount must be non-negative")
     if values["limit_up"] not in (0.0, 1.0) or values["limit_down"] not in (0.0, 1.0):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib limit flags must be exact 0/1")
+    factor_bounds = _float32_source_interval(factor)
+    for field in ("open", "high", "low", "close"):
+        values[field] = _raw_qlib_price(values[field], factor_bounds)
+    # Reference prices are not necessarily on the order-price tick. Preserve
+    # their float32 encoding via its shortest round-trip decimal, not round(2).
+    # This is a representation rule, not recovery of arbitrary source digits.
+    for field in ("prev_close", "up_limit_price", "down_limit_price"):
+        values[field] = float(np.format_float_positional(np.float32(values[field]), unique=True, trim="-"))
+    values["volume"] = values["volume"] * factor
+    if not math.isfinite(values["volume"]):
+        raise _fail(REASON_NON_FINITE, "Qlib reconstructed volume is non-finite")
     return values
 
 

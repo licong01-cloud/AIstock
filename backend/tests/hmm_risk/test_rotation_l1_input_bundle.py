@@ -607,6 +607,59 @@ def test_qlib_row_accepts_only_all_field_na_as_missing_evidence() -> None:
     assert subject._qlib_row_is_fully_missing(np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]) is False
 
 
+def test_qlib_price_precision_restores_flat_and_preserves_real_moves() -> None:
+    # Match the exporter: float64 qfq multiplication, independent float32 storage.
+    # Non-cent reference prices must not be rounded to the A-share order tick.
+    for price, previous in ((4.54, 4.54), (4.49, 4.49), (4.55, 4.54),
+                            (4.53, 4.54), (4.541, 4.54), (4.54, 4.5405)):
+        for factor in (1.0, 0.73123456789, 0.123456789, 1e-6):
+            row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+            row['factor'] = factor
+            for field in ('open', 'high', 'low', 'close'):
+                row[field] = price * factor
+            row['prev_close'] = previous
+            row['up_limit_price'], row['down_limit_price'] = 4.99, 4.09
+            values = subject._raw_qlib_values(row)
+            assert values['close'] == price
+            assert values['prev_close'] == previous
+            assert (values['close'] > values['prev_close']) == (price > previous)
+            assert (values['close'] == values['prev_close']) == (price == previous)
+            for field in ('prev_close', 'up_limit_price', 'down_limit_price'):
+                assert np.float32(values[field]).tobytes() == row[field].tobytes()
+
+
+@pytest.mark.parametrize('price,factor', [(4.5405, 1.0), (100000.0, 1.0), (0.0001, 1.0)])
+def test_qlib_price_precision_rejects_off_grid_or_ambiguous_raw_price(price, factor) -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row['factor'] = factor
+    for field in ('open', 'high', 'low', 'close'):
+        row[field] = price * factor
+    row['prev_close'], row['up_limit_price'], row['down_limit_price'] = 4.54, 4.99, 4.09
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._raw_qlib_values(row)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+
+def test_qlib_price_precision_recovery_matches_exported_integer_li_population() -> None:
+    rng = np.random.default_rng(42)
+    for price_li, factor in zip(rng.integers(1, 3000000, size=200), rng.uniform(.01, 1.0, size=200)):
+        price = int(price_li) / 1000
+        encoded = float(np.float32(price * factor))
+        bounds = subject._float32_source_interval(float(np.float32(factor)))
+        assert subject._raw_qlib_price(encoded, bounds) == price
+
+
+@pytest.mark.parametrize('value', [0.0, -1.0, np.inf, np.nan])
+def test_qlib_price_precision_keeps_invalid_price_fail_closed(value) -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row['factor'] = 1.0
+    for field in ('open', 'high', 'low', 'close', 'prev_close', 'up_limit_price', 'down_limit_price'):
+        row[field] = 4.54
+    row['close'] = value
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._raw_qlib_values(row)
+
+
 def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: Path) -> None:
     qlib = tmp_path / "qlib"
     feature_root = qlib / "features" / "000001.sz"

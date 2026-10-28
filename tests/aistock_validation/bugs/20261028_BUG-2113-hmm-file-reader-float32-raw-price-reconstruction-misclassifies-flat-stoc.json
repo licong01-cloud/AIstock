@@ -6,6 +6,13 @@
     "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
   ],
   "assigned_agent": null,
+  "approved_precision_contract": {
+    "approval": "User approved the recommended precision normalization in this task on 2026-10-28.",
+    "ohlc": "Unique positive integer-li source price within independently rounded float32 price/factor intervals; reject no solution or ambiguity.",
+    "reference_prices": "Shortest decimal preserving the same float32 encoding; never force round(2) or claim recovery of arbitrary pre-encoding digits.",
+    "invariants": "No return epsilon, formula/threshold/model changes, new fit, database write, or overwrite of delivered M0/M1 assets.",
+    "merge_authorization": "User authorized commit, push, PR and merge after at least two reviews, tests and green CI; cleanup is separately scoped."
+  },
   "bug_id": "BUG-2113",
   "closed_at": null,
   "closure_requirements": [
