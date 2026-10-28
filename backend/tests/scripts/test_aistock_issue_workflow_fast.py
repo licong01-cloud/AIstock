@@ -1032,26 +1032,21 @@ def test_advisory_lstm_shadow_capture_semantic_contract(case):
                "independent_economic_confirmation": False, "captured_days": 1, "complete_days": 0, "days": [day],
                "release": {"schema": "lstm_spo_shadow_v1", "program_id": "advp_test", "mode": "SHADOW_ONLY",
                            "physical_fit_count": 0, "sha256": "b" * 64, "model_sha256": "c" * 64}}
-    if case == "empty":
-        payload.update(days=[], captured_days=0)
-    elif case == "wrong_program":
-        payload["program_id"] = "another"
-    elif case == "paused":
-        payload["status"] = "PAUSED"
-    elif case == "promoted":
-        payload["production_ranking_replaced"] = True
-    elif case == "fit":
+    payload.update({
+        "empty": {"days": [], "captured_days": 0},
+        "wrong_program": {"program_id": "another"},
+        "paused": {"status": "PAUSED"},
+        "promoted": {"production_ranking_replaced": True},
+        "count": {"complete_days": 1},
+        "duplicate": {"days": [day, day], "captured_days": 2},
+        "malformed": {"days": [None]},
+    }.get(case, {}))
+    if case == "fit":
         payload["release"]["physical_fit_count"] = 1
-    elif case == "count":
-        payload["complete_days"] = 1
     elif case == "late":
         day["observed_at"] = "2026-10-28T09:30:00+08:00"
     elif case == "naive":
         day["observed_at"] = "2026-10-27T22:00:00"
-    elif case == "duplicate":
-        payload.update(days=[day, day], captured_days=2)
-    elif case == "malformed":
-        payload["days"] = [None]
     elif case.endswith("failure"):
         payload["last_failure"] = {"observed_at": "2026-10-27T23:00:00+08:00" if case == "recent_failure" else "2026-10-27T21:00:00+08:00"}
     semantic = _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/reranking-shadow", payload, "e" * 64)
