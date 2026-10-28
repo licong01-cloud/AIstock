@@ -12699,6 +12699,10 @@ def build_triage_ci_issue_plan(
     linked = _find_bug_by_github_issue(issue["number"])
     body = str(issue.get("body") or "")
     detected_run_id = run_id or _extract_run_id_from_issue_body(body)
+    try:
+        nightly_group = ci_failure_summary.nightly_issue_group(body)
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from exc
     summary: dict[str, Any]
     extraction_errors: list[str] = []
     if summary_json:
@@ -12709,6 +12713,7 @@ def build_triage_ci_issue_plan(
             run_id=detected_run_id,
             run_url=None,
             severity="P1",
+            **({"nox_sessions": nightly_group["sessions"]} if nightly_group else {}),
         )
     else:
         extraction_errors.append("No Actions run id was found in the GitHub Issue body.")
@@ -12726,6 +12731,11 @@ def build_triage_ci_issue_plan(
                 "extraction_errors": extraction_errors,
             }
         )
+    if nightly_group:
+        try:
+            summary = ci_failure_summary.bind_nightly_issue_group(summary, nightly_group)
+        except ValueError as exc:
+            raise WorkflowError(str(exc)) from exc
     summary = _merge_issue_body_regression_locator(summary, body)
     classification = _classify_ci_issue(summary, issue)
     superseding_run = _find_superseding_main_success(summary)

@@ -1700,23 +1700,112 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _test_plan_module_for_nox_session(session: str) -> str | None:
+    return _test_plan_metadata_for_nox_session(session).get("module")
+
+
+def _test_plan_metadata_for_nox_session(session: str) -> dict[str, str]:
     catalog = Path(__file__).resolve().parents[1] / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
     try:
         lines = catalog.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return None
-    module: str | None = None
+        return {}
+    entry: dict[str, str] = {}
     for raw_line in lines:
         line = raw_line.strip()
         if line.startswith("- plan_key:"):
-            module = None
-        elif line.startswith("module:"):
-            module = line.split(":", 1)[1].strip().strip("'\"") or None
-        elif line.startswith("nox_session:"):
-            nox_session = line.split(":", 1)[1].strip().strip("'\"")
-            if nox_session == session:
-                return module
-    return None
+            if entry.get("nox_session") == session:
+                return entry
+            entry = {}
+        elif ":" in line:
+            key, value = line.split(":", 1)
+            if key in {"module", "nox_session", "frontend_test_path"}:
+                entry[key] = value.strip().strip("'\"")
+    return entry if entry.get("nox_session") == session else {}
+
+
+def nightly_issue_group(body: str) -> dict[str, Any] | None:
+    """Recover one published module group, never infer it from a mixed job title."""
+    markers = re.findall(r"<!-- aistock-nightly-failure:(nightly-group-[0-9a-f]{16}) -->", body)
+    if not markers:
+        if "aistock-nightly-failure:nightly-group-" in body:
+            raise ValueError("Nightly Issue has a malformed failure-group fingerprint")
+        return None
+    if len(markers) != 1:
+        raise ValueError("Nightly Issue must identify exactly one failure-group fingerprint")
+    groups = re.findall(r"^- module=`([^`]+)`; sessions=`([^`]+)`", body, re.MULTILINE)
+    if len(groups) != 1:
+        raise ValueError("Nightly Issue must identify exactly one failure group")
+    module, raw_sessions = groups[0]
+    sessions = sorted(set(item.strip() for item in raw_sessions.split(",")))
+    # Infrastructure/overflow Issues have no executable module-session identity;
+    # retain their existing infrastructure-only triage instead of inventing one.
+    if module == "validation.runner" and sessions == ["unknown"]:
+        return None
+    expected = "nightly-group-" + hashlib.sha256(f"module={module}|group_kind=module".encode()).hexdigest()[:16]
+    if markers[0] != expected or any(_test_plan_module_for_nox_session(item) != module for item in sessions):
+        raise ValueError("Nightly Issue fingerprint/session/module identity mismatch")
+    runs = re.findall(r"<!-- aistock-issue-on-test-fail:(\d+) -->", body)
+    commits = re.findall(r"^- Commit: `([0-9a-f]{40})`", body, re.MULTILINE)
+    if len(runs) != 1 or len(commits) != 1:
+        raise ValueError("Nightly Issue lacks exact run/commit identity")
+    return {"module": module, "sessions": sessions, "nightly_fingerprint": markers[0],
+            "run_id": runs[0], "commit": commits[0]}
+
+
+def _nightly_session_log(log_text: str, sessions: Sequence[str]) -> str:
+    selected = set(sessions)
+    active = False
+    retained: list[str] = []
+    lines = normalize_log(log_text)
+    # Nox stderr may be buffered separately from pytest stdout. Prefer the
+    # runner's stdout boundaries; otherwise a last stderr session can swallow
+    # earlier sessions' buffered failures and recreate cross-group attribution.
+    marker = (r"NIGHTLY_SESSION_START session=([\w.-]+)"
+              if any("NIGHTLY_SESSION_START session=" in line for line in lines)
+              else r"nox > Running session ([\w.-]+)")
+    for line in lines:
+        start = re.search(marker, line)
+        if start:
+            active = start[1] in selected
+        if active:
+            retained.append(line)
+        if re.search(r"NIGHTLY_SESSION_END session=[\w.-]+", line):
+            active = False
+    return "\n".join(retained)
+
+
+def bind_nightly_issue_group(summary: dict[str, Any], group: dict[str, Any]) -> dict[str, Any]:
+    if str(summary.get("run_id")) != group["run_id"] or summary.get("commit") != group["commit"]:
+        raise ValueError("Nightly summary run/commit does not match the Issue")
+    sessions = set(group["sessions"])
+    groups = summary.get("nightly_failure_groups") or []
+    matching = [g for g in groups if g.get("module") == group["module"] and set(g.get("sessions") or []) == sessions]
+    if groups and len(matching) != 1:
+        raise ValueError("Nightly summary does not contain the Issue failure group")
+    jobs = []
+    for job in summary.get("failed_jobs") or []:
+        if job.get("nox_session") not in sessions:
+            continue
+        if job.get("nightly_diagnostic_session") != job.get("nox_session"):
+            raise ValueError("Nightly diagnostics lack session-isolated log provenance; collect scoped logs")
+        row = copy.deepcopy(job)
+        row["suspected_module"] = group["module"]
+        row["suspected_files"] = _module_files(group["module"], row.get("failed_tests") or [])
+        for session in group["sessions"]:
+            path = _test_plan_metadata_for_nox_session(session).get("frontend_test_path", "")
+            if path.startswith("tests/") and ".." not in Path(path).parts:
+                row["suspected_files"] = _unique([*row["suspected_files"], "frontend/" + path])
+        jobs.append(row)
+    if {job.get("nox_session") for job in jobs} != sessions:
+        raise ValueError("Nightly diagnostics do not isolate the Issue sessions; collect scoped logs")
+    scoped = finalize_summary({**copy.deepcopy(summary), "failed_jobs": jobs})
+    scoped.update(nightly_failure_groups=[matching[0] if matching else {"module": group["module"], "sessions": group["sessions"]}],
+                  nightly_failed_sessions=group["sessions"], nightly_fingerprint=group["nightly_fingerprint"],
+                  fingerprint=group["nightly_fingerprint"].replace("nightly-group-", "ci-"),
+                  nightly_issue_scope=group)
+    scoped["failure_event"] = build_failure_event(scoped)
+    scoped["agent_handoff"] = build_agent_handoff(scoped)
+    return scoped
 
 
 def _nightly_job_from_statuses(
@@ -1988,6 +2077,7 @@ def summarize_actions_run(
     wait_seconds: float = 20.0,
     log_attempts: int = 1,
     log_wait_seconds: float = 10.0,
+    nox_sessions: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     run_view_args = [
         "gh",
@@ -2093,10 +2183,16 @@ def summarize_actions_run(
                         extraction_errors.append(f"{job.get('name')}: {rest_log.get('stderr') or rest_log.get('stdout')}")
                 else:
                     extraction_errors.append(f"{job.get('name')}: {log_error}")
-        parsed = parse_job_log(log_text, job_name=str(job.get("name") or ""), job_url=job.get("url"))
-        parsed["conclusion"] = job.get("conclusion")
-        parsed["database_id"] = job.get("databaseId")
-        failed_jobs.append(parsed)
+        logs = [(session, _nightly_session_log(log_text, [session])) for session in nox_sessions] if nox_sessions else [(None, log_text)]
+        for session, scoped_log in logs:
+            if session and not scoped_log:
+                continue
+            parsed = parse_job_log(scoped_log, job_name=str(job.get("name") or ""), job_url=job.get("url"))
+            if session:
+                parsed.update(nox_session=session, failed_step=session, nightly_diagnostic_session=session)
+            parsed["conclusion"] = job.get("conclusion")
+            parsed["database_id"] = job.get("databaseId")
+            failed_jobs.append(parsed)
     finalized = finalize_summary(
         {
             "schema_version": "aistock_ci_failure_summary_v1",

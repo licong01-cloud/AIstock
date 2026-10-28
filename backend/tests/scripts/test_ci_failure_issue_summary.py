@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -98,6 +99,153 @@ def test_parse_job_log_extracts_pytest_failure_details() -> None:
     assert any("market.trading_calendar" in line for line in parsed["key_log_excerpt"])
     assert parsed["key_log_excerpt_omitted_count"] == 0
     assert parsed["suspected_module"] == "paper_v2"
+
+
+def _group_issue_body(module="local_data", session="local_data_integrity_ui"):
+    fingerprint = hashlib.sha256(f"module={module}|group_kind=module".encode()).hexdigest()[:16]
+    return (f"<!-- aistock-nightly-failure:nightly-group-{fingerprint} -->\n"
+            "<!-- aistock-issue-on-test-fail:40566184878 -->\n"
+            f"- Commit: `{'a' * 40}`\n## Nightly Failure Groups\n"
+            f"- module=`{module}`; sessions=`{session}`\n")
+
+
+SCOPED_NIGHTLY_LOG = """
+nox > Running session simulation_core_l2
+nox > Session simulation_core_l2 failed.
+nox > Running session local_data_integrity_ui
+nox > Session local_data_integrity_ui failed.
+NIGHTLY_SESSION_START session=simulation_core_l2 timeout_seconds=300
+FAILED backend/tests/simulation_runtime/test_daily_trading_context.py::test_dev_daily_context_query_budget_is_dataset_constant - DataUnavailableError: required dataset refresh did not succeed
+1 failed, 17 passed in 18.75s
+NIGHTLY_SESSION_END session=simulation_core_l2 result=failure
+NIGHTLY_SESSION_START session=local_data_integrity_ui timeout_seconds=300
+Error: Advisory mocked UI requires preconfigured writable X-only TEMP
+NIGHTLY_SESSION_END session=local_data_integrity_ui result=failure
+"""
+
+
+def _mock_scoped_actions(monkeypatch, log=SCOPED_NIGHTLY_LOG):
+    monkeypatch.setattr(summary, "_run", lambda *_a, **_kw: {
+        "ok": True, "stdout": json.dumps({
+            "databaseId": "40566184878", "workflowName": "AIstock Nightly L3 + DR",
+            "headBranch": "main", "headSha": "a" * 40, "status": "completed",
+            "conclusion": "failure", "jobs": [{"databaseId": 99,
+                "name": "Nightly L3 (paper_v2 + qe_archive + qe_read)", "conclusion": "failure"}],
+        }), "stderr": ""})
+    monkeypatch.setattr(summary, "locate_last_green_run", lambda payload, **_: summary._last_green_payload(payload, status="not_requested"))
+    return lambda sessions: summary.summarize_actions_run(
+        repo="licong01-cloud/AIstock", run_id="40566184878", nox_sessions=sessions,
+        log_provider=lambda *_: log)
+
+
+@pytest.mark.parametrize("module,session,expected,excluded", [
+    ("local_data", "local_data_integrity_ui", "writable X-only TEMP", "test_dev_daily_context"),
+    ("paper_v2_selection_center", "simulation_core_l2", "test_dev_daily_context", "writable X-only TEMP"),
+])
+def test_nightly_issue_intake_isolates_buffered_session_logs(monkeypatch, module, session, expected, excluded):
+    collect = _mock_scoped_actions(monkeypatch)
+    group = summary.nightly_issue_group(_group_issue_body(module, session))
+    payload = summary.bind_nightly_issue_group(collect([session]), group)
+    context = summary.build_context_pack(payload, github_issue_number=6782)
+    assert payload["suspected_modules"] == [module]
+    assert expected in json.dumps(context)
+    assert excluded not in json.dumps(context)
+    assert payload["nightly_failed_sessions"] == [session]
+    assert payload["nightly_fingerprint"] == group["nightly_fingerprint"]
+    assert "backend/db/init_schema.py" not in payload["suspected_files"]
+    if module == "local_data":
+        assert payload["suspected_files"] == ["frontend/tests/local-data/daily-integrity-calendar.spec.ts"]
+        assert payload["failed_jobs"][0]["failed_tests"] == []
+    else:
+        assert payload["suspected_files"] == ["backend/tests/simulation_runtime/test_daily_trading_context.py"]
+        assert payload["failed_jobs"][0]["pytest_summary"] == "1 failed, 17 passed in 18.75s"
+
+
+@pytest.mark.parametrize("change", ["fingerprint", "module", "session", "missing_run", "short_sha", "ambiguous", "malformed", "duplicate_run", "duplicate_commit", "duplicate_marker"])
+def test_nightly_issue_group_rejects_invalid_published_identity(change):
+    body = _group_issue_body()
+    if change == "fingerprint":
+        digest = hashlib.sha256(b"module=local_data|group_kind=module").hexdigest()[:16]
+        body = body.replace(digest, "0" * 16)
+    elif change == "module":
+        body = body.replace("module=`local_data`", "module=`qe_archive`")
+    elif change == "session":
+        body = body.replace("local_data_integrity_ui", "simulation_core_l2")
+    elif change == "missing_run":
+        body = body.replace("40566184878", "unknown")
+    elif change == "short_sha":
+        body = body.replace("a" * 40, "a" * 8)
+    elif change == "ambiguous":
+        body += "- module=`local_data`; sessions=`local_data_integrity_ui`\n"
+    elif change == "malformed":
+        body = body.replace("nightly-group-", "nightly-group-invalid-")
+    elif change == "duplicate_run":
+        body += "<!-- aistock-issue-on-test-fail:40566184879 -->\n"
+    elif change == "duplicate_commit":
+        body += f"- Commit: `{'b' * 40}`\n"
+    else:
+        body += body.splitlines()[0] + "\n"
+    with pytest.raises(ValueError):
+        summary.nightly_issue_group(body)
+
+
+def test_nightly_issue_group_preserves_generic_and_infrastructure_triage():
+    assert summary.nightly_issue_group("ordinary CI Issue") is None
+    assert summary.nightly_issue_group(_group_issue_body("validation.runner", "unknown")) is None
+
+
+@pytest.mark.parametrize("change", ["run", "commit", "groups", "foreign_session", "unisolated"])
+def test_nightly_issue_binding_rejects_mismatched_or_unscoped_summary(monkeypatch, change):
+    payload = _mock_scoped_actions(monkeypatch)(["local_data_integrity_ui"])
+    group = summary.nightly_issue_group(_group_issue_body())
+    if change == "run":
+        payload["run_id"] = "40566184879"
+    elif change == "commit":
+        payload["commit"] = "b" * 40
+    elif change == "groups":
+        payload["nightly_failure_groups"] = [{"module": "qe_archive", "sessions": ["qe_archive_l3"]}]
+    elif change == "foreign_session":
+        payload["failed_jobs"][0].update(nox_session="l0", failed_step="local_data_integrity_ui")
+    else:
+        payload["failed_jobs"][0].pop("nightly_diagnostic_session")
+    with pytest.raises(ValueError):
+        summary.bind_nightly_issue_group(payload, group)
+
+
+def test_nightly_session_log_legacy_headers_and_absent_session_fail_closed(monkeypatch):
+    assert "missing schema version" in summary._nightly_session_log(MIXED_NIGHTLY_LOG, ["qe_archive_data_quality"])
+    assert "paper_v2_l3" not in summary._nightly_session_log(MIXED_NIGHTLY_LOG, ["qe_archive_data_quality"])
+    payload = _mock_scoped_actions(monkeypatch, MIXED_NIGHTLY_LOG)(["local_data_integrity_ui"])
+    with pytest.raises(ValueError, match="do not isolate"):
+        summary.bind_nightly_issue_group(payload, summary.nightly_issue_group(_group_issue_body()))
+
+
+def test_nightly_workflow_triage_and_promotion_keep_own_group_scope(monkeypatch, tmp_path):
+    from scripts import aistock_issue_workflow as workflow
+
+    _mock_scoped_actions(monkeypatch)
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda _: {
+        "number": 6782, "body": _group_issue_body(), "title": "UI Nightly failure", "state": "OPEN"})
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda _: None)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda _: None)
+    # Exercise real Actions parsing through the canonical triage entrypoint.
+    original = summary.summarize_actions_run
+    monkeypatch.setattr(summary, "summarize_actions_run", lambda **kw: original(**kw, log_provider=lambda *_: SCOPED_NIGHTLY_LOG))
+    plan = workflow.build_triage_ci_issue_plan(issue_number=6782)
+    assert plan["suggested_bug"]["module"] == "local_data"
+    assert plan["suggested_bug"]["allowed_write_scope"] == ["frontend/tests/local-data/daily-integrity-calendar.spec.ts"]
+    assert "test_dev_daily_context" not in json.dumps(plan)
+    own_test = tmp_path / plan["suggested_bug"]["allowed_write_scope"][0]
+    own_test.parent.mkdir(parents=True)
+    own_test.touch()
+    monkeypatch.setattr(workflow, "_github_actions_registry_pr_capability", lambda: {"allowed": True})
+    submissions = []
+    monkeypatch.setattr(workflow, "build_submit_bug_plan", lambda **kw: submissions.append(kw) or {"next_command": "continue"})
+    promoted = workflow.build_promote_ci_issue_plan(issue_number=6782, apply=True, create_registry_worktree=True)
+    assert promoted["workflow_gate"] == "promoted"
+    assert submissions[0]["module"] == "local_data"
+    assert submissions[0]["changed_files"] == ["frontend/tests/local-data/daily-integrity-calendar.spec.ts"]
 
 
 def test_parse_job_log_prefers_failed_session_over_mixed_job_name() -> None:

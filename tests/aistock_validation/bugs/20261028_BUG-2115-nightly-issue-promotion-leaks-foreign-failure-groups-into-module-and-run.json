@@ -27,7 +27,7 @@
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/issues/6782"
   ],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Canonical Nightly triage/promotion binds the exact published run, full commit, group fingerprint, catalog module and session; only session-isolated diagnostics determine the BUG context and exact file scope. Missing or mismatched provenance fails closed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -116,7 +116,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 6783",
   "required_verification": [
     "l0",
     "validation_workflow_automation"
@@ -252,6 +252,52 @@
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "nightly_intake_repair_20261028": {
+    "review_rounds": [
+      {
+        "round": 1,
+        "focus": "Root cause and scope",
+        "result": "Mixed Actions job reparse overrides the published issue group; fix remains in workflow parser, entrypoint, direct regression tests and BUG JSON."
+      },
+      {
+        "round": 2,
+        "focus": "Identity and fail-closed contracts",
+        "result": "Verify run, full commit, one stable group fingerprint, module/catalog sessions and isolated-log provenance; reject foreign, missing, malformed and ambiguous evidence. Preserve generic CI and infrastructure triage."
+      },
+      {
+        "round": 3,
+        "focus": "Buffered logs and actual read-only replay",
+        "result": "Prefer stdout NIGHTLY_SESSION_START/END over buffered stderr nox headers. Real Issues 6782/6783 replay into local_data UI and paper_v2_selection_center DEV test respectively, with no foreign failed node or schema source."
+      }
+    ],
+    "targeted_tests": {
+      "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider",
+      "passed": 100
+    },
+    "live_replay": {
+      "run_id": "40566184878",
+      "commit": "9dd71bfb18e3a14a77d1caf7df24c11da3fe025e",
+      "issues": [
+        6782,
+        6783
+      ],
+      "artifacts": "tmp/issue_workflow/ci-issue-6782 and ci-issue-6783",
+      "github_mutations": false
+    },
+    "design_compliance": {
+      "complete_in_scope": true,
+      "no_false_success": true,
+      "business_semantics_unchanged": true,
+      "no_unapproved_gates_or_relaxation": true
+    },
+    "boundaries": {
+      "business_source_edited": false,
+      "business_database_writes": false,
+      "service_control": false,
+      "qe_or_training": false,
+      "full_nightly_rerun": false
     }
   }
 }
