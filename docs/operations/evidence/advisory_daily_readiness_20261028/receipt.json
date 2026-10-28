@@ -1,0 +1,375 @@
+{
+  "schema_version": "advisory_daily_readiness_delivery_v1",
+  "observed_at": "2026-10-28T05:42:34.377464+00:00",
+  "design_pr": 6799,
+  "base_commit": "e94e6b3c31a9ac66781440b3c6f5bf535631d059",
+  "source_pr": 6808,
+  "source_merge": "PENDING_CI",
+  "runtime_activation": "PENDING_USER_RESTART",
+  "audit_kind": "NEW_SOURCE_INDEPENDENT_PROCESS_READ_ONLY",
+  "audit_data_date": "2026-10-27",
+  "full_readback_sha256": "0a5fd550c812475f2937fab8c88528c6a49a258f0c5ce6eccbcdca2a27564f13",
+  "packages": [
+    {
+      "package_id": "pkg_ma_8ec5e389fa2c5e484a1ac7e9",
+      "manifest_sha256": "f5b008d09fa1c36a1f3604333dee62fa66ba3c692fa07239b57e5690debb6016",
+      "state": "UNKNOWN",
+      "reason": "MULTI_ALPHA requires one frozen asset binding per seed",
+      "dependencies": null,
+      "all_sync_complete": null,
+      "input_binding_sha256": null,
+      "blocker_count": 0,
+      "blockers_by_dataset_state": {},
+      "window_start": null,
+      "window_end": "2026-10-27",
+      "reason_code": "multi_alpha_parent_leg_runtime_assets_incomplete"
+    },
+    {
+      "package_id": "pkg_c8d3d51fb6d24be89cfb3a50c30c80e4",
+      "manifest_sha256": "5de2ec91c088e5cf9a9cc25673498a4165857b761cb9e4a4456151a1e04f0dc9",
+      "state": "WAITING",
+      "reason": null,
+      "dependencies": {
+        "datasets": [
+          "adj_factor",
+          "bak_basic",
+          "cyq_perf",
+          "daily_basic",
+          "kline_daily_raw",
+          "moneyflow_ts",
+          "sector_data"
+        ],
+        "fields": [
+          "amount",
+          "bb_eps",
+          "bb_rev_yoy",
+          "close",
+          "cp_his_high",
+          "cp_winner_rate",
+          "db_circ_mv",
+          "db_volume_ratio",
+          "factor",
+          "high",
+          "low",
+          "mf_elg_buy_amt",
+          "mf_elg_sell_amt",
+          "mf_lg_buy_amt",
+          "mf_lg_sell_amt",
+          "mf_sm_buy_amt",
+          "open",
+          "sw2_amount",
+          "sw2_close",
+          "sw2_mf_buy_elg_amt",
+          "sw2_mf_net_amt",
+          "sw2_mf_net_vol",
+          "sw2_mf_sell_elg_amt",
+          "sw2_pct_change",
+          "sw2_vol",
+          "volume"
+        ],
+        "window_trading_days": 255,
+        "identity": "0cd52459b839fbd3b4432759c10457b80ec703151e84ad4addb2efc0e7825636",
+        "sequence_lengths": [
+          [
+            "__seed_LGBModel_conservative_v1__",
+            1
+          ]
+        ]
+      },
+      "all_sync_complete": false,
+      "input_binding_sha256": "626ad277779c69c3b0cfd0b229817e3db798bf266086877e70a7f49c0aa92167",
+      "blocker_count": 1780,
+      "blockers_by_dataset_state": {
+        "adj_factor:UNVERIFIED": 254,
+        "bak_basic:UNVERIFIED": 254,
+        "cyq_perf:UNVERIFIED": 254,
+        "daily_basic:UNVERIFIED": 254,
+        "kline_daily_raw:UNVERIFIED": 254,
+        "moneyflow_ts:UNVERIFIED": 254,
+        "sector_data:UNVERIFIED": 254,
+        "adj_factor:INCOMPLETE": 1,
+        "daily_basic:INCOMPLETE": 1
+      },
+      "window_start": "2025-10-09",
+      "window_end": "2026-10-27",
+      "reason_code": null
+    },
+    {
+      "package_id": "pkg_cc7eccb6202e4816b9d7c7d6b748bd37",
+      "manifest_sha256": "93a7fb7c5c0745c96d2d97376db3c669e527256666ed1e014a710c38799a7dc6",
+      "state": "WAITING",
+      "reason": null,
+      "dependencies": {
+        "datasets": [
+          "adj_factor",
+          "cyq_perf",
+          "daily_basic",
+          "kline_daily_raw",
+          "moneyflow_ts",
+          "sector_data"
+        ],
+        "fields": [
+          "PriceStrength_10D",
+          "amount",
+          "close",
+          "cp_weight_avg",
+          "cp_winner_rate",
+          "db_pb",
+          "db_turnover_rate",
+          "db_turnover_rate_f",
+          "factor",
+          "high",
+          "liquidity_turnover",
+          "low",
+          "mf_elg_buy_amt",
+          "mf_elg_net_amt_ratio_5d",
+          "mf_elg_sell_amt",
+          "mf_lg_buy_amt",
+          "open",
+          "sw2_amount",
+          "sw2_close",
+          "sw2_high",
+          "sw2_low",
+          "sw2_pb",
+          "sw2_pct_change",
+          "sw2_total_mv",
+          "value_pe_inv",
+          "volume"
+        ],
+        "window_trading_days": 284,
+        "identity": "07844c781528d0cd19b6223e69042958af3f6be0a3068bc92a99225301c4f8e4",
+        "sequence_lengths": [
+          [
+            "__seed_LSTM_10D_hs64_d02__",
+            20
+          ]
+        ]
+      },
+      "all_sync_complete": false,
+      "input_binding_sha256": "a5898e44287cd58dc9136c889a25bfb08e3760e45b0cdff33dfd52a0e3db8754",
+      "blocker_count": 1700,
+      "blockers_by_dataset_state": {
+        "adj_factor:UNVERIFIED": 283,
+        "cyq_perf:UNVERIFIED": 283,
+        "daily_basic:UNVERIFIED": 283,
+        "kline_daily_raw:UNVERIFIED": 283,
+        "moneyflow_ts:UNVERIFIED": 283,
+        "sector_data:UNVERIFIED": 283,
+        "adj_factor:INCOMPLETE": 1,
+        "daily_basic:INCOMPLETE": 1
+      },
+      "window_start": "2025-08-21",
+      "window_end": "2026-10-27",
+      "reason_code": null
+    },
+    {
+      "package_id": "pkg_8dbd396d27184de6aa5fe288011220f6",
+      "manifest_sha256": "57582c722d7a63f629db4cdb653b442c2e7ee151deb3f1d6d0514126d489c7d6",
+      "state": "WAITING",
+      "reason": null,
+      "dependencies": {
+        "datasets": [
+          "adj_factor",
+          "bak_basic",
+          "cyq_perf",
+          "daily_basic",
+          "kline_daily_raw",
+          "moneyflow_ts",
+          "sector_data"
+        ],
+        "fields": [
+          "amount",
+          "bb_bvps",
+          "bb_eps",
+          "bb_npr",
+          "bb_pe_dyn",
+          "close",
+          "cp_cost_50pct",
+          "cp_weight_avg",
+          "cp_winner_rate",
+          "db_pb",
+          "db_total_mv",
+          "db_turnover_rate",
+          "db_turnover_rate_f",
+          "factor",
+          "high",
+          "low",
+          "mf_elg_buy_amt",
+          "mf_elg_buy_vol",
+          "mf_elg_sell_amt",
+          "mf_lg_buy_amt",
+          "mf_sm_buy_amt",
+          "mf_sm_buy_vol",
+          "open",
+          "sw2_amount",
+          "sw2_close",
+          "sw2_high",
+          "sw2_low",
+          "sw2_pb",
+          "sw2_pct_change",
+          "sw2_total_mv",
+          "volume"
+        ],
+        "window_trading_days": 284,
+        "identity": "720ef99b5b04ac743e1280fe2ead97da302138fcd70f4fbf221debad7baf18ae",
+        "sequence_lengths": [
+          [
+            "__seed_TCN_10D_d02__",
+            20
+          ]
+        ]
+      },
+      "all_sync_complete": false,
+      "input_binding_sha256": "da1cb316288f9adad2a6b65b985632869ad01e7cf79569e520b665675fed83af",
+      "blocker_count": 1983,
+      "blockers_by_dataset_state": {
+        "adj_factor:UNVERIFIED": 283,
+        "bak_basic:UNVERIFIED": 283,
+        "cyq_perf:UNVERIFIED": 283,
+        "daily_basic:UNVERIFIED": 283,
+        "kline_daily_raw:UNVERIFIED": 283,
+        "moneyflow_ts:UNVERIFIED": 283,
+        "sector_data:UNVERIFIED": 283,
+        "adj_factor:INCOMPLETE": 1,
+        "daily_basic:INCOMPLETE": 1
+      },
+      "window_start": "2025-08-21",
+      "window_end": "2026-10-27",
+      "reason_code": null
+    },
+    {
+      "package_id": "pkg_378eb9c91e104c64935404e257e932ee",
+      "manifest_sha256": "80d2e782e43aae5cb2687df2197ef4d443e0b434376350310a7a82ceaf736318",
+      "state": "WAITING",
+      "reason": null,
+      "dependencies": {
+        "datasets": [
+          "adj_factor",
+          "bak_basic",
+          "cyq_perf",
+          "daily_basic",
+          "kline_daily_raw",
+          "moneyflow_ts",
+          "sector_data"
+        ],
+        "fields": [
+          "PriceStrength_10D",
+          "amount",
+          "bb_bvps",
+          "bb_gpr",
+          "bb_liquid_assets",
+          "bb_npr",
+          "bb_pe_dyn",
+          "close",
+          "cp_cost_15pct",
+          "cp_cost_85pct",
+          "cp_his_high",
+          "cp_his_low",
+          "cp_weight_avg",
+          "cp_winner_rate",
+          "db_circ_mv",
+          "db_dv_ratio",
+          "db_pb",
+          "db_pe",
+          "db_pe_ttm",
+          "db_total_mv",
+          "db_turnover_rate",
+          "db_turnover_rate_f",
+          "factor",
+          "high",
+          "liquidity_turnover",
+          "low",
+          "mf_elg_buy_amt",
+          "mf_elg_net_amt_ratio_5d",
+          "mf_elg_sell_amt",
+          "mf_elg_share_in_main_amt",
+          "mf_lg_buy_amt",
+          "mf_lg_sell_amt",
+          "mf_main_net_amt",
+          "mf_sm_buy_amt",
+          "mf_total_net_amt_ratio",
+          "open",
+          "sw2_amount",
+          "sw2_close",
+          "sw2_high",
+          "sw2_low",
+          "sw2_mf_buy_elg_amt",
+          "sw2_pb",
+          "sw2_pct_change",
+          "sw2_total_mv",
+          "value_pb_inv",
+          "value_pe_inv",
+          "volume"
+        ],
+        "window_trading_days": 265,
+        "identity": "54b49ebc38a7b5f6140c729984ac45b68e518c3590d448ade3137d3398f4a653",
+        "sequence_lengths": [
+          [
+            "__seed_LSTM_10D_hs64_d02__",
+            1
+          ]
+        ]
+      },
+      "all_sync_complete": false,
+      "input_binding_sha256": "5a99c8aca7ad1ede5a6a0f0a575c34f28a1274a3d3c2aca114468adca6cfa108",
+      "blocker_count": 1850,
+      "blockers_by_dataset_state": {
+        "adj_factor:UNVERIFIED": 264,
+        "bak_basic:UNVERIFIED": 264,
+        "cyq_perf:UNVERIFIED": 264,
+        "daily_basic:UNVERIFIED": 264,
+        "kline_daily_raw:UNVERIFIED": 264,
+        "moneyflow_ts:UNVERIFIED": 264,
+        "sector_data:UNVERIFIED": 264,
+        "adj_factor:INCOMPLETE": 1,
+        "daily_basic:INCOMPLETE": 1
+      },
+      "window_start": "2025-09-17",
+      "window_end": "2026-10-27",
+      "reason_code": null
+    }
+  ],
+  "unique_factor_definitions": 83,
+  "local_validation": {
+    "direct_contract_tests": 85,
+    "dev_concurrency_rollback_tests": 1,
+    "ruff": "PASS",
+    "typescript_syntax_files": 4,
+    "l0": "PASS_0_BLOCKING",
+    "f2": "PASS_10_ITEMS_0_WARNINGS",
+    "additional_boundary_tests": 4
+  },
+  "delegated_validation": {
+    "ci": "PENDING_LATEST_SOURCE_HEAD",
+    "requested": [
+      "advisory_modeling_backend",
+      "local_data_integrity_backend",
+      "advisory_workbench_backend",
+      "advisory_workbench_ui",
+      "strategy_package_backend"
+    ],
+    "nightly": [
+      "cross_module_regression"
+    ]
+  },
+  "boundaries": {
+    "production_ddl": "NOOP",
+    "production_dml": false,
+    "dev_only": true,
+    "service_control": false,
+    "dataset_switch": false,
+    "fit_count": 0,
+    "qe_started": false,
+    "outcomes_read": false,
+    "production_prediction_started": false
+  },
+  "remaining": [
+    "historical required partitions UNVERIFIED",
+    "2026-10-27 adj_factor/daily_basic INCOMPLETE",
+    "parent seed assets unavailable",
+    "source CI and merge",
+    "user restart and first prospective prediction",
+    "natural 5TD economic evaluation"
+  ],
+  "bug_2111_close_sync": "NOT_MERGED_CAPTURE_STILL_ZERO"
+}

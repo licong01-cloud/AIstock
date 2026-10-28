@@ -56,6 +56,50 @@ def result():
     return ValidationResult(PartitionState.VALID, (CheckCounts("row", 1, 1, 0, 0, 0, 0),), {"source": "DEV fixture"})
 
 
+def test_publication_transaction_holds_revision_lock_and_rolls_back_on_drift(db):
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.services.advisory_forward.repository import AdvisoryForwardPGRepository
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.inputs import partition_pins, verify_partition_refs, InputReadinessError
+    ds, repo = db
+    day = date(2026, 9, 1)
+    revision = changed(repo, ds, day)
+    claim = repo.claim(ds, day)
+    repo.publish(dataset=ds, day=day, revision=revision, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+        target_id=claim["target_id"], token=claim["metadata"]["lease_token"], result=result())
+    with repo._connect() as connection:
+        @contextmanager
+        def borrowed():
+            yield connection
+        publisher = AdvisoryForwardPGRepository(conn_factory=borrowed)
+        with connection.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE publication_rollback_probe (id integer)")
+        with pytest.raises(RuntimeError, match="injected publication failure"):
+            with publisher._publication_connection() as conn:
+                assert conn.autocommit is False
+                pins = partition_pins(conn, day, day, [ds], lock=True)
+                refs = [{"dataset": ds, "fact_date": str(day), **{k: pins[0][k] for k in
+                         ("data_revision", "validation_id", "scope_version", "rule_version")}}]
+                verify_partition_refs(refs, pins)
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    writer = executor.submit(changed, repo, ds, day)
+                    with pytest.raises(psycopg2.errors.LockNotAvailable):
+                        writer.result(timeout=5)
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO publication_rollback_probe VALUES (1)")
+                raise RuntimeError("injected publication failure")
+        assert connection.autocommit is True
+        with connection.cursor() as cur:
+            cur.execute("SELECT count(*) FROM publication_rollback_probe")
+            assert cur.fetchone()[0] == 0
+        changed(repo, ds, day)
+        with pytest.raises(InputReadinessError):
+            with publisher._publication_connection() as conn:
+                verify_partition_refs(refs, partition_pins(conn, day, day, [ds], lock=True))
+                pytest.fail("revised source must reject publication")
+        assert connection.autocommit is True
+
+
 def test_actual_nested_readers_and_revision_use_one_short_dev_snapshot(db, monkeypatch):
     from backend.db import pg_pool
     from backend.services.data_integrity.inputs import capture_inputs

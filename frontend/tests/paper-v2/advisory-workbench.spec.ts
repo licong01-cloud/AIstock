@@ -18,7 +18,7 @@ function episode(index: number, p = "lstm") {
   return { episode_id: `episode-${index}`, symbol: index < 2 ? "600001.SH" : `600${String(index).padStart(3, "0")}.SH`, stock_name: index < 2 ? "重复入选股票" : `历史股票 ${index + 1}`, status: "EXITED", signal_date: "2026-10-12", effective_entry_date: "2026-10-13", effective_exit_date: "2026-10-20", exit_signal_date: "2026-10-19", entry_price: 18.5, exit_price: 17.8, current_rank: null, entry_rank: 1, exit_reason: index % 2 ? "STOP_LOSS" : "TAKE_PROFIT", holding_trading_days: 5, performance_state: "SETTLED", performance_reason_code: null, return_bps: index % 2 ? -410 : 620, return_kind: "REALIZED", progress: "ENDED", mark_date: "2026-10-27", mark_price: 17.8, source: index === 40 ? "UNKNOWN" : "FORWARD", binding_version_id: `${p}-binding`, metric_as_of_trade_date: "2026-10-27" };
 }
 const stocks = Array.from({ length: 8 }, (_, i) => ({ symbol: `60010${i}.SH`, stock_name: `当日股票 ${String.fromCharCode(65 + i)}`, episode_id: [0, 2, 6].includes(i) ? null : `episode-${i}`, rank: i + 1, membership: "IN_SCOPE", change: [0, 2, 6].includes(i) ? "NEW" : "CONTINUING", progress: [0, 2, 6].includes(i) ? "PENDING_ENTRY" : "TRACKING", consecutive_days: [0, 2, 6].includes(i) ? 1 : i + 1, reference_price: 42.18, reference_date: "2026-10-27", episode: [0, 2, 6].includes(i) ? undefined : { ...episode(i), status: "ACTIVE", progress: "TRACKING", return_kind: "UNREALIZED" } }));
-type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean };
+type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean };
 async function json(route: Route, body: unknown, status = 200) { await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }); }
 async function setup(page: Page, state: State) {
   await page.route("**/api/**", async route => {
@@ -27,7 +27,7 @@ async function setup(page: Page, state: State) {
     expect(request.method()).toBe("GET");
     const resource = url.pathname.replace("/api/v1", "");
     if (resource.includes("/integrity/days/")) return json(route, { fact_date: target, all_sync_complete: false });
-    if (resource.endsWith("/reranking-shadow")) return json(route, { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
+    if (resource.endsWith("/reranking-shadow")) return json(route, { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, last_waiting: state.waiting ? { results: [{ status: "WAITING_DATA", decision_date: "2026-10-27", message: "输入分区未验证或已修订", context: { dataset: "index_daily", fact_date: "2026-10-27" } }] } : null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
     if (!resource.startsWith(api)) return json(route, { count: 0, items: [] });
     if (resource === api + "/overview") {
       if (state.fail) return json(route, { detail: { message: "读取失败，请重试" } }, 503);
@@ -61,6 +61,15 @@ async function setup(page: Page, state: State) {
   });
 }
 const main = (page: Page) => page.getByTestId("advisory-workbench");
+
+test("model waiting shows precise source reason without a task action", async ({ page }) => {
+  const state: State = { seen: [], waiting: true }; await setup(page, state);
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
+  await expect(main(page).getByText(/等待输入数据完成验证/)).toBeVisible();
+  await expect(main(page).getByText(/index_daily 2026-10-27/)).toBeVisible();
+  expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
+});
 
 test("overview exposes the five tasks, true old date and null samples; sidebar links to overview", async ({ page }) => {
   const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");

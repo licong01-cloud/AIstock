@@ -250,8 +250,16 @@ class WorkbenchService:
         for package_id in packages:
             try:
                 raw = service.readiness(data_date=data_date, consumer="ADVISORY", binding_id=package_id)
+                blockers = raw.get("blockers") or []
+                if blockers:
+                    from collections import Counter
+                    counts = Counter(row["state"] for row in blockers)
+                    dates = [row["fact_date"] for row in blockers]
+                    raw["reason"] = (f"等待验证：{len(blockers)} 个输入分区（{min(dates)} 至 {max(dates)}）；" +
+                        " / ".join(f"{key} {count}" for key, count in sorted(counts.items())) +
+                        "。涉及 " + "、".join(sorted({row["dataset"] for row in blockers})) + "。")
                 results.append({k: raw.get(k) for k in ("binding_id", "consumer_ready", "prediction_ready", "state", "reason")}
-                    | {"all_sync_complete": sync.get("all_sync_complete")})
+                    | {"all_sync_complete": sync.get("all_sync_complete"), "blocker_count": len(blockers)})
             except Exception as exc:
                 LOG.warning("Advisory workbench readiness unavailable: %s", type(exc).__name__)
                 errors.append({"reason_code": type(exc).__name__, "message": "每日数据就绪合同暂不可读，请核对数据管理状态。"})

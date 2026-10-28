@@ -24,8 +24,9 @@ def parse_day(value: str) -> date:
 
 
 class DailyIntegrityService:
-    def __init__(self, repository: IntegrityRepository | None = None):
+    def __init__(self, repository: IntegrityRepository | None = None, *, asset_store=None):
         self.repository = repository or IntegrityRepository()
+        self.asset_store = asset_store
 
     @staticmethod
     def _release_view(days):
@@ -153,7 +154,7 @@ class DailyIntegrityService:
         )
         from backend.services.strategy_package.models import StrategyPackageManifest
         from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
-        from backend.services.trading_core.errors import PackageAssetInvalidError
+        from backend.services.trading_core.errors import TradingCoreError
         from .consumers import DependencyUnknown, package_dependencies, project_readiness
 
         day = parse_day(data_date)
@@ -175,13 +176,15 @@ class DailyIntegrityService:
                 record = cur.fetchone()
             if not record or record["package_status"] in {"DRAFT", "RETIRED"}:
                 return {**base, **project_readiness(None, [], {}, pit_binding=None, reason="admitted_binding_not_resolved")}
+            base["manifest_sha256"] = record["manifest_sha256"]
             try:
                 manifest = StrategyPackageManifest.model_validate(record["manifest_json"])
                 if manifest.manifest_sha256 != record["manifest_sha256"]:
                     raise DependencyUnknown("frozen package manifest identity differs")
-                dependencies = package_dependencies(manifest, LocalPackageAssetStore())
-            except (ValueError, PackageAssetInvalidError) as exc:
-                return {**base, **project_readiness(None, [], {}, pit_binding=None, reason=str(exc))}
+                dependencies = package_dependencies(manifest, self.asset_store or LocalPackageAssetStore())
+            except (ValueError, TradingCoreError) as exc:
+                return {**base, **project_readiness(None, [], {}, pit_binding=None, reason=str(exc)),
+                        "reason_code": (getattr(exc, "context", {}) or {}).get("reason_code") or getattr(exc, "error_code", None)}
 
             @contextmanager
             def borrowed_connection():
@@ -204,6 +207,7 @@ class DailyIntegrityService:
             result = project_readiness(dependencies, dates, {(r["trade_date"], r["dataset"]): r for r in rows}, pit_binding=asdict(pit))
             daily = self._day(day, *self._read(conn, day, day), now)
             return {**base, **result, "all_sync_complete": daily["all_sync_complete"],
+                    "manifest_sha256": manifest.manifest_sha256,
                     "daily_integrity_id": daily["daily_integrity_id"], "revision": daily["revision"]}
 
     def gaps(self, day: str, dataset: str, *, cursor: str | None = None, limit: int = 100):

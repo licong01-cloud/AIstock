@@ -34,7 +34,7 @@
 
 对神经网络读取配对冻结预处理中的实际step_len。不得运行pickle反序列化回调或模型代码，也不得在每个GET上启动WSL；支持的序列化结构以有界无执行元数据解析实现，不支持、重复冲突、非正整数或无配对身份即UNKNOWN。既有原生加载器对没有声明预处理的路径采用1时，只有该正式合同成立才复用，不因缺字段无条件填1。树模型使用正式已验model_kind的长度1。
 
-窗口复用原生因子窗口/固定5日缓冲及序列长度-1，不以模型名字、标签horizon或250字样替代序列证据。必要时根据代码中确定的rolling窗口保守扩大，但不能改变原生推理合同或放宽预热。
+窗口复用原生因子窗口/固定5日缓冲及序列长度-1，不以模型名字、标签horizon或250字样替代序列证据。实施实读发现LGB的m_drawdown_from_high名称未带250，冻结代码实际rolling(250)，旧名称启发只给约60日。新就绪消费入口须把可证明的更大窗口同时传入实际读取，不能只扩大台账查询而仍读取旧窗口；保留公式、预处理、5日缓冲和评分人口，未知动态窗口继续UNKNOWN。
 
 ## 4. Contracts / 共享readiness与输入绑定
 
@@ -95,8 +95,9 @@ readiness在短只读一致性快照中读取manifest、正式交易日历、PIT
 - `backend/services/advisory_forward/input_readiness.py`、`service.py`、`repository.py`；`backend/services/advisory_program.py`。
 - `backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py`、`lstm_spo_shadow_v1.py`、`generic_daily_db_input_v1.py`。
 - `backend/services/strategy_package/selection_artifact.py`、`backend/inference_engine.py`，仅输入绑定/快照核验所需调用，既有分数与模型计算不变。
+- `backend/services/strategy_package/live_inference.py`、`scripts/strategy_package_live_inference.py`，仅把明确输入绑定传递给既有原生推理入口；该脚本是既有按次推理适配器，不是服务启动脚本或新增流水线。
 - `backend/services/advisory_workbench/service.py`、`frontend/src/components/advisory/workbench/ModelObservation.tsx`、`frontend/src/components/advisory/workbench/shared.tsx`、`frontend/src/lib/api/advisoryWorkbench.ts`，仅状态呈现必需改动。
-- `backend/tests/test_daily_data_integrity_inputs.py`、`backend/tests/test_daily_data_integrity.py`、`backend/tests/test_daily_data_integrity_dev.py`；`backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py`、`test_generic_daily_db_input_v1.py`；`backend/tests/advisory_forward/test_input_readiness.py`及已有forward直接测试文件；`frontend/tests/paper-v2/advisory-workbench.spec.ts`。
+- `backend/tests/test_daily_data_integrity_inputs.py`、`backend/tests/test_daily_data_integrity.py`、`backend/tests/test_daily_data_integrity_dev.py`；`backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py`、`test_generic_daily_db_input_v1.py`；`backend/tests/advisory_model_first/test_forward_boundaries.py`及已有forward直接测试文件；`frontend/tests/paper-v2/advisory-workbench.spec.ts`。
 - `tests/aistock_validation/catalog/file_ownership.yaml`、`test_plans.yaml`、`module_registry.yaml`、`backend/services/validation/plan_catalog.py`、`noxfile.py`，仅确有需要的新增测试归属/执行注册。
 - 本设计、审核记录、`docs/operations/advisory_daily_readiness_consumption_20261028.md`、`docs/operations/evidence/advisory_daily_readiness_20261028/receipt.json`。临时脚本/回执在任务worktree的`tmp/advisory-readiness/`。
 
@@ -116,20 +117,20 @@ readiness在短只读一致性快照中读取manifest、正式交易日历、PIT
 
 ## 9. Design Acceptance Matrix
 
-设计阶段pending为真实未实现状态；不能以设计合入宣称完整功能通过。
+实现矩阵记录源码及直接证据；源数据READY、用户重启、首份前向及经济成熟保持独立。UI较宽回归交由源码PR CI，合入前消费其结果。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | backend/services/data_integrity/dependency_source.py | backend/tests/test_daily_data_integrity_inputs.py | pending | 待实施 |
-| F-002 | backend/services/data_integrity/frozen_metadata.py | backend/tests/test_daily_data_integrity_inputs.py | pending | 待实施 |
-| F-003 | backend/services/data_integrity/service.py | backend/tests/test_daily_data_integrity.py | pending | 待实施 |
-| F-004 | backend/services/advisory_forward/service.py | backend/tests/advisory_forward/test_input_readiness.py | pending | 待实施 |
-| F-005 | backend/services/advisory_forward/input_readiness.py | backend/tests/advisory_forward/test_input_readiness.py | pending | 待实施 |
-| F-006 | backend/services/advisory_forward/repository.py | backend/tests/test_daily_data_integrity_dev.py | pending | 待实施 |
-| F-007 | backend/services/advisory_model_first/lstm_spo_shadow_v1.py | backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py | pending | 待实施 |
-| F-008 | backend/services/advisory_workbench/service.py | frontend/tests/paper-v2/advisory-workbench.spec.ts | pending | 待实施 |
-| F-009 | docs/operations/advisory_daily_readiness_consumption_20261028.md | artifact:docs/operations/evidence/advisory_daily_readiness_20261028/receipt.json | pending | 待实施 |
-| F-010 | docs/analysis/advisory_daily_readiness_review_20261028.md | artifact:docs/operations/evidence/advisory_daily_readiness_20261028/receipt.json | pending | 待实施 |
+| F-001 | backend/services/data_integrity/dependency_source.py | backend/tests/test_daily_data_integrity_inputs.py | verified | - |
+| F-002 | backend/services/data_integrity/frozen_metadata.py | backend/tests/test_daily_data_integrity_inputs.py | verified | - |
+| F-003 | backend/services/data_integrity/service.py | backend/tests/test_daily_data_integrity_inputs.py | verified | - |
+| F-004 | backend/services/advisory_forward/service.py | backend/tests/advisory_model_first/test_forward_boundaries.py | verified | - |
+| F-005 | backend/services/advisory_forward/input_readiness.py | backend/tests/test_daily_data_integrity_inputs.py | verified | - |
+| F-006 | backend/services/advisory_forward/repository.py | backend/tests/test_daily_data_integrity_dev.py | verified | - |
+| F-007 | backend/services/advisory_model_first/lstm_spo_shadow_v1.py | backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py | verified | - |
+| F-008 | backend/services/advisory_workbench/service.py | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | - |
+| F-009 | docs/operations/advisory_daily_readiness_consumption_20261028.md | artifact:docs/operations/evidence/advisory_daily_readiness_20261028/receipt.json | verified | - |
+| F-010 | docs/analysis/advisory_daily_readiness_review_20261028.md | artifact:docs/operations/evidence/advisory_daily_readiness_20261028/receipt.json | verified | - |
 
 ## 10. 发布、回滚与生产门禁
 

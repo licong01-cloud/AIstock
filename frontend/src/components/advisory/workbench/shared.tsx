@@ -22,6 +22,7 @@ export const labels: Record<string, string> = {
   MARK_SOURCE_UNAVAILABLE: "估值来源不可读", ENTRY_NOT_FINALIZED: "进入尚未确认", EXIT_NOT_FINALIZED: "退出尚未结算",
 };
 export const readinessReason = (reason?: string | null) => !reason ? "" :
+  reason.startsWith("等待验证：") ? reason :
   reason.includes("factor dependencies") ? "因子输入依赖尚未完整解析，不能确认就绪。" :
   reason.includes("sequence window") ? "模型所需历史窗口尚未完整声明，不能确认就绪。" :
   reason.includes("asset") || reason.includes("frozen factor") ? "冻结资产身份或输入定义尚未确认。" :
