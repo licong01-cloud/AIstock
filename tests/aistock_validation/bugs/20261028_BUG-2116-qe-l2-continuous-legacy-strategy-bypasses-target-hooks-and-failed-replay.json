@@ -51,23 +51,23 @@
   "expected": "All five optional continuous arms consume original AF targets every decision day; B remains behavior-equivalent; failed native recorders cannot yield completed results; preserve original frozen inputs and full 125-day window.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json",
       "backend/services/quantevolver/l2_continuous_consumer.py",
       "backend/services/quantevolver/templates/read_exp_res.py",
       "backend/tests/quantevolver/test_qe_l2_continuous.py",
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py",
       "scripts/qe_l2_continuous_consumer.py",
-      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+      "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json"
     ],
     "added_files": [
       "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json",
       "backend/services/quantevolver/l2_continuous_consumer.py",
       "backend/services/quantevolver/templates/read_exp_res.py",
       "backend/tests/quantevolver/test_qe_l2_continuous.py",
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py",
       "scripts/qe_l2_continuous_consumer.py",
-      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+      "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -172,8 +172,8 @@
   },
   "first_seen_at": "2026-10-28T05:59:05.297288Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8d7b53156f6ce6eebe66bf338cf7e9d6ad3abaa6",
+  "fixed_at": "2026-10-28T06:23:52Z",
   "github_issue_number": 6809,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6809",
   "last_seen_at": "2026-10-28T05:59:05.297288Z",
@@ -181,6 +181,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6812",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -211,6 +212,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -222,7 +224,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2116",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1f04e61f5ce3923b",
+    "recorded_at": "2026-10-28T06:24:55.177539Z",
+    "runtime_contract_digest": "0747cb95d73aa9512f63b456e61cc04b9e2592fdf1c79bfa7b69527c1c8ab15b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c9cb340960f31e221cf379075955592d3eb69e67",
+    "source_merge_commit": "8d7b53156f6ce6eebe66bf338cf7e9d6ad3abaa6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6812",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/quantevolver/l2_continuous_consumer.py scripts/qe_l2_continuous_consumer.py backend/services/quantevolver/templates/read_exp_res.py backend/tests/quantevolver/test_qe_l2_continuous.py backend/tests/quantevolver/test_read_exp_res_recorder_completion.py -> passed"
+    ],
+    "validation_evidence_digest": "b0103dbb58d5eae82c304edf0bc48ac0e8f597f9319c26bc0ed1bb62e8573b08"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -237,7 +260,8 @@
     "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.native_validation_v1.json",
     "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/rdagent-node1.actual_failed_recorder_guard_v1.json",
     "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.actual_failed_recorder_guard_v1.json",
-    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/fixed_formal_composer_v1/completion.json"
+    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/fixed_formal_composer_v1/completion.json",
+    "python -m nox -s l0 -- backend/services/quantevolver/l2_continuous_consumer.py scripts/qe_l2_continuous_consumer.py backend/services/quantevolver/templates/read_exp_res.py backend/tests/quantevolver/test_qe_l2_continuous.py backend/tests/quantevolver/test_read_exp_res_recorder_completion.py -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
