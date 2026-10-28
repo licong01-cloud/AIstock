@@ -212,7 +212,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-adaptive-24h-20261028\\run_v1\\H_recovery_v1\\post_restart_effective_receipt.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -261,7 +261,8 @@
     "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/rdagent-node1.actual_failed_recorder_guard_v1.json",
     "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.actual_failed_recorder_guard_v1.json",
     "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/fixed_formal_composer_v1/completion.json",
-    "python -m nox -s l0 -- backend/services/quantevolver/l2_continuous_consumer.py scripts/qe_l2_continuous_consumer.py backend/services/quantevolver/templates/read_exp_res.py backend/tests/quantevolver/test_qe_l2_continuous.py backend/tests/quantevolver/test_read_exp_res_recorder_completion.py -> passed"
+    "python -m nox -s l0 -- backend/services/quantevolver/l2_continuous_consumer.py scripts/qe_l2_continuous_consumer.py backend/services/quantevolver/templates/read_exp_res.py backend/tests/quantevolver/test_qe_l2_continuous.py backend/tests/quantevolver/test_read_exp_res_recorder_completion.py -> passed",
+    "python -B tmp/handoff/qe-adaptive-24h-20261028/run_v1/hmm_qe_recovery_activate_v2.py -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
