@@ -29,13 +29,20 @@
   ],
   "expected": "Canonical Nightly triage/promotion binds the exact published run, full commit, group fingerprint, catalog module and session; only session-isolated diagnostics determine the BUG context and exact file scope. Missing or mismatched provenance fails closed.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/ci_failure_issue_summary.py",
-      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      "tests/aistock_validation/bugs/20261028_BUG-2115-nightly-issue-promotion-leaks-foreign-failure-groups-into-module-and-run.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2115-nightly-issue-promotion-leaks-foreign-failure-groups-into-module-and-run.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -109,6 +116,62 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6801",
   "last_seen_at": "2026-10-28T05:19:11.419791Z",
   "module": "validation",
+  "nightly_intake_repair_20261028": {
+    "boundaries": {
+      "business_database_writes": false,
+      "business_source_edited": false,
+      "full_nightly_rerun": false,
+      "qe_or_training": false,
+      "service_control": false
+    },
+    "design_compliance": {
+      "business_semantics_unchanged": true,
+      "complete_in_scope": true,
+      "no_false_success": true,
+      "no_unapproved_gates_or_relaxation": true
+    },
+    "live_replay": {
+      "artifacts": "tmp/issue_workflow/ci-issue-6782 and ci-issue-6783",
+      "commit": "9dd71bfb18e3a14a77d1caf7df24c11da3fe025e",
+      "github_mutations": false,
+      "issues": [
+        6782,
+        6783
+      ],
+      "run_id": "40566184878"
+    },
+    "review_rounds": [
+      {
+        "focus": "Root cause and scope",
+        "result": "Mixed Actions job reparse overrides the published issue group; fix remains in workflow parser, entrypoint, direct regression tests and BUG JSON.",
+        "round": 1
+      },
+      {
+        "focus": "Identity and fail-closed contracts",
+        "result": "Verify run, full commit, one stable group fingerprint, module/catalog sessions and isolated-log provenance; reject foreign, missing, malformed and ambiguous evidence. Preserve generic CI and infrastructure triage.",
+        "round": 2
+      },
+      {
+        "focus": "Buffered logs and actual read-only replay",
+        "result": "Prefer stdout NIGHTLY_SESSION_START/END over buffered stderr nox headers. Real Issues 6782/6783 replay into local_data UI and paper_v2_selection_center DEV test respectively, with no foreign failed node or schema source.",
+        "round": 3
+      },
+      {
+        "round": 4,
+        "focus": "Positive failure evidence",
+        "result": "A session command alone cannot establish a failed session. Require its own failed node or error signature; added negative case passed with the five identity/provenance cases (6 passed). L0 and lint rechecked."
+      }
+    ],
+    "targeted_tests": {
+      "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider",
+      "passed": 100
+    },
+    "followup_targeted_tests": {
+      "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -k nightly_issue_binding -q -p no:cacheprovider",
+      "passed": 6,
+      "additional_unique_case": 1
+    }
+  },
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -125,10 +188,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -252,52 +317,6 @@
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
-    }
-  },
-  "nightly_intake_repair_20261028": {
-    "review_rounds": [
-      {
-        "round": 1,
-        "focus": "Root cause and scope",
-        "result": "Mixed Actions job reparse overrides the published issue group; fix remains in workflow parser, entrypoint, direct regression tests and BUG JSON."
-      },
-      {
-        "round": 2,
-        "focus": "Identity and fail-closed contracts",
-        "result": "Verify run, full commit, one stable group fingerprint, module/catalog sessions and isolated-log provenance; reject foreign, missing, malformed and ambiguous evidence. Preserve generic CI and infrastructure triage."
-      },
-      {
-        "round": 3,
-        "focus": "Buffered logs and actual read-only replay",
-        "result": "Prefer stdout NIGHTLY_SESSION_START/END over buffered stderr nox headers. Real Issues 6782/6783 replay into local_data UI and paper_v2_selection_center DEV test respectively, with no foreign failed node or schema source."
-      }
-    ],
-    "targeted_tests": {
-      "command": "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider",
-      "passed": 100
-    },
-    "live_replay": {
-      "run_id": "40566184878",
-      "commit": "9dd71bfb18e3a14a77d1caf7df24c11da3fe025e",
-      "issues": [
-        6782,
-        6783
-      ],
-      "artifacts": "tmp/issue_workflow/ci-issue-6782 and ci-issue-6783",
-      "github_mutations": false
-    },
-    "design_compliance": {
-      "complete_in_scope": true,
-      "no_false_success": true,
-      "business_semantics_unchanged": true,
-      "no_unapproved_gates_or_relaxation": true
-    },
-    "boundaries": {
-      "business_source_edited": false,
-      "business_database_writes": false,
-      "service_control": false,
-      "qe_or_training": false,
-      "full_nightly_rerun": false
     }
   }
 }

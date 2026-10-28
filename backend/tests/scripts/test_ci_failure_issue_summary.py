@@ -194,7 +194,7 @@ def test_nightly_issue_group_preserves_generic_and_infrastructure_triage():
     assert summary.nightly_issue_group(_group_issue_body("validation.runner", "unknown")) is None
 
 
-@pytest.mark.parametrize("change", ["run", "commit", "groups", "foreign_session", "unisolated"])
+@pytest.mark.parametrize("change", ["run", "commit", "groups", "foreign_session", "unisolated", "no_failure"])
 def test_nightly_issue_binding_rejects_mismatched_or_unscoped_summary(monkeypatch, change):
     payload = _mock_scoped_actions(monkeypatch)(["local_data_integrity_ui"])
     group = summary.nightly_issue_group(_group_issue_body())
@@ -206,8 +206,10 @@ def test_nightly_issue_binding_rejects_mismatched_or_unscoped_summary(monkeypatc
         payload["nightly_failure_groups"] = [{"module": "qe_archive", "sessions": ["qe_archive_l3"]}]
     elif change == "foreign_session":
         payload["failed_jobs"][0].update(nox_session="l0", failed_step="local_data_integrity_ui")
-    else:
+    elif change == "unisolated":
         payload["failed_jobs"][0].pop("nightly_diagnostic_session")
+    else:
+        payload["failed_jobs"][0].update(failed_tests=[], error_signature=None, command="python -m pytest successful.py")
     with pytest.raises(ValueError):
         summary.bind_nightly_issue_group(payload, group)
 

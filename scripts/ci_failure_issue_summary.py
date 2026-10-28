@@ -1788,6 +1788,8 @@ def bind_nightly_issue_group(summary: dict[str, Any], group: dict[str, Any]) -> 
             continue
         if job.get("nightly_diagnostic_session") != job.get("nox_session"):
             raise ValueError("Nightly diagnostics lack session-isolated log provenance; collect scoped logs")
+        if not (job.get("failed_tests") or job.get("error_signature")):
+            raise ValueError("Nightly session lacks failure diagnostics; collect scoped logs")
         row = copy.deepcopy(job)
         row["suspected_module"] = group["module"]
         row["suspected_files"] = _module_files(group["module"], row.get("failed_tests") or [])
