@@ -1036,6 +1036,44 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
     )
 
 
+@pytest.mark.parametrize("runner_temp", ["F:/runner/_temp", "C:/runner/_temp", "X:/other-job/tmp"])
+def test_local_data_ui_preserves_verified_temp_over_runner_temp(monkeypatch, tmp_path, runner_temp):
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entry = tmp_path / "frontend/node_modules" / relative
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.touch()
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", True)
+    monkeypatch.setenv("RUNNER_TEMP", runner_temp)
+    verified = dict.fromkeys(("TEMP", "TMP", "TMPDIR"), "X:/AIstock-CI/job-6782/tmp")
+    for key, value in verified.items():
+        monkeypatch.setenv(key, value)
+    calls = []
+
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, {key: kwargs["env"][key] for key in verified}))
+
+    noxfile.local_data_integrity_ui(Session())
+    assert calls == [(("node", "frontend/node_modules/@playwright/test/cli.js", "test",
+                      "--config=frontend/tests/local-data-integrity.config.ts"), verified)]
+    assert {key: os.environ[key] for key in verified} == verified
+
+
+def test_local_data_ui_missing_prebuilt_dependencies_fails_before_execution(monkeypatch, tmp_path):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+
+    class Session:
+        def error(self, message):
+            raise RuntimeError(message)
+
+        def run(self, *args, **kwargs):
+            pytest.fail("missing dependencies must not trigger install or frontend execution")
+
+    with pytest.raises(RuntimeError, match="prebuilt dependencies"):
+        noxfile.local_data_integrity_ui(Session())
+
+
 def test_mcp_gateway_phase5_invokes_prebuilt_frontend_entrypoints_directly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -1,0 +1,244 @@
+{
+  "actual": "Playwright exits before UI execution: Advisory mocked UI requires preconfigured writable X-only TEMP. Nightly session overwrites X-drive TEMP with runner F-drive RUNNER_TEMP.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "tests/aistock_validation/bugs/20261028_BUG-2114-qe-archive-ci-failure-requires-triage-test-dev-daily-context-query-budge.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": "codex-nightly-pipeline-20261028",
+  "bug_id": "BUG-2114",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-28T05:15:40.479772Z",
+  "description": "Issue 6782 is the local_data_integrity_ui failure group in Nightly run 40566184878. Its nox session overrides verified X-only TEMP with F-drive RUNNER_TEMP, failing Playwright config load before UI tests. Preserve the approved prebuilt dependencies and X-only frontend/browser guard; inherit verified TEMP/TMP/TMPDIR instead of overriding with RUNNER_TEMP.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261028-778c2853f5bc",
+      "timestamp": "2026-10-28T05:15:40.479750Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/40566184878",
+    "https://github.com/licong01-cloud/AIstock/issues/6782",
+    "tmp/issue_workflow/ci-issue-6782/failure-event.json",
+    "tmp/issue_workflow/ci-issue-6782/context-pack.md"
+  ],
+  "expected": "local_data_integrity_ui preserves the preconfigured approved temporary-storage environment and executes the existing mocked calendar UI tests without installs, backend changes or database writes.",
+  "first_seen_at": "2026-10-28T05:15:40.479772Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6782,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6782",
+  "last_seen_at": "2026-10-28T05:15:40.479772Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python -m nox -s local_data_integrity_ui",
+  "required_verification": [
+    "l0",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly local-data UI overwrites verified X-only temporary storage with runner workspace temp",
+  "trigger_condition": {
+    "fingerprint": "778c2853f5bce8a5912602a7",
+    "source_event_id": "FE-20261028-778c2853f5bc"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe_archive",
+          "simulation_core",
+          "qe_long_trend_phase3_platform"
+        ],
+        "plans": [
+          "simulation_core_l2",
+          "qe_long_trend_phase3_platform"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "intake_scope_correction": {
+    "source_issue_number": 6782,
+    "correct_group": "local_data_integrity_ui",
+    "original_generated_module": "qe_archive",
+    "original_generated_node": "test_dev_daily_context_query_budget_is_dataset_constant",
+    "reason": "Promotion collected whole multi-group Nightly job and misattributed another group. Correct actual file ownership before implementation; no backend/HMM/QE business source is in this fix. Canonical finish must infer runtime from actual changed files.",
+    "original_file_scope_contract": {
+      "added_files": [],
+      "changed_files": [
+        "backend/tests/simulation_runtime/test_daily_trading_context.py",
+        "backend/db/init_qe_archive_schema.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "scripts/qe_archive_data_quality_smoke.py"
+      ],
+      "changed_files_source": "planned_intake",
+      "ownership": {
+        "changed_files": [
+          "backend/tests/simulation_runtime/test_daily_trading_context.py",
+          "backend/db/init_qe_archive_schema.py",
+          "backend/tests/test_qe_archive_schema.py",
+          "scripts/qe_archive_data_quality_smoke.py"
+        ],
+        "impacted_modules": [
+          "simulation_runtime",
+          "paper_v2",
+          "miniqmt_execution_runtime",
+          "qe.long_trend_evaluation",
+          "qe.core",
+          "qe.archive",
+          "platform.mcp_gateway",
+          "scripts"
+        ],
+        "matched_rules": [
+          {
+            "file": "backend/tests/simulation_runtime/test_daily_trading_context.py",
+            "impact_modules": [
+              "paper_v2",
+              "miniqmt_execution_runtime"
+            ],
+            "primary_module": "simulation_runtime",
+            "risk_level": "critical",
+            "rule_id": "simulation_runtime_core"
+          },
+          {
+            "file": "backend/db/init_qe_archive_schema.py",
+            "impact_modules": [
+              "qe.core",
+              "qe.archive",
+              "platform.mcp_gateway"
+            ],
+            "primary_module": "qe.long_trend_evaluation",
+            "risk_level": "high",
+            "rule_id": "qe_long_trend_evaluation_phase3"
+          },
+          {
+            "file": "backend/tests/test_qe_archive_schema.py",
+            "impact_modules": [
+              "qe.core",
+              "qe.archive",
+              "platform.mcp_gateway"
+            ],
+            "primary_module": "qe.long_trend_evaluation",
+            "risk_level": "high",
+            "rule_id": "qe_long_trend_evaluation_phase3"
+          },
+          {
+            "file": "scripts/qe_archive_data_quality_smoke.py",
+            "impact_modules": [],
+            "primary_module": "scripts",
+            "risk_level": "medium",
+            "rule_id": "scripts_default"
+          }
+        ],
+        "risk_levels": [
+          "critical",
+          "high",
+          "medium"
+        ],
+        "suggested_scope": [
+          "backend/tests/simulation_runtime/test_daily_trading_context.py",
+          "backend/db/init_qe_archive_schema.py",
+          "backend/tests/test_qe_archive_schema.py",
+          "scripts/qe_archive_data_quality_smoke.py"
+        ],
+        "unmatched_files": []
+      },
+      "planned_files": [
+        "backend/tests/simulation_runtime/test_daily_trading_context.py",
+        "backend/db/init_qe_archive_schema.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "scripts/qe_archive_data_quality_smoke.py"
+      ],
+      "schema_version": "aistock_submit_bug_file_scope_v1",
+      "scope_files": [
+        "backend/tests/simulation_runtime/test_daily_trading_context.py",
+        "backend/db/init_qe_archive_schema.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "scripts/qe_archive_data_quality_smoke.py"
+      ]
+    }
+  }
+}
