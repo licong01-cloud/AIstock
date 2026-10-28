@@ -11,7 +11,7 @@
   "assigned_agent": null,
   "backend_restart_required": true,
   "bug_id": "BUG-2116",
-  "closed_at": null,
+  "closed_at": "2026-10-28T07:07:34.991282Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -211,10 +211,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-adaptive-24h-20261028\\run_v1\\H_recovery_v1\\post_restart_effective_receipt.json",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-adaptive-24h-20261028\\run_v1\\H_user_restart_recovery_v1\\post_restart_source_merge_receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2116",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "0747cb95d73aa9512f63b456e61cc04b9e2592fdf1c79bfa7b69527c1c8ab15b",
+      "expected_identity": "8d7b53156f6ce6eebe66bf338cf7e9d6ad3abaa6",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-28T07:05:03.360848Z",
+      "mode": "read_only",
+      "observed_identity": "79a9d2952eee739f9194ab6f518355a560284a94",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3633a849dee0dda393fd4219dc6f21c06e126f1496a5672081659f042eb89c97",
+      "receipt_sha256": "34771a65e8ab91784332d99db8a0690106718c4066d8cf9b9c6da637ae56c820",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d6372a319c4ad5947cab884d51692a647ef5482be961977e89e4d32341933d76",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -245,7 +267,7 @@
     ],
     "validation_evidence_digest": "b0103dbb58d5eae82c304edf0bc48ac0e8f597f9319c26bc0ed1bb62e8573b08"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
