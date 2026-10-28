@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2108",
-  "closed_at": null,
+  "closed_at": "2026-10-28T05:04:14.663200Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -116,10 +116,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/handoff/hmm-dual-precision-value-20261028/BUG2108_post_restart_merge.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2108",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_risk_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "51084985982911a4051d381c15be5c641b53541271f1dad703657717eb0d4ba2",
+      "expected_identity": "a19704a77303e61aa559155fccc452fa6c2ebb4a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-28T05:04:11.134226Z",
+      "mode": "read_only",
+      "observed_identity": "68f76d98ec63d390706ac7d967e03d6c18557148",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "51e9ae387ae4587689757f568c2f065279c75b1784a0038ca1c5efbe99531dbd",
+      "receipt_sha256": "6438c615353a19a71f291bbc3b685b2b92038d74d9481534be49ea089f0b9da9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a22c83f5c691d23e44300d4d8fdc3745e6937c3913ea9203e9957b6eaec2c764",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -150,7 +172,7 @@
     ],
     "validation_evidence_digest": "2e723197257993a14f0708adb5e7d70e761f516db5d855b0be83811ee8c4e15d"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -160,7 +182,8 @@
     "source_event_id": "FE-20261027-3c1bca6656de"
   },
   "validation_evidence": [
-    "python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_risk_l2_rolling.py backend/tests/hmm_risk/test_risk_l2_date_inference.py backend/tests/hmm_risk/test_risk_l2_database_inference.py -> 76 passed on source commit f70487a23ccf04d43f3b88ba8fc3ddfe7d9ef4e3; CI run 40560745800 success"
+    "python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_risk_l2_rolling.py backend/tests/hmm_risk/test_risk_l2_date_inference.py backend/tests/hmm_risk/test_risk_l2_database_inference.py -> 76 passed on source commit f70487a23ccf04d43f3b88ba8fc3ddfe7d9ef4e3; CI run 40560745800 success",
+    "canonical post-restart-verify expected source merge a19704a77303e61aa559155fccc452fa6c2ebb4a -> verified via live descendant 68f76d98; health, identity and persisted Risk L2 business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
