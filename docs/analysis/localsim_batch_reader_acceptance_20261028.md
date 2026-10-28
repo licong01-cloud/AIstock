@@ -1,6 +1,6 @@
 # LocalSIM共享批量Reader消费验收与BUG-2112
 
-日期：2026-10-28。状态：首轮真实账户运行完成；复现性问题已定位并修复，修复后完整三日验证待执行。本文不代表生产回放或经济有效性验收。
+日期：2026-10-28。状态：共享Reader真实消费、BUG-2112修复后三日完整账户一致性、恢复和exact retry通过；修复尚未建立PR或合入，运行目录合同阻断保持。本文不代表生产回放或经济有效性验收。
 
 ## 输入、边界和源码
 
@@ -39,13 +39,37 @@ WSL使用现成环境、OMP/MKL/OpenBLAS线程1，原181日任务同时运行；
 
 修复在LocalSIM的`_account_day_identity`中仅绑定冻结request、账户、日期及实际消费的前日现金、持仓和参考价。两处任务/提交身份计算复用该函数。前日物理FileRef、完整SHA、原生journal、开盘核对和不可变发布检查全部保留。改变业务输入会改变身份；改变纯审计字段不会。源码身份保护继续拒绝新源码续接旧request，不迁移活动181日。
 
-最小反例修复后通过；后续10项相关定向检查通过，覆盖优化/旧路径、跨目录两日完整业务facts、业务输入敏感性、篡改已提交日报拒绝、并行失败前缀、恢复/exact retry、批量入口、部分成交/取消、原生估值及源码升级拒绝。证据为`bug2112-regression-first-fix.xml`与`bug2112-focused-matrix.xml`；更广回归交由最终HEAD CI。修复后真实三日新冻结研究、严格完整账户比较和恢复结果完成后补入，不提前记为通过。
+最小反例修复后通过；后续10项相关定向检查通过，覆盖优化/旧路径、跨目录两日完整业务facts、业务输入敏感性、篡改已提交日报拒绝、并行失败前缀、恢复/exact retry、批量入口、部分成交/取消、原生估值及源码升级拒绝。证据为`bug2112-regression-first-fix.xml`与`bug2112-focused-matrix.xml`；两份L0扫描均为0项发现。更广回归仍待最终HEAD CI，不将直接测试替代CI。
+
+## 修复后完整三日验收
+
+源码冻结在`627fd4fb2638d6e8c74c94a079e980ee3a53f452`，独立验证工作树为`F:/Dev/AIstock_worktrees/localsim-batch-reader-fixed-acceptance-20261028`。未热更修复分支或旧181日工作树。证据根为`X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/`；新request完整SHA为`9642c82caadbd681edfb5217f1be2d75570afcb4601b24971788394d98a0268b`。
+
+两边均完整覆盖13账户、2026-01-05/06/07及39个账户日，各有449笔成交/资金流水、189笔订单、454个OMS事件、1895个父计划和9282次分钟净值观察。184个父计划FILLED、5个PARTIAL、1706个NO_FILL、0个UNAVAILABLE；未删未成交或部分成交计划。原生账户第二、三日均有50只期初持仓和实际卖出，人工账户也有持仓结转和卖出，覆盖真实多日换仓。
+
+严格读回比较完整账户汇总、逐日持仓现金、逐笔成交/订单/事件、费用、NAV/MDD、原因、人工队列和执行状态。run/plan/order身份不做对齐或重写，核心input/previous-state SHA、idempotency和maximum_queue不排除。只按既有设计分离经自身哈希验证的处理时钟和原生无成交取消/拒绝随机事件ID；物理前缀和receipt实体先验完整SHA，再比较对应完整业务对象。原始文件仍保留全部审计字段。9项反证检查确认成交ID、数量、价格、交易时刻、核心哈希、队列指标、幂等键及事件重复不能被归一化吞掉。
+
+恢复以正式`--stop-after-account-days 14`停止，保留14份日报和14份原生generation，接续仅计算剩余25日；28个前缀文件SHA均不变。随后exact retry返回`ALREADY_MATERIALIZED`、`computed_account_days=0`，结果SHA保持`fa3451a272f89549c1df0c9c1910b5035ee88698296f516212c384d6c1be420e`，整个研究目录全部JSON逐文件SHA不变。读取账户结果阶段始终为`AFTER_COMPLETE_SOURCE_BATCH_INSPECTION`。
+
+| 收据 | 完整文件SHA256 |
+| --- | --- |
+| execution-receipt.json | 5fd18189b6a55b85a677cce0e74fe0b77fb1ff76054fc5b40d42ad27c0d9c1c8 |
+| strict-equivalence-receipt.json | d4a9b98eb1b08871c19ad8d33549cdece8b8e08597c7c00cc267556a5409cfd1 |
+| final-consumer-acceptance.json | 7296b7e4b672ec1ff5b8f8680c2f8232a43f3f52824f97a23d575ab7e5f414b2 |
+
+固定审计器`audit_fixed_v1.py`的完整SHA为`83d99a86ab65901617c907386ca9bfb4927e5e2804153910f301da5cd33523f9`，导入的既有处理时钟比较器完整SHA为`d3a2a632a2a9d6b7cacfd63d21da03cfae6162b39b1d37eefc27513639f2ff33`，审计前后均核验。原始首轮反例和失败证据完整保留。
+
+修复后逐日完整CLI为1064.1075秒；批量checkpoint为683.0676秒、resume为867.4574秒、exact retry为403.4922秒。批量恢复包含两次来源检查，不能与不中断的逐日耗时直接比较；exact retry虽不计算账户，仍有完整来源和输入核验成本。进程树峰值RSS为1712764 KiB，采样峰值FD为43；任务结束采样为0，Reader本身零持有映射由共享交付合同与定向回归证明，不将进程树FD冒充Reader句柄数。两份研究各122个文件、50674084逻辑字节；这是文件长度之和，未宣称物理分配量或冷盘指标。
+
+5份受保护旧产物SHA全部不变；归档时原181日研究仍运行，完成2343/2353个账户日、完整推进到09-29。本次不迁移、不重算或重新验收该旧研究；它仍绑定旧源码及旧身份实现。后续独立重算或跨资源复现需使用正式的新冻结研究，不能把这次通过追溯为旧研究已修复。没有数据库、数据集、行情网络、生产账户或用户服务操作。
 
 ## DESIGN-COMPLIANCE-001和运行态
 
-1. 实现绑定真实因果输入，未将单日或市场接缝测试替代完整账户验收；首轮差异保留，修复后复验待完成。
+1. 实现绑定真实因果输入，真实三日完整人口、换仓、失败前缀、恢复和exact retry均有收据；首轮差异保留，不将短窗口外推为181日全部重新验收。
 2. 不补价格、不吞必要输入错误，不放宽UNKNOWN/NONE、停牌或交易资格；篡改日报仍失败。
 3. 不改择时核心、规则、比较器、选股、费用、撮合或旧TWAP政策；只修正LocalSIM研究运行身份。
 4. 不新增人工审批；不绕过源码、恢复和运行态门禁。新增源码只在新冻结离线研究加载，用户服务重启仍由用户执行。
 
-源码提交、最终CI、合入、离线新进程、后端加载、生产研究激活和经济效果分别报告。工作流当前保守推断backend-main，缺少runbook/probe及运行态证据的门禁保持pending；不能用CLI通过或health 200冒认后端业务已验收。任何非运行时归类须按正式调用闭包/目录合同审查，不手改降级。技术验收不证明人工方式或任何策略有超额收益。
+源码修复提交完成，离线新进程加载及账户验收通过；PR、最终HEAD CI及合入尚未完成，后端加载和生产激活未操作，经济有效性未评价。工作流仍保守推断backend-main，但catalog未提供对应runbook、identity及business smoke引用；该既有门禁阻断PR readiness。真实离线fresh-process证据只证明新CLI加载修复，不冒充后端业务验收；任何非运行时归类须由流程owner按正式调用闭包/目录合同审查，不手改降级。具体交接为`X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/runtime-catalog-owner-handoff.md`。技术验收不证明人工方式或任何策略有超额收益。
+
+已执行F2设计验证；F-014因上述PR/CI与目录合同未完成保持blocked，整体验证不通过。未为通过解析器虚构用户批准、删除未完成验收项或把离线通过标为源码已合入。

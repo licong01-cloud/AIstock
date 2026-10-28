@@ -27,7 +27,13 @@
   ],
   "evidence_uris": [
     "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/pair-difference-inventory.json",
-    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/cross-root-repro-before.xml"
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/cross-root-repro-before.xml",
+    "X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/fresh-process-preflight.json",
+    "X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/strict-equivalence-receipt.json",
+    "X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/final-consumer-acceptance.json",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-focused-matrix.xml",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-l0-quality.json",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-l0-guardrails.json"
   ],
   "expected": "相同冻结请求、账户、日期在不同输出目录及合法资源配置下具有相同逻辑日身份，完整账户业务状态和排队指标一致；物理前缀篡改仍失败，旧研究不得用新源码恢复。",
   "file_scope_contract": {

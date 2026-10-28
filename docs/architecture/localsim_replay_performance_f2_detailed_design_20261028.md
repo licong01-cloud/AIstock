@@ -141,7 +141,7 @@ BUG-2112补充合同：账户日逻辑身份绑定冻结request、账户、交�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | F-001 | dual_mode_research.py?native_research.py | backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py | verified | - |
-| F-002 | research_performance.py??5.1???? | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified_consumer_stage | approved_by_user????????????????????Reader??????????owner???? |
+| F-002 | research_performance.py；第5.1节共享接缝 | backend/tests/simulation_execution/test_localsim_replay_performance.py；artifact: X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/strict-equivalence-receipt.json | verified | - |
 | F-003 | dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-004 | human_portfolio.py???timing.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-005 | research_performance.py?human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
@@ -149,11 +149,11 @@ BUG-2112补充合同：账户日逻辑身份绑定冻结request、账户、交�
 | F-007 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-008 | research_performance.py?dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-009 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py?artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-continuation-receipt.json | verified | - |
-| F-010 | dual_mode_research.py::_account_day_identity；test_localsim_replay_performance.py | docs/analysis/localsim_batch_reader_acceptance_20261028.md；既有单日证据保留 | pending_real_multiday_revalidation | BUG-2112跨目录多日反例及修复后完整账户复验 |
+| F-010 | dual_mode_research.py::_account_day_identity；test_localsim_replay_performance.py | docs/analysis/localsim_batch_reader_acceptance_20261028.md；artifact: X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/strict-equivalence-receipt.json | verified | - |
 | F-011 | research_performance.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-012 | docs/analysis/localsim_replay_performance_implementation_acceptance_20261028.md | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
-| F-013 | ????3/?8????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
-| F-014 | ?????6??????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/final-directed-receipt.json | verified_local_pr_gate | - |
+| F-013 | 第3/8节完整人口及旧产物保护 | artifact: X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/final-consumer-acceptance.json | verified | - |
+| F-014 | 第6节验收索引及BUG-2112工作流 | artifact: X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-finish-preflight.json | blocked | 多轮审核、定向11项及L0通过；catalog运行合同缺口阻断PR，最终CI和合入未完成 |
 
 ## 12. DESIGN-COMPLIANCE-001 / 逐项复核
 
