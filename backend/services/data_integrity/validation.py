@@ -197,7 +197,11 @@ class PhysicalValidator:
                 return key_result(expected, facts, required_fields=TUSHARE_MONEYFLOW_AMOUNT_COLUMNS+TUSHARE_MONEYFLOW_VOLUME_COLUMNS,
                     checks={"source_units": {"amount": "10k_cny", "volume": "hand"}, "alias_authority": "shared_security_source_identity"})
             return key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
-        if dataset in {"sw_daily", "index_daily"}:
+        if dataset == "index_daily":
+            # index_basic is a request catalogue (including nonquoted variants),
+            # not a dated publication authority. Never turn it into fake gaps.
+            return self._scan_contract(conn, obligation, day, revision)
+        if dataset == "sw_daily":
             spec = DATASET_REGISTRY[dataset]
             with conn.cursor() as cur:
                 cur.execute(spec.code_source_sql)
@@ -261,6 +265,8 @@ class PhysicalValidator:
         if spec is None:
             return unverified("formal_physical_validator_required", dataset=dataset)
         scan = metadata.get("provider_scan")
+        if dataset == "index_daily" and metadata.get("provider_query_scope_complete") is not True:
+            return unverified("index_quote_query_scope_incomplete")
         if scan:
             from .provider import verify_scan
             if obligation.category == "reference" and spec.snapshot_date_column is None:
@@ -281,6 +287,17 @@ class PhysicalValidator:
             complete_scan = CheckCounts("completed_provider_scan", 1, 1, 0, 0, 0, 0)
             checks = {"provider": source["data_source"], "scan_sha256": scan["scan_sha256"],
                       "physical_rows": len(actual), "as_of_policy": "CURRENT_SOURCE_NOT_HISTORICAL_VINTAGE"}
+            if dataset == "index_daily":
+                quotes = key_result({entry["key"][0] for entry in scan["entries"]},
+                    {str(r["ts_code"]).strip(): r for r in actual},
+                    required_fields=("open", "high", "low", "close", "vol", "amount"),
+                    positive_fields=("open", "high", "low", "close"))
+                checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability")
+                gaps = tuple({"classification": kind, "keys": keys} for kind, keys in
+                             (("MISSING", missing), ("INVALID", invalid)) if keys)+quotes.gaps
+                return ValidationResult(PartitionState.VALID if check.complete and quotes.state == PartitionState.VALID
+                    else PartitionState.INCOMPLETE, (check, complete_scan)+quotes.counts, checks,
+                    gaps)
             if dataset == "suspend_d":
                 from backend.data_service.suspension_day_authority import publication_quality
                 publication, quality = publication_quality(actual, day)

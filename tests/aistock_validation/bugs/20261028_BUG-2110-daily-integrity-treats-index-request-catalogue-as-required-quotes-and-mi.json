@@ -1,0 +1,306 @@
+{
+  "actual": "index_daily canonical count expected=5920 valid=882 missing=5038; scheduled legacy writer has no revision marker.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/services/data_integrity/validation.py",
+    "scripts/ingest_tushare_index_daily.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/tests/scripts/test_daily_integrity_writers.py",
+    "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2110",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-28T02:45:50.421838Z",
+  "description": "index_daily canonical count expected=5920 valid=882 missing=5038; scheduled legacy writer has no revision marker.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261028-b1e75fa197b8",
+      "timestamp": "2026-10-28T02:45:50.421838Z"
+    }
+  ],
+  "evidence_uris": [
+    "Feature #6774 production aftercare 2026-10-28; active FastAPI/TDX source bf3f4c79cf963e02d06a260200556efed49a46a3"
+  ],
+  "expected": "Completed formal index queries and actual changed dates are revision-bound; catalog request membership alone never proves a required quote; unknown remains unknown and real absent returned keys fail.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_index_daily.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261028_BUG-2110-daily-integrity-treats-index-request-catalogue-as-required-quotes-and-mi.json",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_index_daily.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/data_integrity/validation.py",
+        "scripts/ingest_tushare_index_daily.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/scripts/test_daily_integrity_writers.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/data_integrity/validation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "scripts/ingest_tushare_index_daily.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/scripts/test_daily_integrity_writers.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/data_integrity/validation.py",
+        "scripts/ingest_tushare_index_daily.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/scripts/test_daily_integrity_writers.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_integrity/validation.py",
+      "scripts/ingest_tushare_index_daily.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_integrity/validation.py",
+      "scripts/ingest_tushare_index_daily.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py"
+    ]
+  },
+  "first_seen_at": "2026-10-28T02:45:50.421838Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "Keep the existing shared completed-query contract: certify returned index keys only after all requests complete, check finite quote fields, retain unknown/partial scopes, and mark actual index writes in the caller transaction. Preserve valid values against NULL/NaN and propagate commit failures. No new business gate, publication authority or global rule migration.",
+  "fixed_at": null,
+  "github_issue_number": 6789,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6789",
+  "last_seen_at": "2026-10-28T02:45:50.421838Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "GET /api/v1/local-data/integrity/days/2026-10-27/gaps?dataset=index_daily&limit=2",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "review_notes": [
+    "Round 1: request catalogue is not quote availability; preserve unknown, zero-volume facts and genuine missing returned keys; no invented provider absence or index termination spans.",
+    "Round 2: source keys/dates checked before writes; same-TX revision marker, no-op retry and NULL/NaN preservation; real DEV insert/retry/correction/rollback readback passed.",
+    "Round 3: full versus partial request scope, empty responses, source error, row-limit truncation, wrong returned key and commit failure regression passed; incomplete queries cannot publish complete scans.",
+    "Round 4 DESIGN-COMPLIANCE-001: complete scoped fix, no fake success/silent failure, no PIT/model/window/units change, no new approval or research gate. Fresh process on production read-only returns UNVERIFIED instead of 5038 unproven catalogue gaps; actual runtime and Issue remain pending user restart."
+  ],
+  "risk_area": "bug",
+  "root_cause": "The index validator used index_basic request membership as dated quote availability, while the scheduled legacy index writer bypassed actual-change revisions and completed-scan publication.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process loaded BUG-2110 persistent sources and queried production READ ONLY: index_daily 2026-10-27 returns UNVERIFIED complete_source_scan_not_bound_to_revision, no false catalogue missing count; exact DEV writer R1/R1/R1/R2 rollback readback passed; no user service control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Daily integrity treats index request catalogue as required quotes and misses legacy index writer revisions",
+  "trigger_condition": {
+    "fingerprint": "b1e75fa197b86c175c786d63",
+    "source_event_id": "FE-20261028-b1e75fa197b8"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
