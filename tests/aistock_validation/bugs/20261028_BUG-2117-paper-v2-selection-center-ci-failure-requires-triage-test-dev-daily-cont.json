@@ -1,0 +1,243 @@
+{
+  "actual": "DEV???????2099-01-05?????provider success???data_revision??0????canonical?????canonical????????fail-closed??????????????",
+  "allowed_write_scope": [
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
+    "tests/aistock_validation/bugs/20261028_BUG-2117-paper-v2-selection-center-ci-failure-requires-triage-test-dev-daily-cont.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2117",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-28T06:12:57.808314Z",
+  "description": "Issue #6783 / BUG-2117???DEV????????canonical????????????????????????????????LocalSIM??????????????????????????MiniQMT?",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261028-decb19b4a789",
+      "timestamp": "2026-10-28T06:12:57.808314Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/40566184878",
+    "https://github.com/licong01-cloud/AIstock/issues/6783",
+    "tmp/issue_workflow/ci-issue-6783/failure-event.json",
+    "tmp/issue_workflow/ci-issue-6783/context-pack.md",
+    "X:/AIstock_temp/localsim-nightly-6783-20261028/canonical-triage.json",
+    "X:/AIstock_temp/localsim-nightly-6783-20261028/dev-target-readonly.json",
+    "X:/AIstock_temp/localsim-nightly-6783-20261028/dev-audit-schema.json",
+    "X:/AIstock_temp/localsim-nightly-6783-20261028/dev-regression-before.xml",
+    "X:/AIstock_temp/localsim-nightly-6783-20261028/dev-regression-after.xml",
+    "X:\\AIstock_temp\\localsim-nightly-6783-20261028\\final-directed-matrix.xml",
+    "X:\\AIstock_temp\\localsim-nightly-6783-20261028\\dev-rollback-readback.json",
+    "X:\\AIstock_temp\\localsim-nightly-6783-20261028\\review-receipt.json"
+  ],
+  "expected": "????DEV?????8?stk_limit?1?suspend_d????canonical??????????????fixture???1/8????????5???????????????????scope/rule???????????????????????",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2117-paper-v2-selection-center-ci-failure-requires-triage-test-dev-daily-cont.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2117-paper-v2-selection-center-ci-failure-requires-triage-test-dev-daily-cont.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/simulation_runtime/test_daily_trading_context.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/simulation_runtime/test_daily_trading_context.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/tests/simulation_runtime/test_daily_trading_context.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/simulation_runtime/test_daily_trading_context.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/simulation_runtime/test_daily_trading_context.py"
+    ]
+  },
+  "first_seen_at": "2026-10-28T06:12:57.808314Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6783,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6783",
+  "last_seen_at": "2026-10-28T06:12:57.808314Z",
+  "module": "paper_v2_selection_center",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_daily_trading_context.py::test_dev_daily_context_query_budget_is_dataset_constant -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2_selection_center"
+  ],
+  "title": "paper_v2_selection_center CI failure requires triage: test_dev_daily_context_query_budget_is_dataset_constant",
+  "trigger_condition": {
+    "fingerprint": "decb19b4a789314c55b8fe78",
+    "source_event_id": "FE-20261028-decb19b4a789"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "paper_v2_selection_center",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "paper_v2_selection_center",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
