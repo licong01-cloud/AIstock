@@ -68,13 +68,13 @@ QuoteProvider增加名单上下文，继续复用可见证券注册、15秒轮�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | recommendations.py段投影 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
-| F-002 | recommendations.py、quotes.py | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
-| F-003 | recommendations.py历史结束时钟 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
-| F-004 | repository.py、service.py严格关联 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
-| F-005 | DailyList、StockDrawer、共享组件 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
-| F-006 | QuoteProvider上下文与取消 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
-| F-007 | 只读API、合同测试及生产门禁 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无设计例外；实现验收另列 |
+| F-001 | recommendations.py段投影 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-002 | recommendations.py、quotes.py | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-003 | recommendations.py历史结束时钟 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-004 | repository.py、service.py严格关联 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-005 | DailyList、StockDrawer、共享组件 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-006 | QuoteProvider上下文与取消 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-007 | 只读API、合同测试及生产门禁 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
 
 ## 审核记录
 
