@@ -151,11 +151,11 @@ class PhysicalValidator:
     @staticmethod
     def _canonical_raw_codes(authority, codes, day):
         from backend.services.market_data.instrument_validator import normalize_ts_code
-        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+        from .stock_scope import is_excluded_stock_code
         # Same notation contract as shared QE/Selection/Paper readers; this
         # changes no economic identity, pool, date or stored quote.
         codes = {normalize_ts_code(code) for code in codes}
-        codes = {code for code in codes if not is_b_share_ts_code(code)}
+        codes = {code for code in codes if not is_excluded_stock_code(code)}
         aliases = {}
         for row in authority.rows:
             if (row.source_dataset == "market.kline_daily_raw" and row.effective_start is not None
@@ -237,6 +237,8 @@ class PhysicalValidator:
                 return unverified("independent_stock_scope_empty")
             observed = rows(conn, sql.SQL("SELECT * FROM {}.{} WHERE trade_date=%s").format(
                 sql.Identifier("market"), sql.Identifier(dataset)), (day,))
+            from .stock_scope import filter_stock_rows
+            observed = filter_stock_rows(observed)
             facts = {str(row["ts_code"]).strip(): row for row in observed}
             if len(facts) != len(observed):
                 return ValidationResult(PartitionState.ERROR, (), {}, reason="duplicate_physical_key")
@@ -283,10 +285,11 @@ class PhysicalValidator:
         if dataset == "sector_data":
             from backend.services.sector_data_builder import _PREFLIGHT_DAY_SQL, sector_fact_comparison_sql
             from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
+            from .stock_scope import stock_scope_sql
             with conn.cursor() as cur:
                 cur.execute(_PREFLIGHT_DAY_SQL, {"trade_date": day, "authority_id": CANONICAL_PIT_AUTHORITY_ID})
                 values = list(cur.fetchone())
-                cur.execute("SELECT count(*) FROM market.sector_data WHERE trade_date=%s", (day,))
+                cur.execute("SELECT count(*) FROM market.sector_data WHERE trade_date=%s"+stock_scope_sql(), (day,))
                 actual = cur.fetchone()[0]
             mismatches = rows(conn, sector_fact_comparison_sql(), {"trade_date": day, "authority_id": CANONICAL_PIT_AUTHORITY_ID})
             # Keep the activated producer's existing six semantic checks and
@@ -334,7 +337,7 @@ class PhysicalValidator:
         if dataset == "index_daily" and metadata.get("provider_query_scope_complete") is not True:
             return unverified("index_quote_query_scope_incomplete")
         if scan:
-            from .provider import verify_scan
+            from .provider import verify_scan, scoped_scan_entries
             if obligation.category == "reference" and spec.snapshot_date_column is None:
                 query = sql.SQL("SELECT {} FROM {}").format(
                     sql.SQL(",").join(sql.Identifier(c) for c in spec.columns), sql.Identifier(*spec.target_table.split(".")))
@@ -345,7 +348,9 @@ class PhysicalValidator:
                     sql.Identifier(spec.date_column))
                 actual = rows(conn, query, (day,))
             missing, invalid = verify_scan(spec, scan, actual)
-            expected = len(scan["entries"])
+            from .stock_scope import filter_dataset_rows
+            actual = filter_dataset_rows(spec, actual)
+            expected = len(scoped_scan_entries(spec, scan))
             if obligation.category != "event" and expected == 0:
                 return unverified("reference_or_series_provider_scope_empty")
             check = CheckCounts("provider_fact_identity", expected, expected-len(missing)-len(invalid), 0,
@@ -379,6 +384,8 @@ class PhysicalValidator:
                 return unverified("event_scan_scope_not_proven")
             actual = rows(conn, sql.SQL("SELECT * FROM {} WHERE {}=%s").format(
                 sql.Identifier(*spec.target_table.split(".")), sql.Identifier(spec.date_column)), (day,))
+            from .stock_scope import filter_dataset_rows
+            actual = filter_dataset_rows(spec, actual)
             if dataset == "suspend_d":
                 from backend.data_service.suspension_day_authority import publication_quality
                 publication, quality = publication_quality(actual, day)

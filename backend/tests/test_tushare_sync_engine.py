@@ -152,16 +152,16 @@ def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(mo
     assert conn.autocommit is True
 
 
-def test_suspend_sync_canonicalizes_official_bse_codes_without_changing_events(monkeypatch):
+def test_suspend_sync_excludes_bse_without_querying_a_bse_authority(monkeypatch):
     engine, conn = TushareSyncEngine(), _FakeConn()
     day = dt.date(2025, 9, 16)
-    mapping = [{"o_code": "831961.BJ", "n_code": "920961.BJ"}]
-    original = [dict(ts_code="831961.BJ", trade_date=d.strftime("%Y%m%d"),
-                     suspend_type="S", suspend_timing=None) for d in (day, day + dt.timedelta(days=1))]
+    original = [dict(ts_code=code, trade_date=d.strftime("%Y%m%d"),
+                     suspend_type="S", suspend_timing=None) for d in (day, day + dt.timedelta(days=1))
+                     for code in ("831961.BJ", "920961.BJ", "000001.SZ")]
     calls, writes, audits = [], [], []
     def fetch(spec, params):
         calls.append(spec.tushare_api)
-        return mapping if spec.tushare_api == "bse_mapping" else [
+        return [
             row for row in original if row["trade_date"] == params["trade_date"]]
     monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
     monkeypatch.setattr(engine, "_upsert_batch", lambda _c, _s, rows: writes.extend(rows) or len(rows))
@@ -169,45 +169,11 @@ def test_suspend_sync_canonicalizes_official_bse_codes_without_changing_events(m
     monkeypatch.setattr(engine._refresh_audit, "record_success", lambda **kwargs: audits.append(kwargs))
     monkeypatch.setattr(sync_engine.time, "sleep", lambda _seconds: None)
     result = engine._sync_by_date(conn, SUSPEND_D, day, day + dt.timedelta(days=1), uuid.uuid4())
-    assert result.failed_batches == 0 and calls.count("bse_mapping") == 1
-    assert [r["ts_code"] for r in writes] == ["920961.BJ"] * 2
+    assert result.failed_batches == 0 and calls == ["suspend_d", "suspend_d"]
+    assert [r["ts_code"] for r in writes] == ["000001.SZ"] * 2
     assert all(r["suspend_type"] == "S" and r["suspend_timing"] is None for r in writes)
-    assert all(r["ts_code"] == "831961.BJ" for r in original)
-    evidence = audits[0]["metadata"]["source_security_mapping"]
-    assert evidence["source_api"] == "bse_mapping" and evidence["mapped_row_count"] == 1
-    assert len(evidence["mapping_sha256"]) == len(evidence["source_rows_sha256"]) == 64
-
-
-@pytest.mark.parametrize("mapping", [[], [{"o_code": "831961.BJ", "n_code": "920680.BJ"},
-    {"o_code": "831961.BJ", "n_code": "920961.BJ"}],
-    [{"o_code": "831961.BJ", "n_code": "920961.BJ"},
-     {"o_code": "839680.BJ", "n_code": "920961.BJ"}]])
-def test_suspend_bse_mapping_cannot_guess_missing_or_conflicting_identity(monkeypatch, mapping):
-    engine = TushareSyncEngine()
-    row = dict(ts_code="831961.BJ", trade_date="20250916", suspend_type="S", suspend_timing=None)
-    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: mapping)
-    with pytest.raises(ValueError, match="BSE"):
-        engine._canonicalize_suspension_codes(SUSPEND_D, [row], None)
-
-
-def test_suspend_bse_mapping_does_not_fetch_for_other_markets_or_current_codes(monkeypatch):
-    engine = TushareSyncEngine()
-    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: pytest.fail("unnecessary authority fetch"))
-    rows = [dict(ts_code=code, trade_date="20250916", suspend_type=kind, suspend_timing=timing)
-            for code, kind, timing in [("000001.SZ", "R", "13:00"), ("920961.BJ", "S", None)]]
-    actual, evidence, cache = engine._canonicalize_suspension_codes(SUSPEND_D, rows, None)
-    assert actual == rows and evidence is None and cache is None
-
-
-def test_suspend_bse_mapping_preserves_sr_timing_and_rejects_conflicting_duplicates():
-    engine = TushareSyncEngine()
-    mapping = [{"o_code": "831961.BJ", "n_code": "920961.BJ"}]
-    stop = dict(ts_code="831961.BJ", trade_date="20250916", suspend_type="S", suspend_timing="09:30-13:00")
-    resume = {**stop, "suspend_type": "R", "suspend_timing": "13:00"}
-    actual, _, _ = engine._canonicalize_suspension_codes(SUSPEND_D, [stop, stop, resume], mapping)
-    assert actual == [{**stop, "ts_code": "920961.BJ"}, {**resume, "ts_code": "920961.BJ"}]
-    with pytest.raises(ValueError, match="Conflicting BSE suspension records"):
-        engine._canonicalize_suspension_codes(SUSPEND_D, [stop, {**stop, "suspend_timing": None}], mapping)
+    assert len(original) == 6  # original provider rows stay untouched
+    assert all('source_security_mapping' not in a['metadata'] for a in audits)
 
 
 def test_sync_by_date_treats_empty_stock_st_events_as_valid_no_change(monkeypatch):
@@ -384,8 +350,8 @@ def test_sync_by_date_writes_one_canonical_dividend_revision_and_audits_count(mo
     trade_date = dt.date(2024, 6, 27)
     written = []
     rows = [
-        _dividend_row(div_proc="实施 ", base_share=9018.0),
-        _dividend_row(base_share=9393.0),
+        _dividend_row(ts_code="000001.SZ", div_proc="实施 ", base_share=9018.0),
+        _dividend_row(ts_code="000001.SZ", base_share=9393.0),
     ]
 
     monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
@@ -415,7 +381,7 @@ def test_sync_by_date_records_typed_dividend_source_conflict_without_db_write(mo
     engine._refresh_audit = audit
     trade_date = dt.date(2024, 6, 27)
     writes = []
-    rows = [_dividend_row(), _dividend_row(cash_div=0.2, cash_div_tax=0.2)]
+    rows = [_dividend_row(ts_code="000001.SZ"), _dividend_row(ts_code="000001.SZ", cash_div=0.2, cash_div_tax=0.2)]
 
     monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
     monkeypatch.setattr(

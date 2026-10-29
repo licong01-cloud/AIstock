@@ -687,7 +687,7 @@ def test_go_provider_population_includes_real_ipo_quotes_without_widening_buy_po
         assert params == (dt.date(2026, 10, 15), dt.date(2026, 10, 15))
         return [{"ts_code": "301569.SZ"}, {"ts_code": "920162.BJ"}]
     scheduler._fetchall = fetch
-    assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ", "920162.BJ"]
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ"]
 
 
 def test_go_default_population_ends_before_delisting_effective_day_but_keeps_quote_evidence():
@@ -712,12 +712,12 @@ def test_go_provider_population_excludes_b_shares_from_both_source_branches():
     def fetch(sql, params):
         assert "stock_universe" not in sql
         assert "population" in sql
-        for pattern in ("200%%.SZ", "201%%.SZ", "900%%.SH"):
-            assert f"ts_code NOT LIKE '{pattern}'" in sql
+        assert "00[0-9]{4}[.]SZ" in sql and "6[0-9]{5}[.]SH" in sql
+        assert "\\.BJ$" not in sql
         return [{"ts_code": code} for code in ("000001.SZ", "200706.SZ", "201872.SZ", "900901.SH", "920162.BJ")]
 
     scheduler._fetchall = fetch
-    assert scheduler._go_provider_codes(dt.date(2026, 10, 20), dt.date(2026, 10, 20)) == ["000001.SZ", "920162.BJ"]
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 20), dt.date(2026, 10, 20)) == ["000001.SZ"]
 
 
 def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested():
@@ -726,6 +726,7 @@ def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested(
     day = dt.date(2026, 10, 20)
     assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "900901.SH"]) == []
     assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "000001.SZ"]) == ["000001.SZ"]
+    assert scheduler._go_provider_codes(day, day, requested_codes=["920296.BJ", "BJ430047"]) == []
 
 
 @pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
@@ -734,9 +735,9 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
     scheduler = TDXScheduler.__new__(TDXScheduler)
     latest = dt.datetime(2026, 10, 20, 15)
     daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000, "invalid_fact": False}
-             for code in ["000001.SZ", "200706.SZ"]]
+             for code in ["000001.SZ", "200706.SZ", "920296.BJ"]]
     minute = [{"ts_code": code, "freq": "1m", "bars": 240, "bad_bars": 0,
-               "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH"]]
+               "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH", "920296.BJ"]]
     if missing_a:
         (daily if dataset == "kline_daily_raw" else minute).pop(0)
 
@@ -744,7 +745,7 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
         if "suspend_d" in sql:
             return []
         if "WITH bounds" in sql:
-            return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH"]]
+            return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH", "920296.BJ"]]
         if "kline_daily_raw" in sql:
             return daily
         if "kline_minute_raw" in sql:

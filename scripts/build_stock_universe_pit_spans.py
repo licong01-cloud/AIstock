@@ -75,8 +75,9 @@ def is_b_share_ts_code(ts_code: str) -> bool:
 
 
 def a_share_ts_code_filter(column: str = "ts_code") -> str:
-    """SQL AND-fragment excluding B-share codes from ``column``."""
-    return "".join(f" AND {column} NOT LIKE '{pattern}'" for pattern in B_SHARE_TS_CODE_PATTERNS)
+    """Supported SH/SZ equity facts, not a PIT buy-eligibility filter."""
+    from backend.services.data_integrity.stock_scope import stock_scope_sql
+    return stock_scope_sql(column)
 
 
 class CanonicalPitEvidenceError(RuntimeError):

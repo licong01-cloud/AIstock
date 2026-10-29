@@ -47,7 +47,7 @@ DB_CFG = dict(
 SUPPORTED_DATASETS = {"kline_daily_raw", "kline_minute_raw"}
 EXPECTED_MINUTE_BARS_PER_TRADING_DAY = 240
 CHINA_TZ = dt.timezone(dt.timedelta(hours=8))
-EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
+EXCHANGE_MAP = {"sh": "SSE", "sz": "SZSE"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,11 +113,14 @@ def normalize_ts_code(code: str) -> Optional[str]:
         suffix = "BJ"
     else:
         suffix = "SZ"
-    return f"{code}.{suffix}"
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    normalized = f"{code}.{suffix}"
+    return normalized if is_supported_stock_code(normalized) else None
 
 
 def fetch_codes(exchanges: Optional[Iterable[str]]) -> List[str]:
-    targets = [ex.strip().lower() for ex in exchanges if ex] if exchanges else ["all"]
+    from backend.services.data_integrity.stock_scope import stock_exchange_selection
+    targets = stock_exchange_selection(exchanges)
     result: List[str] = []
     seen = set()
     for exch in targets:
@@ -143,6 +146,10 @@ def fetch_codes(exchanges: Optional[Iterable[str]]) -> List[str]:
 
 
 def get_db_codes(conn, exchanges: Iterable[str]) -> List[str]:
+    from backend.services.data_integrity.stock_scope import stock_exchange_selection, is_supported_stock_code
+    exchanges = stock_exchange_selection(exchanges)
+    if not exchanges:
+        return []
     exchange_values = [EXCHANGE_MAP.get(ex.lower()) for ex in exchanges if ex.lower() in EXCHANGE_MAP]
     query = "SELECT ts_code FROM market.stock_basic"
     params: Tuple[Any, ...] = ()
@@ -153,7 +160,7 @@ def get_db_codes(conn, exchanges: Iterable[str]) -> List[str]:
     with conn.cursor() as cur:
         cur.execute(query, params)
         rows = cur.fetchall()
-    return [r[0] for r in rows]
+    return [r[0] for r in rows if is_supported_stock_code(r[0])]
 
 
 def chunked(items: List[str], size: int) -> Iterable[List[str]]:
@@ -309,6 +316,9 @@ def upsert_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[in
     - source 标记为 'tdx_api'；
     - ON CONFLICT 时更新价格与量。
     """
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    if not is_supported_stock_code(ts_code):
+        return 0, None
     sql = (
         "INSERT INTO market.kline_daily_raw (trade_date, ts_code, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
         "VALUES %s ON CONFLICT (ts_code, trade_date) DO UPDATE SET "
@@ -361,6 +371,9 @@ def _combine_trade_time(trade_date: dt.date, value: Any) -> Optional[str]:
 
 
 def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    if not is_supported_stock_code(ts_code):
+        return 0, None
     sql = (
         "INSERT INTO market.kline_minute_raw (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
         "VALUES %s ON CONFLICT (ts_code, trade_time, freq) DO UPDATE SET "
@@ -665,6 +678,8 @@ def is_trading_day(conn, trade_date: dt.date) -> bool:
 
 
 def get_expected_minute_codes(conn, trade_date: dt.date, ts_codes: List[str]) -> List[str]:
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    ts_codes = [code for code in ts_codes if is_supported_stock_code(code)]
     if not ts_codes:
         return []
     requested_codes = sorted(set(ts_codes))

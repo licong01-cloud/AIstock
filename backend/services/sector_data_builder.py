@@ -1480,6 +1480,7 @@ def sector_fact_comparison_sql() -> str:
     Reject an unexpected statement shape rather than certify rows with an
     incomplete duplicated join. Values are trusted source constants, not input.
     """
+    from .data_integrity.stock_scope import stock_scope_sql
     prefix, insert = _BUILD_DAY_SQL.split("INSERT INTO market.sector_data (", 1)
     columns, select = insert.split(")\nSELECT\n", 1)
     projection, _update = select.split("\nON CONFLICT (trade_date, ts_code)", 1)
@@ -1491,7 +1492,7 @@ def sector_fact_comparison_sql() -> str:
     expected = ",".join("e."+name for name in names)
     actual = ",".join("a."+name for name in names)
     return (prefix + ", expected("+selected+") AS (SELECT\n"+projection+") , actual AS ("
-        "SELECT "+selected+" FROM market.sector_data WHERE trade_date=%(trade_date)s) "
+        "SELECT "+selected+" FROM market.sector_data WHERE trade_date=%(trade_date)s"+stock_scope_sql()+") "
         "SELECT COALESCE(e.ts_code,a.ts_code) AS ts_code, "
         "CASE WHEN e.ts_code IS NULL THEN 'UNEXPECTED' WHEN a.ts_code IS NULL THEN 'MISSING' "
         "ELSE 'INVALID' END AS classification FROM expected e FULL JOIN actual a USING(trade_date,ts_code) "

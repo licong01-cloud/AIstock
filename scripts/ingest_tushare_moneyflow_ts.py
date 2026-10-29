@@ -100,7 +100,8 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
 
 def _get_max_trade_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(trade_date) FROM market.moneyflow_ts")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(trade_date) FROM market.moneyflow_ts WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -193,6 +194,8 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     from backend.services.data_integrity.contracts import finite_number
@@ -266,11 +269,14 @@ def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def _fetch_moneyflow_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     ymd = trade_date.strftime("%Y%m%d")
     df = pro.moneyflow(trade_date=ymd, limit=6000)
     rows: List[Dict[str, Any]] = []
     if df is not None and not df.empty:
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
             rows.append(
                 {
                     "trade_date": trade_date,

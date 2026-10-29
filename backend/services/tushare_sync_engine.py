@@ -682,8 +682,12 @@ class TushareSyncEngine:
                             time.sleep(2 ** attempt)
             raise RuntimeError(f"Tushare {spec.tushare_api} failed after 3 retries: {last_exc}")
 
+        from .data_integrity.stock_scope import filter_dataset_rows
         if not paginated:
-            return _fetch_once(merged_base)
+            raw_rows = _fetch_once(merged_base)
+            if spec.query_mode == QueryMode.BY_DATE and spec.row_limit > 0 and len(raw_rows) >= spec.row_limit:
+                raise RuntimeError(f"{spec.name} returned {len(raw_rows)} rows; row_limit={spec.row_limit} may indicate truncated Tushare data")
+            return filter_dataset_rows(spec, raw_rows)
 
         all_rows: List[Dict[str, Any]] = []
         offset = int(merged_base.get("offset") or 0)
@@ -693,62 +697,12 @@ class TushareSyncEngine:
             rows = _fetch_once(merged)
             all_rows.extend(rows)
             if len(rows) < page_limit:
-                return all_rows
+                return filter_dataset_rows(spec, all_rows)
             offset += page_limit
         raise RuntimeError(
             f"{spec.name} pagination reached max_pages={max_pages}; "
             "provider may ignore offset or return more data than expected"
         )
-
-    def _canonicalize_suspension_codes(self, spec, rows, mapping_rows):
-        """Use the official BSE rename authority, never infer halt semantics.
-
-        Cache belongs to this date-range collection, not the process lifetime.
-        The provider's original batch remains untouched and hash-bound in audit.
-        """
-        import hashlib
-        import re
-        from .dataset_release.canonical import canonical_json_bytes
-
-        legacy = {str(row.get("ts_code", "")) for row in rows
-                  if str(row.get("ts_code", "")).endswith(".BJ")
-                  and not str(row.get("ts_code", "")).startswith("920")}
-        if not legacy:
-            return rows, None, mapping_rows
-        if mapping_rows is None:
-            authority = replace(spec, name="suspension_bse_mapping", tushare_api="bse_mapping",
-                columns={"o_code": "text", "n_code": "text"}, api_field_map={}, api_params={},
-                fetch_params={"limit": 1000, "max_pages": 10}, snapshot_date_column=None)
-            mapping_rows = self._fetch_from_tushare(authority, {})
-        mapping, reverse = {}, {}
-        for item in mapping_rows:
-            old, new = item.get("o_code"), item.get("n_code")
-            if not (isinstance(old, str) and re.fullmatch(r"\d{6}\.BJ", old)
-                    and isinstance(new, str) and re.fullmatch(r"920\d{3}\.BJ", new)):
-                raise ValueError("Invalid official BSE code mapping")
-            if mapping.get(old, new) != new or reverse.get(new, old) != old:
-                raise ValueError("Conflicting official BSE code mapping")
-            mapping[old], reverse[new] = new, old
-        if not legacy.issubset(mapping):
-            raise ValueError(f"Official BSE code mapping missing: {sorted(legacy - mapping.keys())}")
-        normalized, seen = [], {}
-        for row in rows:
-            fact = {**row, "ts_code": mapping.get(row["ts_code"], row["ts_code"])}
-            key = tuple(fact.get(field) for field in spec.primary_keys)
-            if key in seen:
-                if seen[key] != fact:
-                    raise ValueError("Conflicting BSE suspension records after official code mapping")
-                continue
-            seen[key] = fact
-            normalized.append(fact)
-        pairs = [{"o_code": old, "n_code": new} for old, new in sorted(mapping.items())]
-        receipt = {"source_api": "bse_mapping", "mapped_row_count": sum(
-            row["ts_code"] in legacy for row in rows), "mapping_sha256": hashlib.sha256(
-                canonical_json_bytes(pairs)).hexdigest(), "source_rows_sha256": hashlib.sha256(
-                    canonical_json_bytes(rows)).hexdigest(),
-            "aliases": [pair for pair in pairs if pair["o_code"] in legacy],
-            "suspension_semantics_modified": False}
-        return normalized, receipt, mapping_rows
 
     def _complete_stk_limit_references(self, spec, rows, trade_date):
         if all(_is_finite_number(row.get("pre_close")) and not isinstance(row.get("pre_close"), bool)
@@ -761,6 +715,8 @@ class TushareSyncEngine:
         return complete_stk_limit_daily_references(rows, daily_rows, trade_date)
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, reference_fill_only_codes=()) -> int:
+        from .data_integrity.stock_scope import filter_dataset_rows
+        rows = filter_dataset_rows(spec, rows)
         if reference_fill_only_codes:
             if spec.name != "stk_limit":
                 raise ValueError("reference-only supplement is restricted to stk_limit")
@@ -1078,7 +1034,8 @@ class TushareSyncEngine:
         return max_success
 
     def _get_physical_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
-        sql = f"SELECT max({spec.date_column}) FROM {spec.target_table}"
+        from .data_integrity.stock_scope import dataset_scope_sql
+        sql = f"SELECT max({spec.date_column}) FROM {spec.target_table} WHERE TRUE {dataset_scope_sql(spec)}"
         with conn.cursor() as cur:
             cur.execute(sql)
             row = cur.fetchone()
@@ -1093,6 +1050,7 @@ class TushareSyncEngine:
         start_date: dt.date,
         end_date: dt.date,
     ) -> tuple[Optional[dt.date], Optional[dt.date]]:
+        from .data_integrity.stock_scope import dataset_scope_sql
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -1100,6 +1058,7 @@ class TushareSyncEngine:
                 FROM {spec.target_table}
                 WHERE {spec.date_column} >= %s
                   AND {spec.date_column} < %s
+                  {dataset_scope_sql(spec)}
                 """,
                 (start_date, end_date + dt.timedelta(days=1)),
             )
@@ -1179,6 +1138,7 @@ class TushareSyncEngine:
         it records inferred physical gaps as failures and returns the safe cursor
         before the first gap, so max-success cannot jump across unresolved gaps.
         """
+        from .data_integrity.stock_scope import dataset_scope_sql
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -1186,6 +1146,7 @@ class TushareSyncEngine:
                        COUNT(*)::bigint AS row_count
                   FROM {spec.target_table}
                  WHERE {spec.date_column} IS NOT NULL
+                 {dataset_scope_sql(spec)}
                  GROUP BY {spec.date_column}::date
                  ORDER BY {spec.date_column}::date
                 """
@@ -1455,8 +1416,7 @@ class TushareSyncEngine:
                 WHERE k.trade_date=%s AND k.adjust_type='none' AND k.close_li>0
                   AND (k.volume_hand>0 OR k.volume_shares>0)
                   AND (k.ts_code ~ '^(00|30)[0-9]{4}\.SZ$'
-                    OR k.ts_code ~ '^6[0-9]{5}\.SH$'
-                    OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+                    OR k.ts_code ~ '^6[0-9]{5}\.SH$')
                 ORDER BY k.ts_code""", (trade_date,))
             rows = cur.fetchall()
         invalid = [code for code, reference, upper, lower in rows
@@ -1483,7 +1443,6 @@ class TushareSyncEngine:
         days = sorted(set(days).union(self._late_recheck_dates.get(spec.name, [])))
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
                             total_batches=len(days))
-        bse_mapping_rows = None
 
         for d in days:
             ymd = d.strftime("%Y%m%d")
@@ -1491,10 +1450,6 @@ class TushareSyncEngine:
             try:
                 rows = self._fetch_from_tushare(spec, {spec.date_param_name: ymd})
                 self._validate_rows_for_date(spec, rows, d)
-                source_security_mapping = None
-                if spec.name == "suspend_d":
-                    rows, source_security_mapping, bse_mapping_rows = self._canonicalize_suspension_codes(
-                        spec, rows, bse_mapping_rows)
                 reference_enrichment = None
                 if spec.name == "stk_limit" and rows:
                     rows, reference_enrichment = self._complete_stk_limit_references(spec, rows, d)
@@ -1504,6 +1459,8 @@ class TushareSyncEngine:
                         f"row_limit={spec.row_limit} may indicate truncated Tushare data"
                     )
                 canonicalized_source_revisions = 0
+                from .data_integrity.stock_scope import filter_dataset_rows
+                rows = filter_dataset_rows(spec, rows)
                 if spec.name == "dividend":
                     rows, canonicalized_source_revisions = _canonicalize_dividend_rows(rows)
                     self._validate_rows_for_date(spec, rows, d)
@@ -1529,8 +1486,6 @@ class TushareSyncEngine:
                 }
                 from .data_integrity.provider import provider_scan
                 audit_metadata["provider_scan"] = provider_scan(spec, rows, parameters={spec.date_param_name: ymd})
-                if source_security_mapping is not None:
-                    audit_metadata["source_security_mapping"] = source_security_mapping
                 if spec.name == "suspend_d":
                     from backend.data_service.suspension_day_authority import publication_quality as suspension_publication_quality
                     suspension, suspension_quality = suspension_publication_quality(rows, d)
@@ -1860,6 +1815,7 @@ class TushareSyncEngine:
         start_date: dt.date,
         end_date: dt.date,
     ) -> Dict[dt.date, int]:
+        from .data_integrity.stock_scope import dataset_scope_sql
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -1867,6 +1823,7 @@ class TushareSyncEngine:
                 FROM {spec.target_table}
                 WHERE {spec.date_column} >= %s
                   AND {spec.date_column} < %s
+                  {dataset_scope_sql(spec)}
                 GROUP BY {spec.date_column}::date
                 """,
                 (start_date, end_date + dt.timedelta(days=1)),

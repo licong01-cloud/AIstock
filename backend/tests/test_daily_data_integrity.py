@@ -241,3 +241,36 @@ def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypat
     assert result.state == expected
     if mutation == "valid":
         assert result.checks["coverage_basis"] == "complete_query_returned_keys_not_catalogue_availability"
+def test_stock_fact_scope_is_shsz_not_pit_buy_eligibility():
+    from backend.services.data_integrity.stock_scope import (
+        filter_stock_rows, is_supported_stock_code, stock_exchange_selection, stock_scope_sql,
+    )
+    assert all(is_supported_stock_code(c) for c in ['000001.SZ', 'SH600000', '300001.SZ', '688001.SH'])
+    assert not any(is_supported_stock_code(c) for c in ['920296.BJ', 'BJ430047', '200001.SZ', '900901.SH'])
+    # No ST/IPO/exit-period admission check is allowed in a quote fact scope.
+    rows = [{'ts_code': '000001.SZ', 'name': '*ST sample'}, {'ts_code': '920296.BJ'},
+            {'ts_code': 'BJ430047'}, {'ts_code': '200001.SZ'}, {'ts_code': 'bad-source-key'}]
+    assert filter_stock_rows(rows) == [rows[0], rows[-1]]  # malformed facts still reach existing errors
+    assert stock_exchange_selection(['all']) == ['sh', 'sz']
+    assert stock_exchange_selection(['bj']) == []
+    assert 'BJ' not in stock_scope_sql('k.ts_code')
+    from backend.services.sector_data_builder import sector_fact_comparison_sql
+    assert stock_scope_sql() in sector_fact_comparison_sql()
+
+
+def test_legacy_provider_scan_bse_keys_do_not_become_required_stock_facts():
+    from backend.services.data_integrity.contracts import digest
+    from backend.services.data_integrity.provider import provider_scan, verify_scan
+    from backend.services.tushare_dataset_specs import DAILY_BASIC, INDEX_DAILY
+    facts = [{'ts_code': '000001.SZ', 'trade_date': '20261028'},
+             {'ts_code': '920296.BJ', 'trade_date': '20261028'}]
+    scan = provider_scan(DAILY_BASIC, facts, parameters={})
+    assert len(scan['entries']) == 1
+    # A genuine old completed scan may contain BSE. Verify its original digest,
+    # then apply supported scope; never rewrite the old signed source identity.
+    scan['entries'].append({'key': ['2026-10-28', '920296.BJ']})
+    scan['scan_sha256'] = digest({k: v for k, v in scan.items() if k != 'scan_sha256'})
+    assert verify_scan(DAILY_BASIC, scan, facts[:1]) == ([], [])
+    assert verify_scan(DAILY_BASIC, scan, []) == ([['2026-10-28', '000001.SZ']], [])
+    index = provider_scan(INDEX_DAILY, facts, parameters={})
+    assert len(index['entries']) == 2  # never apply an equity scope to index catalogues

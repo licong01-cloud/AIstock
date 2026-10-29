@@ -3981,7 +3981,7 @@ class TDXScheduler:
         self, dataset: str, trade_date: dt.date, *, include_details: bool = False,
     ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
         """Observe raw totals and the existing 1m completeness contract once."""
-        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+        from backend.services.data_integrity.stock_scope import filter_stock_rows, is_excluded_stock_code
 
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
@@ -3995,7 +3995,7 @@ class TDXScheduler:
                 FROM market.kline_daily_raw WHERE trade_date=%s AND adjust_type='none'""",
             (trade_date,),
         )
-        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        daily_rows = filter_stock_rows(daily_rows)
         daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
         if dataset == "kline_daily_raw":
             # Daily runs before minute collection. A minute-derived denominator
@@ -4004,12 +4004,12 @@ class TDXScheduler:
             # PIT buy pool. Only unambiguous full-day suspension can excuse an
             # absent quote; missing/invalid traded facts remain incomplete.
             population = {code for code in self._go_provider_codes(trade_date, trade_date)
-                          if not is_b_share_ts_code(code)}
+                          if not is_excluded_stock_code(code)}
             from backend.data_service.suspension_day_authority import full_day_keys
             suspension_rows = self._fetchall(
                 """SELECT ts_code,trade_date,suspend_type,suspend_timing FROM market.suspend_d
                     WHERE trade_date=%s""", (trade_date,))
-            suspended = {symbol for symbol, _day in full_day_keys(suspension_rows, required_dates=(trade_date,))}
+            suspended = {symbol for symbol, _day in full_day_keys(filter_stock_rows(suspension_rows), required_dates=(trade_date,))}
             expected = population - suspended
             missing_codes = sorted(expected.difference(daily))
             invalid_codes = sorted(code for code, row in daily.items() if row["invalid_fact"]
@@ -4042,9 +4042,9 @@ class TDXScheduler:
              GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
-        # Old B-share facts remain stored, but must not re-enter the completion
+        # Old unsupported-board facts remain stored, but never enter completion
         # population after their collection has been disabled.
-        minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
+        minute_rows = filter_stock_rows(minute_rows)
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         expected = {code for code, row in daily.items()
                     if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
@@ -5618,11 +5618,11 @@ class TDXScheduler:
         *, requested_codes: Optional[List[str]] = None,
     ) -> List[str]:
         # Reuse the existing global PIT board identity, not its buy-eligible
-        # members: ST/exit-period quotes and Beijing provider scope stay intact.
-        from scripts.build_stock_universe_pit_spans import a_share_ts_code_filter, is_b_share_ts_code
+        # members: preserve ST/exit quotes, but never collect unsupported boards.
+        from backend.services.data_integrity.stock_scope import is_supported_stock_code, stock_scope_sql
 
         if requested_codes is not None:
-            return [str(code).strip() for code in requested_codes if not is_b_share_ts_code(code)]
+            return [str(code).strip() for code in requested_codes if is_supported_stock_code(code)]
         # The stock-basic directory may lag an IPO. A real same-window daily
         # quote is also provider-population evidence, never PIT buy eligibility.
         # delist_date is the effective terminal boundary, not a final trading
@@ -5637,11 +5637,11 @@ class TDXScheduler:
                AND (k.volume_hand>0 OR k.volume_shares>0)
                AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
                  OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
-                 OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+                 )
             ) SELECT ts_code FROM population WHERE TRUE"""
-        sql += a_share_ts_code_filter("ts_code") + " ORDER BY ts_code"
+        sql += stock_scope_sql("ts_code") + " ORDER BY ts_code"
         rows = self._fetchall(sql, (end_date, start_date))
-        return [str(row["ts_code"]).strip() for row in rows if not is_b_share_ts_code(row["ts_code"])]
+        return [str(row["ts_code"]).strip() for row in rows if is_supported_stock_code(row["ts_code"])]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]
