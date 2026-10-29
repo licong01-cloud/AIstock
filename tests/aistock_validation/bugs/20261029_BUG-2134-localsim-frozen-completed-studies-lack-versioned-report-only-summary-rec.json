@@ -33,14 +33,22 @@
   ],
   "expected": "A new immutable report-only revision binds old request/results/day receipts and current summary implementation; native ledger readback and all source checks pass; retry reuses the same revision with zero account computation; replay with changed source remains rejected.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/analysis/localsim_report_only_recovery_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2134-localsim-frozen-completed-studies-lack-versioned-report-only-summary-rec.json"
+    ],
     "added_files": [
       "docs/analysis/localsim_report_only_recovery_20261029.md"
     ],
     "changed_files": [
       "backend/services/simulation_execution/localsim/dual_mode_research.py",
-      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py"
+      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/analysis/localsim_report_only_recovery_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2134-localsim-frozen-completed-studies-lack-versioned-report-only-summary-rec.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_execution/localsim/dual_mode_research.py",
@@ -138,10 +146,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
