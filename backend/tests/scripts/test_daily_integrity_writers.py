@@ -1,6 +1,11 @@
 """Direct legacy writer contracts, without opening DB/network connections."""
 from contextlib import contextmanager
 from datetime import date
+import os
+from pathlib import Path
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -180,3 +185,46 @@ def test_index_scan_published_only_after_all_queries_and_commits_succeed(monkeyp
         assert not calls
         if failure != "commit":
             assert not writes_seen
+
+
+def test_moneyflow_absolute_path_can_load_shared_contracts(tmp_path):
+    script = Path(moneyflow.__file__).resolve()
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    result = subprocess.run([sys.executable, "-c",
+        "import runpy; m=runpy.run_path("+repr(str(script))+"); "
+        "assert m['_upsert_moneyflow'](None,[{'ts_code':'','trade_date':None}])==0"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("failed_days", [0, 1])
+def test_main_owns_connection_lifetime_not_outer_transaction(monkeypatch, failed_days):
+    class Connection:
+        autocommit = False
+        closed = False
+
+        def __enter__(self):
+            raise AssertionError("connection context starts an unwanted outer transaction")
+
+        def close(self):
+            self.closed = True
+
+    conn = Connection()
+    args = SimpleNamespace(mode="incremental", start_date="2026-10-28", end_date="2026-10-28",
+                           job_id=None, bulk_session_tune=False, truncate=False)
+    monkeypatch.setattr(moneyflow, "parse_args", lambda: args)
+    monkeypatch.setattr(moneyflow.psycopg2, "connect", lambda **_kwargs: conn)
+    monkeypatch.setattr(moneyflow, "pro_api", lambda: object())
+    monkeypatch.setattr(moneyflow, "_create_job", lambda *_args: "job")
+    monkeypatch.setattr(moneyflow, "_log", lambda *_args: None)
+    monkeypatch.setattr(moneyflow, "run_ingestion", lambda *_args: {"failed_days": failed_days})
+    finished = []
+    monkeypatch.setattr(moneyflow, "_finish_job", lambda *args: finished.append(args[2]))
+    if failed_days:
+        with pytest.raises(SystemExit) as failure:
+            moneyflow.main()
+        assert failure.value.code == 1
+    else:
+        moneyflow.main()
+    assert finished == ["failed" if failed_days else "success"]
+    assert conn.closed

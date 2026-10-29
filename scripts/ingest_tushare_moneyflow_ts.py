@@ -13,9 +13,11 @@ Environment:
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import datetime as dt
 import json
 import os
+from pathlib import Path
 import sys
 import uuid
 from typing import Any, Dict, List, Optional
@@ -23,6 +25,12 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 import psycopg2.extras as pgx
 from dotenv import load_dotenv
+
+
+# Absolute-path scheduler launches do not put the repository on sys.path.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
 load_dotenv(override=True)
@@ -329,7 +337,9 @@ def main() -> None:
     else:
         end_date = today
 
-    with psycopg2.connect(**DB_CFG) as conn:
+    # Helpers own atomic fact/revision transactions; a psycopg connection
+    # context would create an outer transaction even with autocommit=True.
+    with closing(psycopg2.connect(**DB_CFG)) as conn:
         conn.autocommit = True
         _ensure_session_tune(conn, getattr(args, "bulk_session_tune", False))
         pro = pro_api()
@@ -384,6 +394,8 @@ def main() -> None:
             stats = run_ingestion(conn, pro, mode, start_date, end_date, job_id)
             _finish_job(conn, job_id, "success" if stats["failed_days"] == 0 else "failed", {"stats": stats})
             print(f"[DONE] moneyflow_ts mode={mode} stats={stats}")
+            if stats["failed_days"]:
+                sys.exit(1)
         except Exception as exc:  # noqa: BLE001
             _finish_job(conn, job_id, "failed", {"error": str(exc)})
             print(f"[ERROR] moneyflow_ts failed: {exc}")
