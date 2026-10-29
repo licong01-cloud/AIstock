@@ -28,12 +28,18 @@
   ],
   "expected": "Explicit connection lifetime without implicit outer transaction; unchanged and changed histories finish with durable checkpoints and verdict, rollback on real failure, close connection on all exit paths.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2120-adj-factor-cli-connection-context-rolls-back-completed-history-checkpoin.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "scripts/ingest_tushare_adj_factor.py",
-      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2120-adj-factor-cli-connection-context-rolls-back-completed-history-checkpoin.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_adj_factor.py",
@@ -115,10 +121,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
