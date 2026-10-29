@@ -1331,19 +1331,14 @@ def test_hmm_readonly_semantics_bind_real_evidence(kind, case, expected):
         assert semantic["facts"]["route_ready"] is True and "readiness only" in semantic["reason"]
 
 
+def _ci_issue_failure(error_signature, excerpt=()):
+    return {"diagnostic_status": "complete", "failed_jobs": [
+        {"error_signature": error_signature, "key_log_excerpt": list(excerpt)}]}
+
+
 def test_ci_issue_classification_ignores_successful_runner_and_no_network_metadata() -> None:
-    summary = {
-        "diagnostic_status": "complete",
-        "failed_jobs": [
-            {
-                "error_signature": "Nightly failed sessions: validation_center_backend",
-                "key_log_excerpt": [
-                    "runner_preflight: success",
-                    "FAILED backend/tests/scripts/test_issue_flow.py::test_validation_select",
-                ],
-            }
-        ],
-    }
+    summary = _ci_issue_failure("Nightly failed sessions: validation_center_backend", [
+        "runner_preflight: success", "FAILED backend/tests/scripts/test_issue_flow.py::test_validation_select"])
     issue = {
         "title": "[P1][validation_center] Nightly failed: validation_center_backend",
         "body": """## Nightly Statuses
@@ -1376,10 +1371,7 @@ def test_ci_issue_classification_keeps_explicit_runner_failures_infrastructure(
     title: str,
     error_signature: str,
 ) -> None:
-    summary = {
-        "diagnostic_status": "complete",
-        "failed_jobs": [{"error_signature": error_signature, "key_log_excerpt": []}],
-    }
+    summary = _ci_issue_failure(error_signature)
 
     assert workflow._classify_ci_issue(summary, {"title": title, "body": ""}) == "infra_blocker"
 
@@ -1438,6 +1430,9 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
     assert summary["passed"] == []
 
 
+_LOCALSIM_DIR = "backend/services/simulation_execution/localsim/"
+_LOCALSIM_ONLINE_FILES = [_LOCALSIM_DIR + name + ".py" for name in
+                         ("dual_mode_projection", "research_performance", "native_research", "runtime", "dual_mode_research_v2")]
 _REPRESENTATIVE_RUNTIME_ROLES = [
     ('backend/main.py', ['backend-main']),
     ('backend/routers/monthly_dataset_releases.py', ['worker-scheduler']),
@@ -1452,16 +1447,19 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
     ('backend/routers/hmm_risk.py', ['backend-main']),
     ('backend/services/hmm_risk/unknown_consumer.py', ['backend-main']),
     ('scripts/aistock_runner_health.py', []),
+    (_LOCALSIM_DIR + 'dual_mode_research.py', []),
+    *((path, ['backend-main']) for path in _LOCALSIM_ONLINE_FILES),
 ]
 
 
-@pytest.mark.parametrize("family", ["value", "industry", "advisory"])
-def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None:
-    source = "backend/services/hmm_risk/observed_industry_authority.py"
+@pytest.mark.parametrize("family", ["value", "industry", "advisory", "localsim"])
+def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeypatch) -> None:
+    source = _LOCALSIM_DIR + "dual_mode_research.py" if family == "localsim" else "backend/services/hmm_risk/observed_industry_authority.py"
     fixed5 = ["backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
               "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py"]
-    expected = [source] if family == "industry" else fixed5
-    rule_id = "offline-hmm-observed-industry-authority" if family == "industry" else "offline-advisory-fixed5-valuation"
+    expected = [source] if family in {"industry", "localsim"} else fixed5
+    rule_id = ("offline-localsim-dual-mode-study" if family == "localsim" else
+               "offline-hmm-observed-industry-authority" if family == "industry" else "offline-advisory-fixed5-valuation")
     rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
                 if rule["rule_id"] == rule_id)
     assert set(rule["source_globs"]) == set(expected)
@@ -1473,6 +1471,8 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None
         "advisory": [*fixed5, "backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py",
                      "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md",
                      "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"],
+        "localsim": [source, "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+                     "backend/tests/simulation_execution/test_localsim_replay_performance.py"],
     }[family]
     offline = workflow._classify_runtime_impact(files)
     assert offline["runtime_impact"] == "none"
@@ -1482,6 +1482,8 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None
     assert contract["blocking"] == [] and contract["backend_restart_required"] is False
     online_paths = ([*(path.replace("_v2.py", "_v3.py") for path in fixed5), "backend/routers/advisory_model_first.py"]
                     if family == "advisory" else ["backend/routers/hmm_risk.py", source.replace(".py", "_consumer.py")])
+    if family == "localsim":
+        online_paths = _LOCALSIM_ONLINE_FILES
     for online in online_paths:
         mixed = workflow._classify_runtime_impact([*files, online])
         assert mixed["runtime_impact"] == "backend"
@@ -1491,6 +1493,11 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family) -> None
             "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}}, changed_files=[*files, online])
         assert contract["backend_restart_required"] is True
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
+    if family == "localsim":
+        catalog = workflow._load_runtime_target_catalog()
+        catalog["targets"]["backend-main"]["source_globs"].append(source)
+        monkeypatch.setattr(workflow, "_load_runtime_target_catalog", lambda _root=None: catalog)
+        assert workflow._classify_runtime_impact([source])["runtime_impact"] == "unknown"
 
 
 @pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py", "component_artifact_manifest.py", "component_manifest_producer.py", "factor_materializer.py", "source_fact_history.py", "artifact_ready_source.py", "candidate_validator.py", "canonical_stock_transformer.py", *(f"legacy:{name}.py" for name in ("component_artifact_manifest", "component_manifest_producer", "factor_materializer", "source_fact_history", "artifact_ready_source", "candidate_validator", "canonical_stock_transformer"))])

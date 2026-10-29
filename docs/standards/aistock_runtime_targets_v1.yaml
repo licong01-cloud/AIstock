@@ -50,6 +50,13 @@ non_runtime_source_paths:
   - scripts/start_aistock_github_runner.ps1
   - scripts/supervise_aistock_github_runner.ps1
 source_role_rules:
+  # Independent main()/__main__ study CLI. research_performance imports its
+  # account computation only inside the CLI-owned serial/spawn pool paths.
+  # Keep the shared helpers, native runtime and dual_mode_projection online.
+  - rule_id: offline-localsim-dual-mode-study
+    role: non_runtime
+    source_globs:
+      - backend/services/simulation_execution/localsim/dual_mode_research.py
   # Only the fresh-process builder and its tests import this source. The
   # produced C-013 bundle is consumed as data; activation is a separate action.
   - rule_id: offline-hmm-observed-industry-authority
