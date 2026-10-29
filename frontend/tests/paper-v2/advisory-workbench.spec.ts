@@ -88,6 +88,7 @@ test("recommendation returns include new stocks without an episode and keep proc
   await expect(missing.getByTestId("advisory-recommendation-return")).toContainText("等待本段有效行情");
   expect(state.seen.filter(s => s.includes("/returns")).every(s => s.startsWith("GET ") && s.includes("list_version_id="))).toBe(true);
   const removed = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "移出股票 I", exact: true }) }).first();
+  await removed.scrollIntoViewIfNeeded();
   await expect(removed.getByTestId("advisory-recommendation-return")).toContainText("已结束·冻结于 2026-10-28 开盘");
   await main(page).getByRole("button", { name: "历史记录", exact: true }).click();
   const old = main(page).getByRole("row").filter({ hasText: "重复入选股票" }).first();
