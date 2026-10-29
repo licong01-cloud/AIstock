@@ -47,6 +47,35 @@ def key_result(expected, facts, *, required_fields=(), positive_fields=(), check
                             (counts,), {**(checks or {}), "physical_rows": len(facts)}, gaps)
 
 
+def index_quote_result(expected, facts):
+    """A published index needs close; close-only currency/return variants have no OHLC.
+
+    Keep source NULLs explicit. Any provided quote must still be finite and
+    economically valid; this is not a stock/minute or consumer-field exemption.
+    """
+    expected = set(expected)
+    base = key_result(expected, facts, required_fields=("close",), positive_fields=("close",),
+        checks={"required_fields": ["close"], "nullable_fields": ["open", "high", "low", "vol", "amount"],
+                "schema_version": "published_index_quote_fields_v1"})
+    legal, invalid, gaps = 0, 0, list(base.gaps)
+    for field in ("open", "high", "low", "vol", "amount"):
+        bad = []
+        for code in expected & facts.keys():
+            value = facts[code].get(field)
+            if value is None:
+                legal += 1
+            elif (not finite_number(value, positive=field in {"open", "high", "low"})
+                    or value < 0):
+                bad.append(code)
+        invalid += len(bad)
+        if bad:
+            gaps.append({"classification": "INVALID", "symbols": sorted(bad), "fields": [field]})
+    total = 5*len(expected & facts.keys())
+    optional = CheckCounts("published_optional_index_quote_cell", total, total-legal-invalid, legal, 0, invalid, 0)
+    return ValidationResult(PartitionState.VALID if base.state == PartitionState.VALID and optional.complete
+        else PartitionState.INCOMPLETE, base.counts+(optional,), base.checks, tuple(gaps))
+
+
 def adj_factor_result(expected, facts, history=None):
     """A finite latest value cannot certify a known unresolved factor baseline."""
     result = key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
@@ -370,11 +399,10 @@ class PhysicalValidator:
             checks = {"provider": source["data_source"], "scan_sha256": scan["scan_sha256"],
                       "physical_rows": len(actual), "as_of_policy": "CURRENT_SOURCE_NOT_HISTORICAL_VINTAGE"}
             if dataset == "index_daily":
-                quotes = key_result({entry["key"][0] for entry in scan["entries"]},
-                    {str(r["ts_code"]).strip(): r for r in actual},
-                    required_fields=("open", "high", "low", "close", "vol", "amount"),
-                    positive_fields=("open", "high", "low", "close"))
-                checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability")
+                quotes = index_quote_result({entry["key"][0] for entry in scan["entries"]},
+                    {str(r["ts_code"]).strip(): r for r in actual})
+                checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability",
+                              quote_field_contract=quotes.checks)
                 gaps = tuple({"classification": kind, "keys": keys} for kind, keys in
                              (("MISSING", missing), ("INVALID", invalid)) if keys)+quotes.gaps
                 return ValidationResult(PartitionState.VALID if check.complete and quotes.state == PartitionState.VALID
