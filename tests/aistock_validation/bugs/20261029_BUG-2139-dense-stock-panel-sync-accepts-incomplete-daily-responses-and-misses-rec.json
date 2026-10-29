@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2139",
-  "closed_at": null,
+  "closed_at": "2026-10-29T15:27:10.181882Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,15 +32,15 @@
   "expected": "Reuse existing dated SH/SZ source-specific traded-key scope; preserve finite facts; supplement only true missing/invalid panel keys with bounded normal provider retries; keep actual source gaps incomplete. Current whole-day provider replay also returns the185 now-available facts: original first-ingestion omission cause is not proven, and this fix must not claim otherwise. No PIT buy-policy change, fabricated absence, source-date invention, additional approval or release gate.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -61,8 +61,8 @@
   },
   "first_seen_at": "2026-10-29T07:55:23.323550Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f996e0e7928e39861bc92dd28c89b090d23c8649",
+  "fixed_at": "2026-10-29T08:14:25Z",
   "github_issue_number": 6887,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6887",
   "last_seen_at": "2026-10-29T07:55:23.323550Z",
@@ -70,6 +70,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6890",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -92,9 +93,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2139-close-sync-20261029\\tmp\\issue_workflow\\BUG-2139\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2139",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "f996e0e7928e39861bc92dd28c89b090d23c8649",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T15:26:35.716770Z",
+      "mode": "read_only",
+      "observed_identity": "673a9c486d5e447c295ab056eee2146f95550559",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f1644ed5778a454a24a491d6c90b3b63015085dd593bd5900e2be9a17e5d58d6",
+      "receipt_sha256": "129fc9d44c51af91218b60eaffcd0772cb0b048216039f67cee7468624ae1acd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d15fcdd817dfe14dceefbce0cde226ba0913d68cbab63bcc744fc32557dfaffb",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -104,7 +128,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2139",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3bfc40e5155c76ee",
+    "recorded_at": "2026-10-29T08:15:08.352990Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8dd4dc746ad57d07a5183d6f7c91a0628b6dca88",
+    "source_merge_commit": "f996e0e7928e39861bc92dd28c89b090d23c8649",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6890",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_tushare_sync_engine.py -q --no-cov -> 183 passed; CI verdict current HEAD passed; DEV native SQL readback and idempotency passed",
+      "python -m nox -s l0 -> passed changed files only"
+    ],
+    "validation_evidence_digest": "4d3ea632b2476ddd741f16fb0eb569670096cabb56cb34b6279fd5e83d358746"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -113,6 +159,11 @@
     "fingerprint": "e31c6514dd1d6f7cff03a625",
     "source_event_id": "FE-20261029-e31c6514dd1d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_tushare_sync_engine.py -q --no-cov -> 183 passed; CI verdict current HEAD passed; DEV native SQL readback and idempotency passed",
+    "python -m nox -s l0 -> passed changed files only",
+    "post-restart-verify --bug-id BUG-2139 --target backend-main --expected-identity f996e0e7928e39861bc92dd28c89b090d23c8649 -> passed running673a9c486 contains merged dense-panel fix and native read-only smoke"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
