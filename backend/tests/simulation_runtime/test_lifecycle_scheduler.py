@@ -18858,7 +18858,7 @@ def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -
     """Same-day unattended LocalSim must not depend on post-market DB minute sync."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
-    trade_date = date.today()
+    trade_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
     release = _make_test_release()
     manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
     portfolio = PaperPortfolio(
