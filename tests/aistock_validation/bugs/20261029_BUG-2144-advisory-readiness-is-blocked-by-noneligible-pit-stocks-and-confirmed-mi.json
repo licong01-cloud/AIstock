@@ -38,28 +38,28 @@
   "expected": "荐股对正式PIT范围及模型窗口内实际依赖验证；非消费范围缺口不阻断；确认的筹码缺失保留NaN并记录可审计质量证据，未知、损坏、修订仍阻断。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json",
       "backend/inference_engine.py",
+      "backend/services/data_integrity/advisory_scope.py",
       "backend/services/data_integrity/consumers.py",
       "backend/services/data_integrity/inputs.py",
       "backend/services/data_integrity/service.py",
       "backend/tests/test_daily_data_integrity_inputs.py",
-      "backend/services/data_integrity/advisory_scope.py",
-      "docs/analysis/advisory_pit_missing_input_fix_20261030.md"
+      "docs/analysis/advisory_pit_missing_input_fix_20261030.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json"
     ],
     "added_files": [
       "backend/services/data_integrity/advisory_scope.py",
       "backend/tests/test_advisory_input_scope.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json",
       "backend/inference_engine.py",
+      "backend/services/data_integrity/advisory_scope.py",
       "backend/services/data_integrity/consumers.py",
       "backend/services/data_integrity/inputs.py",
       "backend/services/data_integrity/service.py",
       "backend/tests/test_daily_data_integrity_inputs.py",
-      "backend/services/data_integrity/advisory_scope.py",
-      "docs/analysis/advisory_pit_missing_input_fix_20261030.md"
+      "docs/analysis/advisory_pit_missing_input_fix_20261030.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -223,8 +223,8 @@
   },
   "first_seen_at": "2026-10-29T18:47:16.356916Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b1915acfe1788f0a70de2b576e59354eefa7deca",
+  "fixed_at": "2026-10-29T19:03:46Z",
   "github_issue_number": 6906,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6906",
   "last_seen_at": "2026-10-29T18:47:16.356916Z",
@@ -232,6 +232,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6907",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -259,6 +260,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -271,7 +273,30 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "???????????PIT?????NaN????????????????????????",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2144",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3fd839ad7c063a31",
+    "recorded_at": "2026-10-29T19:04:27.878348Z",
+    "runtime_contract_digest": "12312a3c5c72cbce54b214b187d923e852172a6cee215193d2a8773eff187ead",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "47f9572fd89879155651f1a2d3b79635a7cb655e",
+    "source_merge_commit": "b1915acfe1788f0a70de2b576e59354eefa7deca",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6907",
+    "validation_evidence": [
+      "rtk pytest backend/tests/test_daily_data_integrity_inputs.py backend/tests/test_daily_data_integrity.py backend/tests/test_daily_data_integrity_api.py -q -> 140 passed",
+      "python -m nox -s l0 -> passed",
+      "gh pr checks 6907 -> CI verdict passed"
+    ],
+    "validation_evidence_digest": "b4f3269de1772c655926eeab251f46683a4ae470f691dcd3262279adfdbd9af8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -280,6 +305,11 @@
     "fingerprint": "e80bf838ed3eaf2af0afdb22",
     "source_event_id": "FE-20261029-e80bf838ed3e"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/test_daily_data_integrity_inputs.py backend/tests/test_daily_data_integrity.py backend/tests/test_daily_data_integrity_api.py -q -> 140 passed",
+    "python -m nox -s l0 -> passed",
+    "gh pr checks 6907 -> CI verdict passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
