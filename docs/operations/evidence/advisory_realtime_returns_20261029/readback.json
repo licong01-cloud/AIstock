@@ -1,0 +1,21 @@
+{
+  "schema_version": "advisory_realtime_returns_readback_v1",
+  "observed_date": "2026-10-29",
+  "observation_time_precision": "date; Shanghai morning session",
+  "method": "fresh Python process loading task worktree; existing production database read snapshot and TDX read endpoints; no service start",
+  "price_basis": "RAW_CNY",
+  "returns": "unadjusted price change, not brokerage fills or total return",
+  "programs": [
+    {"model": "LGB", "program_id": "advp_be042d9519e74775b7aaa08627ea7b9d", "list_date": "2026-10-28", "in_scope": 25, "cumulative_available": 25, "today_available": 25, "later_enter_linked": 0},
+    {"model": "LSTM", "program_id": "advp_ed918504a02f4b15892f0dba65da139b", "list_date": "2026-10-28", "in_scope": 21, "cumulative_available": 21, "today_available": 21, "later_enter_linked": 5},
+    {"model": "TCN", "program_id": "advp_5c2b7a817cfa46f8b8708e9886082e7e", "list_date": "2026-10-28", "in_scope": 24, "cumulative_available": 24, "today_available": 24, "later_enter_linked": 5},
+    {"model": "parent", "program_id": "advp_3126dd77f9774d94850f37ad012f640f", "list_date": "2026-10-09", "in_scope": 21, "cumulative_available": 21, "today_available": 21, "later_enter_linked": 5},
+    {"model": "single", "program_id": "advp_5a46150a7e9541d2a8887541781c9dfc", "list_date": "2026-10-28", "in_scope": 20, "cumulative_available": 20, "today_available": 20, "later_enter_linked": 5}
+  ],
+  "sum": {"in_scope": 111, "cumulative_available": 111, "today_available": 111, "later_enter_linked": 20},
+  "existing_blockers": "Parent latest list remains October 9; other four remain October 28. Quote availability does not prove daily review, model readiness or economic value.",
+  "production_db_writes": false,
+  "production_services_controlled": false,
+  "production_runtime_verified": false,
+  "dataset_model_or_policy_changed": false
+}

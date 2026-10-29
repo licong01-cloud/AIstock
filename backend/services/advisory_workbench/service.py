@@ -157,14 +157,29 @@ class WorkbenchService:
                 and (not change or r["change"] == change)
                 and (not q or q.lower() in (r["symbol"] + " " + str(r.get("stock_name") or "")).lower())]
             page = filtered[offset:offset + limit]
+            links = defaultdict(set)
+            for link in repo.entry_links(program_id, version, [r['symbol'] for r in page if not r.get('episode_id')]):
+                links[link['symbol']].add(link['episode_id'])
+            for row in page:
+                if not row.get('episode_id') and links[row['symbol']]:
+                    candidates = links[row['symbol']]
+                    row['episode_link_state'] = 'LINKED_ENTER' if len(candidates) == 1 else 'AMBIGUOUS_ENTER'
+                    if len(candidates) == 1:
+                        row['episode_id'] = next(iter(candidates))
             episode_ids = [r.get("episode_id") for r in page if r.get("episode_id")]
             # Batch page-specific episode reads, never one price query per stock.
             records, _ = repo.episodes(program_id, {"episode_ids": episode_ids}) if episode_ids else ([], 0)
             views, _ = self._metric_rows(ctx, records)
             by_episode = {view["episode_id"]: view for view in views}
             for row in page:
-                if row.get("episode_id") in by_episode:
-                    row["episode"] = by_episode[row["episode_id"]]
+                view = by_episode.get(row.get('episode_id'))
+                if row.get('episode_link_state') == 'LINKED_ENTER' and (not view
+                        or view['symbol'] != row['symbol'] or view['program_id'] != program_id
+                        or view['binding_version_id'] != version['binding_version_id']):
+                    row.update(episode_id=None, episode_link_state='EPISODE_IDENTITY_MISMATCH')
+                    continue
+                if view:
+                    row["episode"] = view
                     row["progress"] = row["episode"]["progress"]
             page = AdvisoryProgramService()._enrich_display_names(page)
             return self._envelope(ctx, status="PUBLISHED", items=page, total_count=len(filtered),
@@ -190,8 +205,18 @@ class WorkbenchService:
     def _memberships(repo, ctx, rows):
         selected = ctx["selected"]
         items = repo.items(ctx["program"]["program_id"], [selected["list_version_id"]]) if selected else []
+        later = defaultdict(set)
+        if selected:
+            for link in repo.entry_links(ctx['program']['program_id'], selected,
+                                         [i['symbol'] for i in items if not i.get('episode_id')]):
+                later[link['symbol']].add(link['episode_id'])
         for row in rows:
             matches = [i for i in items if i.get("episode_id") == row["episode_id"]]
+            candidates = later[row['symbol']]
+            if (not matches and candidates == {row['episode_id']}
+                    and row.get('program_id') == ctx['program']['program_id']
+                    and row.get('binding_version_id') == selected['binding_version_id']):
+                matches = [i for i in items if i['symbol'] == row['symbol']]
             row["selected_membership"] = ("NO_CURRENT_LIST" if not selected else
                 membership(matches[0]) if len(matches) == 1 else "UNKNOWN" if matches else "OUTSIDE_LIST")
 

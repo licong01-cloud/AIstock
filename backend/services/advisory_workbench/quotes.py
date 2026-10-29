@@ -77,7 +77,10 @@ class TdxQuotes:
                 duplicates.add(symbol)
             k = item.get("K") if isinstance(item.get("K"), dict) else {}
             price = positive(k.get("Close"))
+            opening, previous = positive(k.get('Open')), positive(k.get('Last'))
             result[symbol] = {"price": price / 1000 if price else None,
+                              'open_price': opening / 1000 if opening else None,
+                              'previous_close': previous / 1000 if previous else None,
                               "source_time_raw": str(item.get("ServerTime") or ""),
                               "has_trades": positive(item.get("TotalHand")) is not None}
         for symbol in duplicates:
@@ -86,7 +89,7 @@ class TdxQuotes:
 
     def close(self, symbol, cutoff):
         response = requests.get(TDX_BASE_URL + "/api/kline-all/tdx",
-                                params={"code": _to_tdx_code(symbol), "type": "day", "limit": 2}, timeout=4)
+                                params={"code": _to_tdx_code(symbol), "type": "day", "limit": 3}, timeout=4)
         response.raise_for_status()
         payload = response.json()
         data = payload.get("data") or {}
@@ -102,13 +105,19 @@ class TdxQuotes:
             price = positive(bar.get("Close"))
             if day > cutoff or price is None:
                 continue
-            if day in bars and bars[day] != price:
+            opening = positive(bar.get('Open')) if positive(bar.get('Volume')) else None
+            value = (price, opening)
+            if day in bars and bars[day] != value:
                 raise ValueError("conflicting bar")
-            bars[day] = price
+            bars[day] = value
         if not bars:
             return {"price": None, "reason_code": "TDX_CLOSE_MISSING"}
         day = max(bars)
-        return {"price": bars[day] / 1000, "trade_date": day,
+        previous = max((d for d in bars if d < day), default=None)
+        return {"price": bars[day][0] / 1000, "trade_date": day,
+                'open_price': bars[day][1] / 1000 if bars[day][1] else None,
+                'previous_close': bars[previous][0] / 1000 if previous else None,
+                'previous_close_date': previous,
                 "kind": "CLOSE" if day == cutoff else "STALE_CLOSE"}
 
 
@@ -130,7 +139,8 @@ class QuoteService:
         symbols = symbols_from_query(raw)
         now = self.clock().astimezone(CN)
         try:
-            kind, cutoff = session(now, self.calendar(now))
+            days = self.calendar(now)
+            kind, cutoff = session(now, days)
         except Exception:
             return self.envelope(now, {s: self.unavailable(s, now, "CALENDAR_UNAVAILABLE") for s in symbols})
         key_prefix = (now.date().isoformat(), kind, cutoff)
@@ -162,7 +172,21 @@ class QuoteService:
                 found.update(fresh)
             finally:
                 CAPACITY.release()
-        return self.envelope(now, found)
+        # Normalize prior-close dates against the official calendar, including weekends.
+        trading = sorted(str(r['cal_date']) for r in days if r['is_trading'])
+        enriched = {}
+        for symbol, original in found.items():
+            quote = dict(original)
+            day = quote.get('trade_date')
+            previous = max((d for d in trading if day and d < day), default=None)
+            if kind != 'CLOSE' and day:
+                quote['previous_close_date'] = previous
+            valid_previous = previous and quote.get('previous_close_date') == previous
+            prior_price = positive(quote.get('previous_close')) if valid_previous else None
+            quote['today_return_bps'] = ((quote['price'] / prior_price - 1) * 10000
+                if quote.get('price') and prior_price else None)
+            enriched[symbol] = quote
+        return self.envelope(now, enriched)
 
     def _read(self, symbols, kind, cutoff, now):
         result = {s: self.unavailable(s, now, "TDX_UNAVAILABLE") for s in symbols}
