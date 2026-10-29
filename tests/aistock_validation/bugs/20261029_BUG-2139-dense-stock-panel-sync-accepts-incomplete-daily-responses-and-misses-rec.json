@@ -1,7 +1,9 @@
 {
   "actual": "bak_basic/cyq_perf daily ingestion can mark a nonempty partial response reconciled without independent dated traded-key readback; retrying the same whole-day query misses facts available by exact code/date. Current bounded Advisory source audit found 185 recoverable bak_basic rows across58 dates, plus264 currently unreturned and10 transport errors. Preserve finite existing facts against provider NULL/nonfinite, supplement only actual missing source-specific keys via reviewed adapter, keep true absence incomplete and HTTP failures distinct, reuse current revision/repair queue. No business model, PIT buy policy, release/profile, service control or unrelated export changes.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json"
+    "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json",
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2139",
@@ -21,12 +23,26 @@
       "timestamp": "2026-10-29T07:55:23.323550Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2139-dense-panel-20261029/dev-validation.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2132-advisory-history-20261029/production-bak-apply.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2132-advisory-history-20261029/repaired-partition-readback.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2132-advisory-history-20261029/bak-source-error-retry.json"
+  ],
+  "expected": "Reuse existing dated SH/SZ source-specific traded-key scope; preserve finite facts; supplement only true missing/invalid panel keys with bounded normal provider retries; keep actual source gaps incomplete. Current whole-day provider replay also returns the185 now-available facts: original first-ingestion omission cause is not proven, and this fix must not claim otherwise. No PIT buy-policy change, fabricated absence, source-date invention, additional approval or release gate.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,7 +51,11 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2139-dense-stock-panel-sync-accepts-incomplete-daily-responses-and-misses-rec.json",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -54,7 +74,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/test_tushare_sync_engine.py -q -k dense_panel",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -62,15 +82,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2139-dense-panel-20261029/validate_dev.py -> PASS existing DEV native SQL source fixtures, missing-key repair, null preservation and idempotent revision; all DEV effects rolled back",
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2139-dense-panel-20261029/validate_dev.py -> PASS worktree engine hash 2d87e2ff3b19f7b8643a71beda75ee5789afad16c16cebc56ab8416e293e64e3",
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2139-dense-panel-20261029/validate_dev.py -> PASS worktree engine hash 2d87e2ff3b19f7b8643a71beda75ee5789afad16c16cebc56ab8416e293e64e3 existing DEV real SQL rollback"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
