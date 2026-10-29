@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2122",
-  "closed_at": null,
+  "closed_at": "2026-10-29T02:28:23Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,14 +32,15 @@
   "expected": "Absolute CLI works from arbitrary cwd without external PYTHONPATH; genuine data failure remains failure and committed progress is durable.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2122-absolute-moneyflow-cli-cannot-import-shared-backend-contracts.json",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
       "scripts/ingest_tushare_moneyflow_ts.py",
-      "backend/tests/scripts/test_daily_integrity_writers.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2122-absolute-moneyflow-cli-cannot-import-shared-backend-contracts.json"
     ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_daily_integrity_writers.py",
       "scripts/ingest_tushare_moneyflow_ts.py",
-      "backend/tests/scripts/test_daily_integrity_writers.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2122-absolute-moneyflow-cli-cannot-import-shared-backend-contracts.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -96,8 +97,8 @@
   },
   "first_seen_at": "2026-10-29T02:13:33.132000Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0c44473499f544acd5722f2648d0d9498f72ac57",
+  "fixed_at": "2026-10-29T02:28:23Z",
   "github_issue_number": 6826,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6826",
   "last_seen_at": "2026-10-29T02:13:33.132000Z",
@@ -105,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6830",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +129,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -136,7 +139,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2122",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "61dbb2644a39a5d7",
+    "recorded_at": "2026-10-29T02:29:01.975400Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4151e851c2203826a52afc10daf7f5bd4b7b2a58",
+    "source_merge_commit": "0c44473499f544acd5722f2648d0d9498f72ac57",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6830",
+    "validation_evidence": [
+      "validation-receipt: id=88b18ad6d0f0392d commit=4151e851c2203826a52afc10daf7f5bd4b7b2a58 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=87fe8e14c3ed9ff3 commit=4151e851c2203826a52afc10daf7f5bd4b7b2a58 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_daily_integrity_writers.py -q` result=`19 passed`"
+    ],
+    "validation_evidence_digest": "fc30d77054f4a2988d0d8aaefcc5d368dd109c2b96e84f2007082497dd5b6438"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -145,6 +170,10 @@
     "fingerprint": "7ac2e2e36ae90ea47d23e16f",
     "source_event_id": "FE-20261029-7ac2e2e36ae9"
   },
+  "validation_evidence": [
+    "validation-receipt: id=88b18ad6d0f0392d commit=4151e851c2203826a52afc10daf7f5bd4b7b2a58 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=87fe8e14c3ed9ff3 commit=4151e851c2203826a52afc10daf7f5bd4b7b2a58 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_daily_integrity_writers.py -q` result=`19 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
