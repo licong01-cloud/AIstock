@@ -1828,6 +1828,7 @@ def test_dense_panel_transport_failure_is_not_success_or_empty(monkeypatch):
     assert result.failed_batches == 1 and not result.success_batches
     assert not audit.success_calls and len(audit.failure_calls)==1
     assert "502" in audit.failure_calls[0]["error_message"]
+    assert "502" in (result.error or "")  # Job summary must retain the native failure too.
 
 
 def test_dense_panel_repair_budget_does_not_hide_remaining_keys(monkeypatch):

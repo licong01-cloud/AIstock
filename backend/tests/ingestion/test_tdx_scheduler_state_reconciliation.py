@@ -41,6 +41,104 @@ def test_pit_day_roll_uses_existing_executor_and_never_duplicates_inflight_work(
     assert len(calls) == 1  # cheap sweep is throttled even after completion
 
 
+@pytest.mark.parametrize("state", ["recovering", "recovered", "incomplete", "obsolete_green"])
+def test_partition_retry_alarm_reflects_current_data_and_active_repair(monkeypatch, state):
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    partition = {"dataset": "bak_basic", "data_revision": 2, "validated_revision": 2,
+                 "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION,
+                 "validation_id": "dated-check", "validation_status": "INCOMPLETE",
+                 "metadata": {"validation": {"checks": {"coverage_basis": "independent_dated_traded_stock_keys"}}}}
+    if state in {"recovered", "obsolete_green"}:
+        partition["validation_status"] = "VALID"
+    if state == "obsolete_green":
+        partition["metadata"] = {"validation": {"checks": {"provider": "tushare"}}}
+    scheduler._fetchall = lambda *_: [{"partition": partition,
+        "recovery_target_ids": ["repair"] if state == "recovering" else []}]
+    alerts, reconciled, updates = [], [], []
+    scheduler._execute = lambda query, params=(): updates.append((query, params))
+    scheduler._reconcile_recovered_target_state = lambda **kw: reconciled.append(kw)
+    monkeypatch.setattr(scheduler_module, "DataHealthAlerter", lambda *_: SimpleNamespace(
+        flush=lambda values: alerts.extend(values) or {"written": len(values)}))
+    target = {"dataset": "bak_basic", "target_date": dt.date(2026, 10, 27),
+              "target_id": "expired", "target_status": "final_blocked",
+              "failure_category": "canonical_partition_not_validated", "attempt_count": 6}
+    scheduler._flush_final_data_sync_alerts([target])
+    if state == "recovered":
+        assert not alerts and len(reconciled) == 1
+    elif state == "recovering":
+        assert not reconciled and len(alerts) == 1
+        assert alerts[0].alert_type == "retry_pending" and alerts[0].severity == "warning"
+        assert alerts[0].details["recovery_target_ids"] == ["repair"]
+        assert any("data_alerts" in query and "acknowledged" in query for query, _ in updates)
+    else:
+        assert not reconciled and len(alerts) == 1
+        assert alerts[0].alert_type == "retry_exhausted"
+
+
+def test_native_tushare_schedule_preserves_failed_result_reason(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    updates = []
+    scheduler._update_ingestion_schedule = lambda sid, **kw: updates.append(kw)
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", lambda: SimpleNamespace(
+        sync=lambda **kw: SimpleNamespace(ok=False, error="bak_basic: provider permission denied")))
+    scheduler._run_tushare_engine_sync(uuid.uuid4(), "schedule", "bak_basic", "incremental", "unit", {})
+    assert updates[0]["last_status"] == "failed"
+    assert updates[0]["last_error"] == "bak_basic: provider permission denied"
+
+
+def test_pending_warning_write_failure_keeps_old_error_visible(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    scheduler._fetchall = lambda *_: [{"partition": None, "recovery_target_ids": ["repair"]}]
+    scheduler._execute = lambda *_: pytest.fail("old error must not be acknowledged before replacement is saved")
+    def fail(_alerts):
+        raise RuntimeError("alert persistence failed")
+    monkeypatch.setattr(scheduler_module, "DataHealthAlerter", lambda *_: SimpleNamespace(flush=fail))
+    with pytest.raises(RuntimeError, match="alert persistence failed"):
+        scheduler._flush_final_data_sync_alerts([{"dataset": "bak_basic", "target_date": dt.date(2026, 10, 27),
+            "target_id": "expired", "target_status": "final_blocked"}])
+
+
+def test_alert_recovery_cannot_acknowledge_partition_changed_since_readback(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    statements = []
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def execute(self, sql, params):
+            statements.append(sql)
+        def fetchone(self):
+            return {"dataset": "bak_basic", "data_revision": 3, "validated_revision": 2,
+                    "validation_status": "VALID", "validation_id": "previous"}
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_: nullcontext(
+        SimpleNamespace(cursor=lambda **_: Cursor())))
+    result = scheduler._reconcile_recovered_target_state(dataset="bak_basic", target_id="expired",
+        target_date=dt.date(2026, 10, 27), trigger_source="unit",
+        context={"canonical_validation_id": "previous"})
+    assert result == {"targets_reconciled": 0, "alerts_acknowledged": 0}
+    assert len(statements) == 1 and "FOR UPDATE" in statements[0]
+
+
+def test_existing_final_sweep_reclassifies_old_provider_alert_without_refetch():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries, alerts = [], []
+    target = {"dataset": "bak_basic", "target_id": "expired", "target_date": dt.date(2026, 10, 27),
+              "data_source": "tushare", "target_status": "final_blocked"}
+    def fetch(query, params=()):
+        queries.append(query)
+        return [target]
+    scheduler._fetchall = fetch
+    scheduler._flush_final_data_sync_alerts = lambda values: alerts.extend(values)
+    scheduler._check_dataset_recovered = lambda *_: pytest.fail("provider target uses canonical ledger readback")
+    scheduler._reconcile_recovered_final_targets()
+    assert alerts == [target]
+    assert "'tushare'" in queries[0] and "'integrity_repair'" in queries[0]
+
+
 ROOT = Path(__file__).resolve().parents[3]
 BUG_1106_MIGRATION = (
     ROOT / "backend" / "migrations" / "ingestion_jobs_scheduler_scan_indexes_20260816.sql"
