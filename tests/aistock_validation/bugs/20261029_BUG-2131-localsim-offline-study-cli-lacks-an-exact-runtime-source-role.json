@@ -103,7 +103,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k exact_offline_roles -q -p no:cacheprovider",
   "required_verification": [
     "l0",
     "guardrail_changed_files",
@@ -242,6 +242,146 @@
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "catalog_owner_review_20261029": {
+    "business_issues": [
+      "BUG-2112/#6796",
+      "BUG-2125/#6837"
+    ],
+    "source_role": {
+      "rule_id": "offline-localsim-dual-mode-study",
+      "exact_path": "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "catalog_sha256": "dc31068c40698e12dab7ece76250c34e4b82588093ac1233e31bd8a04538c15c"
+    },
+    "call_closure": [
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
+        "line": 113,
+        "scope": [
+          "_isolated_account_day"
+        ],
+        "module": "dual_mode_research",
+        "names": [
+          "_compute_account_day"
+        ]
+      },
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
+        "line": 145,
+        "scope": [
+          "AccountComputations",
+          "result"
+        ],
+        "module": "dual_mode_research",
+        "names": [
+          "_compute_account_day"
+        ]
+      },
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\dual_mode_research.py",
+        "line": 30,
+        "scope": [],
+        "module": "research_performance",
+        "names": [
+          "ResearchAccountPool",
+          "ResearchMarketWorkspace",
+          "ResearchPerformanceOptions"
+        ]
+      }
+    ],
+    "business_contract_consumption": [
+      {
+        "bug_id": "BUG-2112",
+        "source_head": "e06951017627fc3307867ad0949dda61e98c165b",
+        "source_sha256": "636116592ffe9ef95bfe46d210630bb04a3d4bd77d18aaafd53e1f7bd802284c",
+        "main_defined": true,
+        "runtime_impact": "none",
+        "target_ids": [],
+        "blocking": [],
+        "reconciliation": {
+          "applied": true,
+          "status": "narrowed",
+          "planned_target_ids": [
+            "backend-main"
+          ],
+          "actual_target_ids": []
+        },
+        "changed_files": [
+          "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json",
+          "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+          "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+          "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+        ]
+      },
+      {
+        "bug_id": "BUG-2125",
+        "source_head": "5b6c60026e63ea6448af399b91fa4f13f38d9951",
+        "source_sha256": "75d7c2a782a9579c5b6757f67a069b0870bdb92a72bc65fa8305577ef13b8747",
+        "main_defined": true,
+        "runtime_impact": "none",
+        "target_ids": [],
+        "blocking": [],
+        "reconciliation": {
+          "applied": true,
+          "status": "narrowed",
+          "planned_target_ids": [
+            "backend-main"
+          ],
+          "actual_target_ids": []
+        },
+        "changed_files": [
+          "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+          "docs/analysis/localsim_immutable_summary_conflict_20261029.md",
+          "tests/aistock_validation/bugs/20261029_BUG-2125-localsim-continuous-study-exact-retry-conflicts-because-price-comparison.json"
+        ]
+      }
+    ],
+    "reviews": [
+      {
+        "round": 1,
+        "focus": "Real callers",
+        "result": "Standalone main/__main__ coordinator; the only two production imports are deferred _compute_account_day calls in research_performance._isolated_account_day and AccountComputations.result, owned by CLI ResearchAccountPool. Online router reads dual_mode_projection; native runtime imports shared helpers. Only the coordinator is non-runtime."
+      },
+      {
+        "round": 2,
+        "focus": "Specificity and fail-closed boundary",
+        "result": "The exact rule beats backend/**/*.py. The five online/unknown neighbors and mixed scopes remain backend-main; BUG metadata cannot downgrade them. Equal exact runtime/non-runtime specificity remains unknown."
+      },
+      {
+        "round": 3,
+        "focus": "Fresh-process business catalog consumption",
+        "result": "Read original BUG records and actual changed-file sets without editing either business worktree. Canonical build_runtime_contract narrowed provisional backend plans to none, no target and no blockers for both 2112 and 2125. The current 2125 HEAD and normalized source hash match r2."
+      },
+      {
+        "round": 4,
+        "focus": "Verification and unchanged budget",
+        "result": "675 related tests passed in the first matrix; its sole failure was the existing 30% module ratio. Reused classification payload and LocalSIM path fixtures, preserving all scenarios/assertions; final 43-case role/budget matrix and lint pass. Guardrail/ownership, 8 catalog tests and workflow smoke pass. CI performs final broad validation."
+      }
+    ],
+    "validation": {
+      "initial_full_related_passed": 675,
+      "final_direct_role_and_budget_passed": 43,
+      "catalog_tests_passed": 8,
+      "guardrail_files": 3,
+      "workflow_smoke": "passed"
+    },
+    "design_compliance": {
+      "complete_in_scope": true,
+      "no_false_success": true,
+      "business_semantics_unchanged": true,
+      "no_unapproved_gates_or_relaxation": true
+    },
+    "boundaries": {
+      "business_worktrees_edited": false,
+      "business_database_access": false,
+      "market_or_dataset_access": false,
+      "service_control": false,
+      "qe_or_training": false,
+      "original_study_results_changed": false,
+      "business_source_prs_merged": false
     }
   }
 }
