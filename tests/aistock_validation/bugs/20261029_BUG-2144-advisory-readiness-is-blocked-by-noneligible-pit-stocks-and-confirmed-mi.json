@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2144",
-  "closed_at": null,
+  "closed_at": "2026-10-29T19:10:26.218463Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -259,10 +259,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2144/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2144",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "12312a3c5c72cbce54b214b187d923e852172a6cee215193d2a8773eff187ead",
+      "expected_identity": "b1915acfe1788f0a70de2b576e59354eefa7deca",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T19:08:15.160149Z",
+      "mode": "read_only",
+      "observed_identity": "b1915acfe1788f0a70de2b576e59354eefa7deca",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3584b13d687bdb8e6146d9090fea318c211e3b61bc11b9c5bd0c39697446de19",
+      "receipt_sha256": "00359194353ec961b501c27f519f2af0dcd3c931127416805a4741d2b28ccf24",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "12ccdee7f30a0d580804e2a6a328591be6de08554515085d27af6fb5260323b6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -296,7 +318,7 @@
     ],
     "validation_evidence_digest": "b4f3269de1772c655926eeab251f46683a4ae470f691dcd3262279adfdbd9af8"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -308,7 +330,8 @@
   "validation_evidence": [
     "rtk pytest backend/tests/test_daily_data_integrity_inputs.py backend/tests/test_daily_data_integrity.py backend/tests/test_daily_data_integrity_api.py -q -> 140 passed",
     "python -m nox -s l0 -> passed",
-    "gh pr checks 6907 -> CI verdict passed"
+    "gh pr checks 6907 -> CI verdict passed",
+    "post-restart-verify --bug-id BUG-2144 --target backend-main --expected-identity b1915acfe1788f0a70de2b576e59354eefa7deca -> passed runtime identity and business smoke; live ADVISORY readiness for four packages -> passed PIT scope and missing-chip policy verification; data readiness remains WAITING for 2026-10-27/28 validation partitions"
   ],
   "verification_budget": {
     "budget": "standard",
