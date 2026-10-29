@@ -7,6 +7,146 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2131",
+  "catalog_owner_review_20261029": {
+    "boundaries": {
+      "business_database_access": false,
+      "business_source_prs_merged": false,
+      "business_worktrees_edited": false,
+      "market_or_dataset_access": false,
+      "original_study_results_changed": false,
+      "qe_or_training": false,
+      "service_control": false
+    },
+    "business_contract_consumption": [
+      {
+        "blocking": [],
+        "bug_id": "BUG-2112",
+        "changed_files": [
+          "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json",
+          "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+          "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+          "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+        ],
+        "main_defined": true,
+        "reconciliation": {
+          "actual_target_ids": [],
+          "applied": true,
+          "planned_target_ids": [
+            "backend-main"
+          ],
+          "status": "narrowed"
+        },
+        "runtime_impact": "none",
+        "source_head": "e06951017627fc3307867ad0949dda61e98c165b",
+        "source_sha256": "636116592ffe9ef95bfe46d210630bb04a3d4bd77d18aaafd53e1f7bd802284c",
+        "target_ids": []
+      },
+      {
+        "blocking": [],
+        "bug_id": "BUG-2125",
+        "changed_files": [
+          "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+          "docs/analysis/localsim_immutable_summary_conflict_20261029.md",
+          "tests/aistock_validation/bugs/20261029_BUG-2125-localsim-continuous-study-exact-retry-conflicts-because-price-comparison.json"
+        ],
+        "main_defined": true,
+        "reconciliation": {
+          "actual_target_ids": [],
+          "applied": true,
+          "planned_target_ids": [
+            "backend-main"
+          ],
+          "status": "narrowed"
+        },
+        "runtime_impact": "none",
+        "source_head": "5b6c60026e63ea6448af399b91fa4f13f38d9951",
+        "source_sha256": "75d7c2a782a9579c5b6757f67a069b0870bdb92a72bc65fa8305577ef13b8747",
+        "target_ids": []
+      }
+    ],
+    "business_issues": [
+      "BUG-2112/#6796",
+      "BUG-2125/#6837"
+    ],
+    "call_closure": [
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
+        "line": 113,
+        "module": "dual_mode_research",
+        "names": [
+          "_compute_account_day"
+        ],
+        "scope": [
+          "_isolated_account_day"
+        ]
+      },
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
+        "line": 145,
+        "module": "dual_mode_research",
+        "names": [
+          "_compute_account_day"
+        ],
+        "scope": [
+          "AccountComputations",
+          "result"
+        ]
+      },
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\dual_mode_research.py",
+        "line": 30,
+        "module": "research_performance",
+        "names": [
+          "ResearchAccountPool",
+          "ResearchMarketWorkspace",
+          "ResearchPerformanceOptions"
+        ],
+        "scope": []
+      }
+    ],
+    "design_compliance": {
+      "business_semantics_unchanged": true,
+      "complete_in_scope": true,
+      "no_false_success": true,
+      "no_unapproved_gates_or_relaxation": true
+    },
+    "reviews": [
+      {
+        "focus": "Real callers",
+        "result": "Standalone main/__main__ coordinator; the only two production imports are deferred _compute_account_day calls in research_performance._isolated_account_day and AccountComputations.result, owned by CLI ResearchAccountPool. Online router reads dual_mode_projection; native runtime imports shared helpers. Only the coordinator is non-runtime.",
+        "round": 1
+      },
+      {
+        "focus": "Specificity and fail-closed boundary",
+        "result": "The exact rule beats backend/**/*.py. The five online/unknown neighbors and mixed scopes remain backend-main; BUG metadata cannot downgrade them. Equal exact runtime/non-runtime specificity remains unknown.",
+        "round": 2
+      },
+      {
+        "focus": "Fresh-process business catalog consumption",
+        "result": "Read original BUG records and actual changed-file sets without editing either business worktree. Canonical build_runtime_contract narrowed provisional backend plans to none, no target and no blockers for both 2112 and 2125. The current 2125 HEAD and normalized source hash match r2.",
+        "round": 3
+      },
+      {
+        "focus": "Verification and unchanged budget",
+        "result": "675 related tests passed in the first matrix; its sole failure was the existing 30% module ratio. Reused classification payload and LocalSIM path fixtures, preserving all scenarios/assertions; final 43-case role/budget matrix and lint pass. Guardrail/ownership, 8 catalog tests and workflow smoke pass. CI performs final broad validation.",
+        "round": 4
+      }
+    ],
+    "source_role": {
+      "catalog_sha256": "dc31068c40698e12dab7ece76250c34e4b82588093ac1233e31bd8a04538c15c",
+      "exact_path": "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "rule_id": "offline-localsim-dual-mode-study"
+    },
+    "validation": {
+      "catalog_tests_passed": 8,
+      "final_direct_role_and_budget_passed": 43,
+      "guardrail_files": 3,
+      "initial_full_related_passed": 675,
+      "workflow_smoke": "passed"
+    }
+  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -30,12 +170,18 @@
   ],
   "expected": "The exact offline CLI changed set resolves from the catalog to none; online, mixed and unknown adjacent source remains backend-main and cannot be downgraded by BUG metadata.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261029_BUG-2131-localsim-offline-study-cli-lacks-an-exact-runtime-source-role.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2131-localsim-offline-study-cli-lacks-an-exact-runtime-source-role.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "docs/standards/aistock_runtime_targets_v1.yaml",
@@ -113,10 +259,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -242,146 +390,6 @@
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
-    }
-  },
-  "catalog_owner_review_20261029": {
-    "business_issues": [
-      "BUG-2112/#6796",
-      "BUG-2125/#6837"
-    ],
-    "source_role": {
-      "rule_id": "offline-localsim-dual-mode-study",
-      "exact_path": "backend/services/simulation_execution/localsim/dual_mode_research.py",
-      "catalog_sha256": "dc31068c40698e12dab7ece76250c34e4b82588093ac1233e31bd8a04538c15c"
-    },
-    "call_closure": [
-      {
-        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
-        "line": 113,
-        "scope": [
-          "_isolated_account_day"
-        ],
-        "module": "dual_mode_research",
-        "names": [
-          "_compute_account_day"
-        ]
-      },
-      {
-        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
-        "line": 145,
-        "scope": [
-          "AccountComputations",
-          "result"
-        ],
-        "module": "dual_mode_research",
-        "names": [
-          "_compute_account_day"
-        ]
-      },
-      {
-        "file": "backend\\services\\simulation_execution\\localsim\\dual_mode_research.py",
-        "line": 30,
-        "scope": [],
-        "module": "research_performance",
-        "names": [
-          "ResearchAccountPool",
-          "ResearchMarketWorkspace",
-          "ResearchPerformanceOptions"
-        ]
-      }
-    ],
-    "business_contract_consumption": [
-      {
-        "bug_id": "BUG-2112",
-        "source_head": "e06951017627fc3307867ad0949dda61e98c165b",
-        "source_sha256": "636116592ffe9ef95bfe46d210630bb04a3d4bd77d18aaafd53e1f7bd802284c",
-        "main_defined": true,
-        "runtime_impact": "none",
-        "target_ids": [],
-        "blocking": [],
-        "reconciliation": {
-          "applied": true,
-          "status": "narrowed",
-          "planned_target_ids": [
-            "backend-main"
-          ],
-          "actual_target_ids": []
-        },
-        "changed_files": [
-          "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json",
-          "backend/services/simulation_execution/localsim/dual_mode_research.py",
-          "backend/tests/simulation_execution/test_localsim_replay_performance.py",
-          "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
-          "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
-        ]
-      },
-      {
-        "bug_id": "BUG-2125",
-        "source_head": "5b6c60026e63ea6448af399b91fa4f13f38d9951",
-        "source_sha256": "75d7c2a782a9579c5b6757f67a069b0870bdb92a72bc65fa8305577ef13b8747",
-        "main_defined": true,
-        "runtime_impact": "none",
-        "target_ids": [],
-        "blocking": [],
-        "reconciliation": {
-          "applied": true,
-          "status": "narrowed",
-          "planned_target_ids": [
-            "backend-main"
-          ],
-          "actual_target_ids": []
-        },
-        "changed_files": [
-          "backend/services/simulation_execution/localsim/dual_mode_research.py",
-          "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
-          "docs/analysis/localsim_immutable_summary_conflict_20261029.md",
-          "tests/aistock_validation/bugs/20261029_BUG-2125-localsim-continuous-study-exact-retry-conflicts-because-price-comparison.json"
-        ]
-      }
-    ],
-    "reviews": [
-      {
-        "round": 1,
-        "focus": "Real callers",
-        "result": "Standalone main/__main__ coordinator; the only two production imports are deferred _compute_account_day calls in research_performance._isolated_account_day and AccountComputations.result, owned by CLI ResearchAccountPool. Online router reads dual_mode_projection; native runtime imports shared helpers. Only the coordinator is non-runtime."
-      },
-      {
-        "round": 2,
-        "focus": "Specificity and fail-closed boundary",
-        "result": "The exact rule beats backend/**/*.py. The five online/unknown neighbors and mixed scopes remain backend-main; BUG metadata cannot downgrade them. Equal exact runtime/non-runtime specificity remains unknown."
-      },
-      {
-        "round": 3,
-        "focus": "Fresh-process business catalog consumption",
-        "result": "Read original BUG records and actual changed-file sets without editing either business worktree. Canonical build_runtime_contract narrowed provisional backend plans to none, no target and no blockers for both 2112 and 2125. The current 2125 HEAD and normalized source hash match r2."
-      },
-      {
-        "round": 4,
-        "focus": "Verification and unchanged budget",
-        "result": "675 related tests passed in the first matrix; its sole failure was the existing 30% module ratio. Reused classification payload and LocalSIM path fixtures, preserving all scenarios/assertions; final 43-case role/budget matrix and lint pass. Guardrail/ownership, 8 catalog tests and workflow smoke pass. CI performs final broad validation."
-      }
-    ],
-    "validation": {
-      "initial_full_related_passed": 675,
-      "final_direct_role_and_budget_passed": 43,
-      "catalog_tests_passed": 8,
-      "guardrail_files": 3,
-      "workflow_smoke": "passed"
-    },
-    "design_compliance": {
-      "complete_in_scope": true,
-      "no_false_success": true,
-      "business_semantics_unchanged": true,
-      "no_unapproved_gates_or_relaxation": true
-    },
-    "boundaries": {
-      "business_worktrees_edited": false,
-      "business_database_access": false,
-      "market_or_dataset_access": false,
-      "service_control": false,
-      "qe_or_training": false,
-      "original_study_results_changed": false,
-      "business_source_prs_merged": false
     }
   }
 }
