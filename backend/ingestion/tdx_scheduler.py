@@ -1358,6 +1358,40 @@ class TDXScheduler:
             reconciled.append(target_id)
         return reconciled
 
+    def _defer_obsolete_integrity_fetch(self, target: Dict[str, Any]) -> bool:
+        """Revalidate obsolete alarms; never refetch unsupported stock gaps.
+
+        Only integrity-generated repair targets qualify. Genuine supported
+        missing facts and normal scheduled/manual collections are unchanged.
+        """
+        if target.get("data_source") != "integrity_repair":
+            return False
+        from backend.services.data_integrity.catalog import canonical_dataset
+        from backend.services.data_integrity.repository import enqueue_validation
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        dataset = canonical_dataset(str(target.get("dataset") or ""))
+        day = self._coerce_target_date(target.get("target_date"))
+        if day is None:
+            return False
+        records = self._fetchall("""SELECT validation_status,metadata->'validation' AS validation
+            FROM market.dataset_date_refresh_audit WHERE dataset=%s AND trade_date=%s
+            AND data_source='canonical_db'""", (dataset, day))
+        if not records:
+            return False
+        verdict = records[0].get("validation") or {}
+        gaps = [g for g in verdict.get("gaps", []) if g.get("classification") != "LEGAL_NA"]
+        unsupported_only = (records[0].get("validation_status") == "INCOMPLETE" and bool(gaps)
+            and all(g.get("classification") in {"MISSING", "INVALID"} and g.get("symbols")
+                    and all(is_excluded_stock_code(code) for code in g["symbols"]) for g in gaps))
+        dense_receipt_only = (dataset in {"cyq_perf", "bak_basic"}
+            and records[0].get("validation_status") == "UNVERIFIED"
+            and verdict.get("reason") in {"complete_source_scan_not_bound_to_revision", "row_count_seed_is_not_a_complete_source_scan"})
+        if not (unsupported_only or dense_receipt_only):
+            return False
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            enqueue_validation(conn, dataset, day)
+        return True
+
     def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
         """Resume persisted retry targets that survived scheduler restart."""
 
@@ -1393,6 +1427,13 @@ class TDXScheduler:
             retry_mode = (sched or {}).get("mode") or "incremental"
             target_id = str(target.get("target_id") or "").strip()
             target_date = self._coerce_target_date(target.get("target_date"))
+
+            try:
+                if self._defer_obsolete_integrity_fetch(target):
+                    continue
+            except Exception as exc:
+                _logger.warning("integrity repair revalidation failed for %s/%s: %s", health_dataset, target_date, exc)
+                continue
 
             try:
                 readiness = self._check_dataset_recovered(health_dataset, target_date)

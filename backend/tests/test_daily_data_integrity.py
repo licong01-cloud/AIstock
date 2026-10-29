@@ -121,6 +121,35 @@ def test_traded_scope_reuses_shared_legacy_code_normalization():
             authority.resolve(code, date(2026, 2, 9), "market.daily_basic")
 
 
+@pytest.mark.parametrize("dataset", ["cyq_perf", "bak_basic"])
+@pytest.mark.parametrize("mutation", ["valid", "zero", "missing", "nan", "missing_feature", "dependency"])
+def test_dense_historical_facts_use_traded_keys_not_sparse_scan_receipts(monkeypatch, dataset, mutation):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation, SCOPE_VERSION, RULE_VERSION
+    validator = validation.PhysicalValidator()
+    partition = {"data_revision": 1, "validated_revision": 1, "scope_version": SCOPE_VERSION,
+                 "rule_version": RULE_VERSION, "validation_status": "VALID", "validation_id": "raw-valid"}
+    if mutation == "dependency":
+        partition["data_revision"] = 2
+    fact = {"ts_code": "000001.SZ", "weight_avg": 2, "cost_50pct": 2, "winner_rate": 0,
+            "his_low": 1, "his_high": 3, "cost_15pct": 1, "cost_85pct": 3}
+    if mutation == "nan":
+        fact["weight_avg"] = float("nan")
+    if mutation == "zero":
+        fact["cost_50pct"] = 0  # A finite provider zero is not a missing cell.
+    if mutation == "missing_feature":
+        fact["his_high"] = None
+    facts = [] if mutation == "missing" else [fact]
+    monkeypatch.setattr(validation, "rows", lambda _c, q, _p=(): [partition]
+        if "dataset_date_refresh_audit" in str(q) else facts)
+    monkeypatch.setattr(validator, "_traded", lambda *_a: {"000001.SZ"})
+    monkeypatch.setattr(validator, "_scan_contract", lambda *_a: pytest.fail("dense facts must not require a source scan"))
+    result = validator.validate(None, Obligation(dataset, "daily_series", "21:00"), date(2025, 8, 22), 0)
+    expected = (PartitionState.UNVERIFIED if mutation == "dependency" else PartitionState.INCOMPLETE
+                if mutation == "missing" or mutation in {"nan", "missing_feature"} and dataset == "cyq_perf" else PartitionState.VALID)
+    assert result.state == expected
+
+
 def test_daily_basic_only_proven_new_listing_ratio_na_is_legal():
     from backend.services.data_integrity.validation import daily_basic_result
     from backend.services.tushare_sync_engine import DAILY_BASIC_REQUIRED_FIELDS
