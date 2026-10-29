@@ -117,8 +117,8 @@
   },
   "first_seen_at": "2026-10-29T05:55:38.552829Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3cf9daa1526c594e8e803d23a47f50061f0da702",
+  "fixed_at": "2026-10-29T06:27:31Z",
   "github_issue_number": 6869,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6869",
   "last_seen_at": "2026-10-29T05:55:38.552829Z",
@@ -126,6 +126,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6872",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -155,6 +156,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -166,7 +168,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2133",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f443bebc31a65403",
+    "recorded_at": "2026-10-29T06:28:13.047215Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1e35d00c59b8769e5717c78f92bf252531f40a87",
+    "source_merge_commit": "3cf9daa1526c594e8e803d23a47f50061f0da702",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6872",
+    "validation_evidence": [
+      "validation-receipt: id=10e10b0bf03690ae commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py -q` result=`26 passed`",
+      "validation-receipt: id=62b3057f0b7261c0 commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py docs/analysis/localsim_historical_pit_admission_repair_20261029.md tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json` result=`passed, 0 blocking`"
+    ],
+    "validation_evidence_digest": "ed08b70ce5a238dec8808b9bdebbe2762782e336914c030c93290ea88cb28f0b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -176,6 +200,10 @@
     "source_event_id": "FE-20261029-aa801ba43dd5"
   },
   "validation": [],
+  "validation_evidence": [
+    "validation-receipt: id=10e10b0bf03690ae commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py -q` result=`26 passed`",
+    "validation-receipt: id=62b3057f0b7261c0 commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py docs/analysis/localsim_historical_pit_admission_repair_20261029.md tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json` result=`passed, 0 blocking`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
