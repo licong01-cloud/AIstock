@@ -31,20 +31,20 @@
   "expected": "Present durable residual/failure evidence is described accurately; true missing/unknown persistence still fails closed, genuine market residual success remains unchanged, and current orders/accounts/fees are untouched.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
-      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
+      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json"
     ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
       "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
-      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
+      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -113,8 +113,8 @@
   },
   "first_seen_at": "2026-10-29T07:20:55.031632Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "498a982ffafb94504f13976435e90887542b28f2",
+  "fixed_at": "2026-10-29T07:45:34Z",
   "github_issue_number": 6880,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6880",
   "last_seen_at": "2026-10-29T07:20:55.031632Z",
@@ -122,6 +122,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6882",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -148,6 +149,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -159,7 +161,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2137",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "81d0b7e6a62c8171",
+    "recorded_at": "2026-10-29T07:46:15.074591Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "851c0140d23b0ef650a455597599ad6dd899fd5c",
+    "source_merge_commit": "498a982ffafb94504f13976435e90887542b28f2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6882",
+    "validation_evidence": [
+      "validation-receipt: id=51bb0f8f3a05624e commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py (18 selected nodes)` result=`passed`",
+      "validation-receipt: id=ac109446c4fbe601 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py` result=`passed`",
+      "validation-receipt: id=a849eda8af7e8517 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+      "validation-receipt: id=7a3f347c32b4f904 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- four scoped files` result=`passed (0 blocking)`"
+    ],
+    "validation_evidence_digest": "06c7882f310c325ec4a61b3d1e89a309db4e771af0e6802aefb5a409f178be09"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -168,6 +194,12 @@
     "fingerprint": "0c79b4598781da5b68e095a4",
     "source_event_id": "FE-20261029-0c79b4598781"
   },
+  "validation_evidence": [
+    "validation-receipt: id=51bb0f8f3a05624e commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py (18 selected nodes)` result=`passed`",
+    "validation-receipt: id=ac109446c4fbe601 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py` result=`passed`",
+    "validation-receipt: id=a849eda8af7e8517 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "validation-receipt: id=7a3f347c32b4f904 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- four scoped files` result=`passed (0 blocking)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
