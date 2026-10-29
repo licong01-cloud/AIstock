@@ -1363,7 +1363,9 @@ class TDXScheduler:
 
         repo = DataSyncTargetRepository()
         try:
-            due_targets = repo.list_fillable_targets(limit=100, exclude_operation="VALIDATE_ONLY")
+            due_targets = repo.list_fillable_targets(
+                limit=100, exclude_operation="VALIDATE_ONLY", latest_per_dataset=True,
+            )
         except Exception as exc:  # noqa: BLE001
             _logger.warning("target retry: due-target scan skipped: %s", exc)
             return []
