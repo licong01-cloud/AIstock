@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Finite positive mandatory fields remain strict; only volume_ratio NULL with proven first-five-listed-trading-day boundary is explicit legal NA; unknown listing/calendar never exempted.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json",
       "backend/services/data_integrity/validation.py",
       "backend/tests/test_daily_data_integrity.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/validation.py",
@@ -109,11 +115,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "{'command': 'python X:/AIstock_temp/DATA_PREPARATION/daily-sync-20261029/validate_warmup.py', 'result': 'PASS: real existing DEV temporary listing/calendar tables; six-session and missing-calendar boundaries remain strict. Read-only complete production partitions 2026-10-22/23/26/27/28 pass with respectively 3/3/3/3/2 explicit volume_ratio legal NAs; no raw value or consumer scope changed. Current Tushare history confirms five initial NULL sessions and a finite sixth session for 920196.BJ and 920296.BJ.'}"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

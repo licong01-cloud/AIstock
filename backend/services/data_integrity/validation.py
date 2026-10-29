@@ -61,11 +61,13 @@ def adj_factor_result(expected, facts, history=None):
     return result
 
 
-def daily_basic_result(expected, facts):
+def daily_basic_result(expected, facts, *, volume_ratio_warmup=None):
     """Keep ingestion's admission ratio, but never call residual gaps complete.
 
     Nullable valuations remain legal NA; the existing five mandatory fields
     have no blanket five-percent missing-data exemption in the day ledger.
+    A new listing has no five-prior-session volume ratio yet; only proven
+    calendar/listing warmup may retain the real source NULL as explicit NA.
     """
     from backend.services.tushare_sync_engine import (
         DAILY_BASIC_REQUIRED_FIELDS, DAILY_BASIC_REQUIRED_RATIO, _daily_basic_required_field_coverage_receipt,
@@ -75,22 +77,49 @@ def daily_basic_result(expected, facts):
     matched = expected & facts.keys()
     coverage = _daily_basic_required_field_coverage_receipt([facts[code] for code in sorted(matched)])
     field_counts, gaps = [], list(keys.gaps)
+    warmup = volume_ratio_warmup or {}
     for field in DAILY_BASIC_REQUIRED_FIELDS:
-        missing = sorted(code for code in expected if code not in facts or facts[code].get(field) is None)
+        legal = {code for code in matched if field == "volume_ratio" and code in warmup
+                 and facts[code].get(field) is None}
+        missing = sorted(code for code in expected-legal if code not in facts or facts[code].get(field) is None)
         invalid = sorted(code for code in matched if facts[code].get(field) is not None
             and not finite_number(facts[code][field], positive=field in {"total_mv", "circ_mv"}))
         field_counts.append(CheckCounts("field_cell:"+field, len(expected),
-            len(expected)-len(missing)-len(invalid), 0, len(missing), len(invalid), 0))
+            len(expected)-len(missing)-len(invalid)-len(legal), len(legal), len(missing), len(invalid), 0))
+        if legal:
+            gaps.append({"classification": "LEGAL_NA", "symbols": sorted(legal), "fields": [field],
+                         "reason": "new_listing_fewer_than_five_prior_trading_days"})
         gaps.extend({"classification": kind, "symbols": symbols, "fields": [field]}
                     for kind, symbols in (("MISSING", missing), ("INVALID", invalid)) if symbols)
     complete = keys.state == PartitionState.VALID and all(count.complete for count in field_counts)
     return ValidationResult(PartitionState.VALID if complete else PartitionState.INCOMPLETE,
         keys.counts+tuple(field_counts), {**keys.checks, "required_fields": list(DAILY_BASIC_REQUIRED_FIELDS),
             "existing_ingestion_admission_ratio": DAILY_BASIC_REQUIRED_RATIO,
-            "coverage": coverage, "nullable_valuation_threshold_added": False}, tuple(gaps))
+            "coverage": coverage, "nullable_valuation_threshold_added": False,
+            "volume_ratio_warmup": warmup}, tuple(gaps))
 
 
 class PhysicalValidator:
+    def _volume_ratio_warmup(self, conn, day, facts):
+        suspects = [code for code, fact in facts.items() if fact.get("volume_ratio") is None]
+        if not suspects:
+            return {}
+        # stock_basic is the shared listing authority, not a consumer buy pool.
+        # Calendar continuity and both endpoints must be proven: an incomplete
+        # calendar cannot turn an old stock or an absent row into legal NA.
+        listing = rows(conn, """SELECT b.ts_code,b.list_date,
+                   count(*) FILTER (WHERE c.is_trading) AS listed_trading_days
+            FROM market.stock_basic b JOIN market.trading_calendar c
+              ON c.cal_date BETWEEN b.list_date AND %s
+            WHERE b.ts_code=ANY(%s::text[]) AND b.list_date<=%s
+            GROUP BY b.ts_code,b.list_date
+            HAVING count(c.cal_date)=(%s::date-b.list_date+1)
+               AND count(*) FILTER (WHERE c.is_trading) BETWEEN 1 AND 5
+               AND bool_or(c.cal_date=b.list_date AND c.is_trading)
+               AND bool_or(c.cal_date=%s AND c.is_trading)""", (day, suspects, day, day, day))
+        return {str(r["ts_code"]).strip(): {"list_date": str(r["list_date"]),
+            "listed_trading_days": int(r["listed_trading_days"])} for r in listing}
+
     def _raw_scheduler(self, conn, *, source_aliases=True):
         # Reuse the existing exact date/key contract without opening its usual
         # independent connections or initializing/running a scheduler.
@@ -196,7 +225,8 @@ class PhysicalValidator:
             if len(facts) != len(observed):
                 return ValidationResult(PartitionState.ERROR, (), {}, reason="duplicate_physical_key")
             if dataset == "daily_basic":
-                return daily_basic_result(expected, facts)
+                return daily_basic_result(expected, facts,
+                    volume_ratio_warmup=self._volume_ratio_warmup(conn, day, facts))
             if dataset == "stk_limit":
                 from backend.services.tushare_sync_engine import _stk_limit_source_prices_valid
                 result = key_result(expected, facts)
