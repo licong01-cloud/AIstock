@@ -131,7 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2136/post-restart-verify.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -176,7 +176,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=051c3cdbd53cb514 commit=61f742d486857134c788be4435f5292af07415d5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py::test_actual_index_engine_preserves_completed_query_scan -q` result=`9 passed`",
-    "validation-receipt: id=b240d2ae15f00d69 commit=61f742d486857134c788be4435f5292af07415d5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`"
+    "validation-receipt: id=b240d2ae15f00d69 commit=61f742d486857134c788be4435f5292af07415d5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "post-restart-verify --bug-id BUG-2136 --target backend-main --expected-identity 216e5e8e972f71da49414c8bbd11fd18d65551d3 -> passed runtime contains source merge and native read-only smoke"
   ],
   "verification_budget": {
     "budget": "standard",
