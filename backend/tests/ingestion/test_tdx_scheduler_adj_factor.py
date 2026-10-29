@@ -175,17 +175,23 @@ def test_incremental_adj_factor_scheduler_passes_optional_history_controls() -> 
     assert "--history-reconcile-dry-run" in args
 
 
+@pytest.mark.parametrize("history_error", [False, True])
 def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write_path(
-    monkeypatch,
+    monkeypatch, history_error,
 ) -> None:
     class _Connection:
         autocommit = False
 
         def __enter__(self):
-            return self
+            pytest.fail("autocommit CLI must not enter a psycopg2 transaction context")
 
         def __exit__(self, exc_type, exc, traceback):
             return False
+
+        def close(self):
+            self.closed = True
+
+    connection = _Connection()
 
     calls: list[tuple[str, object]] = []
 
@@ -217,7 +223,7 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         bulk_session_tune=False,
     )
     monkeypatch.setattr(ingest_adj_factor, "parse_args", lambda: args)
-    monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: _Connection())
+    monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: connection)
     monkeypatch.setattr(ingest_adj_factor, "pro_api", lambda: object())
     monkeypatch.setattr(ingest_adj_factor, "_get_max_trade_date", lambda connection: dt.date(2026, 9, 13))
     monkeypatch.setattr(ingest_adj_factor, "_create_job", lambda *args: "job-id")
@@ -230,7 +236,10 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
     )
     def run_history(connection, arguments, job_id, end_date):
         reconciler = _Reconciler(repository=object())
-        return reconciler.reconcile(end_date=end_date)
+        result = reconciler.reconcile(end_date=end_date)
+        if history_error:
+            raise RuntimeError("real history failure must remain failed")
+        return result
     monkeypatch.setattr(ingest_adj_factor, "run_history_ingestion", run_history)
     monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository",
                         lambda _connection: SimpleNamespace(writer_lock=nullcontext))
@@ -240,9 +249,16 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         lambda *args, **kwargs: pytest.fail("incremental mode must not use the date-only upsert path"),
     )
 
-    ingest_adj_factor.main()
+    if history_error:
+        with pytest.raises(SystemExit) as error:
+            ingest_adj_factor.main()
+        assert error.value.code == 1
+    else:
+        ingest_adj_factor.main()
 
     assert [name for name, _ in calls] == ["constructed", "reconciled", "finished"]
     status, summary = calls[-1][1]
-    assert status == "success"
-    assert summary["history_reconciliation"]["status"] == "unchanged"
+    assert connection.closed is True
+    assert status == ("failed" if history_error else "success")
+    if not history_error:
+        assert summary["history_reconciliation"]["status"] == "unchanged"

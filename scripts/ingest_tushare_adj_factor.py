@@ -15,7 +15,7 @@ Environment:
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 import datetime as dt
 import json
 import os
@@ -561,7 +561,10 @@ def main() -> None:
     else:
         end_date = today
 
-    with psycopg2.connect(**DB_CFG) as conn, ExitStack() as stack:
+    # psycopg2's connection context starts a transaction even in autocommit
+    # mode. The repository owns fact/checkpoint/verdict transactions; this
+    # outer scope owns only connection lifetime and must not roll them back.
+    with closing(psycopg2.connect(**DB_CFG)) as conn, ExitStack() as stack:
         # 启用 autocommit，同时在 run_ingestion 中对进度更新显式调用 conn.commit()
         conn.autocommit = True
         # Acquire before touching job ownership, not only before fact writes.
