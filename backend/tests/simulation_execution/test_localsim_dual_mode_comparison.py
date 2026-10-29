@@ -1,7 +1,12 @@
 """File-contract functional population; not real-history economic evidence."""
 
 from decimal import Decimal
+import hashlib
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -30,6 +35,89 @@ def dual_fixture(tmp_path, monkeypatch, *, two_days=True, matrix="FULL_13"):
     frozen = dual.freeze_study(source_request=FileRef.model_validate(source["request"]),
                               output_root=tmp_path / "dual", producer_commit="2" * 40, matrix=matrix)
     return FileRef.model_validate(frozen["request"]), tmp_path / "dual"
+
+
+def test_continuous_comparisons_are_byte_identical_across_fresh_processes():
+    accounts = [
+        {"account_id": "native", "operation": {"operation_mode": "NATIVE"},
+         "rule": "LOCALSIM_NATIVE_TWAP", "delay_seconds": None,
+         "terminal_nav_cny": "10000000", "max_drawdown": "0", "fees_cny": "0"},
+        {"account_id": "human", "operation": {"operation_mode": "HUMAN_SIM"},
+         "rule": "FIRST_OBSERVABLE_V1", "delay_seconds": 60,
+         "terminal_nav_cny": "10000000", "max_drawdown": "0", "fees_cny": "0"},
+    ]
+    histories = {
+        a["account_id"]: [{"trade_date": "2026-09-21", "parents": [
+            {"symbol": f"{index:06d}.SZ", "side": "BUY" if index % 2 == 0 else "SELL",
+             "filled_quantity": 1000,
+             "average_price_raw": str(Decimal(10) + Decimal(index % (
+                 113 if a["account_id"] == "human" else 173)) / 100)}
+            for index in range(5000)]}]
+        for a in accounts
+    }
+    script = """
+import json, sys
+from backend.services.simulation_execution.localsim.dual_mode_research import summarize_accounts
+inputs = json.loads(sys.stdin.read())
+result = summarize_accounts(inputs['accounts'], inputs['histories'])
+print('SUMMARY_JSON=' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+"""
+    outputs = []
+    for seed in ("1", "2", "3", "4"):
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", script],
+            input=json.dumps({"accounts": accounts, "histories": histories}),
+            capture_output=True, text=True, encoding="utf-8", check=True, timeout=60,
+            cwd=Path(__file__).resolve().parents[3],
+            env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        outputs.append(next(line.removeprefix("SUMMARY_JSON=") for line in
+                            completed.stdout.splitlines() if line.startswith("SUMMARY_JSON=")))
+    assert len(set(outputs)) == 1, [hashlib.sha256(s.encode()).hexdigest() for s in outputs]
+    comparisons = json.loads(outputs[0])
+    assert len(comparisons) == 2
+    for row in comparisons:
+        assert row["net_increment_cny"] == row["fee_difference_cny"] == row["mdd_reduction"] == "0"
+        for side, count in (("ALL", 5000), ("BUY", 2500), ("SELL", 2500)):
+            paired = row["conditional_execution"][side]
+            assert paired["paired_count"] == paired["union_plan_count"] == count
+            assert paired["missing_fraction"] == "0"
+
+
+@pytest.mark.parametrize("metric", ["fee_difference_cny", "conditional_price_cost_bps"])
+def test_actual_result_conflict_still_rejects_retry_and_preserves_all_old_artifacts(tmp_path, monkeypatch, metric):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    real_summary = dual.summarize_accounts
+
+    def original(*args, **kwargs):
+        rows = real_summary(*args, **kwargs)
+        if metric == "conditional_price_cost_bps":
+            # A numeric report fixture isolates byte immutability from whether
+            # the small account fixture happens to have matched executions.
+            rows[0]["conditional_execution"]["ALL"][metric] = "1.234567890123456789012345678"
+        return rows
+
+    monkeypatch.setattr(dual, "summarize_accounts", original)
+    first = dual.run_study(request)
+    root = Path(request.path).parent
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    def changed_comparison(*args, **kwargs):
+        rows = original(*args, **kwargs)
+        if metric == "fee_difference_cny":
+            rows[0][metric] = "1"
+        else:
+            paired = rows[0]["conditional_execution"]["ALL"]
+            old = Decimal(paired[metric])
+            new = old.next_plus()
+            assert 0 < new - old < Decimal("1E-20")
+            paired[metric] = str(new)
+        return rows
+
+    monkeypatch.setattr(dual, "summarize_accounts", changed_comparison)
+    with pytest.raises(ValueError, match="LOCALSIM_TIMING_IMMUTABLE_ARTIFACT_CONFLICT"):
+        dual.run_study(request)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    assert ref(Path(first["results"]["path"])) == first["results"]
 
 
 def test_thirteen_accounts_two_days_resume_native_journals_and_exact_retry(tmp_path, monkeypatch):

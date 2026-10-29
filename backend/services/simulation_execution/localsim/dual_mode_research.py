@@ -194,7 +194,9 @@ def summarize_accounts(accounts, histories=None):
                             for d in histories[which["account_id"]] for p in d["parents"]}
                 left, right = plan_rows(account), plan_rows(baseline)
                 for side in ("ALL", "BUY", "SELL"):
-                    population = {k for k in left.keys() | right.keys() if side == "ALL" or k[2] == side}
+                    # Decimal sums depend on order. Freeze parent order so a
+                    # fresh process regenerates the same immutable report bytes.
+                    population = sorted(k for k in left.keys() | right.keys() if side == "ALL" or k[2] == side)
                     both = [k for k in population if k in left and k in right
                             and left[k]["filled_quantity"] > 0 and right[k]["filled_quantity"] > 0]
                     differences = [(Decimal(str(left[k]["average_price_raw"])) / Decimal(str(right[k]["average_price_raw"])) - 1)
