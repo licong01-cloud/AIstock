@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2119",
-  "closed_at": null,
+  "closed_at": "2026-10-29T01:42:19.759615Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -131,10 +131,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/BUG-2119-post-restart-20261029.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2119",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "6812216685f8a2fd14ae789baac8685b14dd64cf7788dc390f62490fb2323bfd",
+      "expected_identity": "61410e4584027a058bb8745985e32e2a05c28fa8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T01:41:16.881445Z",
+      "mode": "read_only",
+      "observed_identity": "50e1ecf96fa592ba39b71d7a04d64218388c8d75",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "518676400be7b1475f25ada7fdce8742f5882b8cd20269a1436a25343d6074a9",
+      "receipt_sha256": "3cd44643ca96eb358f2bea6011f01c79fb42b22a4ce48d28d186a00636709330",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2c2fa067ecb7ccb7f56882cf9a933798af737c81a0974a39f77be41f1675af1b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -166,7 +188,7 @@
     ],
     "validation_evidence_digest": "480cffd558041ad7845ff8fdd386c2ad0b75c600074e6fb83320a62095fb9491"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
