@@ -1,0 +1,399 @@
+{
+  "actual": "project_readiness直接检查整日source_complete，没有股票范围投影；capture/recheck也只接受整分区完整，筹码源缺口阻断全部包。",
+  "allowed_write_scope": [
+    "backend/services/data_integrity/consumers.py",
+    "backend/services/data_integrity/service.py",
+    "backend/services/data_integrity/inputs.py",
+    "backend/services/advisory_historical_range/inference_inputs.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/tests/test_daily_data_integrity_inputs.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/services/data_integrity/advisory_scope.py",
+    "backend/tests/test_advisory_input_scope.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json",
+    "backend/inference_engine.py",
+    "docs/analysis/advisory_pit_missing_input_fix_20261030.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2144",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T18:47:16.356916Z",
+  "description": "project_readiness直接检查整日source_complete，没有股票范围投影；capture/recheck也只接受整分区完整，筹码源缺口阻断全部包。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-e80bf838ed3e",
+      "timestamp": "2026-10-29T18:47:16.356900Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/advisory_pit_missing_input_fix_20261030.md"
+  ],
+  "expected": "荐股对正式PIT范围及模型窗口内实际依赖验证；非消费范围缺口不阻断；确认的筹码缺失保留NaN并记录可审计质量证据，未知、损坏、修订仍阻断。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json",
+      "backend/inference_engine.py",
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/data_integrity/service.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "backend/services/data_integrity/advisory_scope.py",
+      "docs/analysis/advisory_pit_missing_input_fix_20261030.md"
+    ],
+    "added_files": [
+      "backend/services/data_integrity/advisory_scope.py",
+      "backend/tests/test_advisory_input_scope.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2144-advisory-readiness-is-blocked-by-noneligible-pit-stocks-and-confirmed-mi.json",
+      "backend/inference_engine.py",
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/data_integrity/service.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "backend/services/data_integrity/advisory_scope.py",
+      "docs/analysis/advisory_pit_missing_input_fix_20261030.md"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/data_integrity/consumers.py",
+        "backend/services/data_integrity/service.py",
+        "backend/services/data_integrity/inputs.py",
+        "backend/services/advisory_historical_range/inference_inputs.py",
+        "backend/services/strategy_package/selection_artifact.py",
+        "backend/tests/test_daily_data_integrity_inputs.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/services/data_integrity/advisory_scope.py",
+        "backend/tests/test_advisory_input_scope.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "advisory.historical_range",
+        "tests.backend",
+        "strategy_package",
+        "selection_center",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/data_integrity/consumers.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/service.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/inference_inputs.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/strategy_package/selection_artifact.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity_inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/advisory_scope.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_advisory_input_scope.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/data_integrity/consumers.py",
+        "backend/services/data_integrity/service.py",
+        "backend/services/data_integrity/inputs.py",
+        "backend/services/advisory_historical_range/inference_inputs.py",
+        "backend/services/strategy_package/selection_artifact.py",
+        "backend/tests/test_daily_data_integrity_inputs.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/services/data_integrity/advisory_scope.py",
+        "backend/tests/test_advisory_input_scope.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/service.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/advisory_historical_range/inference_inputs.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/services/data_integrity/advisory_scope.py",
+      "backend/tests/test_advisory_input_scope.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/service.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/advisory_historical_range/inference_inputs.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/services/data_integrity/advisory_scope.py",
+      "backend/tests/test_advisory_input_scope.py"
+    ]
+  },
+  "first_seen_at": "2026-10-29T18:47:16.356916Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6906,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6906",
+  "last_seen_at": "2026-10-29T18:47:16.356916Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "advisory_historical_range_backend",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches",
+    "fresh_process_evidence": [
+      "Task-worktree fresh Python read-only process: four formal package projections remove only non-consumed PIT gaps; 1702 current LSTM partition references and independent member projection PASS; real 000663.SZ/2026-05-20 source read preserves nine chip fields as NaN. Overall WAITING remains for four old provider-scan validations, no source writes or prediction execution.",
+      "Task-worktree fresh Python process -> 4 existing package projections and 1702 LSTM partition references passed read-only verification; 000663.SZ 2026-05-20 raw nine chip fields remained NaN; no model fit, prediction, DB write or service control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "???????????PIT?????NaN????????????????????????",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "Advisory readiness is blocked by noneligible PIT stocks and confirmed missing chip inputs",
+  "trigger_condition": {
+    "fingerprint": "e80bf838ed3eaf2af0afdb22",
+    "source_event_id": "FE-20261029-e80bf838ed3e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "data_sync_autonomy",
+        "advisory_historical_range",
+        "paper_v2"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "advisory_historical_range_backend",
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "data_sync_autonomy",
+          "advisory_historical_range",
+          "paper_v2"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "advisory_historical_range_backend",
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
