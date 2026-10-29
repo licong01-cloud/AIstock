@@ -1840,6 +1840,54 @@ def test_record_by_code_audit_full_day_stays_ok(monkeypatch):
     assert "expected_rows" not in call
 
 
+@pytest.mark.parametrize("failure", ["none", "source", "commit", "wrong_key", "truncated", "empty", "catalogue_change"])
+def test_actual_index_engine_preserves_completed_query_scan(monkeypatch, failure):
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    spec = replace(INDEX_DAILY, batch_sleep=0, row_limit=2)
+    day, next_day = dt.date(2026, 10, 27), dt.date(2026, 10, 28)
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit, conn = _CapturingAudit(), _FakeConn()
+    engine._refresh_audit = audit
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    catalog_reads = []
+    def codes(*_args):
+        catalog_reads.append(True)
+        return ["000300.SH", "000985.CSI"] + (["399006.SZ"] if failure == "catalogue_change" and len(catalog_reads)>1 else [])
+    monkeypatch.setattr(engine, "_fetch_code_list", codes)
+    monkeypatch.setattr(engine, "_trading_dates_between", lambda *_args: [day, next_day])
+    monkeypatch.setattr(engine, "_has_code_rows", lambda *_args: False)
+    monkeypatch.setattr(engine, "_log", lambda *_args: None)
+    monkeypatch.setattr(engine, "_update_progress", lambda *_args: None)
+    monkeypatch.setattr(engine, "_record_by_code_audit", lambda *_args: None)
+    def fetch(_spec, params):
+        code = params["ts_code"]
+        if failure == "source" and code == "000985.CSI":
+            raise RuntimeError("provider unavailable")
+        if failure == "empty":
+            return []
+        value = {"ts_code": "wrong" if failure == "wrong_key" else code, "trade_date": "20261027"}
+        return [value, value] if failure == "truncated" else [value]
+    def write(_conn, _spec, rows):
+        if failure == "commit":
+            raise RuntimeError("commit failed")
+        return len(rows)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
+    monkeypatch.setattr(engine, "_upsert_batch", write)
+    result = engine._sync_by_code_batched(spec, day, next_day, uuid.uuid4())
+    if failure in {"source", "commit", "wrong_key", "truncated"}:
+        assert not result.ok
+        assert audit.success_calls == []
+        return
+    assert result.ok
+    assert len(audit.success_calls) == 2
+    first, second = audit.success_calls
+    assert first["metadata"]["provider_query_scope_complete"] is (failure != "catalogue_change")
+    assert first["metadata"]["audit_from_target_table"] is False
+    assert len(first["metadata"]["provider_scan"]["entries"]) == (0 if failure == "empty" else 2)
+    assert second["metadata"]["provider_scan"]["entries"] == []
+    assert second["quality_status"] == "empty_valid"
+
+
 def test_chip_and_margin_specs_carry_min_expected_rows():
     from backend.services.tushare_dataset_specs import MARGIN_DETAIL
 
