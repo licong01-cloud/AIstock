@@ -1,6 +1,6 @@
 # LocalSIM共享批量Reader消费验收与BUG-2112
 
-日期：2026-10-28。状态：共享Reader真实消费、BUG-2112修复后三日完整账户一致性、恢复和exact retry通过；修复尚未建立PR或合入，运行目录合同阻断保持。本文不代表生产回放或经济有效性验收。
+日期：2026-10-28，交付复核：2026-10-29。状态：共享Reader真实消费、BUG-2112修复后三日完整账户一致性、恢复和exact retry通过；公共目录合同已由 PR #6858 修复，原工作树正式预检通过，源码 PR/CI/合入分别确认。本文不代表生产回放或经济有效性验收。
 
 ## 输入、边界和源码
 
@@ -70,6 +70,6 @@ WSL使用现成环境、OMP/MKL/OpenBLAS线程1，原181日任务同时运行；
 3. 不改择时核心、规则、比较器、选股、费用、撮合或旧TWAP政策；只修正LocalSIM研究运行身份。
 4. 不新增人工审批；不绕过源码、恢复和运行态门禁。新增源码只在新冻结离线研究加载，用户服务重启仍由用户执行。
 
-源码修复提交完成，离线新进程加载及账户验收通过；PR、最终HEAD CI及合入尚未完成，后端加载和生产激活未操作，经济有效性未评价。工作流仍保守推断backend-main，但catalog未提供对应runbook、identity及business smoke引用；该既有门禁阻断PR readiness。真实离线fresh-process证据只证明新CLI加载修复，不冒充后端业务验收；任何非运行时归类须由流程owner按正式调用闭包/目录合同审查，不手改降级。具体交接为`X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/runtime-catalog-owner-handoff.md`。技术验收不证明人工方式或任何策略有超额收益。
+源码修复提交完成，离线新进程加载及账户验收通过；PR、最终HEAD CI及合入分别确认，后端加载和生产激活未操作，经济有效性未评价。公共 owner 已通过 BUG-2131 / PR #6858（`1abb26cbfbe40841f8e558a294854e8095c8c063`）仅将 `dual_mode_research.py` 精确登记为离线入口。原工作树已同步主线并重新运行正式 `finish --plan-only`，得到 `closure_ready=true`、`runtime_impact=none`、不需后端重启，三项目录阻断全部消除。该归属由 canonical 合同自动计算，业务记录不手改降级；在线读取器、共享模块及混合改动仍保留运行态要求。收据为 `X:/AIstock_temp/localsim-merge-after-runtime-contract-20261029/bug2112-runtime-preflight.json`。技术验收不证明人工方式或任何策略有超额收益。
 
-已执行F2设计验证；F-014因上述PR/CI与目录合同未完成保持blocked，整体验证不通过。未为通过解析器虚构用户批准、删除未完成验收项或把离线通过标为源码已合入。
+F2 的 F-014 要求将审核、测试、L0、CI、合入各阶段分别报告：当前已具备审核、测试、L0 和正式预检证据，CI及合入交由后续源码 PR 收据确认，未将 pending 阶段虚报通过。设计验收矩阵据此更新；最终合入仍要求 HEAD CI 全绿。旧研究和反例证据保留，不重跑或迁移原 181 日研究，也不覆盖旧结果。
