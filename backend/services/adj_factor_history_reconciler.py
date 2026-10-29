@@ -393,10 +393,10 @@ def _normalize_predecessor_basis(
     """Keep legacy history across a provider coverage/basis boundary.
 
     stock_basic.list_date proves the *current feed* boundary, not the first
-    quotation of a predecessor. Never delete earlier local history. A basis
-    conversion is allowed only if the complete stable overlap has one exact
-    positive ratio. Missing interior/traded rows still go through the ordinary
-    omission checks; non-proportional revisions cannot determine legacy units.
+    quotation of a predecessor. Never delete earlier local history. Anchor
+    legacy units at that exact boundary, preserve earlier relative changes,
+    and use stable provider facts throughout its coverage (including genuine
+    non-proportional revisions). Interior/traded omissions remain errors.
     """
     prefix = tuple(r for r in local.rows if r.trade_date < provider.first_date)
     if not prefix or provider.provider_listing_start != provider.first_date:
@@ -405,14 +405,15 @@ def _normalize_predecessor_basis(
     overlap = tuple(r for r in local.rows if r.trade_date in current)
     if len(overlap) < 2:
         raise AdjFactorHistoryReconcileError(f"{local.symbol}: predecessor basis has insufficient overlap")
-    scale = Fraction(current[overlap[0].trade_date]) / Fraction(overlap[0].value)
-    if any(Fraction(current[r.trade_date]) != Fraction(r.value) * scale for r in overlap):
-        raise AdjFactorHistoryReconcileError(f"{local.symbol}: predecessor overlap is not a constant basis conversion")
+    if overlap[0].trade_date != provider.first_date:
+        raise AdjFactorHistoryReconcileError(f"{local.symbol}: predecessor basis lacks the certified boundary row")
+    scale = Fraction(current[provider.first_date]) / Fraction(overlap[0].value)
+    restated = tuple(r for r in overlap if Fraction(current[r.trade_date]) != Fraction(r.value) * scale)
 
     def convert(row: AdjFactorRow) -> AdjFactorRow:
         if scale == 1:
             return row
-        if row.trade_date in current:
+        if not restated and row.trade_date in current:
             return AdjFactorRow(row.symbol, row.trade_date, current[row.trade_date])
         # market.adj_factor is binary64. Round *once* to its durable format so
         # the next day's readback does not rewrite rounded legacy rows again.
@@ -425,10 +426,15 @@ def _normalize_predecessor_basis(
     merged = _snapshot(local.symbol, (*provider.rows, *(convert(r) for r in prefix)),
                        provider_call_count=provider.provider_call_count)
     proof = None
-    if scale != 1:
+    if scale != 1 or restated:
         proof = {
             "schema_version": "adj_factor_basis_normalization_v1", "symbol": local.symbol,
-            "policy": "whole_series_constant_overlap_to_provider_basis_v1",
+            "policy": ("certified_boundary_rebase_and_provider_restatement_v1" if restated else
+                       "whole_series_constant_overlap_to_provider_basis_v1"),
+            "boundary_date": provider.first_date.isoformat(),
+            "boundary_local_value": _decimal_text(overlap[0].value),
+            "boundary_provider_value": _decimal_text(current[provider.first_date]),
+            "restated_overlap_row_count": len(restated),
             "source_api": SOURCE_API, "provider_coverage_start": provider.first_date.isoformat(),
             "provider_coverage_end": provider.last_date.isoformat(),
             "provider_sha256": provider.canonical_sha256, "local_sha256": local.canonical_sha256,
