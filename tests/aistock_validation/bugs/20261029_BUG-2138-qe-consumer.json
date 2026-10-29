@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2138",
-  "closed_at": null,
+  "closed_at": "2026-10-29T08:00:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -47,15 +47,15 @@
   "expected": "使用前一个交易步的左端点作为上一实际交易日，保持D消费T且不重复滞后；保留时点严格校验和首日空信号语义。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json",
       "backend/tests/unified_engine/test_qe_stock_probability_strategy.py",
-      "scripts/qe_stock_probability_gate_strategy.py"
+      "scripts/qe_stock_probability_gate_strategy.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json",
       "backend/tests/unified_engine/test_qe_stock_probability_strategy.py",
-      "scripts/qe_stock_probability_gate_strategy.py"
+      "scripts/qe_stock_probability_gate_strategy.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -111,9 +111,9 @@
   },
   "first_seen_at": "2026-10-29T07:45:14.010449Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "af9b0b45a0e22871a7f69848e6de172b4a196452",
   "fix_summary": "Use the actual previous interval left endpoint, preserve strict previous-session validation and empty first-day AF semantics.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-29T08:00:24Z",
   "github_issue_number": 6885,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6885",
   "last_seen_at": "2026-10-29T07:45:14.010449Z",
@@ -121,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6888",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -139,6 +140,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -148,7 +150,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2138",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "402bc9465418d146",
+    "recorded_at": "2026-10-29T08:01:14.665626Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4c13e1e13ca99deca971158d4a0edea083d4512e",
+    "source_merge_commit": "af9b0b45a0e22871a7f69848e6de172b4a196452",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6888",
+    "validation_evidence": [
+      "python -m nox -s l0 -- scripts/qe_stock_probability_gate_strategy.py backend/tests/unified_engine/test_qe_stock_probability_strategy.py tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json -> passed: 0 findings",
+      "rtk ruff check scripts/qe_stock_probability_gate_strategy.py backend/tests/unified_engine/test_qe_stock_probability_strategy.py -> passed",
+      "rtk git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "ff96a1dc1a88841600cbc5fe57bc45c6b1b9a2ef989e858ad4fee059f237be8e"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -157,6 +182,11 @@
     "fingerprint": "57b5a11f36d53072d2c2d374",
     "source_event_id": "FE-20261029-57b5a11f36d5"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- scripts/qe_stock_probability_gate_strategy.py backend/tests/unified_engine/test_qe_stock_probability_strategy.py tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json -> passed: 0 findings",
+    "rtk ruff check scripts/qe_stock_probability_gate_strategy.py backend/tests/unified_engine/test_qe_stock_probability_strategy.py -> passed",
+    "rtk git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
