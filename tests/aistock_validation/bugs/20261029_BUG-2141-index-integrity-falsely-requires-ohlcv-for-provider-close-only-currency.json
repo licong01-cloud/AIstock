@@ -30,15 +30,15 @@
   "expected": "Shared index fact validation requires a real finite positive close, preserves explicit unavailable optional OHLC/volume/amount as legal NA, rejects invalid provided values and every real missing key. Completed source query, revision binding and catalogue identity remain required; no stock/minute/model contracts or original facts change. Actual 20TD comparison converts only the8 fully scanned false failures to VALID;12 dates without completed query proof remain UNVERIFIED, not fabricated PASS.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -49,14 +49,18 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-29T15:36:54.755211Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9664db1cbb77050560bcea996e4f33a6c36200e8",
+  "fixed_at": "2026-10-29T15:54:58Z",
   "github_issue_number": 6895,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6895",
   "last_seen_at": "2026-10-29T15:36:54.755211Z",
@@ -64,6 +68,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6896",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -86,6 +91,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -97,7 +103,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2141",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d1a0fe475a733b28",
+    "recorded_at": "2026-10-29T15:55:54.145399Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f0557aa18830adadd53797f09cda5df2bc2789dc",
+    "source_merge_commit": "9664db1cbb77050560bcea996e4f33a6c36200e8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6896",
+    "validation_evidence": [
+      "68 passed; native DEV rolled back; 20TD exact comparison: 8 false field failures corrected, 12 query-proof gaps preserved"
+    ],
+    "validation_evidence_digest": "45cfee352599111d3cce82ebdd75447d422344003cd2d0e76bddedba8a69e39a"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -106,6 +133,9 @@
     "fingerprint": "e769c6c7cf4b8744ef707b84",
     "source_event_id": "FE-20261029-e769c6c7cf4b"
   },
+  "validation_evidence": [
+    "68 passed; native DEV rolled back; 20TD exact comparison: 8 false field failures corrected, 12 query-proof gaps preserved"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
