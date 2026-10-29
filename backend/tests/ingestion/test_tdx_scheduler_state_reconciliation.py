@@ -1072,7 +1072,9 @@ def test_obsolete_integrity_fetch_never_reaches_collector_dispatch(monkeypatch):
     assert scheduler._reconcile_due_data_sync_targets({"kline_daily_raw": {"mode": "incremental"}}) == []
 
 
-def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
+@pytest.mark.parametrize("metadata", [None, {}, {"schedule_dataset": "sw_sector"},
+    {"schedule_dataset": "sw_daily"}, '{"schedule_dataset":"sw_daily"}'])
+def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch, metadata):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
     target = {
@@ -1080,7 +1082,7 @@ def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
         "dataset": "sw_daily",
         "target_date": dt.date(2026, 7, 14),
         "attempt_count": 0,
-        "metadata": {"schedule_dataset": "sw_sector"},
+        "metadata": metadata,
     }
 
     class _Repo:
@@ -1114,6 +1116,17 @@ def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
     enqueue = next(call[1] for call in calls if call[0] == "enqueue")
     assert enqueue["target"] is target
     assert enqueue["execution_dataset"] == "sw_sector"
+
+
+@pytest.mark.parametrize("dataset,metadata,expected", [
+    ("sw_daily", {"schedule_dataset": " SW_DAILY "}, "sw_sector"),
+    ("sw_daily", "not-json", "sw_sector"),
+    ("sw_daily", {"schedule_dataset": "custom_owner"}, "custom_owner"),
+    ("moneyflow_ts", {"schedule_dataset": "stock_moneyflow_ts"}, "stock_moneyflow_ts"),
+    ("orphan_dataset", None, "orphan_dataset"),
+])
+def test_retry_owner_alias_normalization_preserves_other_owners(dataset, metadata, expected):
+    assert TDXScheduler._retry_schedule_dataset(dataset, metadata) == expected
 
 
 def test_sw_daily_level_coverage_normalizes_l1_and_l2_rows():
@@ -1950,6 +1963,36 @@ def test_sector_data_recovery_deadline_extends_to_next_day_0200_china_time():
     deadline = scheduler._final_deadline_for_target("sector_data", dt.date(2026, 7, 15))
 
     assert deadline == dt.datetime(2026, 7, 15, 18, 0, tzinfo=dt.timezone.utc)
+
+
+@pytest.mark.parametrize("start,end,expected", [
+    ("2026-10-29", "2026-10-29", "success"),
+    ("2026-10-29", None, "failed"),
+    (None, "2026-10-29", "failed"),
+    ("2026-10-29", "2026-10-28", "failed"),
+    ("invalid", "2026-10-29", "failed"),
+])
+def test_sector_exact_repair_never_drains_unrelated_history(monkeypatch, start, end, expected):
+    import backend.services.sector_data_builder as sector_builder_module
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls, logs = [], []
+    builder = SimpleNamespace(build_range=lambda a, b: calls.append((a, b)) or 4902,
+        pending_dates=lambda *_: pytest.fail("exact repair must not drain historical revisions"))
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: builder)
+    scheduler._query_max_date = lambda *_: pytest.fail("exact repair must not use the global maximum")
+    scheduler._execute = lambda *_: None
+    scheduler._record_refresh_audit_from_table_range = lambda **kw: calls.append(kw) or True
+    scheduler._log_ingestion_run = lambda *args, **kw: logs.append((args, kw))
+    options = {key: value for key, value in {"start_date": start, "end_date": end}.items() if value is not None}
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit", options)
+    assert logs[0][0][4] == expected
+    if expected == "success":
+        day = dt.date(2026, 10, 29)
+        assert calls[0] == (day, day)
+        assert calls[1]["start_date"] == calls[1]["end_date"] == day
+    else:
+        assert calls == []
 
 
 def test_sector_data_upstream_delay_finalizes_job_as_delayed(monkeypatch):

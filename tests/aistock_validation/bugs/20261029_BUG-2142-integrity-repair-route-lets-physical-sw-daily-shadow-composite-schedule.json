@@ -1,6 +1,8 @@
 {
   "actual": "Live sw_daily exact-date repair target repeatedly fails schedule_owner_missing although sw_sector is enabled. DailyIntegrityWorker stamps schedule_dataset=sw_daily; TDXScheduler returns explicit owner before applying existing physical-to-schedule aliases. Source facts are currently available and DEV native upsert readback passed. Normalize both newly produced and existing metadata routing without changing fact validation, PIT membership or success verdicts. Add RED-GREEN retry routing tests.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
   ],
   "assigned_agent": null,
@@ -21,8 +23,10 @@
       "timestamp": "2026-10-29T15:56:27.957624Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2142-repair-routing-20261030/dev-validation.json"
+  ],
+  "expected": "Normalize physical sw_daily metadata to its existing sw_sector schedule owner; exact dated sector repairs must honor their ordered window and must not process unrelated revision history. Preserve automatic append/revision mode when no explicit dates were requested.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -54,7 +58,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_sw_daily_target_uses_sw_sector_schedule_owner -q --no-cov",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -62,18 +66,36 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2142-repair-routing-20261030/validate_dev.py -> passed worktree-isolated real target route replay in existing DEV; one dry-run dispatch; effects rolled back; no production writes",
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_daily_sync_recovery.py -q --no-cov -> 214 passed, 1 skipped"
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": ["backend-main"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "review_rounds": [
+    "Round 1: production target reproduces stale physical owner; RED 2 routing cases, GREEN all 10 owner cases; unknown/custom owners remain unchanged.",
+    "Round 2: exact sector date options were ignored; RED all 5 range cases, GREEN all 5; invalid/partial/reversed windows fail without building any history.",
+    "Round 3: 214 related scheduler/recovery tests passed, 1 skipped; existing DEV real metadata dry-run routes once, no actual job or production write; L0/Ruff/diff checks passed."
+  ],
+  "design_compliance_review": {
+    "requested_scope_complete": true,
+    "existing_automatic_mode_preserved": true,
+    "no_business_semantic_or_validation_relaxation": true,
+    "no_new_manual_gate_or_framework": true,
+    "runtime_acceptance": "pending_user_restart"
+  },
   "status": "open",
   "suspected_modules": [
     "local_data"
@@ -102,10 +124,10 @@
     "schema_version": "aistock_ui_issue_intake_hints_v1",
     "scope_source": "inferred_from_module_route_and_changed_files",
     "ui_component_scope": [],
-    "ui_issue": true,
+    "ui_issue": false,
     "ui_route": null,
     "ui_routes": [],
-    "visual_acceptance_required": true
+    "visual_acceptance_required": false
   },
   "verification_budget": {
     "budget": "standard",
