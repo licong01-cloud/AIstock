@@ -3,21 +3,10 @@
   "allowed_write_scope": [
     "backend/services/hmm_risk/rotation_l1_input_bundle.py",
     "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_formal_state_input.py",
     "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json"
   ],
   "assigned_agent": null,
-  "fix_analysis": {
-    "root_cause": "Monthly native Qlib updates rescale a serialized float32 prefix through a second float64 multiply/float32 cast. Single-cast price/factor intervals can exclude the true integer-li source price.",
-    "implementation": "Read the current release manifest-pinned native materialization receipt and full calendar; bind scaled OHLC/factor hashes, byte sizes and exact physical prefix boundaries; invert the recorded float32 re-encoding and require a unique integer-li source price across every possible predecessor encoding. New suffix rows retain single-cast decoding. Reference prices, volume semantics and model contracts are unchanged.",
-    "review_round_1": "Corrected full-calendar versus bounded-read-calendar indexing; both warmup and aggregation use the same provenance decoder.",
-    "review_round_2": "Checked unknown/missing/duplicate lineage, scale/size/hash/calendar drift, exact prefix boundary and ambiguity failures. No database or old-release fallback, dataset writes, fit, or QE asset replacement.",
-    "design_compliance_001": {
-      "no_simplified_delivery": "Both production read paths are wired; complete two-date formal validation remains pending until clean committed source.",
-      "no_silent_failure": "Missing provenance, changed input and nonunique source prices remain typed failures.",
-      "business_semantics_unchanged": "No changes to model, features, seed, threshold, PIT or price source unit.",
-      "no_unapproved_gate": "Enforces existing immutable input and unique-source-price contracts; no additional model or manual approval gate."
-    }
-  },
   "bug_id": "BUG-2118",
   "closed_at": null,
   "closure_requirements": [
@@ -36,16 +25,25 @@
     }
   ],
   "evidence_uris": [
-    "F:/Dev/AIstock_runtime/hmm_l2_dual_precision/20261028/run_v1/price_failure_locations.json"
+    "F:/Dev/AIstock_runtime/hmm_l2_dual_precision/20261028/run_v1/price_failure_locations.json",
+    "F:/Dev/AIstock_runtime/hmm_l2_dual_precision/20261029/run_v2/summary.json"
   ],
   "expected": "Interpret verified monthly serialization provenance without arbitrary epsilon, rounding fallback or rewriting shared datasets; retain exact unique integer-li and reference-price contracts.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json",
+      "backend/tests/hmm_risk/test_formal_state_input.py"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json",
+      "backend/tests/hmm_risk/test_formal_state_input.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -81,15 +79,29 @@
     },
     "planned_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py"
     ]
   },
   "first_seen_at": "2026-10-28T06:16:47.316462Z",
+  "fix_analysis": {
+    "design_compliance_001": {
+      "business_semantics_unchanged": "No changes to model, features, seed, threshold, PIT or price source unit.",
+      "no_silent_failure": "Missing provenance, changed input and nonunique source prices remain typed failures.",
+      "no_simplified_delivery": "Both production read paths are wired. Official 2026-04-01 and 2026-07-01 file inference passed at clean source 87b5f244c98641bfc4722d382ab7f71bc5111da8; 131 rows each, double fresh-process bitwise equal, zero fits. Subsequent changes are tests/BUG metadata only.",
+      "no_unapproved_gate": "Enforces existing immutable input and unique-source-price contracts; no additional model or manual approval gate."
+    },
+    "implementation": "Read the current release manifest-pinned native materialization receipt and full calendar; bind scaled OHLC/factor hashes, byte sizes and exact physical prefix boundaries; invert the recorded float32 re-encoding and require a unique integer-li source price across every possible predecessor encoding. New suffix rows retain single-cast decoding. Reference prices, volume semantics and model contracts are unchanged.",
+    "review_round_1": "Corrected full-calendar versus bounded-read-calendar indexing; both warmup and aggregation use the same provenance decoder.",
+    "review_round_2": "Checked unknown/missing/duplicate lineage, scale/size/hash/calendar drift, exact prefix boundary and ambiguity failures. No database or old-release fallback, dataset writes, fit, or QE asset replacement.",
+    "root_cause": "Monthly native Qlib updates rescale a serialized float32 prefix through a second float64 multiply/float32 cast. Single-cast price/factor intervals can exclude the true integer-li source price."
+  },
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
@@ -113,10 +125,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
