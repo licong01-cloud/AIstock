@@ -1312,7 +1312,7 @@ class TDXScheduler:
         return _AUTO_RETRY_SCHEDULE_ALIASES.get(health_dataset, health_dataset)
 
     def _reconcile_recovered_final_targets(self) -> List[str]:
-        """Recheck final readiness targets so historical recovered families self-heal."""
+        """Refresh existing final targets/alarms using the bounded maintenance sweep."""
 
         now = _now()
         last_sweep = getattr(self, "_last_final_target_recovery_sweep", None)
@@ -1321,10 +1321,11 @@ class TDXScheduler:
         self._last_final_target_recovery_sweep = now
         candidates = self._fetchall(
             """SELECT DISTINCT ON (dataset, target_date)
-                      target_id, dataset, target_date, metadata
+                      target_id, dataset, target_date, metadata, data_source, target_status,
+                      attempt_count, last_error_message AS failure_category
                  FROM market.data_sync_targets
                 WHERE target_status = 'final_blocked'
-                  AND data_source = 'readiness_gate'
+                  AND data_source IN ('readiness_gate','tushare','integrity_repair')
                   AND target_date IS NOT NULL
                 ORDER BY dataset, target_date DESC, updated_at DESC
                 LIMIT 100"""
@@ -1337,6 +1338,10 @@ class TDXScheduler:
             if not dataset or not target_id or target_date is None:
                 continue
             try:
+                if (target.get("data_source", "readiness_gate") != "readiness_gate"
+                        or dataset in {"bak_basic", "cyq_perf"}):
+                    self._flush_final_data_sync_alerts([target])
+                    continue  # no refetch or assumed success for a final provider target
                 readiness = self._check_dataset_recovered(dataset, target_date)
             except Exception as exc:  # noqa: BLE001 - one dataset must not block the sweep.
                 _logger.warning("final target recovery precheck failed for %s/%s: %s", dataset, target_date, exc)
@@ -2584,6 +2589,17 @@ class TDXScheduler:
         finished_at = finished_at or _now()
         with get_conn(autocommit=False, manage_transaction=True) as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                if (context or {}).get("canonical_validation_id"):
+                    from ..services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+                    from ..services.data_integrity.contracts import effective_partition
+                    canonical = {"stock_moneyflow_ts": "moneyflow_ts", "sw_sector": "sw_daily"}.get(dataset_key, dataset_key)
+                    cur.execute("""SELECT * FROM market.dataset_date_refresh_audit
+                        WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db' FOR UPDATE""",
+                        (canonical, target_date))
+                    current = effective_partition(cur.fetchone(), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                    if (not current["source_complete"]
+                            or current["validation_id"] != context["canonical_validation_id"]):
+                        return {"targets_reconciled": 0, "alerts_acknowledged": 0}
                 cur.execute(
                     """SELECT target_id, target_status
                          FROM market.data_sync_targets
@@ -2662,12 +2678,22 @@ class TDXScheduler:
                     """UPDATE market.data_alerts
                           SET acknowledged = TRUE, ack_at = NOW()
                         WHERE dataset = %s
-                          AND alert_type = 'retry_exhausted'
+                          AND (alert_type = 'retry_exhausted' OR alert_type = 'retry_pending')
                           AND acknowledged = FALSE
                           AND details->>'target_id' = ANY(%s)""",
                     (dataset_key, family_ids),
                 )
                 alerts_acknowledged = int(cur.rowcount or 0)
+                if (context or {}).get("canonical_validation_id"):
+                    # The locked, current partition certifies this date even
+                    # when an older alarm belongs to another fetch target.
+                    cur.execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
+                        WHERE dataset=%s AND acknowledged=FALSE
+                          AND alert_type IN ('retry_exhausted','retry_pending')
+                          AND details->>'target_date'=%s
+                          AND details->>'alert_gate'='data_sync_targets_final_state'""",
+                        (dataset_key, str(target_date)))
+                    alerts_acknowledged += int(cur.rowcount or 0)
 
         return {
             "targets_reconciled": targets_reconciled,
@@ -2676,6 +2702,7 @@ class TDXScheduler:
 
     def _flush_final_data_sync_alerts(self, targets: List[Dict[str, Any]]) -> Dict[str, int]:
         alerts = []
+        pending_ack = []
         for target in targets:
             status = str(target.get("target_status") or target.get("status") or "").lower()
             failure_category = str(target.get("failure_category") or "retry_exhausted")
@@ -2683,6 +2710,34 @@ class TDXScheduler:
                 continue
             dataset = str(target.get("dataset") or "?")
             target_date = target.get("target_date")
+            recovery_ids = []
+            if target_date is not None:
+                from ..services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+                from ..services.data_integrity.contracts import effective_partition
+                canonical = {"stock_moneyflow_ts": "moneyflow_ts", "sw_sector": "sw_daily"}.get(dataset, dataset)
+                family = {dataset, canonical, _AUTO_RETRY_SCHEDULE_ALIASES.get(canonical, canonical)}
+                if canonical == "moneyflow_ts":
+                    family.add("stock_moneyflow_ts")
+                observed = self._fetchall("""SELECT
+                    (SELECT to_jsonb(p) FROM market.dataset_date_refresh_audit p
+                     WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db') AS partition,
+                    ARRAY(SELECT target_id FROM market.data_sync_targets t
+                        WHERE dataset=ANY(%s) AND target_date=%s AND target_id IS DISTINCT FROM %s
+                          AND target_status IN ('pending','retry')
+                          AND COALESCE(target_scope->>'operation','FETCH')<>'VALIDATE_ONLY'
+                          AND (data_source='integrity_repair' OR required_before IS NULL
+                               OR required_before>clock_timestamp() OR dataset=ANY(%s))) AS recovery_target_ids""",
+                    (canonical, target_date, sorted(family), target_date, target.get("target_id"),
+                     list(LATE_PUBLICATION_TAIL_DAYS)))
+                context = observed[0] if observed else {}
+                partition = effective_partition(context.get("partition"),
+                    scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                if partition["source_complete"]:
+                    self._reconcile_recovered_target_state(dataset=dataset, target_id=target.get("target_id"),
+                        target_date=target_date, trigger_source="final_alert_readback",
+                        context={"canonical_validation_id": partition["validation_id"]})
+                    continue
+                recovery_ids = context.get("recovery_target_ids") or []
             alerts.append(
                 classify_retry_alert(dataset, "exhausted", original_status=failure_category,
                                      attempt_count=target.get("attempt_count"))
@@ -2697,9 +2752,25 @@ class TDXScheduler:
                     "alert_gate": "data_sync_targets_final_state",
                 }
             )
+            if recovery_ids:
+                # A failed source target is not exhaustion of the dated repair
+                # family. Keep the real gap visible without claiming success.
+                alerts[-1].severity = "warning"
+                alerts[-1].alert_type = "retry_pending"
+                alerts[-1].title = f"{dataset} 数据待补齐，已安排自动修复"
+                alerts[-1].message = f"数据集 {dataset} / {target_date} 尚未通过完整性验证，已保留自动修复任务"
+                alerts[-1].details.update(retry_result="pending", recovery_target_ids=recovery_ids)
+                pending_ack.append((dataset, str(target_date)))
         if not alerts:
             return {}
-        return DataHealthAlerter(self._db_cfg).flush(alerts)
+        counts = DataHealthAlerter(self._db_cfg).flush(alerts)
+        # Retain old errors if persisting the replacement warning failed.
+        for dataset, target_date in pending_ack:
+            self._execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
+                    WHERE dataset=%s AND alert_type='retry_exhausted' AND acknowledged=FALSE
+                      AND details->>'target_date'=%s
+                      AND details->>'alert_gate'='data_sync_targets_final_state'""", (dataset, target_date))
+        return counts
 
     def _schedule_delayed_retry(
         self,
@@ -5020,6 +5091,7 @@ class TDXScheduler:
             except Exception as exc:
                 _logger.error("unexpected error: %s", exc)
 
+        error_msg = None
         try:
             engine = TushareSyncEngine()
             result = engine.sync(
@@ -5028,8 +5100,11 @@ class TDXScheduler:
                 job_id=job_id,
             )
             status = "success" if result.ok else "failed"
+            if not result.ok:
+                error_msg = result.error or f"{dataset} sync failed without a native error summary"
         except Exception as exc:
             status = "failed"
+            error_msg = str(exc)
             result = None
             if job_id is not None:
                 try:
@@ -5045,7 +5120,7 @@ class TDXScheduler:
 
         if schedule_id:
             self._update_ingestion_schedule(
-                schedule_id, last_run=start_ts, last_status=status, last_error=None,
+                schedule_id, last_run=start_ts, last_status=status, last_error=error_msg,
             )
 
     def _run_suspend_d_refresh(

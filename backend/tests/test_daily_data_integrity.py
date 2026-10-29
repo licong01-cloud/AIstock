@@ -53,6 +53,31 @@ def test_dirty_revision_or_rule_never_reuses_old_green():
         assert result["state"] == "UNVERIFIED" and not result["source_complete"]
 
 
+@pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf"])
+def test_dense_panel_legacy_scan_green_is_not_current_traded_scope(dataset):
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    row = {"dataset": dataset, "data_revision": 1, "validated_revision": 1,
+           "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION,
+           "validation_status": "VALID", "validation_id": "old-provider-scan",
+           "metadata": {"validation": {"checks": {"provider": "tushare"}}}}
+    old = effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+    assert old["state"] == "UNVERIFIED" and not old["source_complete"]
+    row["metadata"]["validation"]["checks"]["coverage_basis"] = "independent_dated_traded_stock_keys"
+    assert effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+    row["validation_status"] = "INCOMPLETE"
+    assert not effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+    row.update(dataset="index_daily", validation_status="VALID", metadata={})
+    assert effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+
+
+@pytest.mark.parametrize("metadata", [None, "invalid", {"validation": []}, {"validation": {"checks": "invalid"}}])
+def test_malformed_dense_validation_metadata_is_unknown_not_green_or_api_error(metadata):
+    row = {"dataset": "bak_basic", "data_revision": 1, "validated_revision": 1,
+           "scope_version": "s1", "rule_version": "r1", "validation_status": "VALID",
+           "validation_id": "old", "metadata": metadata}
+    assert effective_partition(row, scope_version="s1", rule_version="r1")["state"] == "UNVERIFIED"
+
+
 @pytest.mark.parametrize("parts,expected", [([], "UNVERIFIED"),
     ([{"state": "VALID", "source_complete": True}], "COMPLETE"),
     ([{"state": "WAIT_UPSTREAM"}], "IN_PROGRESS"),

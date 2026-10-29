@@ -20,7 +20,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-29T18:25:03.318809Z",
-  "description": "Legacy greens reused after validator change; active recovery mislabeled exhausted; failed job summary loses native error.",
+  "description": "旧版provider-scan VALID沿用相同版本号，被错误当作独立交易股票范围完整证明；同日修复目标仍在排队却提示重试耗尽；按日同步捕获异常后未传入结果摘要。修复仅作用于完整性与报警程序，不移除历史股票、不修改PIT、不将源端空记录伪装为合法NA。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -216,11 +216,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "AIstock-CI python -m pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 416 passed, 1 skipped; fresh-process worktree imports, no service control",
+      "AISTOCK_INTEGRITY_DEV_TEST=1 existing DEV aistock_dev: test_obsolete_dense_green_requeues_once_without_invalidating_other_datasets and test_dated_retry_alert_native_sql_and_recovery_readback_in_existing_dev -> 4 passed; unique DEV ledger keys cleaned; no production writes",
+      "Final alert-sweep and concurrency revision: targeted tests -> 12 passed, including 3 existing DEV native SQL readbacks; no collection or production writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -287,6 +294,14 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "validation_evidence": [
+    "RED: legacy green, missing native error and retry-alarm cases failed before source changes; GREEN: all direct cases passed",
+    "Related matrix: 416 passed, 1 explicitly guarded DEV test skipped",
+    "Existing DEV native SQL: 4 passed; old proof requeued idempotently, unrelated datasets retained; incomplete/retrying/recovered alert readbacks passed",
+    "Final sweep/race regression: 12 passed; Ruff, fresh-process imports, compile and git diff --check passed; L0 passed",
+    "DESIGN-COMPLIANCE-001: no partial result reported complete; no swallowed errors or invented NA; historical facts/PIT/policy unchanged; no new approval or research gate",
+    "Production read-only refreshed 2026-10-30 02:33 CN: known bak_basic list still misses 275 keys/19 symbols; cyq_perf 000663.SZ/2026-05-20 absent. Source-empty is not permission to mark valid. Runtime verification remains pending user restart."
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
