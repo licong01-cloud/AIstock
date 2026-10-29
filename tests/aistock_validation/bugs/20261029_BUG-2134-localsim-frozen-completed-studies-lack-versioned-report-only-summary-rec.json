@@ -25,7 +25,11 @@
     }
   ],
   "evidence_uris": [
-    "docs/analysis/localsim_immutable_summary_conflict_20261029.md"
+    "docs/analysis/localsim_immutable_summary_conflict_20261029.md",
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/report-real-run-r1.json",
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/report-real-retry-r1.json",
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/report-origin-protection-r1.json",
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/revision-analysis-consumption-r1.json"
   ],
   "expected": "A new immutable report-only revision binds old request/results/day receipts and current summary implementation; native ledger readback and all source checks pass; retry reuses the same revision with zero account computation; replay with changed source remains rejected.",
   "file_scope_contract": {
