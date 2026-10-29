@@ -1,5 +1,5 @@
 {
-  "actual": "2353 account-days and their receipts verified. Extracted original production result assembly differs only in five conditional-price decimal tails; fixed ordered aggregation is identical under four hash seeds, and differs from published original in only three tails, max 6E-26 bps. Account/NAV/fees/statuses/quantities and 4709 original file hashes are unchanged. Before test fails; after five unique direct nodes pass. Existing true immutable conflicts are still rejected. Original study remains FAILED/EXACT_RETRY; no pins, account state or old results changed.",
+  "actual": "2353 account-days and their receipts verified. Extracted original production result assembly differs only in five conditional-price decimal tails; fixed ordered aggregation is identical under four hash seeds, and differs from published original in only three tails, max 6E-26 bps. Account/NAV/fees/statuses/quantities and 4709 original file hashes are unchanged. Before test fails; after six unique direct nodes pass; microscopic report-price changes remain strictly rejected. Existing true immutable conflicts are still rejected. Original study remains FAILED/EXACT_RETRY; no pins, account state or old results changed.",
   "allowed_write_scope": [
     "backend/services/simulation_execution/localsim/dual_mode_research.py",
     "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
@@ -31,7 +31,8 @@
     "X:/AIstock_temp/localsim-immutable-summary-20261029/fresh-process-receipt-v1.json",
     "X:/AIstock_temp/localsim-immutable-summary-20261029/regression-before.xml",
     "X:/AIstock_temp/localsim-immutable-summary-20261029/regression-after.xml",
-    "X:/AIstock_temp/localsim-immutable-summary-20261029/directed-matrix.xml"
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/directed-matrix.xml",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/precision-conflict-review-r2.xml"
   ],
   "expected": "Identical validated account histories produce byte-identical comparisons across fresh processes and hash seeds; true immutable result mismatches remain rejected.",
   "file_scope_contract": {

@@ -84,16 +84,33 @@ print('SUMMARY_JSON=' + json.dumps(result, sort_keys=True, separators=(',', ':')
             assert paired["missing_fraction"] == "0"
 
 
-def test_actual_result_conflict_still_rejects_retry_and_preserves_all_old_artifacts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("metric", ["fee_difference_cny", "conditional_price_cost_bps"])
+def test_actual_result_conflict_still_rejects_retry_and_preserves_all_old_artifacts(tmp_path, monkeypatch, metric):
     request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    real_summary = dual.summarize_accounts
+
+    def original(*args, **kwargs):
+        rows = real_summary(*args, **kwargs)
+        if metric == "conditional_price_cost_bps":
+            # A numeric report fixture isolates byte immutability from whether
+            # the small account fixture happens to have matched executions.
+            rows[0]["conditional_execution"]["ALL"][metric] = "1.234567890123456789012345678"
+        return rows
+
+    monkeypatch.setattr(dual, "summarize_accounts", original)
     first = dual.run_study(request)
     root = Path(request.path).parent
     before = {p: p.read_bytes() for p in root.rglob("*.json")}
-    original = dual.summarize_accounts
-
     def changed_comparison(*args, **kwargs):
         rows = original(*args, **kwargs)
-        rows[0]["fee_difference_cny"] = "1"
+        if metric == "fee_difference_cny":
+            rows[0][metric] = "1"
+        else:
+            paired = rows[0]["conditional_execution"]["ALL"]
+            old = Decimal(paired[metric])
+            new = old.next_plus()
+            assert 0 < new - old < Decimal("1E-20")
+            paired[metric] = str(new)
         return rows
 
     monkeypatch.setattr(dual, "summarize_accounts", changed_comparison)
