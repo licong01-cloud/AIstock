@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -589,9 +590,6 @@ class _FakeConn:
         return cur
 
 
-_B_SHARE_EXCLUDES = ("NOT LIKE '200%%.SZ'", "NOT LIKE '201%%.SZ'", "NOT LIKE '900%%.SH'")
-
-
 def test_is_b_share_ts_code() -> None:
     for code in ("200011.SZ", "201872.SZ", "900901.SH", "200011.sz"):
         assert is_b_share_ts_code(code), code
@@ -641,8 +639,13 @@ def test_live_source_boundary_is_previous_trade_day_not_a_synthetic_snapshot() -
 
 def test_a_share_ts_code_filter_fragment() -> None:
     fragment = a_share_ts_code_filter("s.ts_code")
-    for exclude in _B_SHARE_EXCLUDES:
-        assert f"s.ts_code {exclude}" in fragment
+    predicate = re.search(r"upper\(btrim\(s\.ts_code\)\) ~ '([^']+)'", fragment)
+    assert predicate is not None
+    pattern = predicate.group(1)
+    for code in ("000001.SZ", "300750.SZ", "600000.SH", "688981.SH", "SZ000001", "SH600000"):
+        assert re.fullmatch(pattern, code), code
+    for code in ("200011.SZ", "201872.SZ", "900901.SH", "920296.BJ", "830001.BJ", "BJ920296"):
+        assert re.fullmatch(pattern, code) is None, code
 
 
 def test_authoritative_st_name_requires_explicit_risk_prefix() -> None:
@@ -677,8 +680,7 @@ def test_universe_source_queries_exclude_b_shares() -> None:
     executed = [sql for cur in conn.cursors for sql in cur.queries]
     assert len(executed) == 6
     for sql in executed:
-        for exclude in _B_SHARE_EXCLUDES:
-            assert exclude in sql, sql
+        assert any(a_share_ts_code_filter(column).strip() in sql for column in ("ts_code", "s.ts_code")), sql
     delisting_sql = executed[-1]
     assert "time_mode = 'backtest'" in delisting_sql
     assert "terminal_evidence_contract' = %s" in delisting_sql

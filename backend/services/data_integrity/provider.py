@@ -53,8 +53,9 @@ def row_identity(spec, row, fields):
 
 
 def provider_scan(spec, facts, *, parameters, complete: bool = True):
+    from .stock_scope import filter_dataset_rows
     identities = {}
-    for row in facts:
+    for row in filter_dataset_rows(spec, facts):
         key = tuple(value_identity(row.get(field), spec.columns[field]) for field in spec.primary_keys)
         if any(value is None and field not in spec.nullable_identity_columns for field, value in zip(spec.primary_keys, key)):
             raise ValueError("provider scan has no stable primary identity")
@@ -80,14 +81,24 @@ def merge_scans(spec, scans, *, parameters):
     return {**body, "scan_sha256": digest(body)}
 
 
+def scoped_scan_entries(spec, scan):
+    from .stock_scope import STOCK_APIS, is_excluded_stock_code
+    if spec.tushare_api not in STOCK_APIS or 'ts_code' not in spec.primary_keys:
+        return scan['entries']
+    index = spec.primary_keys.index('ts_code')
+    return [entry for entry in scan['entries'] if not is_excluded_stock_code(entry['key'][index])]
+
+
 def verify_scan(spec, scan, actual_rows):
     if (scan.get("schema_version") != "aistock_completed_provider_scan_v1" or scan.get("dataset") != spec.name
             or scan.get("complete") is not True or scan.get("key_columns") != spec.primary_keys
             or scan.get("scan_sha256") != digest({k: v for k, v in scan.items() if k != "scan_sha256"})):
         raise ValueError("completed provider scan identity differs")
-    actual = {tuple(value_identity(row.get(field), spec.columns[field]) for field in spec.primary_keys): row for row in actual_rows}
+    from .stock_scope import filter_dataset_rows
+    actual = {tuple(value_identity(row.get(field), spec.columns[field]) for field in spec.primary_keys): row
+              for row in filter_dataset_rows(spec, actual_rows)}
     missing, invalid = [], []
-    for entry in scan["entries"]:
+    for entry in scoped_scan_entries(spec, scan):
         key = tuple(entry["key"])
         row = actual.get(key)
         if row is None:

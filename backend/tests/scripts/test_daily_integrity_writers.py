@@ -14,6 +14,40 @@ from scripts import sync_cninfo_anns_metadata as cninfo
 from backend.services.data_integrity import writes
 
 
+@pytest.mark.parametrize('module,functions', [
+    ('ingest_tushare_adj_factor', ['_insert_adj_factor_init', '_upsert_adj_factor']),
+    ('ingest_tushare_daily_basic', ['_upsert_daily_basic']),
+    ('ingest_tushare_moneyflow_ts', ['_upsert_moneyflow']),
+    ('ingest_tushare_stock_basic', ['_insert_stock_basic']),
+    ('ingest_tushare_stock_st', ['_upsert_stock_st']),
+    ('ingest_tushare_bak_basic', ['_upsert_bak_basic']),
+    ('ingest_tushare_cyq', ['upsert_cyq_perf', 'upsert_cyq_chips']),
+])
+def test_legacy_stock_writers_never_open_db_for_bse_only_payload(monkeypatch, module, functions):
+    import importlib
+    import dotenv
+    monkeypatch.setattr(dotenv, 'load_dotenv', lambda *_a, **_kw: None)
+    script = importlib.import_module('scripts.' + module)
+    # None is intentional: an unsupported-only payload must return before SQL,
+    # marks, factor normalization, or a source retry can happen.
+    for function in functions:
+        assert getattr(script, function)(None, [{'ts_code': '920296.BJ'}, {'ts_code': 'BJ430047'}]) == 0
+
+
+@pytest.mark.parametrize('name', ['ingest_incremental', 'ingest_full_daily_raw', 'ingest_full_minute'])
+def test_legacy_tdx_collectors_expand_all_to_shsz_and_reject_bse_before_io(monkeypatch, name):
+    import importlib
+    script = importlib.import_module('scripts.' + name)
+    queried = []
+    def fetch(_path, params=None):
+        queried.append(params['exchange'])
+        return {'data': {'codes': ['000001', '600000', '430047', '920296', '200001']}}
+    monkeypatch.setattr(script, 'http_get', fetch)
+    assert script.fetch_codes(['bj']) == [] and queried == []
+    assert script.fetch_codes(['all']) == ['000001.SZ', '600000.SH']
+    assert queried == ['sh', 'sz']
+
+
 class Connection:
     autocommit = False
 
@@ -52,6 +86,27 @@ def test_cninfo_metadata_only_retry_does_not_dirty_facts(monkeypatch):
     assert "IS DISTINCT FROM" in queries[0] and "RETURNING ann_date" in queries[0]
     assert "last_seen_at=NOW()" in queries[1]
     assert markers == [("anns_metadata", [])]
+
+
+@pytest.mark.parametrize('name', ['bak_basic', 'stock_st'])
+def test_legacy_stock_collectors_do_not_report_success_after_commit_failure(monkeypatch, name):
+    import importlib
+    script = importlib.import_module('scripts.ingest_tushare_' + name)
+    class FailingConnection:
+        rollbacks = 0
+        def commit(self):
+            raise OSError('commit failed')
+        def rollback(self):
+            self.rollbacks += 1
+    conn = FailingConnection()
+    monkeypatch.setattr(script, '_fetch_' + name + '_for_date', lambda *_a: [])
+    monkeypatch.setattr(script, '_upsert_' + name, lambda *_a: 0)
+    if hasattr(script, '_get_trading_days'):
+        monkeypatch.setattr(script, '_get_trading_days', lambda *_a: [date(2026, 10, 28)])
+    monkeypatch.setattr(script, '_update_job_progress', lambda *_a: None)
+    with pytest.raises(OSError, match='commit failed'):
+        script.run_ingestion(conn, None, 'incremental', date(2026, 10, 28), date(2026, 10, 28), None, 0)
+    assert conn.rollbacks == 1
 
 
 @pytest.mark.parametrize("script", ["scripts/import_minutes_gap.py", "scripts/import_minutes_to_db.py"])

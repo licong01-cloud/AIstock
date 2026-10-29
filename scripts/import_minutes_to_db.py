@@ -176,6 +176,8 @@ def load_from_tushare_cache(date_str):
 
 def insert_batch(conn, rows):
     """批量插入"""
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    rows = [row for row in rows if is_supported_stock_code(row[1])]
     if not rows:
         return 0
     sql = """

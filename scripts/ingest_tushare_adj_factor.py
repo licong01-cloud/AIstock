@@ -143,7 +143,8 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
 
 def _get_max_trade_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(trade_date) FROM market.adj_factor")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(trade_date) FROM market.adj_factor WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -277,6 +278,8 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _insert_adj_factor_init(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = "INSERT INTO market.adj_factor (ts_code, trade_date, adj_factor) VALUES %s"
@@ -298,6 +301,8 @@ def _insert_adj_factor_init(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def _upsert_adj_factor(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = (
@@ -323,12 +328,15 @@ def _upsert_adj_factor(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def _fetch_adj_factor_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     ymd = trade_date.strftime("%Y%m%d")
     df = pro.adj_factor(trade_date=ymd)
     rows: List[Dict[str, Any]] = []
     codes = set()
     if df is not None and not df.empty:
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
             code = str(row.get("ts_code") or "").strip().upper()
             if not code or code in codes or str(row.get("trade_date") or "") != ymd:
                 raise ValueError("adj_factor source has an invalid/duplicate security-date identity")
@@ -427,6 +435,8 @@ def run_history_ingestion(conn, args, job_id, end_date: dt.date) -> Dict[str, An
         dry_run = args.history_reconcile_dry_run
         seed = {} if dry_run else _resume_checkpoint(conn, effective_end, job_id)
         completed = seed.get("completed", {})
+        from backend.services.data_integrity.stock_scope import is_supported_stock_code
+        completed = {code: identity for code, identity in completed.items() if is_supported_stock_code(code)}
         collection_id = seed.get("collection_id") or str(job_id)
         collection_started_at = seed.get("collection_started_at") or dt.datetime.now(dt.timezone.utc).isoformat()
         last_flush = 0.0

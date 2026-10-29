@@ -15,6 +15,10 @@ import datetime as dt
 import json
 import os
 import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import time
 import uuid
 from decimal import Decimal, InvalidOperation
@@ -124,7 +128,8 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
 
 def _get_max_trade_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(trade_date) FROM market.daily_basic")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(trade_date) FROM market.daily_basic WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -239,6 +244,7 @@ def _parse_ymd(val) -> dt.date | None:
 
 
 def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     ymd = trade_date.strftime("%Y%m%d")
     offset = 0
     limit = 6000
@@ -260,6 +266,8 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
                 f"missing_columns={missing_columns}"
             )
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
             source_code = row.get("ts_code")
             source_date = row.get("trade_date")
             # Do not relabel a provider's later snapshot as the requested PIT day.
@@ -366,6 +374,8 @@ def _finite_numeric_or_none(value: Any) -> Any:
 
 
 def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = (

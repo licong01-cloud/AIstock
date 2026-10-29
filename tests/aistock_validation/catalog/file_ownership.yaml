@@ -1520,6 +1520,12 @@ rules:
       - scripts/import_minutes_gap.py
       - scripts/import_minutes_to_db.py
       - scripts/ingest_tushare_moneyflow_ts.py
+      - scripts/ingest_full_daily_raw.py
+      - scripts/ingest_tushare_bak_basic.py
+      - scripts/ingest_tushare_cyq.py
+      - scripts/ingest_tushare_stock_basic.py
+      - scripts/ingest_tushare_stock_st.py
+      - scripts/ingest_tushare_weekly.py
       - scripts/ingest_tushare_index_daily.py
       - scripts/sync_cninfo_anns_metadata.py
       - backend/tests/scripts/test_daily_integrity_writers.py

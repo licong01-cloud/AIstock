@@ -128,6 +128,7 @@ def _symbol_from_dir(path: Path) -> str:
 
 
 def _feature_symbols(root: Path, *, frequency: str) -> tuple[str, ...]:
+    from backend.services.data_integrity.stock_scope import is_excluded_stock_code
     features = root / "features"
     if not features.is_dir():
         raise AdjFactorCandidateRepairError(f"feature root is missing: {features}")
@@ -136,6 +137,7 @@ def _feature_symbols(root: Path, *, frequency: str) -> tuple[str, ...]:
         _symbol_from_dir(path)
         for path in features.iterdir()
         if path.is_dir() and not path.is_symlink() and (path / name).is_file()
+        and not is_excluded_stock_code(path.name)
     )
     if not symbols:
         raise AdjFactorCandidateRepairError(f"no factor bins found under {features}")
