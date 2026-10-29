@@ -124,7 +124,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh persistent source: 12 direct nodes including native confirmed economics/valuation restart and one-generation retry passed; valuation-matrix.xml",
+      "Fresh source inspected 49 real frozen positions and all 49 historical visible quotes using enforced READ ONLY DB connections; core completion mocked only for routing capture, production status/outbox unchanged. valuation-fresh-readonly-r1.json SHA256 81ae65089fc9d4420f67e84888766df62c9f75c1f0d05bead132075410b6fb0b"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -134,7 +137,10 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -254,5 +260,14 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "design_compliance": {
+    "no_unapproved_simplification": "Projection-only routing plus existing native completion; real source/plan/state readback; production completion pending user restart.",
+    "no_silent_error": "Identity/time/input conflicts remain fail-closed; original failures and cash gap stay visible.",
+    "no_business_logic_change": "No new orders/fills/fee/account generation, model, source-plan or ledger semantics.",
+    "no_unapproved_gate": "Uses existing frozen generation and state closure contracts; no new approval or data gate."
+  },
+  "review_rounds": [
+    "R1: source clock and before-fix reproduction; R2: original plan/state/generation and no duplicate execution; R3: 12 direct nodes, real readonly route/input proof, L0 and immutable evidence."
+  ]
 }
