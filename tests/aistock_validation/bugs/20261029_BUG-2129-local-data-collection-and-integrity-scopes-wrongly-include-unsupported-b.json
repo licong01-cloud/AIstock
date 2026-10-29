@@ -57,11 +57,11 @@
   "expected": "All active local-data stock collection, persistence, validation, retry and export entry points consistently exclude BSE without changing PIT eligibility or relaxing SH/SZ completeness.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/qlib_exporter/db_reader.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/services/data_integrity/provider.py",
+      "backend/services/data_integrity/stock_scope.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/dataset_release/adj_factor_candidate_repair.py",
       "backend/services/sector_data_builder.py",
@@ -71,7 +71,9 @@
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/scripts/test_daily_integrity_writers.py",
       "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
       "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
       "scripts/build_stock_universe_pit_spans.py",
       "scripts/import_minutes_to_db.py",
       "scripts/ingest_full_daily_raw.py",
@@ -86,17 +88,18 @@
       "scripts/ingest_tushare_stock_st.py",
       "scripts/ingest_tushare_weekly.py",
       "scripts/repair_minute_via_minute_api.py",
-      "backend/services/data_integrity/stock_scope.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "backend/services/data_integrity/stock_scope.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/qlib_exporter/db_reader.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/services/data_integrity/provider.py",
+      "backend/services/data_integrity/stock_scope.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/dataset_release/adj_factor_candidate_repair.py",
       "backend/services/sector_data_builder.py",
@@ -106,7 +109,9 @@
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/scripts/test_daily_integrity_writers.py",
       "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
       "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
       "scripts/build_stock_universe_pit_spans.py",
       "scripts/import_minutes_to_db.py",
       "scripts/ingest_full_daily_raw.py",
@@ -121,7 +126,8 @@
       "scripts/ingest_tushare_stock_st.py",
       "scripts/ingest_tushare_weekly.py",
       "scripts/repair_minute_via_minute_api.py",
-      "backend/services/data_integrity/stock_scope.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -513,8 +519,8 @@
   },
   "first_seen_at": "2026-10-29T04:02:04.706128Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7c90000a1b5ccb187b4f5c4e4641b52f195e584c",
+  "fixed_at": "2026-10-29T04:43:52Z",
   "github_issue_number": 6851,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6851",
   "last_seen_at": "2026-10-29T04:02:04.706128Z",
@@ -522,6 +528,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6856",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -547,6 +554,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -558,7 +566,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2129",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "97616c6cd811b1d4",
+    "recorded_at": "2026-10-29T04:44:40.242818Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "df01b56fb132c1e4980afe89f42e41bce6b1eb01",
+    "source_merge_commit": "7c90000a1b5ccb187b4f5c4e4641b52f195e584c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6856",
+    "validation_evidence": [
+      "validation-receipt: id=bd4c09b6f6333939 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py::test_a_share_ts_code_filter_fragment backend/tests/test_stock_universe_pit_spans.py::test_universe_source_queries_exclude_b_shares -q` result=`2 passed; prior direct matrix 383 passed, 1 skipped`",
+      "validation-receipt: id=5af0db1960b19cb7 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=abbc5c0370f57c2f commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`passed`",
+      "validation-receipt: id=61983d3abd70240d commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`"
+    ],
+    "validation_evidence_digest": "49caa8b252791d56a661aef115d4a53b05658d355d24f17e7a2d3a818e78e6ef"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -567,6 +599,12 @@
     "fingerprint": "41e6ac4d47785f358f67ed29",
     "source_event_id": "FE-20261029-41e6ac4d4778"
   },
+  "validation_evidence": [
+    "validation-receipt: id=bd4c09b6f6333939 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py::test_a_share_ts_code_filter_fragment backend/tests/test_stock_universe_pit_spans.py::test_universe_source_queries_exclude_b_shares -q` result=`2 passed; prior direct matrix 383 passed, 1 skipped`",
+    "validation-receipt: id=5af0db1960b19cb7 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=abbc5c0370f57c2f commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`passed`",
+    "validation-receipt: id=61983d3abd70240d commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
