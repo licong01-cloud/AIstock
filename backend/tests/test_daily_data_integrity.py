@@ -124,6 +124,12 @@ def test_daily_basic_only_proven_new_listing_ratio_na_is_legal():
     assert daily_basic_result(facts, facts, volume_ratio_warmup=proof).state == PartitionState.INCOMPLETE
     facts["301718.SZ"]["circ_mv"] = 1
     facts["301718.SZ"]["volume_ratio"] = float("nan")
+    assert daily_basic_result(facts, facts, volume_ratio_warmup=proof).state == PartitionState.VALID
+    assert daily_basic_result(facts, facts).state == PartitionState.INCOMPLETE
+    from decimal import Decimal
+    facts["301718.SZ"]["volume_ratio"] = Decimal("NaN")
+    assert daily_basic_result(facts, facts, volume_ratio_warmup=proof).state == PartitionState.VALID
+    facts["301718.SZ"]["volume_ratio"] = float("inf")
     assert daily_basic_result(facts, facts, volume_ratio_warmup=proof).state == PartitionState.INCOMPLETE
     assert daily_basic_result(facts, {}, volume_ratio_warmup=proof).state == PartitionState.INCOMPLETE
 
