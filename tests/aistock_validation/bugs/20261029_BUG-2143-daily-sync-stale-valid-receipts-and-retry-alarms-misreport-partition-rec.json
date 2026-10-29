@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2143",
-  "closed_at": null,
+  "closed_at": "2026-10-29T19:11:20.804240Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,18 +34,30 @@
   ],
   "expected": "Only current applicable validation proof certifies completeness; recovery and terminal errors accurately reflected; real missing facts remain visible and failed jobs preserve root cause.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
       "backend/services/data_integrity/contracts.py",
       "backend/services/data_integrity/repository.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/test_daily_data_integrity.py",
-      "backend/tests/test_tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_daily_data_integrity_dev.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2143-daily-sync-stale-valid-receipts-and-retry-alarms-misreport-partition-rec.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/contracts.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2143-daily-sync-stale-valid-receipts-and-retry-alarms-misreport-partition-rec.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/contracts.py",
@@ -195,8 +207,8 @@
   },
   "first_seen_at": "2026-10-29T18:25:03.318809Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5727a8c4b43ca9d5b5c17e077c13191366a3b371",
+  "fixed_at": "2026-10-29T18:43:50Z",
   "github_issue_number": 6902,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6902",
   "last_seen_at": "2026-10-29T18:25:03.318809Z",
@@ -204,6 +216,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6904",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -226,8 +239,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\cyq-history-repair-attempt-20261030-r1\\BUG-2143-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2143",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "5727a8c4b43ca9d5b5c17e077c13191366a3b371",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T19:08:47.942868Z",
+      "mode": "read_only",
+      "observed_identity": "b1915acfe1788f0a70de2b576e59354eefa7deca",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "5dc240605cd1f4575d105b1b5c9bec262bb97b56c8180a809c536776c62507d5",
+      "receipt_sha256": "393f7aaa48dada67429cce6132102cc063c99f87581e413ece85e084c363ba11",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2f01c66ed6390c42984f3f71ff176bbba9195b3b0e80f3a76298e57aa39d470e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -237,7 +274,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2143",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "65a0b1c632b776f5",
+    "recorded_at": "2026-10-29T18:44:31.215915Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a3885379fc54327b70167c55ea4630da22a76def",
+    "source_merge_commit": "5727a8c4b43ca9d5b5c17e077c13191366a3b371",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6904",
+    "validation_evidence": [
+      "validation-receipt: id=73d34eb71f2b0357 commit=a3885379fc54327b70167c55ea4630da22a76def kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q` result=`416 passed, 1 skipped; final targeted regression12 passed after final sweep change`",
+      "validation-receipt: id=9f7574fd63003013 commit=a3885379fc54327b70167c55ea4630da22a76def kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity_dev.py -k \"obsolete_dense_green or dated_retry_alert_native\" -q` result=`4 passed in existing DEV; no production write`",
+      "validation-receipt: id=1c9f2058905d7e03 commit=a3885379fc54327b70167c55ea4630da22a76def kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=4b0d704c7d573e1b commit=a3885379fc54327b70167c55ea4630da22a76def kind=ruff plan=direct status=passed command=`ruff check changed Python files; python -m compileall -q changed source; git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "6f838c47c655b12fed9789df5779743de45fae50da9d28b02057ee3117bf1696"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -246,6 +307,19 @@
     "fingerprint": "61e869eaf084ff652e7d02b7",
     "source_event_id": "FE-20261029-61e869eaf084"
   },
+  "validation_evidence": [
+    "RED: legacy green, missing native error and retry-alarm cases failed before source changes; GREEN: all direct cases passed",
+    "Related matrix: 416 passed, 1 explicitly guarded DEV test skipped",
+    "Existing DEV native SQL: 4 passed; old proof requeued idempotently, unrelated datasets retained; incomplete/retrying/recovered alert readbacks passed",
+    "Final sweep/race regression: 12 passed; Ruff, fresh-process imports, compile and git diff --check passed; L0 passed",
+    "DESIGN-COMPLIANCE-001: no partial result reported complete; no swallowed errors or invented NA; historical facts/PIT/policy unchanged; no new approval or research gate",
+    "Production read-only refreshed 2026-10-30 02:33 CN: known bak_basic list still misses 275 keys/19 symbols; cyq_perf 000663.SZ/2026-05-20 absent. Source-empty is not permission to mark valid. Runtime verification remains pending user restart.",
+    "validation-receipt: id=73d34eb71f2b0357 commit=a3885379fc54327b70167c55ea4630da22a76def kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q` result=`416 passed, 1 skipped; final targeted regression12 passed after final sweep change`",
+    "validation-receipt: id=9f7574fd63003013 commit=a3885379fc54327b70167c55ea4630da22a76def kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity_dev.py -k \"obsolete_dense_green or dated_retry_alert_native\" -q` result=`4 passed in existing DEV; no production write`",
+    "validation-receipt: id=1c9f2058905d7e03 commit=a3885379fc54327b70167c55ea4630da22a76def kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=4b0d704c7d573e1b commit=a3885379fc54327b70167c55ea4630da22a76def kind=ruff plan=direct status=passed command=`ruff check changed Python files; python -m compileall -q changed source; git diff --check` result=`passed`",
+    "2026-10-30 user restart: backend b1915acfe1788f0a70de2b576e59354eefa7deca contains source merge 5727a8c4b; official identity/business smoke passed. Read-only SQL: cyq_perf 2026-05-20 revision2 remains INCOMPLETE; 2026-10-29 revision1 VALID; native failed job retains independent_dated_stock_panel_incomplete. Historical source gaps remain unresolved; no source/database/profile writes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -294,14 +368,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "RED: legacy green, missing native error and retry-alarm cases failed before source changes; GREEN: all direct cases passed",
-    "Related matrix: 416 passed, 1 explicitly guarded DEV test skipped",
-    "Existing DEV native SQL: 4 passed; old proof requeued idempotently, unrelated datasets retained; incomplete/retrying/recovered alert readbacks passed",
-    "Final sweep/race regression: 12 passed; Ruff, fresh-process imports, compile and git diff --check passed; L0 passed",
-    "DESIGN-COMPLIANCE-001: no partial result reported complete; no swallowed errors or invented NA; historical facts/PIT/policy unchanged; no new approval or research gate",
-    "Production read-only refreshed 2026-10-30 02:33 CN: known bak_basic list still misses 275 keys/19 symbols; cyq_perf 000663.SZ/2026-05-20 absent. Source-empty is not permission to mark valid. Runtime verification remains pending user restart."
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
