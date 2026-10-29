@@ -145,6 +145,13 @@ class BacktestExecutor(BaseExecutor):
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
+        relative_study = custom_params.get("qe_l2_relative_manifest")
+        if relative_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_L2_RELATIVE_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(relative_study, dict)
+                    or relative_study.get("assets", {}).get("prediction", {}).get("sha256") != source.sha256):
+                raise ValueError("QE_L2_RELATIVE_SOURCE_PREDICTION_MISMATCH")
         probability_study = custom_params.get("qe_stock_probability_study")
         if probability_study is not None:
             if mode != BacktestMode.PREDICTION_REPLAY:
