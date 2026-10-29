@@ -1,0 +1,269 @@
+{
+  "actual": "After BUG-2125 fixed deterministic summary aggregation, the completed 181-day 13-account study cannot use the new implementation through run_study because the original request correctly freezes old source identity. Add explicit versioned report-only recovery over the original immutable source/results/account receipts, validating the full source batch before outcomes, calling the unique summary function, preserving original producer identity and all old artifacts, and issuing a separate current summary producer identity with exact retry. Do not recompute any account or mark the original failed job successful.",
+  "allowed_write_scope": [
+    "backend/services/simulation_execution/localsim/dual_mode_research.py",
+    "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+    "docs/analysis/localsim_report_only_recovery_20261029.md",
+    "tests/aistock_validation/bugs/20261029_BUG-2134-localsim-frozen-completed-studies-lack-versioned-report-only-summary-rec.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2134",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T06:11:45.368380Z",
+  "description": "After BUG-2125 fixed deterministic summary aggregation, the completed 181-day 13-account study cannot use the new implementation through run_study because the original request correctly freezes old source identity. Add explicit versioned report-only recovery over the original immutable source/results/account receipts, validating the full source batch before outcomes, calling the unique summary function, preserving original producer identity and all old artifacts, and issuing a separate current summary producer identity with exact retry. Do not recompute any account or mark the original failed job successful.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-99522a856772",
+      "timestamp": "2026-10-29T06:11:45.368380Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/localsim_immutable_summary_conflict_20261029.md"
+  ],
+  "expected": "A new immutable report-only revision binds old request/results/day receipts and current summary implementation; native ledger readback and all source checks pass; retry reuses the same revision with zero account computation; replay with changed source remains rejected.",
+  "file_scope_contract": {
+    "added_files": [
+      "docs/analysis/localsim_report_only_recovery_20261029.md"
+    ],
+    "changed_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_execution/localsim/dual_mode_research.py",
+        "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+        "docs/analysis/localsim_report_only_recovery_20261029.md"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "simulation.layer_foundation",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "selection_center",
+        "strategy_package",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "docs/analysis/localsim_report_only_recovery_20261029.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_execution/localsim/dual_mode_research.py",
+        "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+        "docs/analysis/localsim_report_only_recovery_20261029.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/analysis/localsim_report_only_recovery_20261029.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/analysis/localsim_report_only_recovery_20261029.md"
+    ]
+  },
+  "first_seen_at": "2026-10-29T06:11:45.368380Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6871,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6871",
+  "last_seen_at": "2026-10-29T06:11:45.368380Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM frozen completed studies lack versioned report-only summary recovery",
+  "trigger_condition": {
+    "fingerprint": "99522a85677285dc6e380b0a",
+    "source_event_id": "FE-20261029-99522a856772"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "platform_api",
+        "simulation_core"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "platform_api",
+          "simulation_core"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
