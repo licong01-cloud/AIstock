@@ -15,6 +15,13 @@
   ],
   "created_at": "2026-10-29T15:56:27.957624Z",
   "description": "Live sw_daily exact-date repair target repeatedly fails schedule_owner_missing although sw_sector is enabled. DailyIntegrityWorker stamps schedule_dataset=sw_daily; TDXScheduler returns explicit owner before applying existing physical-to-schedule aliases. Source facts are currently available and DEV native upsert readback passed. Normalize both newly produced and existing metadata routing without changing fact validation, PIT membership or success verdicts. Add RED-GREEN retry routing tests.",
+  "design_compliance_review": {
+    "existing_automatic_mode_preserved": true,
+    "no_business_semantic_or_validation_relaxation": true,
+    "no_new_manual_gate_or_framework": true,
+    "requested_scope_complete": true,
+    "runtime_acceptance": "pending_user_restart"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,9 +35,18 @@
   ],
   "expected": "Normalize physical sw_daily metadata to its existing sw_sector schedule owner; exact dated sector repairs must honor their ordered window and must not process unrelated revision history. Preserve automatic append/revision mode when no explicit dates were requested.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -45,8 +61,8 @@
   },
   "first_seen_at": "2026-10-29T15:56:27.957624Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "692f57fe538928c364f972206160bd1c25919d25",
+  "fixed_at": "2026-10-29T16:09:13Z",
   "github_issue_number": 6898,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6898",
   "last_seen_at": "2026-10-29T15:56:27.957624Z",
@@ -54,6 +70,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6899",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,40 +80,58 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
-  "risk_area": "bug",
-  "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2142-repair-routing-20261030/validate_dev.py -> passed worktree-isolated real target route replay in existing DEV; one dry-run dispatch; effects rolled back; no production writes",
-      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_daily_sync_recovery.py -q --no-cov -> 214 passed, 1 skipped"
-    ],
-    "inference_basis": "actual_changed_files",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": false,
-    "runtime_impact": "backend",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": ["backend-main"]
-  },
-  "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
   "review_rounds": [
     "Round 1: production target reproduces stale physical owner; RED 2 routing cases, GREEN all 10 owner cases; unknown/custom owners remain unchanged.",
     "Round 2: exact sector date options were ignored; RED all 5 range cases, GREEN all 5; invalid/partial/reversed windows fail without building any history.",
     "Round 3: 214 related scheduler/recovery tests passed, 1 skipped; existing DEV real metadata dry-run routes once, no actual job or production write; L0/Ruff/diff checks passed."
   ],
-  "design_compliance_review": {
-    "requested_scope_complete": true,
-    "existing_automatic_mode_preserved": true,
-    "no_business_semantic_or_validation_relaxation": true,
-    "no_new_manual_gate_or_framework": true,
-    "runtime_acceptance": "pending_user_restart"
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2142-repair-routing-20261030/validate_dev.py -> passed worktree-isolated real target route replay in existing DEV; one dry-run dispatch; effects rolled back; no production writes",
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_daily_sync_recovery.py -q --no-cov -> 214 passed, 1 skipped"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
-  "status": "open",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2142",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "63194e1425c2a47d",
+    "recorded_at": "2026-10-29T16:10:04.944046Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0b24b44c6ae78fddf599b77440a857b96d3c3761",
+    "source_merge_commit": "692f57fe538928c364f972206160bd1c25919d25",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6899",
+    "validation_evidence": [
+      "214 passed, 1 skipped; L0/Ruff passed; existing DEV real metadata routing replay passed and rolled back; exact-date repair excludes unrelated history"
+    ],
+    "validation_evidence_digest": "65de6224bf603b881795ada038dd6b9204612bdf8742ffa6650fe10de4c641ff"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -129,6 +164,9 @@
     "ui_routes": [],
     "visual_acceptance_required": false
   },
+  "validation_evidence": [
+    "214 passed, 1 skipped; L0/Ruff passed; existing DEV real metadata routing replay passed and rolled back; exact-date repair excludes unrelated history"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
