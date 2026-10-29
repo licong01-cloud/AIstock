@@ -150,6 +150,12 @@ class PhysicalValidator:
 
     @staticmethod
     def _canonical_raw_codes(authority, codes, day):
+        from backend.services.market_data.instrument_validator import normalize_ts_code
+        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+        # Same notation contract as shared QE/Selection/Paper readers; this
+        # changes no economic identity, pool, date or stored quote.
+        codes = {normalize_ts_code(code) for code in codes}
+        codes = {code for code in codes if not is_b_share_ts_code(code)}
         aliases = {}
         for row in authority.rows:
             if (row.source_dataset == "market.kline_daily_raw" and row.effective_start is not None

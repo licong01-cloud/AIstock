@@ -108,6 +108,19 @@ def test_daily_basic_admission_ratio_is_not_zero_gap_certification():
     assert daily_basic_result(facts, facts).state == PartitionState.INCOMPLETE
 
 
+def test_traded_scope_reuses_shared_legacy_code_normalization():
+    from backend.services.data_integrity.validation import PhysicalValidator
+    from backend.data_service.security_source_identity import load_default_security_source_identity_manifest
+    authority = load_default_security_source_identity_manifest()
+    codes = PhysicalValidator._canonical_raw_codes(authority,
+        ["SZ000001 ", "000001.SZ", "sh600000", "SZ200002", "SH900901"], date(2026, 2, 9))
+    assert codes == {"000001.SZ", "600000.SH"}
+    assert {authority.resolve(code, date(2026, 2, 9), "market.daily_basic").source_ts_code for code in codes} == codes
+    with pytest.raises(ValueError, match="canonical_ts_code is invalid"):
+        for code in PhysicalValidator._canonical_raw_codes(authority, ["bad-symbol"], date(2026, 2, 9)):
+            authority.resolve(code, date(2026, 2, 9), "market.daily_basic")
+
+
 def test_daily_basic_only_proven_new_listing_ratio_na_is_legal():
     from backend.services.data_integrity.validation import daily_basic_result
     from backend.services.tushare_sync_engine import DAILY_BASIC_REQUIRED_FIELDS
