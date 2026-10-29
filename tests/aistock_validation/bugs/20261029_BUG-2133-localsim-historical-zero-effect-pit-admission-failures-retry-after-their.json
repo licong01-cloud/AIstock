@@ -124,7 +124,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh AIstock Python loaded persistent scheduler/PIT source: 26 direct tests passed; X:/AIstock_temp/localsim-reliability-followup-20261029/pit-matrix.xml",
+      "Fresh persistent scheduler source inspected both original 2026-10-26 rows through enforced read-only DB connections with updates captured only in memory; production states remain FAILED_RETRYABLE. Receipt: X:/AIstock_temp/localsim-reliability-followup-20261029/pit-fresh-readonly-r1.json SHA256 76dadfda21a724bea8fe115d3aa39aadd3b1ba39394d98f41d992ddb2d216c7a"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -134,7 +137,10 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -254,5 +260,15 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "validation": [],
+  "design_compliance": {
+    "no_unapproved_simplification": "Missed live days stay explicitly failed; no historical backfill.",
+    "no_silent_error": "Original failure and strict identity errors preserved; no unknown economics fabricated.",
+    "no_business_logic_change": "No package, PIT rules, account, fills, fees or ledger change.",
+    "no_unapproved_gate": "Uses existing pre-run zero-effect contract and frozen identity; no new approval or data gate."
+  },
+  "review_rounds": [
+    "R1: before-fix failing node; R2: immutable identity and zero-effect exclusions; R3: 26 targeted tests, strict read-only real records, lint/compile/diff and L0."
+  ]
 }

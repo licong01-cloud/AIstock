@@ -196,9 +196,9 @@ _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT = 100
 # claim/clear writes on every scheduler tick. Present-but-non-dict carriers are NOT
 # skipped here; the isolated path keeps raising the typed invalid-carrier error. The
 # isolated path also validates the outbox before its carrier check, so a run with a
-# corrupt outbox AND a valid dict carrier is skipped by this hoist instead of raising;
-# that combination is unreachable because the carrier write implies a previously valid
-# outbox and nothing mutates the outbox afterwards.
+# corrupt outbox AND a valid dict carrier is skipped by this hoist instead of raising.
+# Durable carriers require an already validated outbox; the PIT-admission carrier is
+# instead written only after proving there was no plan, broker activity or economics.
 _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "local_sim_projection_readback_failure",
     "local_sim_projection_terminal_failure",
@@ -206,6 +206,7 @@ _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "localsim_historical_legacy_plan_terminalization_v1",
     "localsim_historical_failed_retryable_active_recovery_v1",
     "localsim_historical_failed_terminal_active_recovery_v1",
+    "localsim_historical_pit_admission_failure_v1",
 )
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
@@ -7210,6 +7211,61 @@ class SimulationLifecycleScheduler:
                     return terminalized
         return terminalized
 
+    def _terminalize_missed_localsim_pit_admission(
+        self, *, run: SimulationDailyRun, scheduler_trade_date: date,
+    ) -> dict[str, Any] | None:
+        """Close a missed live day as failed, never manufacture historical trades."""
+        if (scheduler_trade_date != self._scheduler_now().date()
+                or run.trade_date >= scheduler_trade_date
+                or not self._localsim_pit_failure_can_be_superseded(run)):
+            return None
+        from backend.services.selection_center.canonical_pit_runtime import (
+            CANONICAL_PIT_RUNTIME_LEASE_KEY, SelectionPitRuntimeLease,
+        )
+        from .localsim_input_source_plan import PLAN_KEY
+
+        binding = self.repository.get_simulation_release_binding(run.binding_id)
+        release = self.repository.get_strategy_runtime_release(run.release_id)
+        metadata = release.release_config_json.get("metadata") or {}
+        if PLAN_KEY in metadata or CANONICAL_PIT_RUNTIME_LEASE_KEY not in metadata:
+            return None
+        lease = SelectionPitRuntimeLease.from_mapping(metadata[CANONICAL_PIT_RUNTIME_LEASE_KEY])
+        if (binding.strategy_id != run.strategy_id or binding.release_id != run.release_id
+                or binding.release_hash != run.release_hash or release.release_hash != run.release_hash
+                or binding.binding_hash != run.binding_hash
+                or binding.package_id != run.package_id or release.package_id != run.package_id
+                or binding.manifest_sha256 != run.manifest_sha256
+                or release.manifest_sha256 != run.manifest_sha256
+                or binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM
+                or lease.coverage_end >= run.trade_date
+                or metadata.get("selection_runtime_config", {}).get(CANONICAL_PIT_RUNTIME_LEASE_KEY) != lease.as_dict()):
+            raise DataUnavailableError(
+                "Historical LocalSIM PIT failure does not match its frozen admission",
+                context={"reason_code": "LOCALSIM_HISTORICAL_PIT_FAILURE_IDENTITY_CONFLICT",
+                         "run_id": run.run_id},
+            )
+        audit = {
+            "schema_version": "localsim_historical_pit_admission_failure_v1",
+            "reason_code": "LOCALSIM_HISTORICAL_PIT_ADMISSION_MISSED",
+            "previous_status": run.status.value, "trade_date": run.trade_date.isoformat(),
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "binding_id": run.binding_id, "release_id": run.release_id,
+            "frozen_coverage_end": lease.coverage_end.isoformat(),
+            "broker_called": False, "submitted_intents": 0,
+            "historical_orders_backfilled": False,
+            "terminalized_at": self._scheduler_now().isoformat(),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id, status=SimulationDailyRunStatus.FAILED_TERMINAL,
+            payload_patch={"last_stage": "FAILED_TERMINAL",
+                           "localsim_historical_pit_admission_failure_v1": audit},
+        )
+        return {"run_id": updated.run_id, "trade_date": updated.trade_date.isoformat(),
+                "strategy_id": updated.strategy_id, "broker_backend": updated.broker_backend.value,
+                "previous_status": run.status.value, "status": updated.status.value,
+                "reason": "missed_live_day_pit_admission_without_economic_effects",
+                "reason_code": audit["reason_code"]}
+
     def _terminalize_historical_localsim_durable_run_if_safe(
         self,
         *,
@@ -7217,6 +7273,11 @@ class SimulationLifecycleScheduler:
         scheduler_trade_date: date,
         as_of_time: datetime | None,
     ) -> dict[str, Any] | None:
+        missed_admission = self._terminalize_missed_localsim_pit_admission(
+            run=run, scheduler_trade_date=scheduler_trade_date,
+        )
+        if missed_admission is not None:
+            return missed_admission
         raw_outbox = run.run_payload_json.get("local_sim_projection_outbox_v1")
         if raw_outbox is None:
             return None
