@@ -1864,7 +1864,7 @@ def test_record_by_code_audit_full_day_stays_ok(monkeypatch):
     assert "expected_rows" not in call
 
 
-@pytest.mark.parametrize("failure", ["none", "source", "commit", "wrong_key", "truncated", "empty", "catalogue_change"])
+@pytest.mark.parametrize("failure", ["none", "case", "source", "commit", "wrong_key", "wrong_date", "truncated", "empty", "catalogue_change"])
 def test_actual_index_engine_preserves_completed_query_scan(monkeypatch, failure):
     from backend.services.tushare_dataset_specs import INDEX_DAILY
     spec = replace(INDEX_DAILY, batch_sleep=0, row_limit=2)
@@ -1876,7 +1876,7 @@ def test_actual_index_engine_preserves_completed_query_scan(monkeypatch, failure
     catalog_reads = []
     def codes(*_args):
         catalog_reads.append(True)
-        return ["000300.SH", "000985.CSI"] + (["399006.SZ"] if failure == "catalogue_change" and len(catalog_reads)>1 else [])
+        return ["h00300.CSI" if failure == "case" else "000300.SH", "000985.CSI"] + (["399006.SZ"] if failure == "catalogue_change" and len(catalog_reads)>1 else [])
     monkeypatch.setattr(engine, "_fetch_code_list", codes)
     monkeypatch.setattr(engine, "_trading_dates_between", lambda *_args: [day, next_day])
     monkeypatch.setattr(engine, "_has_code_rows", lambda *_args: False)
@@ -1889,7 +1889,8 @@ def test_actual_index_engine_preserves_completed_query_scan(monkeypatch, failure
             raise RuntimeError("provider unavailable")
         if failure == "empty":
             return []
-        value = {"ts_code": "wrong" if failure == "wrong_key" else code, "trade_date": "20261027"}
+        value = {"ts_code": "wrong" if failure == "wrong_key" else code.upper() if failure == "case" else code,
+                 "trade_date": "20261029" if failure == "wrong_date" else "20261027"}
         return [value, value] if failure == "truncated" else [value]
     def write(_conn, _spec, rows):
         if failure == "commit":
@@ -1898,7 +1899,7 @@ def test_actual_index_engine_preserves_completed_query_scan(monkeypatch, failure
     monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
     monkeypatch.setattr(engine, "_upsert_batch", write)
     result = engine._sync_by_code_batched(spec, day, next_day, uuid.uuid4())
-    if failure in {"source", "commit", "wrong_key", "truncated"}:
+    if failure in {"source", "commit", "wrong_key", "wrong_date", "truncated"}:
         assert not result.ok
         assert audit.success_calls == []
         return
@@ -1910,6 +1911,8 @@ def test_actual_index_engine_preserves_completed_query_scan(monkeypatch, failure
     assert len(first["metadata"]["provider_scan"]["entries"]) == (0 if failure == "empty" else 2)
     assert second["metadata"]["provider_scan"]["entries"] == []
     assert second["quality_status"] == "empty_valid"
+    if failure == "case":
+        assert {e["key"][0] for e in first["metadata"]["provider_scan"]["entries"]} == {"H00300.CSI", "000985.CSI"}
 
 
 def test_chip_and_margin_specs_carry_min_expected_rows():

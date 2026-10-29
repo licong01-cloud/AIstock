@@ -2145,9 +2145,16 @@ class TushareSyncEngine:
                         if spec.name == "index_daily":
                             for row in rows:
                                 day = _parse_ymd(row.get(spec.date_column))
-                                if day is None or not start_date <= day <= end_date or row.get(spec.code_param_name) != code_val:
+                                response_code = row.get(spec.code_param_name)
+                                # index_basic can use h00300.CSI while daily
+                                # quotes use H00300.CSI. Keep the real request
+                                # and stored source spelling; case alone is not
+                                # a different index. Other key/date drift fails.
+                                if (day is None or not start_date <= day <= end_date
+                                        or not isinstance(response_code, str)
+                                        or response_code.upper() != code_val.upper()):
                                     raise ValueError("index provider returned an unexpected code or date")
-                                index_facts.append((day, {"ts_code": code_val, "trade_date": day}))
+                                index_facts.append((day, {"ts_code": response_code, "trade_date": day}))
                         # All empty-response guards ask the same question for
                         # this code. Probe once and reuse; nonempty responses
                         # need no local-history query at all.
