@@ -176,7 +176,7 @@ class PhysicalValidator:
 
     def validate(self, conn, obligation: Obligation, day: date, revision: int) -> ValidationResult:
         dataset = obligation.dataset
-        if dataset in {"kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts"}:
+        if dataset in {"kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts", "cyq_perf", "bak_basic"}:
             from .catalog import SCOPE_VERSION, RULE_VERSION
             dependency = rows(conn, """SELECT * FROM market.dataset_date_refresh_audit
                 WHERE dataset='kline_daily_raw' AND trade_date=%s AND data_source='canonical_db'""", (day,))
@@ -225,7 +225,7 @@ class PhysicalValidator:
                            "scope": "full_provider_not_buy_universe"},
                 tuple({"classification": kind, "symbols": sorted(values), "fact_date": str(day)}
                       for kind, values in (("MISSING", absent), ("INVALID", invalid)) if values))
-        if dataset in {"daily_basic", "adj_factor", "stk_limit", "moneyflow_ts"}:
+        if dataset in {"daily_basic", "adj_factor", "stk_limit", "moneyflow_ts", "cyq_perf", "bak_basic"}:
             table = f"market.{dataset}"
             if dataset == "adj_factor":
                 authority = load_default_security_source_identity_manifest()
@@ -245,6 +245,14 @@ class PhysicalValidator:
             if dataset == "daily_basic":
                 return daily_basic_result(expected, facts,
                     volume_ratio_warmup=self._volume_ratio_warmup(conn, day, facts))
+            if dataset in {"cyq_perf", "bak_basic"}:
+                # These are dated stock panels, not sparse event catalogues.
+                # Independent traded keys certify stored history; never invent
+                # an old provider scan or use a present-day listing snapshot.
+                return key_result(expected, facts,
+                    required_fields=("weight_avg", "cost_50pct", "winner_rate") if dataset == "cyq_perf" else (),
+                    checks={"coverage_basis": "independent_dated_traded_stock_keys",
+                            "historical_provider_scan_required": False})
             if dataset == "stk_limit":
                 from backend.services.tushare_sync_engine import _stk_limit_source_prices_valid
                 result = key_result(expected, facts)

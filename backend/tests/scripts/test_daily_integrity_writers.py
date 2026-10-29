@@ -58,7 +58,10 @@ class Connection:
 
 @pytest.mark.parametrize("changed", [False, True])
 def test_moneyflow_preserves_finite_values_and_marks_only_actual_changes(monkeypatch, changed):
+    from backend.services import sector_data_repair
     statements, markers = [], []
+    derived = []
+    monkeypatch.setattr(sector_data_repair, "mark_revision_dates", lambda _c, days, dataset: derived.append((dataset, days)))
     def execute(_cur, query, values, **_options):
         statements.append((query, values))
         return [(date(2026, 9, 1),)] if changed else []
@@ -72,6 +75,35 @@ def test_moneyflow_preserves_finite_values_and_marks_only_actual_changes(monkeyp
     assert "IS DISTINCT FROM" in query and "RETURNING trade_date" in query
     assert values[0][3] is None and values[0][-1] == -3.5
     assert markers == [("moneyflow_ts", [date(2026, 9, 1)] if changed else [])]
+    assert derived == ([("moneyflow_ts", [date(2026, 9, 1)])] if changed else [])
+
+
+def test_legacy_fact_and_sector_invalidation_share_one_transaction(monkeypatch):
+    from backend.services import sector_data_repair
+    class Conn(Connection):
+        autocommit = True
+        committed = False
+        rolled_back = False
+        def commit(self): self.committed = True
+        def rollback(self): self.rolled_back = True
+    conn = Conn()
+    monkeypatch.setattr(writes.extras, "execute_values", lambda *_a, **_kw: [(date(2026, 9, 1),)])
+    monkeypatch.setattr(writes, "mark_changed", lambda *_a, **_kw: None)
+    def failed_marker(*_a):
+        assert not conn.autocommit
+        raise RuntimeError("derived invalidation failed")
+    monkeypatch.setattr(sector_data_repair, "mark_revision_dates", failed_marker)
+    with pytest.raises(RuntimeError, match="derived invalidation"):
+        writes.changed_values(conn, "INSERT ... RETURNING trade_date", [(1,)], dataset="moneyflow_ts", source="test")
+    assert conn.rolled_back and not conn.committed and conn.autocommit
+
+
+def test_controlled_source_repair_sql_invalidates_only_affected_derived_dates():
+    marker = writes.sql_revision_marker("moneyflow_ts")
+    assert "sector_dependency_revision" in marker
+    assert "mark_data_integrity_changed('sector_data'" in marker
+    assert "2021-07-30" in marker
+    assert "sector_dependency_revision" not in writes.sql_revision_marker("adj_factor")
 
 
 def test_cninfo_metadata_only_retry_does_not_dirty_facts(monkeypatch):

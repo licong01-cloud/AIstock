@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import datetime as dt
 import hashlib
 import json
@@ -22,6 +23,16 @@ from backend.services.industry_pit.contracts import (
     TaxonomyIdentity,
     make_candidate_interval,
 )
+
+
+def test_derived_sector_paths_use_same_versioned_history_with_explicit_tail_fallback():
+    for query in (module._PREFLIGHT_DAY_SQL, module._BUILD_DAY_SQL, module._DELETE_STALE_DAY_SQL):
+        assert "market.sw_industry_classification_history_v1" in query
+        assert "taxonomy_version = 'SW2021'" in query
+        assert "effective_from <= %(trade_date)s" in query
+        assert "effective_to >= %(trade_date)s" in query
+        assert "FROM dated_members AS member" in query
+        assert "NOT EXISTS (SELECT 1 FROM historical_members h WHERE h.ts_code = m.ts_code)" in query
 
 
 class _Cursor:

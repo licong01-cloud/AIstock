@@ -1040,6 +1040,38 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("dataset,verdict,expected", [
+    ("kline_daily_raw", {"state": "INCOMPLETE", "gaps": [{"classification": "MISSING", "symbols": ["920680.BJ"]}]}, True),
+    ("kline_daily_raw", {"state": "INCOMPLETE", "gaps": [{"classification": "MISSING", "symbols": ["000001.SZ"]}]}, False),
+    ("cyq_perf", {"state": "UNVERIFIED", "reason": "complete_source_scan_not_bound_to_revision"}, True),
+    ("sector_data", {"state": "INCOMPLETE", "gaps": [{"classification": "INVALID", "ts_code": "000001.SZ"}]}, False),
+])
+def test_integrity_retry_revalidates_obsolete_scope_before_refetch(monkeypatch, dataset, verdict, expected):
+    from backend.services.data_integrity import repository
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queued = []
+    scheduler._fetchall = lambda *_a, **_kw: [{"validation_status": verdict["state"], "validation": verdict}]
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_kw: nullcontext(object()))
+    monkeypatch.setattr(repository, "enqueue_validation", lambda _conn, ds, day: queued.append((ds, day)))
+    target = {"dataset": dataset, "data_source": "integrity_repair", "target_date": dt.date(2025, 8, 22)}
+    assert scheduler._defer_obsolete_integrity_fetch(target) is expected
+    assert queued == ([(dataset, dt.date(2025, 8, 22))] if expected else [])
+    target["data_source"] = "normal_sync"
+    assert scheduler._defer_obsolete_integrity_fetch(target) is False
+
+
+def test_obsolete_integrity_fetch_never_reaches_collector_dispatch(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = {"target_id": "old-bse-gap", "dataset": "kline_daily_raw", "data_source": "integrity_repair",
+              "target_date": dt.date(2025, 8, 22), "metadata": {"integrity_dataset": "kline_daily_raw"}}
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: SimpleNamespace(
+        list_fillable_targets=lambda **_kw: [target]))
+    scheduler._defer_obsolete_integrity_fetch = lambda row: row is target
+    scheduler._check_dataset_recovered = lambda *_a: pytest.fail("no collector precheck after deferred verification")
+    scheduler._enqueue_target_retry = lambda **_kw: pytest.fail("no refetch for an obsolete unsupported gap")
+    assert scheduler._reconcile_due_data_sync_targets({"kline_daily_raw": {"mode": "incremental"}}) == []
+
+
 def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []

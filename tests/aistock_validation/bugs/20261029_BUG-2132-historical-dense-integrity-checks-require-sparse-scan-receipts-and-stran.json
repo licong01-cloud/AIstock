@@ -1,8 +1,13 @@
 {
   "actual": "Advisory LSTM has 282 cyq_perf partitions UNVERIFIED solely for missing historical provider scan receipts although dated SH/SZ traded-key samples are complete; source-only receipts must not replace physical validation of dense facts. Old BSE-only raw verdicts block 38 daily_basic and moneyflow partitions and can dispatch redundant historical TDX fetches. 204 pending sector dependency revision dates remain unrepaired; inspect producer failures and exact-date recovery before fact backfill.",
   "allowed_write_scope": [
+    "backend/services/sector_data_builder.py",
+    "backend/tests/services/test_sector_data_builder.py",
+    "backend/data_service/security_source_identity.py",
+    "backend/tests/data_service/test_security_source_identity.py",
     "backend/services/data_integrity/validation.py",
-    "backend/services/data_integrity/worker.py",
+    "backend/services/data_integrity/writes.py",
+    "backend/tests/scripts/test_daily_integrity_writers.py",
     "backend/ingestion/tdx_scheduler.py",
     "backend/tests/test_daily_data_integrity.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
@@ -176,17 +181,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": ["python X:/AIstock_temp/DATA_PREPARATION/BUG-2132-advisory-history-20261029/validate_dev.py -> existing DEV temporary-table validation; real transaction markers and controlled SQL rollback; no production fact writes"],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
