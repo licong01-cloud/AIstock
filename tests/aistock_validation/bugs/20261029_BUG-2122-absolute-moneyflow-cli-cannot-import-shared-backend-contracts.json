@@ -2,7 +2,7 @@
   "actual": "Daily moneyflow ingest fails before upsert; derived sector data blocked.",
   "allowed_write_scope": [
     "scripts/ingest_tushare_moneyflow_ts.py",
-    "backend/tests/scripts/test_moneyflow_cli_bootstrap.py",
+    "backend/tests/scripts/test_daily_integrity_writers.py",
     "tests/aistock_validation/bugs/20261029_BUG-2122-absolute-moneyflow-cli-cannot-import-shared-backend-contracts.json"
   ],
   "assigned_agent": null,
@@ -21,22 +21,31 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261029-7ac2e2e36ae9",
       "timestamp": "2026-10-29T02:13:33.132000Z"
+    },
+    {
+      "action": "scope_review",
+      "note": "Reuse the existing directly CI-mapped daily integrity writer tests; no pipeline changes or new test lane.",
+      "timestamp": "2026-10-29T02:20:39.723Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Absolute CLI works from arbitrary cwd without external PYTHONPATH; genuine data failure remains failure and committed progress is durable.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/tests/scripts/test_moneyflow_cli_bootstrap.py"
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2122-absolute-moneyflow-cli-cannot-import-shared-backend-contracts.json",
+      "scripts/ingest_tushare_moneyflow_ts.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py"
     ],
+    "added_files": [],
     "changed_files": [
-      "scripts/ingest_tushare_moneyflow_ts.py"
+      "scripts/ingest_tushare_moneyflow_ts.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_moneyflow_ts.py",
-        "backend/tests/scripts/test_moneyflow_cli_bootstrap.py"
+        "backend/tests/scripts/test_daily_integrity_writers.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -58,7 +67,7 @@
           "rule_id": "local_data_pipeline"
         },
         {
-          "file": "backend/tests/scripts/test_moneyflow_cli_bootstrap.py",
+          "file": "backend/tests/scripts/test_daily_integrity_writers.py",
           "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
@@ -71,18 +80,18 @@
       ],
       "suggested_scope": [
         "scripts/ingest_tushare_moneyflow_ts.py",
-        "backend/tests/scripts/test_moneyflow_cli_bootstrap.py"
+        "backend/tests/scripts/test_daily_integrity_writers.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "scripts/ingest_tushare_moneyflow_ts.py",
-      "backend/tests/scripts/test_moneyflow_cli_bootstrap.py"
+      "backend/tests/scripts/test_daily_integrity_writers.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/ingest_tushare_moneyflow_ts.py",
-      "backend/tests/scripts/test_moneyflow_cli_bootstrap.py"
+      "backend/tests/scripts/test_daily_integrity_writers.py"
     ]
   },
   "first_seen_at": "2026-10-29T02:13:33.132000Z",
@@ -108,11 +117,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      {
+        "command": "python X:/AIstock_temp/DATA_PREPARATION/daily-sync-20261029/validate_moneyflow.py",
+        "result": "PASS: real DEV temporary tables; 5576 authoritative source rows, idempotent rerun, finite history preserved, failure exits 1 with durable failed job; production_write=false."
+      }
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
