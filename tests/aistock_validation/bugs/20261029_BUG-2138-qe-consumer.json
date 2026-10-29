@@ -15,6 +15,24 @@
   ],
   "created_at": "2026-10-29T07:45:14.010449Z",
   "description": "六个Loop首个交易决策前失败，无成交、无成功账户；未重试。",
+  "design_compliance": [
+    {
+      "conclusion": "PASS: exact previous session fix; real catalog order tests plus full 180-day physical-calendar and asset probes; no reduced contract",
+      "requirement": "Full admitted consumer contract"
+    },
+    {
+      "conclusion": "PASS: strict invalid-signal assertion retained; original six FAILED recorders and logs preserved",
+      "requirement": "No silent errors"
+    },
+    {
+      "conclusion": "PASS: thresholds, AF, NA, fees, buy/add restriction, holds/sells, dataset and window unchanged",
+      "requirement": "No business semantic change"
+    },
+    {
+      "conclusion": "PASS: no additional business gate or service restart",
+      "requirement": "No unapproved gates"
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +46,18 @@
   ],
   "expected": "使用前一个交易步的左端点作为上一实际交易日，保持D消费T且不重复滞后；保留时点严格校验和首日空信号语义。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json",
+      "backend/tests/unified_engine/test_qe_stock_probability_strategy.py",
+      "scripts/qe_stock_probability_gate_strategy.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/qe_stock_probability_gate_strategy.py",
-      "backend/tests/unified_engine/test_qe_stock_probability_strategy.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2138-qe-consumer.json",
+      "backend/tests/unified_engine/test_qe_stock_probability_strategy.py",
+      "scripts/qe_stock_probability_gate_strategy.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/qe_stock_probability_gate_strategy.py",
@@ -88,6 +112,7 @@
   "first_seen_at": "2026-10-29T07:45:14.010449Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Use the actual previous interval left endpoint, preserve strict previous-session validation and empty first-day AF semantics.",
   "fixed_at": null,
   "github_issue_number": 6885,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6885",
@@ -106,13 +131,16 @@
     "qe_read_backend"
   ],
   "risk_area": "regression",
+  "root_cause": "Qlib previous daily interval right endpoint is next session minus one second. It can fall on holidays/weekends; the consumer incorrectly normalized that endpoint to signal_date.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -175,6 +203,24 @@
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_evidence": {
+    "actual_calendar_days_per_arm": 180,
+    "arms": [
+      "G",
+      "F"
+    ],
+    "holiday_weekend_right_endpoint_cases": 38,
+    "new_AF_inferences": 0,
+    "new_accounts": 0,
+    "new_experiment_submissions": 0,
+    "new_fits": 0,
+    "no_backend_restart_required": true,
+    "nodes": [
+      "rdagent-node1",
+      "wsl2-5080"
+    ],
+    "unique_worker_order_tests": 5
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
