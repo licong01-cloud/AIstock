@@ -145,6 +145,13 @@ class BacktestExecutor(BaseExecutor):
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
+        probability_study = custom_params.get("qe_stock_probability_study")
+        if probability_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_STOCK_PROBABILITY_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(probability_study, dict)
+                    or probability_study.get("manifest", {}).get("prediction_sha256") != source.sha256):
+                raise ValueError("QE_STOCK_PROBABILITY_SOURCE_PREDICTION_MISMATCH")
         runtime_flags = config.build_runtime_flags()
         fixed_seed = extract_qe_random_seed(runtime_flags)
         require_fixed_seed = bool(ctx.require_fixed_seed or kwargs.get("require_fixed_seed"))

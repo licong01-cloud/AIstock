@@ -301,6 +301,19 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The risk artifact, strategy wrapper, runtime packaging, Recorder evidence, multi-alpha policy arms, and F-014 aligned metrics form one QE-only research module.
+  - rule_id: qe_stock_probability_entry_consumer
+    priority: 126
+    include:
+      - backend/services/quantevolver/stock_probability_consumer.py
+      - scripts/qe_stock_probability_gate.py
+      - scripts/qe_stock_probability_gate_strategy.py
+      - backend/tests/quantevolver/test_stock_probability_consumer.py
+      - backend/tests/unified_engine/test_qe_stock_probability_strategy.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.archive]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Frozen stock probability buy-only consumption, strict asset admission and original AF strategy hooks use the existing QE direct tests; real worker Qlib validation remains separate from runtime activation.
   - rule_id: qe_optional_l2_risk_consumer
     priority: 125
     include:
