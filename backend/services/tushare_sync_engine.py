@@ -1886,6 +1886,29 @@ class TushareSyncEngine:
                         conn=conn,
                     )
 
+    def _record_index_query_audit(self, spec, start_date, end_date, job_id, codes, rows_by_day):
+        """Publish completed requests, not a post-hoc table-count certificate."""
+        from .data_integrity.provider import provider_scan
+        from .data_integrity.contracts import digest
+
+        with get_conn() as conn:
+            days = self._trading_dates_between(conn, start_date, end_date)
+            required = set(self._fetch_code_list(conn, spec))
+            requested = set(codes)
+            complete = bool(required) and required <= requested
+            if not days or set(rows_by_day)-set(days):
+                raise ValueError("index response dates differ from requested trading calendar")
+            parameters = {"start_date": str(start_date), "end_date": str(end_date),
+                          "requested_code_count": len(requested), "requested_codes_sha256": digest(sorted(requested))}
+            for day in days:
+                facts = rows_by_day.get(day, [])
+                self._refresh_audit.record_success(dataset=spec.name, trade_date=day, row_count=len(facts),
+                    written_rows=len(facts), job_id=str(job_id), data_source="tushare", conn=conn,
+                    quality_status="ok" if facts else "empty_valid",
+                    metadata={"mode": spec.query_mode.value, "audit_from_target_table": False,
+                              "provider_query_scope_complete": complete,
+                              "provider_scan": provider_scan(spec, facts, parameters=parameters)})
+
     def _fetch_code_list(self, conn, spec: DatasetSpec) -> List[str]:
         """Fetch ts_code list from DB for BY_CODE mode."""
         if not spec.code_source_sql:
@@ -2076,6 +2099,7 @@ class TushareSyncEngine:
         end_ymd = end_date.strftime("%Y%m%d") if end_date else None
 
         reference_scans = []
+        index_rows_by_day = {}
 
         for batch_start in range(0, len(codes), BATCH_SIZE):
             batch = codes[batch_start:batch_start + BATCH_SIZE]
@@ -2103,6 +2127,13 @@ class TushareSyncEngine:
                                    f"(>= {spec.row_limit}); narrow date range and rerun")
                             self._log(conn, job_id, "error", msg)
                             raise RuntimeError(msg)
+                        index_facts = []
+                        if spec.name == "index_daily":
+                            for row in rows:
+                                day = _parse_ymd(row.get(spec.date_column))
+                                if day is None or not start_date <= day <= end_date or row.get(spec.code_param_name) != code_val:
+                                    raise ValueError("index provider returned an unexpected code or date")
+                                index_facts.append((day, {"ts_code": code_val, "trade_date": day}))
                         # All empty-response guards ask the same question for
                         # this code. Probe once and reuse; nonempty responses
                         # need no local-history query at all.
@@ -2154,6 +2185,8 @@ class TushareSyncEngine:
                             inserted = self._upsert_batch(conn, spec, rows)
                         result.inserted_rows += inserted
                         result.success_batches += 1
+                        for day, fact in index_facts:
+                            index_rows_by_day.setdefault(day, []).append(fact)
                         if spec.skip_date_params:
                             from .data_integrity.provider import provider_scan
                             reference_scans.append(provider_scan(spec, rows, parameters=params))
@@ -2174,7 +2207,10 @@ class TushareSyncEngine:
                     logging.getLogger(__name__).warning("_sync_by_code_batched: progress update failed for job %s: %s", job_id, exc)
 
         try:
-            self._record_by_code_audit(spec, start_date, end_date, job_id, result)
+            if spec.name == "index_daily" and result.ok:
+                self._record_index_query_audit(spec, start_date, end_date, job_id, codes, index_rows_by_day)
+            else:
+                self._record_by_code_audit(spec, start_date, end_date, job_id, result)
             if spec.skip_date_params and result.ok:
                 from .data_integrity.provider import merge_scans
                 with get_conn() as conn:

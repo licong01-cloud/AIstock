@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "The actual production engine publishes a revision-bound completed provider scan after every requested query and commit succeeds; failures remain explicit and partial/empty catalogues cannot certify the partition.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -112,11 +118,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "{'command': 'python X:/AIstock_temp/DATA_PREPARATION/daily-sync-20261029/validate_index_engine.py', 'result': 'PASS: real existing DEV temporary tables with four independently read production index facts; actual engine query-audit method clears the obsolete table-count-only flag, binds source scans to revision 0, and the real physical validator certifies both dates. No network, production write or service action.'}"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
