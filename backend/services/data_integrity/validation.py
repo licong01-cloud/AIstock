@@ -250,9 +250,12 @@ class PhysicalValidator:
                 # Independent traded keys certify stored history; never invent
                 # an old provider scan or use a present-day listing snapshot.
                 return key_result(expected, facts,
-                    required_fields=("weight_avg", "cost_50pct", "winner_rate") if dataset == "cyq_perf" else (),
+                    required_fields=("his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate")
+                        if dataset == "cyq_perf" else (),
                     checks={"coverage_basis": "independent_dated_traded_stock_keys",
-                            "historical_provider_scan_required": False})
+                            "historical_provider_scan_required": False,
+                            "required_fields": ["his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate"]
+                                if dataset == "cyq_perf" else []})
             if dataset == "stk_limit":
                 from backend.services.tushare_sync_engine import _stk_limit_source_prices_valid
                 result = key_result(expected, facts)
