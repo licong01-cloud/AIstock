@@ -1,0 +1,343 @@
+{
+  "actual": "38份原权重与37份旧包资产哈希通过；FUND5完整加载通过；LSTM33缺原配置、工作区模型代码及配对预处理，真实父包恢复仍阻断。",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/package_asset_backfill.py",
+    "backend/services/strategy_package/multi_alpha_promotion.py",
+    "backend/services/strategy_package/seed_asset_recovery.py",
+    "scripts/recover_multi_alpha_seed_assets.py",
+    "backend/tests/strategy_package/test_seed_asset_recovery.py",
+    "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+    "tests/aistock_validation/bugs/20261023_BUG-2076-alpha-seed.json",
+    "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2076",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-23T06:45:23.572361Z",
+  "description": "关联 BUG-1804/#5742：旧包 pkg_ma_8ec5e389fa2c5e484a1ac7e9 缺38个逐seed冻结绑定；新增独立版本化资产恢复路径，完整闭包才入库，不经V25重新晋升。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261023-e332c63ef338",
+      "timestamp": "2026-10-23T06:45:23.572344Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/seed-source-preflight.json",
+    "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+    "docs/operations/strategy_package_seed_asset_recovery_20261023.md"
+  ],
+  "expected": "保留旧冻结身份、原seed均值聚合与IC权重；全量原资产通过后生成新DRAFT。缺失逐项报告，不复制、不重训、不绕过V25。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/strategy_package/seed_asset_recovery.py",
+      "scripts/recover_multi_alpha_seed_assets.py",
+      "backend/tests/strategy_package/test_seed_asset_recovery.py",
+      "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json"
+    ],
+    "changed_files": [
+      "backend/services/strategy_package/package_asset_backfill.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/package_asset_backfill.py",
+        "backend/services/strategy_package/multi_alpha_promotion.py",
+        "backend/services/strategy_package/seed_asset_recovery.py",
+        "scripts/recover_multi_alpha_seed_assets.py",
+        "backend/tests/strategy_package/test_seed_asset_recovery.py",
+        "docs/operations/strategy_package_seed_asset_recovery_20261023.md"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment",
+        "scripts",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/package_asset_backfill.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/multi_alpha_promotion.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/seed_asset_recovery.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "scripts/recover_multi_alpha_seed_assets.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_seed_asset_recovery.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/package_asset_backfill.py",
+        "backend/services/strategy_package/multi_alpha_promotion.py",
+        "backend/services/strategy_package/seed_asset_recovery.py",
+        "scripts/recover_multi_alpha_seed_assets.py",
+        "backend/tests/strategy_package/test_seed_asset_recovery.py",
+        "docs/operations/strategy_package_seed_asset_recovery_20261023.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/package_asset_backfill.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/seed_asset_recovery.py",
+      "scripts/recover_multi_alpha_seed_assets.py",
+      "backend/tests/strategy_package/test_seed_asset_recovery.py",
+      "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/package_asset_backfill.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/seed_asset_recovery.py",
+      "scripts/recover_multi_alpha_seed_assets.py",
+      "backend/tests/strategy_package/test_seed_asset_recovery.py",
+      "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
+  },
+  "first_seen_at": "2026-10-23T06:45:23.572361Z",
+  "fix_branch": "bug/BUG-2076-alpha-seed-20261023",
+  "fix_commit": "a80eff3af8ccbc8adc32b49adfc1cba69a0a7a8b",
+  "fixed_at": null,
+  "github_issue_number": 6634,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6634",
+  "last_seen_at": "2026-10-23T06:45:23.572361Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/strategy_package/test_seed_asset_recovery.py -q -> 11 passed",
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json: DEV governance transaction passed; five original FUND models loaded in fresh WSL processes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9/selection-artifacts"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "旧多Alpha包缺少不经重新晋升的版本化逐seed资产恢复路径",
+  "trigger_condition": {
+    "fingerprint": "e332c63ef338c00349ba5775",
+    "source_event_id": "FE-20261023-e332c63ef338"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "scope_expansion_note": "新增可移植的38项资产核验收据；仅证据文件，不增加生产操作。",
+  "delivery_states": {
+    "source_fix": "PR_open",
+    "real_asset_recovery": "blocked_LSTM_33_original_closures_missing",
+    "dev_governance": "passed_transaction_rolled_back",
+    "production_asset_write": "not_executed_not_authorized",
+    "production_activation": "not_executed",
+    "services_restart": "not_executed",
+    "new_schema": "none"
+  },
+  "design_compliance_review": {
+    "no_partial_as_complete": "pass; real asset recovery explicitly blocked",
+    "no_silent_failure": "pass; 38 per-seed receipts and incomplete/no-write",
+    "no_semantic_drift": "pass; identity/version/seed/IC/V25 tests",
+    "no_extra_approval": "pass; only user-requested production asset/activation separation"
+  },
+  "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope.",
+  "fix_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635"
+}
