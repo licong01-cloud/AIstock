@@ -27,15 +27,15 @@
   "expected": "The actual production engine publishes a revision-bound completed provider scan after every requested query and commit succeeds; failures remain explicit and partial/empty catalogues cannot certify the partition.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-29T02:40:51.042923Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+  "fixed_at": "2026-10-29T02:49:58Z",
   "github_issue_number": 6835,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6835",
   "last_seen_at": "2026-10-29T02:40:51.042923Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6838",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -141,7 +143,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2124",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "64df286beeb2b34e",
+    "recorded_at": "2026-10-29T02:50:30.375501Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dc6baf31c76c022eeac52f7bce2c333484501734",
+    "source_merge_commit": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6838",
+    "validation_evidence": [
+      "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`"
+    ],
+    "validation_evidence_digest": "5e8e7dec6100a027a0cb526b1138fc30d6ecb84901e6668524dbfe9e970c5fce"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -150,6 +174,10 @@
     "fingerprint": "101028af7a4462bd0873e511",
     "source_event_id": "FE-20261029-101028af7a44"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
