@@ -1,5 +1,5 @@
 {
-  "actual": "Same 5000-parent histories under seeds 1/2/3/4 produce four different comparison hashes; original exact retry exits 1 after all account-days materialized.",
+  "actual": "2353 account-days and their receipts verified. Extracted original production result assembly differs only in five conditional-price decimal tails; fixed ordered aggregation is identical under four hash seeds, and differs from published original in only three tails, max 6E-26 bps. Account/NAV/fees/statuses/quantities and 4709 original file hashes are unchanged. Before test fails; after five unique direct nodes pass. Existing true immutable conflicts are still rejected. Original study remains FAILED/EXACT_RETRY; no pins, account state or old results changed.",
   "allowed_write_scope": [
     "backend/services/simulation_execution/localsim/dual_mode_research.py",
     "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
@@ -25,7 +25,13 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/localsim-human-continuous-20261027/status.json"
+    "X:/AIstock_temp/localsim-human-continuous-20261027/status.json",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/diagnosis-v1.json",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/cross-seed-acceptance-v1.json",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/fresh-process-receipt-v1.json",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/regression-before.xml",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/regression-after.xml",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/directed-matrix.xml"
   ],
   "expected": "Identical validated account histories produce byte-identical comparisons across fresh processes and hash seeds; true immutable result mismatches remain rejected.",
   "file_scope_contract": {
@@ -133,7 +139,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/localsim-immutable-summary-20261029/fresh-process-receipt-v1.json"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
