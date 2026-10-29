@@ -1306,7 +1306,9 @@ class TDXScheduler:
         if isinstance(metadata_obj, dict):
             explicit_owner = str(metadata_obj.get("schedule_dataset") or "").strip().lower()
             if explicit_owner:
-                return explicit_owner
+                # Integrity repair metadata can name the physical table. Its
+                # existing composite schedule still owns collection/retries.
+                return _AUTO_RETRY_SCHEDULE_ALIASES.get(explicit_owner, explicit_owner)
         return _AUTO_RETRY_SCHEDULE_ALIASES.get(health_dataset, health_dataset)
 
     def _reconcile_recovered_final_targets(self) -> List[str]:
@@ -3571,17 +3573,6 @@ class TDXScheduler:
 
         start_date = None
         end_date = None
-        if options.get("start_date"):
-            try:
-                start_date = _dt.date.fromisoformat(str(options["start_date"]))
-            except Exception as exc:
-                _logger.error("unexpected error: %s", exc)
-        if options.get("end_date"):
-            try:
-                end_date = _dt.date.fromisoformat(str(options["end_date"]))
-            except Exception as exc:
-                _logger.error("unexpected error: %s", exc)
-
         status = "success"
         rows = 0
         error_msg: Optional[str] = None
@@ -3592,6 +3583,16 @@ class TDXScheduler:
         revision_errors: Dict[str, str] = {}
         deferred_revisions = 0
         try:
+            # Parse inside the guarded job boundary: malformed input must
+            # fail this job rather than silently become an automatic rebuild.
+            if options.get("start_date"):
+                start_date = _dt.date.fromisoformat(str(options["start_date"]))
+            if options.get("end_date"):
+                end_date = _dt.date.fromisoformat(str(options["end_date"]))
+            if (start_date is None) != (end_date is None) or (
+                start_date is not None and end_date is not None and start_date > end_date
+            ):
+                raise ValueError("sector_data exact repair requires an ordered start_date/end_date pair")
             # 标记 job 为 running
             if job_id is not None:
                 try:
@@ -3609,6 +3610,11 @@ class TDXScheduler:
                 if start_date is None or end_date is None:
                     raise ValueError("sector_data init requires start_date and end_date")
                 _logger.info("sector_data init: building %s ~ %s", start_date, end_date)
+                rows = builder.build_range(start_date, end_date)
+                audit_start, audit_end = start_date, end_date
+            elif start_date is not None and end_date is not None:
+                # A dated repair must fix that partition, not drain unrelated
+                # source-revision history or infer its range from global MAX.
                 rows = builder.build_range(start_date, end_date)
                 audit_start, audit_end = start_date, end_date
             else:
