@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { path, programPath, type DailyItem, type Decision, type Episode, type Page, type Params, type Readiness, type Summary, type Version } from "@/lib/api/advisoryWorkbench";
 import { Badge, bps, day, Empty, ErrorNotice, gain, Metric, number, Pager, percent, readinessReason, text, time, useRead } from "./shared";
-import { QuoteCell } from "../LiveQuotes";
+import { QuoteCell, QuoteProvider } from "../LiveQuotes";
 import DailyList from "./DailyList";
 import EpisodeTable from "./EpisodeTable";
 import StockDrawer from "./StockDrawer";
@@ -51,7 +51,7 @@ export default function ProgramDetail({ programId, initialDate }: { programId: s
     <Link className={styles.back} href="/paper-v2/advisory">← 返回荐股总览</Link>
     <header className={styles.header}><div><h1>{summary?.program.program_name || "策略荐股详情"}</h1>{summary && <p><Badge value={summary.runtime.state} /> <span>首次发布目标日 {day(summary.coverage.first_published_target_date)} · 启用 {day(summary.program.enabled_since)}</span></p>}</div><div className={styles.actions}><button disabled={result.loading} onClick={() => { setRefresh(v => v + 1); setStock(null); }}>刷新</button><Link href="/paper-v2/advisory/manage">任务管理</Link></div></header>
     <ErrorNotice error={result.error} stale={!!summary} />{result.loading && !summary && <Empty>正在读取策略数据…</Empty>}
-    {summary && <>
+    {summary && <QuoteProvider key={`${summary.program_id}:${summary.list_version_id || "no-list"}`} programId={summary.program_id} listVersionId={summary.selected?.list_version_id}>
       <div className={styles.toolbar}><div className={styles.filters}><label>推荐目标日 <input aria-label="推荐目标日" type="date" value={target || summary.target_date} onChange={e => changeDate(e.target.value)} /></label><span>输入截止 {day(summary.selected?.date_context?.selection_as_of_trade_date || summary.selected?.date_context?.decision_as_of_trade_date)}</span>{summary.target_date !== summary.default_target_date && <Badge>历史或指定日期</Badge>}</div><span>最近读取 {time(summary.generated_at)}</span></div>
       <nav className={styles.tabs} aria-label="荐股详情分类">{tabs.map(name => <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => { setTab(name); setStock(null); }}>{name}</button>)}</nav>
       {[1, 2, 4].includes(tabs.indexOf(tab)) && <><div className={styles.metrics}><Metric label="跟踪中" value={number(summary.metrics.active_count)} /><Metric label="已结束有效样本" value={number(summary.metrics.metric_evaluable_count)} /><Metric label="已结束胜率" value={percent(summary.metrics.win_rate)} /><Metric label="平均参考收益" value={bps(summary.metrics.avg_return_bps)} className={gain(summary.metrics.avg_return_bps)} note="费用前参考收益" /></div><div className={styles.toolbar}><div className={styles.filters}><label>来源 <select aria-label="记录来源" value={source} onChange={e => setSource(e.target.value)}>{["ALL", "FORWARD", "REPLAY", "UNKNOWN"].map(s => <option key={s} value={s}>{text(s)}</option>)}</select></label><label>绑定 <select aria-label="绑定范围" value={binding} onChange={e => setBinding(e.target.value)}><option value="">全部绑定</option><option value="CURRENT">当前绑定</option><option value="UNKNOWN">绑定待核验</option>{summary.bindings.map((b, i) => <option key={b.binding_version_id} value={b.binding_version_id}>版本 {b.program_version} · {day(b.effective_from_trade_date)}{i === 0 ? "（最近）" : ""}</option>)}</select></label><label>入选日 <input aria-label="入选开始日期" type="date" value={start} onChange={e => setStart(e.target.value)} /></label><span>至</span><input aria-label="入选结束日期" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} /></div></div></>}
@@ -64,6 +64,6 @@ export default function ProgramDetail({ programId, initialDate }: { programId: s
       </div>
       <Runtime summary={summary} refresh={refresh} />
       {stock && <StockDrawer key={stock.episode_id || stock.symbol} summary={summary} item={stock} onClose={() => setStock(null)} />}
-    </>}
+    </QuoteProvider>}
   </>;
 }

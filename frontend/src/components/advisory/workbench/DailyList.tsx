@@ -1,18 +1,17 @@
 "use client";
 import { useState } from "react";
 import { path, programPath, type DailyItem, type DailyPage, type Summary } from "@/lib/api/advisoryWorkbench";
-import { QuoteCell, ReferenceChange, EpisodeReturn } from "../LiveQuotes";
-import { Badge, day, Empty, ErrorNotice, Metric, number, Pager, text, useRead } from "./shared";
+import { QuoteCell, RecommendationValue, TodayChange } from "../LiveQuotes";
+import { Badge, Empty, ErrorNotice, Metric, number, Pager, useRead } from "./shared";
 import styles from "./workbench.module.css";
 
 type Props = { summary: Summary; refresh: number; onStock: (item: DailyItem) => void; onDate: (date: string) => void };
 function Rows({ items, onStock }: { items: DailyItem[]; onStock: Props["onStock"] }) {
-  return <div className={styles.tableWrap}><table><thead><tr><th>排名</th><th>股票</th><th>当前最新价</th><th>今日变化</th><th>连续推荐</th><th>跟踪状态</th><th>参考价</th><th>较推荐参考价涨跌</th><th>过程参考收益</th></tr></thead><tbody>{items.map((row, i) => <tr key={`${row.symbol}-${i}`} className={row.change === "NEW" ? styles.newRow : ""}>
-    <td>{number(row.rank)}</td><td><button className={styles.stockLink} onClick={() => onStock(row)}>{row.stock_name || row.symbol}</button><small>{row.symbol}</small></td><td><QuoteCell symbol={row.symbol} /></td>
+  return <div className={styles.tableWrap}><table><thead><tr><th>排名</th><th>股票</th><th>推荐状态</th><th>连续推荐</th><th>首次生效日</th><th>起始基准价</th><th>当前最新价</th><th>累计涨跌（实时）</th><th>今日涨跌</th></tr></thead><tbody>{items.map((row, i) => <tr key={`${row.symbol}-${i}`} className={row.change === "NEW" ? styles.newRow : ""}>
+    <td>{number(row.rank)}</td><td><button className={styles.stockLink} onClick={() => onStock(row)}>{row.stock_name || row.symbol}</button><small>{row.symbol}</small></td>
     <td><Badge value={row.change === "UNKNOWN" && row.membership !== "IN_SCOPE" ? row.membership : row.change} /></td><td>{row.consecutive_days == null ? "—" : row.consecutive_days === 1 ? "首日" : `${row.consecutive_days} 日`}</td>
-    <td><Badge value={row.progress} />{row.membership !== "IN_SCOPE" && <small>{text(row.reason_code, "原因待核验")}</small>}</td>
-    <td>{row.reference_price == null ? "待确认" : `¥${number(row.reference_price, 2)}`}<small>{row.reference_date ? day(row.reference_date) : "缺少参考日期"}</small></td>
-    <td><ReferenceChange symbol={row.symbol} price={row.reference_price} date={row.reference_date} /></td><td><EpisodeReturn episode={row.episode} /></td>
+    <td><RecommendationValue symbol={row.symbol} field="start" /></td><td><RecommendationValue symbol={row.symbol} field="base" /></td><td><QuoteCell symbol={row.symbol} /></td>
+    <td><RecommendationValue symbol={row.symbol} field="return" /></td><td><TodayChange symbol={row.symbol} /></td>
   </tr>)}</tbody></table></div>;
 }
 function OtherGroup({ summary, refresh, group, title, onStock }: Omit<Props, "onDate"> & { group: string; title: string }) {
@@ -38,7 +37,7 @@ export default function DailyList({ summary, refresh, onStock, onDate }: Props) 
       <div className={styles.dailyGrid}><section className={styles.panel}><header className={styles.panelHeader}><h2>{scopeLabel}推荐名单</h2><Badge value="IN_SCOPE">范围内 · {counts.in_scope} 只</Badge></header>
         <div className={styles.toolbar}><div className={styles.filters}>{[["", "全部"], ["NEW", "新加入"], ["CONTINUING", "继续推荐"], ["UNKNOWN", "变化待核验"]].map(([key, label]) => <button key={key} aria-pressed={change === key} className={change === key ? styles.selected : ""} onClick={() => { setChange(key); setPage(1); }}>{label}</button>)}</div><input aria-label="搜索当日股票" placeholder="搜索股票" value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} /></div>
         <Rows items={result.data!.items} onStock={onStock} />{!result.data!.items.length && <Empty>当前筛选下没有推荐股票。</Empty>}<Pager total={result.data!.total_count} limit={limit} page={page} onChange={setPage} onLimit={n => { setLimit(n); setPage(1); }} />
-        <p className={styles.explanation}>推荐成员身份与进入/退出进度分别展示；参考价来自输入日收盘；较参考价涨跌使用TDX当前价计算，是未复权价格变化，不是持有收益或含分红总回报，不计入胜率。当前最新价始终是现在的行情，与所选历史日期无关。未知连续天数不会以前序缺失记录补齐。</p>
+        <p className={styles.explanation}>累计涨跌从本次连续推荐首次生效日的开盘价起算，继续推荐不重置，移出后固定为移出生效日开盘价；今日涨跌相对报价交易日昨收。两者均为未复权价格变化，除权分红可能造成价格跳变，不代表真实成交或含分红总回报，不含费用、不计入策略胜率。最新价始终是现在的行情。策略过程收益见股票详情或历史记录。</p>
       </section><aside className={styles.panel}><header className={styles.panelHeader}><h3>所选日名单变化</h3></header><div className={styles.changeFlow}><span>上次<strong>{number(counts.previous_count)} 只</strong></span><span>→</span><span>当次<strong>{counts.in_scope} 只</strong></span></div><div className={styles.changeTags}><Badge value="CONTINUING">保留 {number(counts.comparison_known ? counts.continuing : null)}</Badge><Badge value="REMOVED">移出 {number(counts.comparison_known ? counts.removed : null)}</Badge><Badge value="NEW">新增 {number(counts.comparison_known ? counts.new : null)}</Badge></div>
         <p className={styles.explanation}>{counts.comparison_known ? "按同一绑定的前后已发布名单对比。" : "前序身份不足，变化暂不能完整确认。"}</p>{counts.unknown_change > 0 && <p className={styles.explanation}>变化待核验 {counts.unknown_change} 只</p>}<p className={styles.explanation}>点击股票查看推荐过程、参考价格与后续跟踪记录。</p>
       </aside></div>

@@ -64,20 +64,24 @@ QuoteProvider增加名单上下文，继续复用可见证券注册、15秒轮�
 
 ## 设计验收矩阵
 
-此独立设计PR的verified仅指设计合同审核完成，以下实现与测试路径为实施定位和验收命令，不表示代码已存在或运行验收已通过。实现PR必须替换成实际验证收据，不能用本矩阵宣称功能完成。
+实现验收：verified指源码逐项审核、直接合同及独立进程真实只读读回；UI完整回归由PR CI执行，必须通过后合入。生产运行加载和页面验收仍等待用户重启，不能由源码检查替代。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | recommendations.py段投影 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
-| F-002 | recommendations.py、quotes.py | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
-| F-003 | recommendations.py历史结束时钟 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
-| F-004 | repository.py、service.py严格关联 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
-| F-005 | DailyList、StockDrawer、共享组件 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
-| F-006 | QuoteProvider上下文与取消 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
-| F-007 | 只读API、合同测试及生产门禁 | artifact:docs/architecture/advisory_realtime_returns_f1_design_20261029.md | verified（设计合同审核） | 无 |
+| F-001 | recommendations.py段投影 | backend/tests/advisory_workbench/test_recommendations.py | verified（源码/直接合同） | 无 |
+| F-002 | recommendations.py、quotes.py | backend/tests/advisory_workbench/test_quotes.py; backend/tests/advisory_workbench/test_recommendations.py | verified（源码/直接合同） | 无 |
+| F-003 | recommendations.py历史结束时钟 | backend/tests/advisory_workbench/test_recommendations.py | verified（源码/直接合同） | 无 |
+| F-004 | repository.py、service.py严格关联 | backend/tests/advisory_workbench/test_service.py | verified（源码/直接合同） | 无 |
+| F-005 | DailyList、StockDrawer、共享组件 | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified（源码/直接合同） | 无 |
+| F-006 | QuoteProvider上下文与取消 | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified（源码/直接合同） | 无 |
+| F-007 | 只读API、合同测试及生产门禁 | artifact:docs/operations/evidence/advisory_realtime_returns_20261029/readback.json | verified（源码/直接合同） | 无 |
 
 ## 审核记录
 
 第一轮：将名单生命周期与跟踪池分开，明确连续推荐、重新加入、结束冻结；禁止按股票代码借用其他binding或不同时间段的episode。
 
 第二轮：将指标明确为未复权价格变化，避免当天复权因子缺失时前填制造收益；明确盘前、停牌、历史缺口和TDX失败的空值原因。补充只读事务不得跨网络、固定名单身份刷新和源码/运行验收分离。
+
+第三轮实现审核：逐项检查金融时钟、不可变身份和异步取消。新增真实日线成交量守卫，停牌日不开假基准；缺失推荐连续性不猜起点；只读快照在TDX网络请求前关闭。60项直接合同通过，随后新增API名单固定身份及历史页ENTER关联反例12项通过（含重跑相关服务合同）。TypeScript、修改文件ESLint、L0均通过；L0唯一MEDIUM为测试fixture的JSON序列化，非产品原始JSON展示。
+
+第四轮实现审核：历史过程的selected_membership也使用严格后续ENTER关联，旧同股票episode不继承新段身份。页面附名单截止日，避免父包10月9日历史名单被误认作今天复评。请求或名单身份失败清空旧涨跌，提示刷新；策略过程详情与名单实时涨跌分开。真实读回111/111条累计和今日涨跌可用，20条后来ENTER可严格关联；原资产/输入阻断保持。后续以最终提交CI完成UI与模块回归。

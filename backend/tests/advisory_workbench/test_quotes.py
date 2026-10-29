@@ -106,9 +106,9 @@ def test_raw_close_uses_tdx_1000_units_and_ignores_future_and_partial_day(monkey
             dict(Time="2026-10-23T15:00:00+08:00", Close=12345),
             dict(Time="2026-10-26T15:00:00+08:00", Close=20000)])))
     monkeypatch.setattr("backend.services.advisory_workbench.quotes.requests.get", get)
-    assert TdxQuotes().close("000001.SZ", "2026-10-23") == dict(price=12.345, trade_date="2026-10-23", kind="CLOSE")
+    assert TdxQuotes().close("000001.SZ", "2026-10-23") == dict(price=12.345, trade_date="2026-10-23", kind="CLOSE", open_price=None, previous_close=None, previous_close_date=None)
     assert seen[0][0].endswith("/api/kline-all/tdx")
-    assert seen[0][1]["params"] == dict(code="SZ000001", type="day", limit=2)
+    assert seen[0][1]["params"] == dict(code="SZ000001", type="day", limit=3)
 
 
 def test_close_rejects_adjusted_other_provider(monkeypatch):
@@ -119,7 +119,7 @@ def test_close_rejects_adjusted_other_provider(monkeypatch):
 
 
 def test_batch_uses_close_not_previous_last_and_rejects_duplicate_and_zero(monkeypatch):
-    rows = [dict(Code="000001", Exchange=0, K=dict(Close=12340, Last=9990), TotalHand=1),
+    rows = [dict(Code="000001", Exchange=0, K=dict(Close=12340, Last=9990, Open=11000), TotalHand=1),
             dict(Code="000002", Exchange=0, K=dict(Close=0)),
             dict(Code="000003", Exchange=0, K=dict(Close=1000)),
             dict(Code="000003", Exchange=0, K=dict(Close=2000)),
@@ -128,6 +128,8 @@ def test_batch_uses_close_not_previous_last_and_rejects_duplicate_and_zero(monke
                         lambda *a, **k: mock_response(dict(code=0, data=rows)))
     result = TdxQuotes().live([f"00000{i}.SZ" for i in range(1, 5)])
     assert result["000001.SZ"]["price"] == 12.34
+    assert result['000001.SZ']['open_price'] == 11
+    assert result['000001.SZ']['previous_close'] == 9.99
     assert result["000002.SZ"]["price"] is None
     assert result["000003.SZ"]["reason_code"] == "TDX_DUPLICATE_SYMBOL"
     assert result["000004.SZ"]["price"] is None
@@ -142,3 +144,27 @@ def test_route_get_only_bounded_and_does_not_call_program_actions():
     assert client.get("/workbench/quotes?symbols=000001.SZ").json()["items"]["000001.SZ"]["price"] == 12.34
     assert client.get("/workbench/quotes?symbols=bad").status_code == 422
     assert client.post("/workbench/quotes?symbols=000001.SZ").status_code == 405
+
+
+def test_today_change_uses_yesterday_not_the_segment_open():
+    reader = Reader()
+    reader.live = lambda symbols: {s: dict(price=12, open_price=11, previous_close=10, has_trades=True) for s in symbols}
+    row = make(reader).get('000001.SZ')['items']['000001.SZ']
+    assert row['today_return_bps'] == pytest.approx(2000)
+    assert row['previous_close_date'] == '2026-10-23'
+    reader.live = lambda symbols: {s: dict(price=12, open_price=11, previous_close=0, has_trades=True) for s in symbols}
+    assert make(reader).get('000001.SZ')['items']['000001.SZ']['today_return_bps'] is None
+
+
+def test_close_day_change_requires_exact_previous_trading_date(monkeypatch):
+    payload = dict(code=0, data=dict(meta=dict(source='tdx', type='day'), list=[
+        dict(Time='2026-10-22T15:00:00+08:00', Close=10000, Open=9900, Volume=10),
+        dict(Time='2026-10-23T15:00:00+08:00', Close=12000, Open=11000, Volume=10)]))
+    monkeypatch.setattr('backend.services.advisory_workbench.quotes.requests.get', lambda *a, **k: mock_response(payload))
+    service = make(TdxQuotes(), stamp='2026-10-25T10:00')
+    service.calendar = lambda _: [dict(cal_date=date(2026, 10, 22), is_trading=True), *DAYS]
+    row = service.get('000001.SZ')['items']['000001.SZ']
+    assert row['open_price'] == 11 and row['today_return_bps'] == pytest.approx(2000)
+    payload['data']['list'][0]['Time'] = '2026-10-21T15:00:00+08:00'
+    row = make(TdxQuotes(), stamp='2026-10-25T10:00').get('000001.SZ')['items']['000001.SZ']
+    assert row['today_return_bps'] is None
