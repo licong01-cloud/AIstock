@@ -1003,7 +1003,8 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     }
 
     class _Repo:
-        def list_fillable_targets(self, **_kwargs):
+        def list_fillable_targets(self, **kwargs):
+            assert kwargs == {"limit": 100, "exclude_operation": "VALIDATE_ONLY", "latest_per_dataset": True}
             return [target]
 
         def claim_fillable_target(self, *_args, **_kwargs):

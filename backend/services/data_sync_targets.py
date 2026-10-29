@@ -258,6 +258,7 @@ class DataSyncTargetRepository:
         due_at: datetime | None = None,
         limit: int = 100,
         exclude_operation: str | None = None,
+        latest_per_dataset: bool = False,
     ) -> list[dict[str, Any]]:
         due_at = due_at or datetime.now(timezone.utc)
         limit = max(1, min(int(limit or 100), 1000))
@@ -276,16 +277,38 @@ class DataSyncTargetRepository:
             filters.append("COALESCE(target_scope->>'operation','FETCH') <> %s")
             params.append(exclude_operation)
         params.append(limit)
+        query = f"""
+            SELECT * FROM market.data_sync_targets
+            WHERE {" AND ".join(filters)}
+            ORDER BY priority ASC, COALESCE(required_before, created_at) ASC, created_at ASC
+            LIMIT %s
+        """
+        if latest_per_dataset:
+            # The dispatcher runs at most one retry per dataset. Rank before
+            # LIMIT so one historical backlog cannot hide every other dataset.
+            # Keep explicit priority, due leases and all old targets intact;
+            # validation-only consumers retain the default FIFO order.
+            query = f"""
+                WITH due AS (
+                    SELECT target_id, priority,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY dataset
+                               ORDER BY priority, target_date DESC NULLS LAST,
+                                        COALESCE(required_before, created_at), created_at, target_id
+                           ) AS retry_rank
+                    FROM market.data_sync_targets
+                    WHERE {" AND ".join(filters)}
+                )
+                SELECT target.* FROM market.data_sync_targets AS target
+                JOIN due ON due.target_id = target.target_id
+                ORDER BY due.priority, due.retry_rank, target.target_date DESC NULLS LAST,
+                         COALESCE(target.required_before, target.created_at), target.created_at, target.target_id
+                LIMIT %s
+            """
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"""
-                    SELECT *
-                    FROM market.data_sync_targets
-                    WHERE {" AND ".join(filters)}
-                    ORDER BY priority ASC, COALESCE(required_before, created_at) ASC, created_at ASC
-                    LIMIT %s
-                    """,
+                    query,
                     params,
                 )
                 return self._rows(cur)
