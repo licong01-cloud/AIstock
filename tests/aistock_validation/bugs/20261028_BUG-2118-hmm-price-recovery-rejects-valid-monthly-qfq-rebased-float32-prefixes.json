@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2118",
-  "closed_at": null,
+  "closed_at": "2026-10-29T02:44:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,16 +32,16 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
       "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
-      "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json",
-      "backend/tests/hmm_risk/test_formal_state_input.py"
+      "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
       "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
-      "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json",
-      "backend/tests/hmm_risk/test_formal_state_input.py"
+      "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -103,8 +103,8 @@
     "root_cause": "Monthly native Qlib updates rescale a serialized float32 prefix through a second float64 multiply/float32 cast. Single-cast price/factor intervals can exclude the true integer-li source price."
   },
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af0f2ec9c62aa723ef7b83f41ac96e2c987aaff2",
+  "fixed_at": "2026-10-29T02:44:07Z",
   "github_issue_number": 6811,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6811",
   "last_seen_at": "2026-10-28T06:16:47.316462Z",
@@ -112,6 +112,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6834",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,6 +130,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -138,7 +140,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2118",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "704899a332599fe8",
+    "recorded_at": "2026-10-29T02:44:58.392943Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eb084307d4e725162b290366cd6b18ed4a367595",
+    "source_merge_commit": "af0f2ec9c62aa723ef7b83f41ac96e2c987aaff2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6834",
+    "validation_evidence": [
+      "validation-receipt: id=32dbb7a069e45212 commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py -q -k 'monthly_encoding or monthly_rebase or price_precision or prior_price or stock_reader or strictly_prior_circ_context' --no-cov` result=`29 passed`",
+      "validation-receipt: id=3aaebc250befc216 commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`",
+      "validation-receipt: id=25b7c0fb43c352fe commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`",
+      "validation-receipt: id=866724bdbf8c2bcd commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; zero findings`",
+      "validation-receipt: id=a3d0501794ac5b01 commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+    ],
+    "validation_evidence_digest": "ddd5038a50c4997bb52914a665aa1bc3f76e13f18237d1688c4446da831c44a9"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -147,6 +174,13 @@
     "fingerprint": "45200a5671061ca5a93270e5",
     "source_event_id": "FE-20261028-45200a567106"
   },
+  "validation_evidence": [
+    "validation-receipt: id=32dbb7a069e45212 commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py -q -k 'monthly_encoding or monthly_rebase or price_precision or prior_price or stock_reader or strictly_prior_circ_context' --no-cov` result=`29 passed`",
+    "validation-receipt: id=3aaebc250befc216 commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`",
+    "validation-receipt: id=25b7c0fb43c352fe commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`",
+    "validation-receipt: id=866724bdbf8c2bcd commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; zero findings`",
+    "validation-receipt: id=a3d0501794ac5b01 commit=eb084307d4e725162b290366cd6b18ed4a367595 kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
