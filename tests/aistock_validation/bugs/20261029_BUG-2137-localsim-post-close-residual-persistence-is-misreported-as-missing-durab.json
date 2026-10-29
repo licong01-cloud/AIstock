@@ -25,18 +25,28 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/localsim-reliability-followup-20261029/TASK_STATE.md"
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/TASK_STATE.md",
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/closure-fresh-readonly-r1.json"
   ],
   "expected": "Present durable residual/failure evidence is described accurately; true missing/unknown persistence still fails closed, genuine market residual success remains unchanged, and current orders/accounts/fees are untouched.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
+      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
+    ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
       "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
     ],
     "changed_files": [
-      "backend/services/simulation_runtime/scheduler.py"
+      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
+      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/scheduler.py",
@@ -124,11 +134,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "fresh_process_evidence": [
+      "18 targeted tests passed in a fresh process, including real native post-close market residual and generation authority. closure-matrix.xml",
+      "Final source classifies actual persisted residual input in memory; FAILED_TERMINAL retained, original production status/payload unchanged, writes 0. closure-fresh-readonly-r1.json SHA256 ddb96d4e87bc1c26d206c0af6f6270eb2e506f61f5a3045f33ad009f75c3e507",
+      "Fresh final source: closure-fresh-readonly-r1.json SHA256 ddb96d4e87bc1c26d206c0af6f6270eb2e506f61f5a3045f33ad009f75c3e507; actual original production run/payload unchanged, writes 0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
