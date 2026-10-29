@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2139",
-  "closed_at": null,
+  "closed_at": "2026-10-29T15:27:10.181882Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -93,10 +93,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2139-close-sync-20261029\\tmp\\issue_workflow\\BUG-2139\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2139",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "f996e0e7928e39861bc92dd28c89b090d23c8649",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T15:26:35.716770Z",
+      "mode": "read_only",
+      "observed_identity": "673a9c486d5e447c295ab056eee2146f95550559",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f1644ed5778a454a24a491d6c90b3b63015085dd593bd5900e2be9a17e5d58d6",
+      "receipt_sha256": "129fc9d44c51af91218b60eaffcd0772cb0b048216039f67cee7468624ae1acd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d15fcdd817dfe14dceefbce0cde226ba0913d68cbab63bcc744fc32557dfaffb",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -128,7 +150,7 @@
     ],
     "validation_evidence_digest": "4d3ea632b2476ddd741f16fb0eb569670096cabb56cb34b6279fd5e83d358746"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -139,7 +161,8 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/test_tushare_sync_engine.py -q --no-cov -> 183 passed; CI verdict current HEAD passed; DEV native SQL readback and idempotency passed",
-    "python -m nox -s l0 -> passed changed files only"
+    "python -m nox -s l0 -> passed changed files only",
+    "post-restart-verify --bug-id BUG-2139 --target backend-main --expected-identity f996e0e7928e39861bc92dd28c89b090d23c8649 -> passed running673a9c486 contains merged dense-panel fix and native read-only smoke"
   ],
   "verification_budget": {
     "budget": "standard",
