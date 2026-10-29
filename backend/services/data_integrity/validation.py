@@ -6,7 +6,9 @@ facts use independent dated scope; sparse scans must be tied to this revision.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 import hashlib
+import math
 
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
@@ -61,6 +63,14 @@ def adj_factor_result(expected, facts, history=None):
     return result
 
 
+def _volume_ratio_na(value):
+    # Legacy pandas imports stored SQL numeric NaN instead of NULL. This is
+    # only a representation test; independent listing/calendar proof is still
+    # required. Infinity, strings and other required fields are not exempted.
+    return (value is None or isinstance(value, Decimal) and value.is_nan()
+            or isinstance(value, float) and math.isnan(value))
+
+
 def daily_basic_result(expected, facts, *, volume_ratio_warmup=None):
     """Keep ingestion's admission ratio, but never call residual gaps complete.
 
@@ -80,9 +90,9 @@ def daily_basic_result(expected, facts, *, volume_ratio_warmup=None):
     warmup = volume_ratio_warmup or {}
     for field in DAILY_BASIC_REQUIRED_FIELDS:
         legal = {code for code in matched if field == "volume_ratio" and code in warmup
-                 and facts[code].get(field) is None}
+                 and _volume_ratio_na(facts[code].get(field))}
         missing = sorted(code for code in expected-legal if code not in facts or facts[code].get(field) is None)
-        invalid = sorted(code for code in matched if facts[code].get(field) is not None
+        invalid = sorted(code for code in matched-legal if facts[code].get(field) is not None
             and not finite_number(facts[code][field], positive=field in {"total_mv", "circ_mv"}))
         field_counts.append(CheckCounts("field_cell:"+field, len(expected),
             len(expected)-len(missing)-len(invalid)-len(legal), len(legal), len(missing), len(invalid), 0))
@@ -101,7 +111,7 @@ def daily_basic_result(expected, facts, *, volume_ratio_warmup=None):
 
 class PhysicalValidator:
     def _volume_ratio_warmup(self, conn, day, facts):
-        suspects = [code for code, fact in facts.items() if fact.get("volume_ratio") is None]
+        suspects = [code for code, fact in facts.items() if _volume_ratio_na(fact.get("volume_ratio"))]
         if not suspects:
             return {}
         # stock_basic is the shared listing authority, not a consumer buy pool.
