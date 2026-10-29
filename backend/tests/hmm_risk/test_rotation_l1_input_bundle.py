@@ -649,6 +649,153 @@ def test_qlib_price_precision_recovery_matches_exported_integer_li_population() 
         assert subject._raw_qlib_price(encoded, bounds) == price
 
 
+def test_qlib_monthly_rebase_recovers_source_price_without_changing_reference_or_volume() -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row['factor'] = 0.8994452953338623
+    for field in ('open', 'high', 'low', 'close'):
+        row[field] = 10.325631141662598
+    row['prev_close'], row['up_limit_price'], row['down_limit_price'] = 11.4795, 12.63, 10.33
+    row['volume'], row['amount'] = 200, 1000
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._raw_qlib_values(row)
+    values = subject._raw_qlib_values(row, prefix_scale=0.9784479330245184)
+    assert [values[f] for f in ('open', 'high', 'low', 'close')] == [11.48] * 4
+    assert values['prev_close'] == 11.4795
+    assert values['volume'] == float(row['volume']) * float(row['factor'])
+    assert values['amount'] == 1000
+
+
+@pytest.mark.parametrize('price', [4.5405, 100000.0])
+def test_qlib_monthly_rebase_does_not_choose_nearest_or_ambiguous_price(price) -> None:
+    scale, factor = .9784479330245184, .9192571640014648
+    encoded = float(np.float32(float(np.float32(price * factor)) * scale))
+    encoded_factor = float(np.float32(float(np.float32(factor)) * scale))
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._raw_rebased_qlib_price(encoded, encoded_factor, scale)
+
+
+def test_qlib_monthly_rebase_roundtrip_population_and_invalid_scale() -> None:
+    rng = np.random.default_rng(2118)
+    for li, factor, scale in zip(rng.integers(1, 300000, 100), rng.uniform(.01, 1, 100),
+                                 rng.uniform(.5, 2, 100)):
+        price = int(li) / 1000
+        encoded = float(np.float32(float(np.float32(price * factor)) * scale))
+        encoded_factor = float(np.float32(float(np.float32(factor)) * scale))
+        assert subject._raw_rebased_qlib_price(encoded, encoded_factor, scale) == price
+    for scale in (0, -1, np.nan, np.inf):
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._raw_rebased_qlib_price(10, 1, scale)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._float32_rebase_predecessors(float(np.nextafter(np.float32(0), np.float32(1))), .5)
+
+
+@pytest.fixture
+def monthly_price_encoding(tmp_path: Path):
+    root = tmp_path / 'release'
+    qlib = root / 'components/daily_bin_candidate'
+    days = (subject.SOURCE_START, subject.SOURCE_END, date(2026, 9, 30))
+    pins, rows = {}, []
+
+    def pin(path):
+        relative = path.relative_to(root).as_posix()
+        pins[relative] = {'path': relative, 'size': path.stat().st_size, 'sha256': subject._sha256_file(path)}
+
+    calendar = qlib / 'calendars/day.txt'
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text('\n'.join(d.isoformat() for d in days) + '\n', encoding='utf-8')
+    pin(calendar)
+    for field in subject.QLIB_STOCK_FIELDS:
+        path = qlib / 'features/000001.sz' / f'{field}.day.bin'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        value = (0.8994452953338623 if field == 'factor' else
+                 10.325631141662598 if field in ('open', 'high', 'low', 'close') else
+                 0.0 if field in ('limit_up', 'limit_down') else 11.48)
+        np.asarray([0, value, value, value], dtype='<f4').tofile(path)
+        pin(path)
+        if field in ('open', 'high', 'low', 'close', 'factor'):
+            rows.append(dict(instrument='000001.sz', feature=field, start_index=0, end_index=2,
+                             written_value_count=1, prefix_scale=.9784479330245184,
+                             predecessor_manifest_sha256='a' * 64,
+                             target_sha256=subject._sha256_file(path), target_size=path.stat().st_size))
+    receipt = dict(schema_version='aistock_monthly_native_qlib_materialization_v1', status='PASS',
+                   predecessor_manifest_sha256='a' * 64,
+                   native_writer=dict(schema_version='aistock_qlib_bounded_update_receipt_v1',
+                                      frequency='day', predecessor_manifest_sha256='a' * 64,
+                                      calendar_sha256=subject._sha256_file(calendar),
+                                      qfq_basis_changed_instrument_count=1,
+                                      calendar_prefix_count=2, feature_receipts=rows))
+    materialization = root / 'daily_bin/materialization_receipt.json'
+    materialization.parent.mkdir()
+
+    def seal():
+        materialization.write_text(json.dumps(receipt), encoding='utf-8')
+        pin(materialization)
+        body = dict(schema_version='qe_dataset_manifest_v1', components=pins)
+        (root / 'qe_dataset_manifest.json').write_text(
+            json.dumps({**body, 'dataset_manifest_sha256': canonical_sha256(body)}), encoding='utf-8')
+
+    (root / 'release_closure_receipt.json').write_text('{}', encoding='utf-8')
+    seal()
+    return qlib, days, receipt, seal
+
+
+def test_qlib_monthly_encoding_pins_prefix_and_uses_full_not_read_calendar(monthly_price_encoding):
+    root, days, _, _ = monthly_price_encoding
+    encoding = subject._QlibPriceEncoding(root, days[1:2])
+    assert encoding.scale('000001.SZ', days[1]) == .9784479330245184
+    assert encoding.scale('000001.SZ', days[2]) == 1
+    # Exercise the production warmup caller, not just standalone arithmetic.
+    state = subject._strict_prior_price_state(
+        root, calendar=days, spans={'000001.SZ': ((days[0], days[-1]),)}, suspension_keys=frozenset(),
+        source_start=days[0], window_start=days[-1])
+    assert state['000001.SZ'][1] == ((days[0], 11.48), (days[1], 11.48))
+    encoding.unchanged()
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'schema', 'scale', 'duplicate', 'boundary', 'hash', 'size',
+                                     'all_features_missing', 'calendar', 'invalid_writer'])
+def test_qlib_monthly_encoding_rejects_missing_or_conflicting_provenance(monthly_price_encoding, mutation):
+    root, days, receipt, seal = monthly_price_encoding
+    rows = receipt['native_writer']['feature_receipts']
+    if mutation == 'missing':
+        rows.pop()
+    elif mutation == 'schema':
+        receipt['native_writer']['schema_version'] = 'unknown'
+    elif mutation == 'scale':
+        rows[0]['prefix_scale'] = 1
+    elif mutation == 'duplicate':
+        rows.append(dict(rows[0]))
+    elif mutation == 'boundary':
+        rows[0]['written_value_count'] = 0
+    elif mutation == 'hash':
+        rows[0]['target_sha256'] = 'b' * 64
+    elif mutation == 'size':
+        rows[0]['target_size'] += 4
+    elif mutation == 'all_features_missing':
+        rows.clear()
+    elif mutation == 'calendar':
+        receipt['native_writer']['calendar_sha256'] = 'c' * 64
+    else:
+        receipt['native_writer'] = None
+    seal()
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._QlibPriceEncoding(root, days)
+
+
+def test_qlib_monthly_encoding_rejects_unpinned_receipt_and_changed_bin(monthly_price_encoding):
+    root, days, _, seal = monthly_price_encoding
+    receipt_path = root.parent.parent / 'daily_bin/materialization_receipt.json'
+    receipt_path.write_text('{}', encoding='utf-8')
+    with pytest.raises(subject.RotationL1InputBundleError, match='pinned file differs'):
+        subject._QlibPriceEncoding(root, days)
+    seal()
+    encoding = subject._QlibPriceEncoding(root, days)
+    binary = root / 'features/000001.sz/open.day.bin'
+    binary.write_bytes(binary.read_bytes() + b'\x00' * 4)
+    with pytest.raises(subject.RotationL1InputBundleError, match='pinned file differs'):
+        encoding.scale('000001.SZ', days[0])
+
+
 @pytest.mark.parametrize('value', [0.0, -1.0, np.inf, np.nan])
 def test_qlib_price_precision_keeps_invalid_price_fail_closed(value) -> None:
     row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
@@ -1260,7 +1407,7 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
     monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=dates,
         spans={symbol: ((dates[0], dates[-1]),)},
         adapter=Adapter(),
@@ -1349,7 +1496,7 @@ def test_pit_entry_uses_prior_authoritative_circ_mv_without_future_fill(
     monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=dates,
         spans={symbol: ((active_dates[0], active_dates[-1]),)},
         adapter=Adapter(),
@@ -1433,7 +1580,7 @@ def test_latest_invalid_circ_mv_is_not_silently_replaced_by_older_value(
     monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=dates,
         spans={symbol: ((dates[-1], dates[-1]),)},
         adapter=Adapter(),
@@ -3044,7 +3191,7 @@ def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     monkeypatch.setattr(subject, "_append_day_level_aggregates", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=(*prior_dates, *dates),
         spans={symbol: ((prior_dates[0], dates[-1]),)},
         adapter=Adapter(),
