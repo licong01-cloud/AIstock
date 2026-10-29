@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1570",
-  "closed_at": null,
+  "closed_at": "2026-10-29T01:50:25.610184Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -201,10 +201,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/BUG-1570-dev-20261028/BUG-1570-post-restart-20261029.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1570",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "6812216685f8a2fd14ae789baac8685b14dd64cf7788dc390f62490fb2323bfd",
+      "expected_identity": "dec01d55359eab6e6bf63185f8bda27db80b9a78",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T01:41:31.540304Z",
+      "mode": "read_only",
+      "observed_identity": "50e1ecf96fa592ba39b71d7a04d64218388c8d75",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "12ef75414ce87c7bc01bf15e85aef2ab1eecc506bbd15cde13b1b34419d4c3a6",
+      "receipt_sha256": "e63a71dea67f77497766f3fb3ce0b91d0ceb1ff08634e0b344b6a4c605b81713",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2805fe05978883d44e22ecff91ed8385a8e70e235dc3c48e6da6fe30dda05eae",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -236,7 +258,7 @@
     ],
     "validation_evidence_digest": "f630a34acc8c1a4000c8bfc60c0021c0d3c5f77afcca4d0bd8a77aa728b55fd0"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
