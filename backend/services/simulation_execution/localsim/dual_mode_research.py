@@ -252,6 +252,18 @@ def run_study(request_ref: FileRef, *, stop_after_account_days: int | None = Non
         return {"status": "IN_PROGRESS", "computation_performed": False, "outcomes_read": False}
 
 
+def _account_day_identity(*, request_identity: str, account_id: str, trade_date: str, prior: dict) -> str:
+    """Bind causal inputs independently of receipt paths and processing clocks.
+
+    The immutable previous-day FileRef and native journal retain full physical
+    lineage validation. Only the prior state consumed by account computation
+    enters its logical identity, so resource/output choices preserve plan IDs.
+    """
+    opening = {"cash_cny": prior["cash_cny"], "positions": prior["positions"],
+               "marks_raw_cny": prior.get("marks_raw_cny", {})}
+    return digest(["localsim_dual_mode_account_day_v2", request_identity, account_id, trade_date, opening])
+
+
 def _compute_account_day(job: dict) -> dict:
     """Only compute native facts; a worker cannot publish a journal or result."""
     initial, prior = job["initial"], job["prior"]
@@ -366,8 +378,8 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
         for initial in initials:
             account_id = initial["account_id"]
             prior = histories[account_id][-1] if histories[account_id] else initial
-            previous = references[account_id][-1] if references[account_id] else None
-            identity = digest([request["identity"], account_id, day_string, previous])
+            identity = _account_day_identity(request_identity=request["identity"], account_id=account_id,
+                                             trade_date=day_string, prior=prior)
             run_id = "lsdm_" + identity[:48]
             if ((root / "journals" / run_id / "generations/00000001.json").exists()
                     or remaining is not None and missing_count >= remaining):
@@ -385,7 +397,8 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
             account_id = initial["account_id"]
             prior = histories[account_id][-1] if histories[account_id] else initial
             previous = references[account_id][-1] if references[account_id] else None
-            identity = digest([request["identity"], account_id, day_string, previous])
+            identity = _account_day_identity(request_identity=request["identity"], account_id=account_id,
+                                             trade_date=day_string, prior=prior)
             store = TimingFileRepository(root / "journals", "lsdm_" + identity[:48])
             path = root / "days" / account_id / (day_string + ".json")
             record = store.latest()
