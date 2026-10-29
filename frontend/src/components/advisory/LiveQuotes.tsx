@@ -16,6 +16,7 @@ export function QuoteProvider({ children, programId, listVersionId }: { children
   const counts = useRef(new Map<string, number>());
   const [symbols, setSymbols] = useState("");
   const [items, setItems] = useState<Quotes>({});
+  const quoteScope = useRef<string>();
   const debounce = useRef<ReturnType<typeof setTimeout>>();
   const register = useCallback((symbol: string) => {
     if (!valid(symbol)) return () => undefined;
@@ -36,8 +37,12 @@ export function QuoteProvider({ children, programId, listVersionId }: { children
     let stopped = false, busy = false;
     let controller: AbortController | null = null;
     const wanted = symbols.split(",");
-    // Scope quotes to mounted visible securities; a page change cannot reuse another page's response.
-    setItems({});
+    const scope = JSON.stringify([programId || null, listVersionId || null]);
+    const sameScope = quoteScope.current === scope;
+    quoteScope.current = scope;
+    // Clearing visible quotes changes row heights and can feed back into the observer.
+    // Keep overlapping securities only within this exact program/list identity.
+    setItems(previous => sameScope ? Object.fromEntries(wanted.filter(s => previous[s]).map(s => [s, previous[s]])) : {});
     const refresh = async () => {
       if (stopped || document.hidden || busy) return;
       busy = true; controller = new AbortController();
