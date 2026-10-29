@@ -4,7 +4,8 @@
     "backend/services/simulation_runtime/scheduler.py",
     "backend/tests/simulation_runtime/test_localsim_historical_valuation_recovery.py",
     "docs/analysis/localsim_historical_valuation_recovery_20261029.md",
-    "tests/aistock_validation/bugs/20261029_BUG-2135-localsim-historical-pending-valuations-bypass-frozen-context-recovery-an.json"
+    "tests/aistock_validation/bugs/20261029_BUG-2135-localsim-historical-pending-valuations-bypass-frozen-context-recovery-an.json",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2135",
@@ -39,7 +40,8 @@
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_historical_valuation_recovery.py",
       "docs/analysis/localsim_historical_valuation_recovery_20261029.md",
-      "tests/aistock_validation/bugs/20261029_BUG-2135-localsim-historical-pending-valuations-bypass-frozen-context-recovery-an.json"
+      "tests/aistock_validation/bugs/20261029_BUG-2135-localsim-historical-pending-valuations-bypass-frozen-context-recovery-an.json",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
     ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_historical_valuation_recovery.py",
@@ -49,7 +51,8 @@
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_historical_valuation_recovery.py",
       "docs/analysis/localsim_historical_valuation_recovery_20261029.md",
-      "tests/aistock_validation/bugs/20261029_BUG-2135-localsim-historical-pending-valuations-bypass-frozen-context-recovery-an.json"
+      "tests/aistock_validation/bugs/20261029_BUG-2135-localsim-historical-pending-valuations-bypass-frozen-context-recovery-an.json",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -144,8 +147,11 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "fresh_process_evidence": [
-      "Fresh persistent source: 12 direct nodes including native confirmed economics/valuation restart and one-generation retry passed; valuation-matrix.xml",
-      "Fresh source inspected 49 real frozen positions and all 49 historical visible quotes using enforced READ ONLY DB connections; core completion mocked only for routing capture, production status/outbox unchanged. valuation-fresh-readonly-r1.json SHA256 81ae65089fc9d4420f67e84888766df62c9f75c1f0d05bead132075410b6fb0b"
+      "pytest valuation-final.xml -> 16 passed, including original native valuation/restart and generation retry; CI four failing nodes rerun passed after wall-clock source fix",
+      "Fresh final-source read-only production route/input check -> 49/49 visible historical quotes; no valuation executed, no writes, old status/outbox unchanged; valuation-fresh-readonly-r2.json SHA256 5d99b12078d01a150caf9e42989f208d3fe2536d523c4aa8445f3ce504470eb6",
+      "Final source read-only route/input verification -> 49 of 49 visible quotes; no production writes or valuation executed; valuation-fresh-readonly-r2.json SHA256 5d99b12078d01a150caf9e42989f208d3fe2536d523c4aa8445f3ce504470eb6",
+      "Final source read-only route/input verification: 49 of 49 visible quotes, no writes or valuation executed; valuation-fresh-readonly-r2.json SHA256 5d99b12078d01a150caf9e42989f208d3fe2536d523c4aa8445f3ce504470eb6",
+      "Fresh final source: valuation-fresh-readonly-r2.json SHA256 5d99b12078d01a150caf9e42989f208d3fe2536d523c4aa8445f3ce504470eb6; 49/49 quotes, no writes or valuation executed."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -165,6 +171,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "CI exposed four legacy/source-clock expectations. Source authority must use actual Asia/Shanghai wall date; align the existing same-day production fixture with that timezone, without changing any trading/default behavior.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [

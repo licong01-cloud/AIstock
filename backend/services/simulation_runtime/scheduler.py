@@ -1579,7 +1579,7 @@ class ProductionSimulationRunContextProvider:
         if not isinstance(data_source, MinuteDataSource):
             data_source = MinuteDataSource(str(data_source))
         # A historical causal cursor never grants access to today's realtime source.
-        current_trade_date = scheduler_now().date()
+        current_trade_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
         if trade_date == current_trade_date:
             return MinuteDataSource.TDX_REALTIME
         return data_source

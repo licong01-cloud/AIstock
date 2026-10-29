@@ -16,9 +16,17 @@ from backend.tests.simulation_runtime.test_lifecycle_scheduler import (
 TZ = ZoneInfo('Asia/Shanghai')
 
 
+def _source_clock(monkeypatch, today):
+    class SourceDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.combine(today, datetime.min.time(), TZ).astimezone(tz or TZ)
+    monkeypatch.setattr(module, 'datetime', SourceDatetime)
+
+
 def test_historical_causal_cursor_does_not_select_realtime_for_legacy_account(monkeypatch):
     today = TRADE_DATE + timedelta(days=4)
-    monkeypatch.setattr(module, 'scheduler_now', lambda: datetime.combine(today, datetime.min.time(), TZ))
+    _source_clock(monkeypatch, today)
     source = module.ProductionSimulationRunContextProvider._resolve_local_sim_market_data_source(
         portfolio=SimpleNamespace(data_source=MinuteDataSource.DB_HISTORICAL), trade_date=TRADE_DATE,
         as_of_time=datetime.combine(TRADE_DATE, datetime.min.time(), TZ).replace(hour=10))
@@ -28,7 +36,7 @@ def test_historical_causal_cursor_does_not_select_realtime_for_legacy_account(mo
 @pytest.mark.parametrize('source', [MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES])
 def test_current_day_is_realtime_and_past_day_keeps_declared_source(monkeypatch, source):
     today = TRADE_DATE + timedelta(days=4)
-    monkeypatch.setattr(module, 'scheduler_now', lambda: datetime.combine(today, datetime.min.time(), TZ))
+    _source_clock(monkeypatch, today)
     provider = module.ProductionSimulationRunContextProvider
     portfolio = SimpleNamespace(data_source=source)
     assert provider._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=today) is MinuteDataSource.TDX_REALTIME
