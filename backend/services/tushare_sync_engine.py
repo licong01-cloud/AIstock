@@ -50,6 +50,13 @@ ZERO_ROW_VALID_DATASETS = {
     "stock_st_events",
     *FINANCIAL_EVENT_RAW_DATASETS,
 }
+DENSE_STOCK_PANELS = frozenset({"bak_basic", "cyq_perf"})
+NULL_PRESERVING_DATASETS = frozenset(LATE_PUBLICATION_TAIL_DAYS) | DENSE_STOCK_PANELS
+# Bound one repair attempt, not completeness. Remaining keys retain the same
+# existing date retry target and already committed facts are reused next time.
+DENSE_PANEL_REPAIR_BATCH = 32
+DENSE_CYQ_FIELDS = ("his_low", "his_high", "cost_15pct", "cost_50pct",
+                    "cost_85pct", "weight_avg", "winner_rate")
 
 # BUG-1425: contract version for the daily_basic required-field coverage
 # receipt written into refresh-audit metadata. Must stay in sync with
@@ -751,7 +758,7 @@ class TushareSyncEngine:
             "THEN EXCLUDED.pre_close ELSE stk_limit.pre_close END"
             if fill_only_reference and c == "pre_close" else
             f"{c}=COALESCE(EXCLUDED.{c}, {table}.{c})"
-            if spec.name in LATE_PUBLICATION_TAIL_DAYS else f"{c}=EXCLUDED.{c}"
+            if spec.name in NULL_PRESERVING_DATASETS else f"{c}=EXCLUDED.{c}"
             for c in non_pk
         )
 
@@ -770,7 +777,7 @@ class TushareSyncEngine:
             vals = []
             for c in col_names:
                 v = r.get(c)
-                if (spec.name in LATE_PUBLICATION_TAIL_DAYS and col_types[c] == "numeric"
+                if (spec.name in NULL_PRESERVING_DATASETS and col_types[c] == "numeric"
                         and v is not None and (not _is_finite_number(v)
                             or (spec.name == "stk_limit" and
                                 (float(v) < 0 or (c != "down_limit" and float(v) == 0))))):
@@ -796,7 +803,7 @@ class TushareSyncEngine:
                     assignments.append("CASE WHEN stk_limit.pre_close IS NULL OR stk_limit.pre_close<=0 "
                         "OR stk_limit.pre_close::text IN ('NaN','Infinity','-Infinity') "
                         "THEN EXCLUDED.pre_close ELSE stk_limit.pre_close END")
-                elif spec.name in LATE_PUBLICATION_TAIL_DAYS:
+                elif spec.name in NULL_PRESERVING_DATASETS:
                     assignments.append(f"COALESCE(EXCLUDED.{c}, {table}.{c})")
                 else:
                     assignments.append(f"EXCLUDED.{c}")
@@ -1434,6 +1441,41 @@ class TushareSyncEngine:
 
     # -- sync strategies ----------------------------------------------------
 
+    def _dense_panel_observation(self, conn, spec, day):
+        """One dated SH/SZ traded scope; never PIT buy eligibility or row-count guesses."""
+        from .data_integrity.validation import PhysicalValidator, rows
+        expected = PhysicalValidator()._traded(conn, day, spec.target_table)
+        fields = DENSE_CYQ_FIELDS if spec.name == "cyq_perf" else ()
+        observed = rows(conn, f"SELECT ts_code{',' if fields else ''}{','.join(fields)} "
+                        f"FROM {spec.target_table} WHERE trade_date=%s", (day,))
+        facts = {str(row["ts_code"]).strip(): row for row in observed}
+        if len(facts) != len(observed):
+            raise RuntimeError("dense stock panel duplicate physical identity")
+        missing = expected-facts.keys()
+        invalid = {code for code in expected & facts.keys()
+                   if any(not _is_finite_number(facts[code].get(field)) for field in fields)}
+        return {"expected_rows": len(expected), "valid_rows": len(expected)-len(missing)-len(invalid),
+                "missing_symbols": sorted(missing), "invalid_symbols": sorted(invalid)}
+
+    def _complete_dense_panel(self, conn, spec, day):
+        """Only missing keys use exact provider calls; empty and HTTP failure stay distinct."""
+        observation = self._dense_panel_observation(conn, spec, day)
+        pending = sorted(set(observation["missing_symbols"]) | set(observation["invalid_symbols"]))
+        written, empty = 0, []
+        for code in pending[:DENSE_PANEL_REPAIR_BATCH]:
+            supplement = self._fetch_from_tushare(spec, {spec.date_param_name: _to_ymd(day), "ts_code": code})
+            self._validate_rows_for_date(spec, supplement, day)
+            if len(supplement) > 1 or any(str(row.get("ts_code", "")).strip() != code for row in supplement):
+                raise RuntimeError("dense stock panel exact provider identity differs")
+            if supplement:
+                written += self._upsert_batch(conn, spec, supplement)
+            else:
+                empty.append(code)
+        if written:
+            observation = self._dense_panel_observation(conn, spec, day)
+        return {**observation, "attempted_keys": min(len(pending), DENSE_PANEL_REPAIR_BATCH),
+                "source_empty_symbols": empty, "provider_absence_established": False}, written
+
     def _sync_by_date(
         self, conn, spec: DatasetSpec,
         start_date: dt.date, end_date: dt.date,
@@ -1471,7 +1513,11 @@ class TushareSyncEngine:
                         reference_fill_only_codes=[row["ts_code"] for row in reference_enrichment["facts"]])
                 else:
                     inserted = self._upsert_batch(conn, spec, rows)
-                if inserted == 0 and spec.name not in ZERO_ROW_VALID_DATASETS:
+                dense_panel = None
+                if spec.name in DENSE_STOCK_PANELS:
+                    dense_panel, supplemented = self._complete_dense_panel(conn, spec, d)
+                    inserted += supplemented
+                if inserted == 0 and spec.name not in ZERO_ROW_VALID_DATASETS and dense_panel is None:
                     raise RuntimeError(
                         f"{spec.name} {spec.date_param_name}={ymd} returned/wrote 0 rows; "
                         "treating as not ready for audit/self-healing"
@@ -1480,12 +1526,23 @@ class TushareSyncEngine:
                 audit_quality: Dict[str, Any] = {"quality_status": quality_status}
                 if inserted > 0:
                     audit_quality = self._audit_quality_for_rows(spec, inserted)
+                if dense_panel is not None:
+                    complete = (dense_panel["expected_rows"] > 0 and not dense_panel["missing_symbols"]
+                                and not dense_panel["invalid_symbols"])
+                    audit_quality = {"quality_status": "ok" if complete else "low_coverage",
+                        "expected_rows": dense_panel["expected_rows"],
+                        "coverage_ratio": dense_panel["valid_rows"]/dense_panel["expected_rows"]
+                            if dense_panel["expected_rows"] else 0.0}
+                    if not complete:
+                        audit_quality["failure_category"] = "independent_dated_stock_panel_incomplete"
                 audit_metadata = {
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
                 from .data_integrity.provider import provider_scan
                 audit_metadata["provider_scan"] = provider_scan(spec, rows, parameters={spec.date_param_name: ymd})
+                if dense_panel is not None:
+                    audit_metadata["dense_panel_readback"] = dense_panel
                 if spec.name == "suspend_d":
                     from backend.data_service.suspension_day_authority import publication_quality as suspension_publication_quality
                     suspension, suspension_quality = suspension_publication_quality(rows, d)
@@ -1551,7 +1608,7 @@ class TushareSyncEngine:
                 self._refresh_audit.record_success(
                     dataset=spec.name,
                     trade_date=d,
-                    row_count=inserted,
+                    row_count=dense_panel["valid_rows"] if dense_panel is not None else inserted,
                     job_id=str(job_id),
                     data_source="tushare",
                     metadata=audit_metadata,
@@ -1565,7 +1622,7 @@ class TushareSyncEngine:
                     "reconciled" if quality_ok else "retry",
                     job_id=job_id,
                     rows_written=inserted,
-                    rows_observed=inserted,
+                    rows_observed=dense_panel["valid_rows"] if dense_panel is not None else inserted,
                     context={"quality_status": audit_quality["quality_status"]},
                 )
                 result.inserted_rows += inserted
