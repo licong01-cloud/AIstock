@@ -3,7 +3,7 @@
 > v1.0；2026-10-29；F2；feature lane。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` §1.22/§7。
 > 当前授权：2026-10-29用户对异步问题明确答复“批准完整推荐合同”，批准 **L2-LOSS-SEVERITY-D1～D6** 及双fresh-process共4 fits；另答复“授权审核通过后提交并合入”，覆盖本任务三份设计及后续HMM源码的提交、推送、PR和合入。不含工作树清理、生产写入或服务重启。
-> 当前状态：零fit归因、两轮设计审核及源码直接验证已完成；源码PR/CI、正式4-fit、资产、真实双入口及QE采用未完成。设计批准与实际验证分开报告。
+> 当前状态：源码#6860 CI全绿已合入，正式4/4 fits、125日完整资产、有界真实历史输入快照双入口、结果复核与交接完成。主MSE取舍通过但增量弱、排序未超旧模型；QE新消费公式/实验、实时在线接入和生产采用未执行。详见§14，不改变D1～D6数值。
 
 ## 1. Background / 目标与已知事实
 
@@ -120,19 +120,19 @@ F-011：单一经济损失目标、成熟训练及4fit预算；F-012：完整L2�
 
 ### Design Acceptance Matrix
 
-本矩阵只验收**本次设计交付**的完整性与证据可定位性，status不是效果通过状态。D1～D6已由用户单独批准；源码LOCAL_VERIFIED，训练、真实双入口和QE消费分别为NOT_STARTED。
+本矩阵记录HMM本包已批准交付，不能代报QE/实时业务/生产验收。源码MERGED；正式4-fit与历史输入快照双入口COMPLETED；研究主MSE取舍通过，收益增益未证实；QE新消费仍NOT_STARTED。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | §4～§6/§8；backend/services/hmm_risk/risk_l2_loss_severity.py；scripts/hmm_risk/run_risk_l2_loss_severity.py | tests: backend/tests/hmm_risk/test_risk_l2_loss_severity.py；artifact: F:/Dev/AIstock_worktrees/hmm-l2-risk-economic-target-20261029/tmp/handoff/economic-target/attribution.json；正式4fit仍未执行 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-012 | §3/§7；risk_l2_loss_severity.infer_prepared，显式源carrier验证与独立loss核 | tests: backend/tests/hmm_risk/test_risk_l2_loss_severity.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_dual_precision/20261029/run_v2/summary.json（旧模型对照定位）；新模型真实双入口待fit后执行 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-013 | §8/§9，HMM结果及QE/业务交接定义；新结果未执行 | artifact: F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/HMM_final_analysis_v1/review.json；§9停止及责任边界 | DESIGN_REVIEW_VERIFIED | 无 |
+| F-011 | §4～§6/§8；backend/services/hmm_risk/risk_l2_loss_severity.py；scripts/hmm_risk/run_risk_l2_loss_severity.py | tests: backend/tests/hmm_risk/test_risk_l2_loss_severity.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_loss_severity/20261029/run_v1/acceptance.json；result_review.json | VERIFIED | 无 |
+| F-012 | §3/§7；risk_l2_loss_severity.infer_prepared，显式源carrier验证与独立loss核 | tests: backend/tests/hmm_risk/test_risk_l2_loss_severity.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_loss_severity/20261029/dual_entry_v1/summary.json；限真实历史快照，不是重新查实时库 | VERIFIED | 无 |
+| F-013 | §8/§9/§14，HMM结果及QE/业务交接，不代为实现外模块公式 | artifact: F:/Dev/AIstock_runtime/hmm_l2_loss_severity/20261029/qe_handoff.md；advisory_localsim_handoff.md；delivery.json | VERIFIED | 无 |
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
 本提案同时改变损失目标与输出类型，因此不能纯因果归结为标签一项改变；选简单Ridge仅为避免同时搜索模型复杂度。20D可能不足以预测终值损失；该实验可能完全失败。loss改善仍可能无法在股票Alpha中形成有价值的交易决策。10D固定锚点不是实际持仓或盘中成交，不能据此自动控制仓位。需通过后续QE真持仓/成本对照确认，不扩大研究结论。
 
-回滚为不用新schema/版本，原资产、默认与接口不变；不删除旧结果或回填历史。生产DDL/DML、依赖安装、dataset/profile写入、runtime activation均noop；未启动服务或训练。后续源码按实际changed-files判定runtime，不将研究CLI分类外推到现有API；需要用户重启时独立报告。
+回滚为不用新schema/版本，原资产、默认与接口不变；不删除旧结果或回填历史。生产DDL/DML、依赖安装、dataset/profile写入、runtime activation均noop；未控制服务，独立研究4/4 fits已按批准执行。源码按实际changed-files判定runtime，不将研究CLI验证外推为现有API已加载；需要用户重启时独立报告。
 
 ## 12. 已完成归因与审核定位
 
@@ -146,10 +146,32 @@ DESIGN-COMPLIANCE-001：完整模型/双入口/外模块状态分开，未验证
 
 第二轮作者审核（接口、交付与权限，当时合同待批准）：核对实际feature/label keys和Ridge签名；明确20D名称/顺序、连续目标独立schema、不可套用旧概率消费者、物理范围投影不吞异常；原rolling合同逐字保留，只增补终态。修复F2矩阵将合同批准pending与设计验收混写的问题，status仅指文档审核。不声称第三方独立审核。随后收到本页顶部两项明确批准，生产和清理仍未授权。
 
-## 13. 源码交付审修与门禁
+## 13. 源码交付前审修与门禁（历史节点，后续终态见§14）
 
 第一轮源码作者审核：核对加权Ridge与独立正规方程、train-only scaler、成熟标签及先封存后评价；修复标签pin只校验格式而未绑定已批准值、baseline在fit后才验证、字符串数值可被转换的问题。第二轮源码作者审核：分别检查文件/数据库carrier校验、独立loss核、完整131和NA、失败计数/无重试及输出权限；补齐真实来源缓存双入口测试，禁止未验证dataset root时写入failure receipt。两轮均未留下阻断finding，不声称独立第三方审核。
 
 直接测试15 passed；旧rolling直接回归8 passed（仅既有sklearn弃用提示）；Ruff/py_compile/fresh-process imports、L0及module registry通过。changed-files共6项，hmm.risk 3项、docs.architecture 3项，ownership unmapped/ambiguous=0；CI选取hmm_risk_pr_slice，无遗漏test文件。正式prepared/features和两份16375行baseline身份零fit读回通过，未读新tail或改旧资产。
 
 按现行catalog，新backend文件分类为backend-main，未声明runtime=none；独立CLI研究不控制服务，生产运行生效/后端源码加载仍须独立验收。本提交不注册新路由或生产默认。DDL/DML、依赖、数据/profile写入、激活均noop；PR全绿与合入后再执行4-fit，不把本地测试冒充正式研究。
+
+## 14. 正式终态与两轮结果审核（2026-10-29）
+
+以上§13为源码交付时状态，实际后续已完成：#6860 CI通过并合入b2c699f1e206cca5fd1dd11ff3cfe390abe8871f；从该干净源码运行双fresh-process共4 fits，无失败/重试/额外fit。全部研究文件位于`F:/Dev/AIstock_runtime/hmm_l2_loss_severity/20261029`。
+
+| 指标 | 全期 | 2026Q2 | 2026Q3 |
+|---|---:|---:|---:|
+| 成熟日/行数 | 115/15065 | 60/7860 | 55/7205 |
+| MSE | 0.001757045880 | 0.001688678700 | 0.001831628258 |
+| 训练均值参照MSE | 0.001786323488 | 0.001688214267 | 0.001893351729 |
+| MSE_skill | 0.0163898691 | -0.0002751032 | 0.0326001083 |
+| 平均同日loss rank相关 | 0.0796637223 | 0.0006764708 | 0.1658316331 |
+
+旧M0/M1在相同loss目标上的同日概率排序相关为0.0952102670/0.0900055420，高于新loss；不同输出量纲不做概率MSE伪对照。本轮只是数值损失估计小幅优于训练均值，且增量主要来自Q3。主取舍满足ELIGIBLE_FOR_QE_CONSUMER_DESIGN，不等于行业排序全面升级、经济有效或生产可用。
+
+`run_v1/loss_predictions.json`为125日×131行业=16375行，唯一键无缺口、全部预测available；末10日1310标签仍OUTCOME_NOT_MATURE，无窗口截短。文件SHA256=`75250a22ea24aef564fc40c265744855122c9f95d244d9a03416e8025e9dd267`，6381918 bytes。Q2/Q3模型参数hash分别为`6f9154f96002c2a016edbe9c45daa103a48259057a52e1f1b04fd7f5d0a973ee`及`8ab99fd1c2361d4f90a289718c8e169aa98edd860de7062c3e7264d092cc5bcc`；训练有效日期714/715、有效行93052/93319，仍按原批准成熟边界。
+
+双入口：4月1日/7月1日各131行，两次fresh-process分别一致；文件/数据库历史事实快照的新模型最大loss差3.5441e-10/3.1941e-10，availability/reason差异0。复用已验证真实DB snapshot，无本轮DB查询，不是实时在线验收。新模型生效范围止于9月30日，不能直接用于10月荐股/模拟盘。旧M0/M1预测及模型四个保护资产前后SHA不变。
+
+第一轮结果作者审核：直接从冻结逐日收益独立重算终值L、日期等权MSE/参照/skill，与正式实现一致；125/131/16375、115/15065、1310未成熟及双process相等通过。回执`result_review.json`。第二轮结果/文档作者审核：区分数值估计与排序、季度差异与经济收益、历史快照与在线、模型有效期与当前日期；修正“只要fit完成即可交QE采用”的潜在歧义。没有追加新阈值、额外fit或无关证据工程。
+
+本包至此结束；HMM已提供`qe_handoff.md`、`advisory_localsim_handoff.md`和`delivery.json`。QE先判断有无合理损失消费函数，再另按其批准合同实验；不把1-loss套旧1-p，不重跑旧十五账户。当前无新QE准入/远端部署、生产DDL/DML、激活、依赖安装、数据/profile变更、服务控制或工作树清理。研究成功状态不替代上述独立状态。
