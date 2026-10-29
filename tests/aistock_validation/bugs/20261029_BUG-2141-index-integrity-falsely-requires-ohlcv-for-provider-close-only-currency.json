@@ -1,7 +1,9 @@
 {
   "actual": "Postrestart source identity is correct and185 repaired bak rows retained. Native index scans completed all5920 catalogue requests with zero failures, yet20TD index certification blocks because validator requires open/high/low/vol/amount on every published index. Exact raw provider+DB confirm2026-10-16 000300CAD13.CSI and000300GBP00.CSI have finite positive close and official NULL optional quote fields; CSI300 actual OHLCV complete. Fix shared validation: mandatory finite positive close, retain explicit nullable optional provider fields, reject nonfinite/nonpositive present OHLC or negative volume/amount; do not fabricate values or discard returned keys, weaken stock/minute/QE contracts, shrink catalogue or claim historical vintage. Existing completed-scan/revision/key requirements remain. No market fact DML, release/profile or service control changes.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json"
+    "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json",
+    "backend/services/data_integrity/validation.py",
+    "backend/tests/test_daily_data_integrity.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2141",
@@ -21,12 +23,24 @@
       "timestamp": "2026-10-29T15:36:54.755211Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2141-index-quote-20261029/dev-validation.json",
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2139-dense-panel-20261029/remaining-provider-readback.json"
+  ],
+  "expected": "Shared index fact validation requires a real finite positive close, preserves explicit unavailable optional OHLC/volume/amount as legal NA, rejects invalid provided values and every real missing key. Completed source query, revision binding and catalogue identity remain required; no stock/minute/model contracts or original facts change. Actual 20TD comparison converts only the8 fully scanned false failures to VALID;12 dates without completed query proof remain UNVERIFIED, not fabricated PASS.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261029_BUG-2141-index-integrity-falsely-requires-ohlcv-for-provider-close-only-currency.json",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -54,7 +68,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/test_daily_data_integrity.py -q -k index_complete_query",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -62,15 +76,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2141-index-quote-20261029/validate_dev.py -> PASS isolated worktree validator, real source fixtures in existing DEV, source NULLs retained and invalid close rejected; DEV effects rolled back; 20TD production read-only comparison preserves12 unproven dates",
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2141-index-quote-20261029/validate_dev.py -> passed real source DEV fixtures; isolated worktree code;20TD read-only comparison; no production writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

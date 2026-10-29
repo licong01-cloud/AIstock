@@ -244,6 +244,9 @@ def test_index_request_catalogue_is_not_a_required_quote_universe(monkeypatch, s
 
 
 @pytest.mark.parametrize("mutation,expected", [("valid", PartitionState.VALID),
+    ("close_only", PartitionState.VALID), ("nullable_volume", PartitionState.VALID),
+    ("nan_open", PartitionState.INCOMPLETE), ("zero_open", PartitionState.INCOMPLETE),
+    ("negative_volume", PartitionState.INCOMPLETE), ("null_close", PartitionState.INCOMPLETE),
     ("missing", PartitionState.INCOMPLETE), ("nan", PartitionState.INCOMPLETE),
     ("partial_query", PartitionState.UNVERIFIED), ("old_revision", PartitionState.UNVERIFIED)])
 def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypatch, mutation, expected):
@@ -262,6 +265,18 @@ def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypat
         actual.pop()
     if mutation == "nan":
         actual[0]["close"] = float("nan")
+    if mutation == "close_only":
+        actual[0].update(open=None, high=None, low=None, vol=None, amount=None)
+    if mutation == "nullable_volume":
+        actual[0].update(vol=None, amount=None)
+    if mutation == "nan_open":
+        actual[0]["open"] = float("nan")
+    if mutation == "zero_open":
+        actual[0]["open"] = 0
+    if mutation == "negative_volume":
+        actual[0]["vol"] = -1
+    if mutation == "null_close":
+        actual[0]["close"] = None
     if mutation == "old_revision":
         source["metadata"]["integrity_observed_revision"] = 0
     monkeypatch.setattr(validation, "rows", lambda _c, query, _p=(): [source]
@@ -270,6 +285,9 @@ def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypat
     assert result.state == expected
     if mutation == "valid":
         assert result.checks["coverage_basis"] == "complete_query_returned_keys_not_catalogue_availability"
+    if mutation in {"close_only", "nullable_volume"}:
+        assert result.checks["quote_field_contract"]["required_fields"] == ["close"]
+        assert result.counts[-1].legal_na == (5 if mutation == "close_only" else 2)
 def test_stock_fact_scope_is_shsz_not_pit_buy_eligibility():
     from backend.services.data_integrity.stock_scope import (
         filter_stock_rows, is_supported_stock_code, stock_exchange_selection, stock_scope_sql,
