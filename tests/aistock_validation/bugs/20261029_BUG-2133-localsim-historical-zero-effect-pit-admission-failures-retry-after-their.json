@@ -144,7 +144,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "fresh_process_evidence": [
       "Fresh AIstock Python loaded persistent scheduler/PIT source: 26 direct tests passed; X:/AIstock_temp/localsim-reliability-followup-20261029/pit-matrix.xml",
-      "Fresh persistent scheduler source inspected both original 2026-10-26 rows through enforced read-only DB connections with updates captured only in memory; production states remain FAILED_RETRYABLE. Receipt: X:/AIstock_temp/localsim-reliability-followup-20261029/pit-fresh-readonly-r1.json SHA256 76dadfda21a724bea8fe115d3aa39aadd3b1ba39394d98f41d992ddb2d216c7a"
+      "Fresh persistent scheduler source inspected both original 2026-10-26 rows through enforced read-only DB connections with updates captured only in memory; production states remain FAILED_RETRYABLE. Receipt: X:/AIstock_temp/localsim-reliability-followup-20261029/pit-fresh-readonly-r1.json SHA256 76dadfda21a724bea8fe115d3aa39aadd3b1ba39394d98f41d992ddb2d216c7a",
+      "Fresh process captured both real PIT rows using enforced read-only DB connections; no production writes; pit-fresh-readonly-r1.json -> passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
