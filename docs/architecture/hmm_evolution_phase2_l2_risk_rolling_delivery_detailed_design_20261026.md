@@ -3,6 +3,7 @@
 > 日期：2026-10-26；tier=F2；lane=feature。
 > 用户批准：本轮要求按上一回复P0→P1→P2连续完成；除后端重启交用户外，继续执行。HMM源码与文档允许审修后提交合入；QE、荐股、模拟盘代码和正式QE实验仍由对应业务窗口负责。
 > 父蓝图：hmm_evolution_and_risk_management_system_design_20260716.md §1.0/§2.6。
+> **2026-10-29状态增补**：下文保留原设计/源码交付时的阶段记录；当时“尚未训练/交接/QE”的表述不再代表当前。正式4-fit、M0/M1资产、双入口交接及QE十五账户已经完成；真实结果见§13。本合同不因此改变，也不批准下一候选或生产晋升。
 
 ## 1. Background / 目标
 
@@ -113,3 +114,13 @@ F-011：滚动训练与同源M0/M1预测；F-012：模型版本双入口与因�
 本地直接矩阵90 passed；最后计数回执位置修订的定向回归1 passed；Ruff、compile、ownership（8/8、无歧义）、module-registry L0（8 passed）、L0、F2和fresh-process hmm_risk/health import通过。既有sklearn参数弃用与合法NA的numpy/pandas警告不作为模型结果。完整矩阵交CI/Nightly，不重复本地盲跑。
 
 源码runtime分类为backend、target_ids=[backend-main]、catalog_error=null，不能标成none。当前仅源码交付门禁通过：正式prepare/4-fit、真实新模型双入口读回、结果分析和QE交接尚未执行；上线加载仍需用户重启及后续只读验证。研究离线运行可使用最终干净源码继续，不等待运行服务切换。
+
+## 13. 正式研究与QE消费终态（2026-10-29状态增补）
+
+修复后正式研究在`F:/Dev/AIstock_runtime/hmm_l2_risk_rolling/20261026/repaired_20261028`完成双fresh-process共4fit，两个vintage模型及M0/M1各16375行、125日、131行业预测封存。末10日标签未成熟，不截掉其预测。M0/M1预测SHA分别为`a8b58217469682ae1a6ad0aac141a516b81724eb71b5aa8f548e405204debbd8`和`16a92d69367d2f418b2bce1e7c0bf96218a09a0d0f6c2b4bf357c5a1fafe349c`。M1 AUC/Brier未优于M0，不自动晋升。
+
+QE任务`qe_20261028_133301_9d39`有效Loop10～24已完成B/M0/M1/X0/X1三seed十五账户；完整125日及9月30日执行/估值，未重训HMM。净收益均值B +3.583%、M0 −1.750%、M1 −1.001%；M1−B −4.584个百分点，MDD幅度改善1.530个百分点。M1−M0 +0.749个百分点基本由同目标敞口参照+0.804个百分点解释；M1−X1 +0.0658个百分点且1/3seed为正，不支持采用M1。净收益已扣费；原warehouse字段`manifest_verification_status=not_verified`与独立账本/资产核验状态分开，不能把后者改称原字段通过。完整回执见`F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/HMM_final_analysis_v1`。
+
+BUG-2113/2118后续精度修复未覆盖上述M0/M1。2026-10-29零fit双日期精度对照位于`F:/Dev/AIstock_runtime/hmm_l2_dual_precision/20261029/run_v2/summary.json`：4月1日/7月1日各131可用，warning/availability/reason无变化；文件/数据库最大概率差约3.53e-9/6.69e-9，不宣称全125日重新验证或同源bitwise。
+
+本合同研究与QE实验已结束，不能重开旧4-fit或十五账户。下一轮方向与真实证据见父蓝图§1.22及`hmm_evolution_phase2_l2_risk_loss_severity_detailed_design_20261029.md`；新连续损失目标另行冻结，不能以本合同授权自动改变目标、消费公式、模型schema或生产默认。
