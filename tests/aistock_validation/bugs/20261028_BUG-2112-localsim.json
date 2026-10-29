@@ -37,15 +37,24 @@
   ],
   "expected": "相同冻结请求、账户、日期在不同输出目录及合法资源配置下具有相同逻辑日身份，完整账户业务状态和排队指标一致；物理前缀篡改仍失败，旧研究不得用新源码恢复。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md",
+      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+      "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json"
+    ],
     "added_files": [
       "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
     ],
     "changed_files": [
       "backend/services/simulation_execution/localsim/dual_mode_research.py",
       "backend/tests/simulation_execution/test_localsim_replay_performance.py",
-      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md"
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md",
+      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+      "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_execution/localsim/dual_mode_research.py",
@@ -158,16 +167,18 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
