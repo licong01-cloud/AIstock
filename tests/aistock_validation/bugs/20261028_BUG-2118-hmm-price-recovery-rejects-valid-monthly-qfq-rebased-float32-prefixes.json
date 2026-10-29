@@ -6,6 +6,18 @@
     "tests/aistock_validation/bugs/20261028_BUG-2118-hmm-price-recovery-rejects-valid-monthly-qfq-rebased-float32-prefixes.json"
   ],
   "assigned_agent": null,
+  "fix_analysis": {
+    "root_cause": "Monthly native Qlib updates rescale a serialized float32 prefix through a second float64 multiply/float32 cast. Single-cast price/factor intervals can exclude the true integer-li source price.",
+    "implementation": "Read the current release manifest-pinned native materialization receipt and full calendar; bind scaled OHLC/factor hashes, byte sizes and exact physical prefix boundaries; invert the recorded float32 re-encoding and require a unique integer-li source price across every possible predecessor encoding. New suffix rows retain single-cast decoding. Reference prices, volume semantics and model contracts are unchanged.",
+    "review_round_1": "Corrected full-calendar versus bounded-read-calendar indexing; both warmup and aggregation use the same provenance decoder.",
+    "review_round_2": "Checked unknown/missing/duplicate lineage, scale/size/hash/calendar drift, exact prefix boundary and ambiguity failures. No database or old-release fallback, dataset writes, fit, or QE asset replacement.",
+    "design_compliance_001": {
+      "no_simplified_delivery": "Both production read paths are wired; complete two-date formal validation remains pending until clean committed source.",
+      "no_silent_failure": "Missing provenance, changed input and nonunique source prices remain typed failures.",
+      "business_semantics_unchanged": "No changes to model, features, seed, threshold, PIT or price source unit.",
+      "no_unapproved_gate": "Enforces existing immutable input and unique-source-price contracts; no additional model or manual approval gate."
+    }
+  },
   "bug_id": "BUG-2118",
   "closed_at": null,
   "closure_requirements": [
