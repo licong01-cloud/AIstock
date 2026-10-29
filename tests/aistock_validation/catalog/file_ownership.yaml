@@ -1,5 +1,16 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: qe_terminal_prediction_replay
+    priority: 125
+    include:
+      - backend/services/quantevolver/terminal_replay_consumer.py
+      - scripts/qe_terminal_replay_preflight.py
+      - backend/tests/quantevolver/test_qe_terminal_replay.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Explicit prediction replay terminal-bar wiring validates frozen physical calendars without changing default execution.
   - rule_id: advisory_workbench_read_contracts
     priority: 141
     include:
