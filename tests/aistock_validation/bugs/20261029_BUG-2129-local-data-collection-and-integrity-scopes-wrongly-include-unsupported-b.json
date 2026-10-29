@@ -1,6 +1,8 @@
 {
   "actual": "The 23 daily repair keys and 15 halt keys are all BSE; current raw/factor/basic/moneyflow daily partitions retain 353 BSE equities while active PIT contains none.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "backend/services/sector_data_builder.py",
     "scripts/repair_minute_via_minute_api.py",
     "scripts/import_minutes_to_db.py",
