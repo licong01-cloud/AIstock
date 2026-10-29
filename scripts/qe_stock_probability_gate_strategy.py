@@ -65,8 +65,10 @@ class StockProbabilityGateMixin:
             return super().generate_trade_decision(execute_result)
         step = self.trade_calendar.get_trade_step()
         start, _ = self.trade_calendar.get_step_time(step)
-        _, signal_end = self.trade_calendar.get_step_time(step, shift=1)
-        day, signal = self._stock_probability_inputs.validate_time(start, signal_end)
+        # Qlib's right endpoint is the next session minus one second, which
+        # can be a holiday/weekend. The left endpoint names the actual session.
+        signal_start, _ = self.trade_calendar.get_step_time(step, shift=1)
+        day, signal = self._stock_probability_inputs.validate_time(start, signal_start)
         require(day not in self._stock_probability_seen, "DUPLICATE_DECISION")
         self._probability_day, self._probability_signal = day, signal
         self._probability_original, self._probability_selected, self._probability_scanned = [], [], []
