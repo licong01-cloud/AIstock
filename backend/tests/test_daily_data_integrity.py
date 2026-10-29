@@ -108,6 +108,26 @@ def test_daily_basic_admission_ratio_is_not_zero_gap_certification():
     assert daily_basic_result(facts, facts).state == PartitionState.INCOMPLETE
 
 
+def test_daily_basic_only_proven_new_listing_ratio_na_is_legal():
+    from backend.services.data_integrity.validation import daily_basic_result
+    from backend.services.tushare_sync_engine import DAILY_BASIC_REQUIRED_FIELDS
+    facts = {"301718.SZ": dict.fromkeys(DAILY_BASIC_REQUIRED_FIELDS, 1)}
+    facts["301718.SZ"]["volume_ratio"] = None
+    proof = {"301718.SZ": {"list_date": "2026-10-22", "listed_trading_days": 5}}
+    result = daily_basic_result(facts, facts, volume_ratio_warmup=proof)
+    assert result.state == PartitionState.VALID
+    count = next(c for c in result.counts if c.unit == "field_cell:volume_ratio")
+    assert count.legal_na == 1 and count.missing == 0 and count.valid == 0
+    assert facts["301718.SZ"]["volume_ratio"] is None
+    assert daily_basic_result(facts, facts).state == PartitionState.INCOMPLETE
+    facts["301718.SZ"]["circ_mv"] = None
+    assert daily_basic_result(facts, facts, volume_ratio_warmup=proof).state == PartitionState.INCOMPLETE
+    facts["301718.SZ"]["circ_mv"] = 1
+    facts["301718.SZ"]["volume_ratio"] = float("nan")
+    assert daily_basic_result(facts, facts, volume_ratio_warmup=proof).state == PartitionState.INCOMPLETE
+    assert daily_basic_result(facts, {}, volume_ratio_warmup=proof).state == PartitionState.INCOMPLETE
+
+
 @pytest.mark.parametrize("events,expected", [
     ([], 240), ([("S", None)], 0), ([("R", None)], 240),
     ([("S", "13:00-15:00")], 120), ([("S", "10:00-10:30")], 210),
