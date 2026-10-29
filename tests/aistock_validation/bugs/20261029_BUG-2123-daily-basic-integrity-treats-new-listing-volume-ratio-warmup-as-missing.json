@@ -27,15 +27,15 @@
   "expected": "Finite positive mandatory fields remain strict; only volume_ratio NULL with proven first-five-listed-trading-day boundary is explicit legal NA; unknown listing/calendar never exempted.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-29T02:17:33.012996Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5a888a6f8bab180217acbf9f9ac987aa8bf3cdfc",
+  "fixed_at": "2026-10-29T02:31:26Z",
   "github_issue_number": 6827,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6827",
   "last_seen_at": "2026-10-29T02:17:33.012996Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6831",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +128,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -138,7 +140,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2123",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9984ea34fe7ebd25",
+    "recorded_at": "2026-10-29T02:31:57.466878Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cb6a4e9ee5d9c0d5e1128c6f7898c59c0a0bcb15",
+    "source_merge_commit": "5a888a6f8bab180217acbf9f9ac987aa8bf3cdfc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6831",
+    "validation_evidence": [
+      "validation-receipt: id=c64f6d5e65f2cd28 commit=cb6a4e9ee5d9c0d5e1128c6f7898c59c0a0bcb15 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=cbbdb21a4516ce41 commit=cb6a4e9ee5d9c0d5e1128c6f7898c59c0a0bcb15 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`47 passed`"
+    ],
+    "validation_evidence_digest": "7560602065c8a0347f914c53937849a0b64f1be24fe947326f39df49c9a3cddc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -147,6 +171,10 @@
     "fingerprint": "828d5c1449055be4663559d9",
     "source_event_id": "FE-20261029-828d5c144905"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c64f6d5e65f2cd28 commit=cb6a4e9ee5d9c0d5e1128c6f7898c59c0a0bcb15 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=cbbdb21a4516ce41 commit=cb6a4e9ee5d9c0d5e1128c6f7898c59c0a0bcb15 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`47 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
