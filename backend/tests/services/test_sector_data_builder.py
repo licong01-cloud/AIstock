@@ -179,6 +179,18 @@ def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     assert "COALESCE(sd." not in module._BUILD_DAY_SQL
 
 
+def test_missing_provider_pe_does_not_discard_real_sector_quotes():
+    # 801952.SI: source quotes/volume are present while provider PE is NULL.
+    # Keep this nullable valuation field verbatim, not a missing-quote alarm.
+    assert "sd.pe IS NULL" not in module._PREFLIGHT_DAY_SQL
+    for field in ("open", "high", "low", "close", "pct_change", "vol", "amount"):
+        assert f"sd.{field} IS NULL" in module._PREFLIGHT_DAY_SQL
+    assert "sd.ts_code IS NULL" in module._PREFLIGHT_DAY_SQL
+    assert "sd.vol, sd.amount, sd.pe, sd.pb, sd.total_mv" in module._BUILD_DAY_SQL
+    assert "sw2_pe              = EXCLUDED.sw2_pe" in module._BUILD_DAY_SQL
+    assert "COALESCE(sd.pe" not in module._BUILD_DAY_SQL
+
+
 def test_failed_insert_rolls_back_delete_without_clearing_revision(monkeypatch):
     cursor = _Cursor()
     connection = _Connection(cursor)

@@ -1281,7 +1281,8 @@ SELECT
             OR sd.pct_change IS NULL
             OR sd.vol IS NULL
             OR sd.amount IS NULL
-            OR sd.pe IS NULL
+            -- Provider PE may be NULL even when an official quote exists.
+            -- Preserve that valuation NA; never discard the quote or fill PE.
             OR sd.pb IS NULL
             OR sd.total_mv IS NULL
         )
@@ -1320,7 +1321,6 @@ SELECT
             OR sd.pct_change IS NULL
             OR sd.vol IS NULL
             OR sd.amount IS NULL
-            OR sd.pe IS NULL
             OR sd.pb IS NULL
             OR sd.total_mv IS NULL
         )

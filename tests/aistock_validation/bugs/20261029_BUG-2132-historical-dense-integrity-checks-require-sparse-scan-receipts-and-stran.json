@@ -1,5 +1,5 @@
 {
-  "actual": "Advisory LSTM has 282 cyq_perf partitions UNVERIFIED solely for missing historical provider scan receipts although dated SH/SZ traded-key samples are complete; source-only receipts must not replace physical validation of dense facts. Old BSE-only raw verdicts block 38 daily_basic and moneyflow partitions and can dispatch redundant historical TDX fetches. 204 pending sector dependency revision dates remain unrepaired; inspect producer failures and exact-date recovery before fact backfill.",
+  "actual": "Dense historical cyq_perf/bak_basic are stranded behind sparse provider-scan receipt checks. BSE-only obsolete verdicts can dispatch redundant historical fetches. The live sector producer ignores the approved SW2021 versioned history used by monthly export, source repair writers can omit derived invalidation, and nullable provider PE incorrectly blocks 31 real quote dates for 801952.SI. Production derived facts require separately authorized repair after DEV validation; source merge alone does not close consumer readiness.",
   "allowed_write_scope": [
     "backend/services/sector_data_builder.py",
     "backend/tests/services/test_sector_data_builder.py",
@@ -23,7 +23,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-29T05:29:49.227400Z",
-  "description": "Advisory LSTM has 282 cyq_perf partitions UNVERIFIED solely for missing historical provider scan receipts although dated SH/SZ traded-key samples are complete; source-only receipts must not replace physical validation of dense facts. Old BSE-only raw verdicts block 38 daily_basic and moneyflow partitions and can dispatch redundant historical TDX fetches. 204 pending sector dependency revision dates remain unrepaired; inspect producer failures and exact-date recovery before fact backfill.",
+  "description": "Repair shared historical dense-panel validation, stale unsupported-scope retry dispatch, and sector derivation from approved dated SW2021 history. Preserve real missing rows, nullable source PE, source-specific aliases and atomic derived invalidation; do not fabricate historical scan receipts, classifications or quotes.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -33,7 +33,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Validate existing dense SH/SZ facts against independent traded keys; revalidate integrity-repair dependencies before fetch; preserve genuine missing values and explicit pending derived dates without duplicate jobs.",
+  "expected": "Validate existing dense SH/SZ facts against independent traded keys and all admitted packages' chip fields; revalidate obsolete integrity targets before fetching. Sector preflight/build/stale cleanup use one dated SW2021 authority, nullable provider PE is preserved, and actual source repairs invalidate derived dates atomically. Keep genuine missing facts and consumer readiness explicit until authorized data repair and runtime readback.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
