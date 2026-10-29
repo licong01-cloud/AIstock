@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2130",
-  "closed_at": null,
+  "closed_at": "2026-10-29T04:30:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -37,12 +37,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "frontend/src/components/advisory/LiveQuotes.tsx",
-      "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261029_BUG-2130-advisory-visible-quote-refresh-clears-rows-and-loops-on-layout-changes.json"
     ],
     "added_files": [],
     "changed_files": [
       "frontend/src/components/advisory/LiveQuotes.tsx",
-      "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261029_BUG-2130-advisory-visible-quote-refresh-clears-rows-and-loops-on-layout-changes.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -90,8 +92,8 @@
   },
   "first_seen_at": "2026-10-29T04:14:53.186007Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "279131dfb346a030792ad72b4f6ee2de7a6712a9",
+  "fixed_at": "2026-10-29T04:30:02Z",
   "github_issue_number": 6852,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6852",
   "last_seen_at": "2026-10-29T04:14:53.186007Z",
@@ -99,6 +101,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6853",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -120,6 +123,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -129,7 +133,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2130",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fe66c16ac1a5584a",
+    "recorded_at": "2026-10-29T04:30:48.758690Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "233ed7a55c087acdfd3c53f521810565f4ae1843",
+    "source_merge_commit": "279131dfb346a030792ad72b4f6ee2de7a6712a9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6853",
+    "validation_evidence": [
+      "validation-receipt: id=532025009ba2aa9a commit=233ed7a55c087acdfd3c53f521810565f4ae1843 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "0865444b56499148aab67078ea482c89c35f5adcbb5e9ee9509f600da64b4148"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory.ui"
   ],
@@ -177,6 +202,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=532025009ba2aa9a commit=233ed7a55c087acdfd3c53f521810565f4ae1843 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
