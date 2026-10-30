@@ -21,6 +21,112 @@ from backend.services.dataset_release.source_authority import (
 )
 
 
+def _monthly_scope_fixture(monkeypatch, dataset_profile, *, gaps=None, revision=3, counts=None,
+                           index_missing=False, calendar_missing=False):
+    from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+    from backend.services.dataset_release.source_authority import (
+        MonthlySourceAuthority, SourceRefreshAuditLedger, _sanitize_refresh_audit_row,
+    )
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+
+    day = date(2026, 10, 8)
+    gaps = gaps if gaps is not None else [{"classification": "MISSING", "symbols": ["002731.SZ"]}]
+    validation = {"counts": counts or [{"expected": 2, "valid": 1, "legal_na": 0,
+        "missing": 1, "invalid": 0, "unverified": 0}], "gaps": gaps,
+        "checks": {"coverage_basis": "independent_dated_traded_stock_keys"}}
+    raw = {"dataset": "bak_basic", "trade_date": day, "data_source": "canonical_db", "status": "failed",
+        "row_count": 1, "written_rows": 1, "expected_rows": 2, "coverage_ratio": None,
+        "refreshed_at": "2026-10-29T21:00:00+08:00", "data_max_at": None, "job_id": None,
+        "quality_status": "unproven", "failure_category": None, "error_message": None,
+        "metadata": {"validation": validation}, "data_revision": revision, "validated_revision": 3,
+        "validation_status": "INCOMPLETE", "validation_id": "div_frozen", "scope_version": SCOPE_VERSION,
+        "rule_version": RULE_VERSION}
+    ledger = SourceRefreshAuditLedger({("bak_basic", day): (_sanitize_refresh_audit_row(raw),)},
+        (day,), {"bak_basic": ("tushare",)}, {"bak_basic": ("ok",)})
+    monkeypatch.setattr(MonthlySourceAuthority, "_freeze_refresh_audit", lambda *_a, **_k: ledger)
+    calls = []
+
+    class Session:
+        def stream(self, query_id, params, **kwargs):
+            calls.append((query_id, params))
+            if query_id == "pit_spans":
+                return iter([{"ts_code": "000001.SZ", "eligible_start": day, "eligible_end": day}])
+            if query_id == "trading_calendar":
+                return iter([] if calendar_missing else [{"row_payload": json.dumps(
+                    {"cal_date": str(day), "is_trading": True})}])
+            if query_id == "index_daily":
+                assert set(json.loads(params["index_required_from_json"])) == set(dataset_profile.index_codes)
+                return iter({"row_payload": json.dumps({"ts_code": code, "trade_date": str(day),
+                    "open": 10, "high": 11, "low": 9, "close": 10, "pre_close": 10,
+                    "pct_chg": 0, "vol": 20, "amount": 200})}
+                    for i, code in enumerate(dataset_profile.index_codes) if not (index_missing and i == 0))
+            raise AssertionError(query_id)
+
+    source = MonthlyObservedSourceAuthority(dataset_profile, None, progress=lambda _: None,
+        month_start=date(2026, 10, 1))
+    scoped = source._freeze_refresh_audit(Session(), cutoff=day, checkpoint=lambda: None)
+    return scoped, ledger, calls, day
+
+
+def test_monthly_bak_scope_preserves_global_incomplete_but_releases_only_outside_gaps(monkeypatch, dataset_profile):
+    scoped, original, calls, day = _monthly_scope_fixture(monkeypatch, dataset_profile)
+    assert scoped.partition_digest("bak_basic", day, day)
+    with pytest.raises(SourceAuditIncomplete):
+        original.partition_digest("bak_basic", day, day)
+    assert scoped.rows == original.rows
+    receipt = scoped.as_receipt(profile=dataset_profile.profile, cutoff=day)
+    assert receipt["rows"][0]["sources"][0]["integrity_revision"]["validation_status"] == "INCOMPLETE"
+    assert receipt["consumer_partition_projections"]
+    assert all(params["start"] == date(2026, 10, 1) for _, params in calls)
+
+
+@pytest.mark.parametrize("drift", ["audit", "reason", "count", "dataset"])
+def test_monthly_scope_projection_rejects_drift(monkeypatch, dataset_profile, drift):
+    from dataclasses import replace
+    scoped, _, _, day = _monthly_scope_fixture(monkeypatch, dataset_profile)
+    projections = {key: dict(value) for key, value in scoped.consumer_partition_projections.items()}
+    proof = projections[("bak_basic", day)]
+    if drift == "audit":
+        proof["audit_rows_sha256"] = "f" * 64
+    elif drift == "reason":
+        proof["reason"] = "arbitrary_user_waiver"
+    elif drift == "count":
+        proof["unexplained_gap_count"] = False
+    else:
+        proof["dataset"] = "moneyflow_ts"
+    with pytest.raises(SourceAuditIncomplete, match="projection differs"):
+        replace(scoped, consumer_partition_projections=projections).partition_digest("bak_basic", day, day)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"gaps": [{"classification": "MISSING", "symbols": ["000001.SZ"], "fact_date": "2026-10-08"}]},
+    {"gaps": [{"classification": "INVALID", "symbols": ["002731.SZ"], "fact_date": "2026-10-08"}]},
+    {"gaps": [{"classification": "MISSING", "symbols": ["002731.SZ"], "fact_date": "2026-10-09"}]},
+    {"revision": 4},
+    {"counts": [{"expected": 3, "valid": 1, "legal_na": 0, "missing": 2, "invalid": 0, "unverified": 0}]},
+    {"counts": [{"expected": 3, "valid": 1, "legal_na": 0, "missing": 1, "invalid": 1, "unverified": 0}]},
+])
+def test_monthly_bak_scope_never_hides_required_unknown_or_stale_gaps(monkeypatch, dataset_profile, kwargs):
+    scoped, _, _, day = _monthly_scope_fixture(monkeypatch, dataset_profile, **kwargs)
+    with pytest.raises(SourceAuditIncomplete):
+        scoped.partition_digest("bak_basic", day, day)
+
+
+@pytest.mark.parametrize("dataset,kwargs,passes", [
+    ("trading_calendar", {}, True),
+    ("trading_calendar", {"calendar_missing": True}, False),
+    ("index_daily", {}, True),
+    ("index_daily", {"index_missing": True}, False),
+])
+def test_monthly_calendar_and_fixed_indices_use_same_snapshot_facts(monkeypatch, dataset_profile, dataset, kwargs, passes):
+    scoped, _, _, day = _monthly_scope_fixture(monkeypatch, dataset_profile, **kwargs)
+    if passes:
+        assert scoped.partition_digest(dataset, day, day)
+    else:
+        with pytest.raises(SourceAuditIncomplete):
+            scoped.partition_digest(dataset, day, day)
+
+
 def test_monthly_source_fact_codes_do_not_change_pit_selection(dataset_profile):
     from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
     pit = SimpleNamespace(spans=(SimpleNamespace(ts_code="000001.SZ"),))

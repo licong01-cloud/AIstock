@@ -159,12 +159,16 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/DATA_PREPARATION/monthly-october-readiness-20261030/validate_monthly_source_scope.py -> passed; native read-only SOURCE session resolves scope/calendar/index false blockers, preserves global INCOMPLETE and real margin delay; no seal or writes"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
