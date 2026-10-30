@@ -1035,6 +1035,7 @@ def build_static_factors(
     end_date: Union[str, date],
     *,
     asof_fill_slow_static: bool = False,
+    asof_fill_prefixes: Iterable[str] = LIVE_ASOF_STATIC_PREFIXES,
 ) -> pd.DataFrame:
     """
     构建完整的 static_factors 数据集，与 generate_static_factors_bundle.py 生成的
@@ -1121,7 +1122,7 @@ def build_static_factors(
         df_merged = df_merged.join(df_next, how="left")
 
     if asof_fill_slow_static and df_pv is not None and not df_pv.empty and isinstance(df_pv.index, pd.MultiIndex):
-        df_merged = _asof_fill_static_prefixes_to_target_index(df_merged, df_pv.index)
+        df_merged = _asof_fill_static_prefixes_to_target_index(df_merged, df_pv.index, prefixes=asof_fill_prefixes)
 
     df_merged = df_merged.sort_index()
     logger.info(f"build_static_factors: 完成，shape={df_merged.shape}")

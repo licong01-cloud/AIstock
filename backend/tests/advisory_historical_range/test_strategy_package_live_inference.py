@@ -185,6 +185,32 @@ def _batch_args(tmp_path, monkeypatch, plan):
     return output
 
 
+def test_bound_daily_static_reader_preserves_chip_gaps_and_other_slow_fields(monkeypatch):
+    from backend.data_service import qe_data_service as data
+    from backend.services.data_integrity.advisory_scope import verify_missing_chip_values
+    index = pd.MultiIndex.from_product([pd.to_datetime(["2026-05-19", "2026-05-20"]),
+                                       ["SZ000663"]], names=["datetime", "instrument"])
+    frames = {
+        "load_daily_basic": pd.DataFrame({"db_pe": [1., 2.]}, index=index),
+        "load_bak_basic": pd.DataFrame({"bb_total_share": [100., float("nan")]}, index=index),
+        "load_cyq_perf": pd.DataFrame({"cp_winner_rate": [0.4, float("nan")]}, index=index),
+        "load_daily_pv": pd.DataFrame({"close": [10., 11.]}, index=index),
+    }
+    for name in ("load_daily_basic", "load_moneyflow", "load_bak_basic", "load_cyq_perf",
+                 "load_sector_data", "load_margin_detail", "load_daily_pv"):
+        monkeypatch.setattr(data, name, lambda *a, _name=name, **kw: frames.get(_name, pd.DataFrame()).copy())
+    monkeypatch.setattr(data, "compute_moneyflow_derived_factors", lambda *a: pd.DataFrame())
+    monkeypatch.setattr(data, "compute_daily_basic_precomputed_factors", lambda *a: pd.DataFrame())
+    args = dict(universe=["000663.SZ"], start_date=date(2026, 5, 19), end_date=date(2026, 5, 20))
+    raw = runner._strategy_package_fundamental_reader(**args)
+    assert pd.isna(raw.loc[index[1], "cp_winner_rate"])
+    assert raw.loc[index[1], "bb_total_share"] == 100.
+    verify_missing_chip_values({"partition_refs": [{"fact_date": "2026-05-20",
+        "consumer_projection": {"missing_as_nan": ["000663.SZ"]}}]}, raw)
+    legacy = data.build_static_factors(args["universe"], args["start_date"], args["end_date"], asof_fill_slow_static=True)
+    assert legacy.loc[index[1], "cp_winner_rate"] == 0.4
+
+
 def test_batch_runner_reuses_one_session_and_keeps_full_daily_receipts(tmp_path, monkeypatch):
     output = _batch_args(tmp_path, monkeypatch, [
         {"trade_date": "2026-06-02", "cutoff_date": "2026-06-01"},

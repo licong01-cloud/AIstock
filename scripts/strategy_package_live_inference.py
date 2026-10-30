@@ -194,7 +194,12 @@ def main() -> int:
 
 def _strategy_package_fundamental_reader(*, universe, start_date, end_date):
     from backend.data_service import qe_data_service
-    return qe_data_service.build_static_factors(universe, start_date, end_date, asof_fill_slow_static=True)
+    # Readiness-bound Advisory accepts audited chip gaps as NaN. Preserve all
+    # other established slow-field handling; never forward-fill chip values.
+    return qe_data_service.build_static_factors(
+        universe, start_date, end_date, asof_fill_slow_static=True,
+        asof_fill_prefixes=tuple(p for p in qe_data_service.LIVE_ASOF_STATIC_PREFIXES if p != "cp_"),
+    )
 
 
 def _run_request(
