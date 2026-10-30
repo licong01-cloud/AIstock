@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2145",
-  "closed_at": null,
+  "closed_at": "2026-10-30T08:19:30.815165Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -193,10 +193,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2145/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2145",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "12312a3c5c72cbce54b214b187d923e852172a6cee215193d2a8773eff187ead",
+      "expected_identity": "54ee55a067f642796fe0b7b475cbbe333c138c21",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T08:18:01.906051Z",
+      "mode": "read_only",
+      "observed_identity": "68be6390c5ff584497d3549cb1051cc12db7e643",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a5464c61dd9916458c0a1cf121bdb2d49d536f6745e3b28e605de9565bcc3914",
+      "receipt_sha256": "86e5a0371d0dc4788eac62736ab3c2a84a18b9415f4731c0e16eefef279344de",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f00439c1405625115fa562400900412a09f8a1b755f28a8258b020534717bb3e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -252,7 +274,7 @@
       "validation_evidence_digest": "d455aecea862eb05433acff507df6a8fa3ff2fef7c97900d6c7c47dce947c016"
     }
   ],
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -269,7 +291,8 @@
     "gh pr checks 6912 -> CI verdict passed",
     "rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -q -> 3 passed on existing DEV with rollback",
     "gh pr checks 6914 -> CI verdict passed",
-    "rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -q -> 3 passed on existing DEV with rollback for unchanged publication transaction"
+    "rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -q -> 3 passed on existing DEV with rollback for unchanged publication transaction",
+    "post-restart identity/health/business smoke PASS; 8 original runs unchanged PUBLISHED/NOT_ENTERED; automatic recovery observed and old parent isolated; production idempotence PASS"
   ],
   "verification_budget": {
     "budget": "standard",
