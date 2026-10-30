@@ -302,6 +302,7 @@ def _build_suspend(
     suspension_binding: Mapping[str, Any] | None = None,
 ) -> tuple[Path, Path, set[tuple[str, date]], int]:
     import pandas as pd
+    from .monthly_legacy_prefix import resolve_legacy_component_pin
 
     month_start = cutoff.replace(day=1)
     effective_calendar = tuple(day for day in calendar if month_start <= day <= cutoff) if prefix is not None else tuple(calendar)
@@ -373,7 +374,7 @@ def _build_suspend(
         lineage = {
             "validation_scope": "month_delta", "historical_values_validated": 0,
             "predecessor_manifest_sha256": prefix.manifest_sha256,
-            "inherited_suspend_sha256": prefix.manifest["components"]["suspend_data"]["sha256"],
+            "inherited_suspend_sha256": resolve_legacy_component_pin(prefix, "suspend_data")["sha256"],
             "historical_authority_reprojected_keys": reviewed_keys,
             "historical_projection_legacy_normalized_inputs": legacy_inputs,
         }

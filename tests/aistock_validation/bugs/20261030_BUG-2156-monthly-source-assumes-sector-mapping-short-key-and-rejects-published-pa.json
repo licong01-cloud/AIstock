@@ -44,7 +44,8 @@
   "fix_review_rounds": [
     "Round 1: reproduce the real path-keyed predecessor failure; retain exact native provider paths instead of matching arbitrary metadata basenames.",
     "Round 2: cover the same assumption in SOURCE anchors, native day/minute append, shared sector sidecars and factor inventory. Reuse individual published factor pins when the redundant old inventory file is absent; do not manufacture or rewrite a frozen manifest.",
-    "Round 3: negative pin/byte/link tests and immutable-prefix/NaN regressions pass. Final direct matrix: 180 passed, 3 skipped; Ruff, changed-file compile, diff check and L0 pass. Real predecessor readback is isolated, read-only and does not claim monthly SOURCE/build completion."
+    "Round 3: negative pin/byte/link tests and immutable-prefix/NaN regressions pass. Final direct matrix: 180 passed, 3 skipped; Ruff, changed-file compile, diff check and L0 pass. Real predecessor readback is isolated, read-only and does not claim monthly SOURCE/build completion.",
+    "Round 4: first CI exposed five suspension-sidecar compatibility regressions in the new common pin resolver. Preserve existing logical sidecar roles and add published suspension paths; do not change suspension interpretation. Failed nodes plus all path-keyed role cases: 14 passed. CI must rerun before merge."
   ],
   "file_scope_contract": {
     "added_files": [],

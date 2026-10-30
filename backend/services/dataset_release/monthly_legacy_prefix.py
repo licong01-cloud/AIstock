@@ -63,14 +63,16 @@ def resolve_legacy_component_pin(prefix: LegacyMonthlyPrefix, name: str) -> Mapp
         "market_context": "components/sector_context_candidate_v1/market_context.parquet",
         "sector_data": "factor_bundle/sector_data.h5",
         "factor_meta": "components/factor_h5_static_candidate_v2/meta.json",
+        "suspend_data": "components/suspend_d_daily_candidate_v2/suspend_d.parquet",
+        "suspend_meta": "components/suspend_d_daily_candidate_v2/meta.json",
     }
     components = prefix.manifest.get("components")
-    if name not in paths or not isinstance(components, Mapping):
-        raise LegacyMonthlyPrefixError("legacy component pin role or inventory is invalid")
+    if not isinstance(components, Mapping):
+        raise LegacyMonthlyPrefixError("legacy component pin inventory is invalid")
     aliases = (name, "daily_meta_export") if name == "day_meta_export" else (name,)
     candidates = [components[key] for key in aliases if key in components]
     candidates.extend(pin for pin in components.values()
-                      if isinstance(pin, Mapping) and pin.get("path") == paths[name])
+                      if isinstance(pin, Mapping) and name in paths and pin.get("path") == paths[name])
     if not candidates or not isinstance(candidates[0], Mapping):
         raise LegacyMonthlyPrefixError(f"legacy {name} pin is unavailable")
     pin = candidates[0]

@@ -50,6 +50,9 @@ def prefix(tmp_path, *, meta_filename="meta.json"):
     ("sector_membership_spans", "components/sector_context_candidate_v1/sector_membership_spans.parquet"),
     ("market_context", "components/sector_context_candidate_v1/market_context.parquet"),
     ("sector_data", "factor_bundle/sector_data.h5"),
+    ("factor_meta", "components/factor_h5_static_candidate_v2/meta.json"),
+    ("suspend_data", "components/suspend_d_daily_candidate_v2/suspend_d.parquet"),
+    ("suspend_meta", "components/suspend_d_daily_candidate_v2/meta.json"),
 ])
 def test_published_path_pins_resolve_without_mutating_manifest(name, path):
     pin = {"path": path, "sha256": "a" * 64, "size": 3}
