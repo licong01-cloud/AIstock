@@ -13,6 +13,29 @@ from backend.services.data_integrity.provider import provider_scan, verify_scan
 from backend.services.tushare_dataset_specs import DAILY_BASIC, DIVIDEND
 
 
+@pytest.mark.parametrize("dataset", ["tushare_forecast_raw", "tushare_express_raw", "tushare_fina_indicator_raw"])
+def test_raw_financial_scans_share_supported_stock_scope_without_rewriting_legacy_hash(dataset):
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    from backend.services.data_integrity.contracts import digest
+    from backend.services.data_integrity.provider import scoped_scan_entries
+    spec = DATASET_REGISTRY[dataset]
+    supported = {"source_record_key": f"{dataset}:000001.SZ:20261028:20260930", "source_row_hash": "a"*64}
+    excluded = {"source_record_key": f"{dataset}:920306.BJ:20261028:20260930", "source_row_hash": "b"*64}
+    scan = provider_scan(spec, [supported, excluded], parameters={"period": "20260930"})
+    assert len(scan["entries"]) == 1
+    scan["entries"].append({"key": [excluded[k] for k in spec.primary_keys]})
+    scan["scan_sha256"] = digest({k: v for k, v in scan.items() if k != "scan_sha256"})
+    original = digest(scan)
+    assert len(scoped_scan_entries(spec, scan)) == 1
+    assert verify_scan(spec, scan, [supported]) == ([], [])
+    missing, invalid = verify_scan(spec, scan, [])
+    assert missing == [[supported[k] for k in spec.primary_keys]] and invalid == []
+    assert digest(scan) == original
+    unknown = {**excluded, "source_record_key": "opaque:" + excluded["source_record_key"]}
+    unknown_scan = provider_scan(spec, [unknown], parameters={})
+    assert verify_scan(spec, unknown_scan, [])[0] == [[unknown[k] for k in spec.primary_keys]]
+
+
 @pytest.mark.parametrize("value,expected", [(0, True), (Decimal("0"), True), (None, False),
     (float("nan"), False), (Decimal("NaN"), False), (float("inf"), False), (True, False), ("1", False)])
 def test_field_finite_contract_distinguishes_real_zero(value, expected):
