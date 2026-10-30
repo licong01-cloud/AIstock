@@ -206,6 +206,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2145",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fec2a8b58f7989e9",
+    "recorded_at": "2026-10-30T03:16:37.909129Z",
+    "runtime_contract_digest": "12312a3c5c72cbce54b214b187d923e852172a6cee215193d2a8773eff187ead",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "46c10b6558a3e4aa31379985f7c9a069fe563c59",
+    "source_merge_commit": "54ee55a067f642796fe0b7b475cbbe333c138c21",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6914",
+    "validation_evidence": [
+      "gh pr checks 6914 -> CI verdict passed",
+      "rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -q -> 3 passed on existing DEV with rollback for unchanged publication transaction"
+    ],
+    "validation_evidence_digest": "287af65f45e44f429ce5f3711f486e555c1caf1bfc5f6d014d4c88774cef77d4"
+  },
   "source_merge_receipt_history": [
     {
       "bug_id": "BUG-2145",
