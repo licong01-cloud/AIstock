@@ -131,7 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2124-postrestart.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -176,7 +176,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
-    "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`"
+    "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2124 --target backend-main -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
