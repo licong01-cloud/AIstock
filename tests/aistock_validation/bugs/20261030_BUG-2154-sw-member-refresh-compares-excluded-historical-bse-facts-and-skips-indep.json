@@ -29,19 +29,19 @@
   "expected": "沪深新旧成员按同一支持范围比较；旧北交所事实保留且不阻断；沪深真实遗漏仍报错；成员失败仍尝试报价，组合失败不伪报成功；当日155报价及行业派生正常验证。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/sw_industry_history_store.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_sw_industry_history_store.py"
+      "backend/tests/test_sw_industry_history_store.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/sw_industry_history_store.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_sw_industry_history_store.py"
+      "backend/tests/test_sw_industry_history_store.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -133,8 +133,8 @@
   },
   "first_seen_at": "2026-10-30T13:15:10.145831Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f39a668306dd676101a6f6f2fcc5e197553f55aa",
+  "fixed_at": "2026-10-30T13:45:12Z",
   "github_issue_number": 6944,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6944",
   "last_seen_at": "2026-10-30T13:15:10.145831Z",
@@ -142,6 +142,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6945",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -169,6 +170,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -180,7 +182,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2154",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "061b6cfff586b4c1",
+    "recorded_at": "2026-10-30T13:46:12.787149Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3351c3301701dd78705f30aaf944def1c56c2942",
+    "source_merge_commit": "f39a668306dd676101a6f6f2fcc5e197553f55aa",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6945",
+    "validation_evidence": [
+      "validation-receipt: id=0583af04728edfd7 commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_tushare_sync_engine.py -q` result=`403 passed, 1 skipped`",
+      "validation-receipt: id=f258b29303d6ca3a commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install -- backend/services/sw_industry_history_store.py backend/ingestion/tdx_scheduler.py backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json` result=`passed`"
+    ],
+    "validation_evidence_digest": "518d38980570c6f2efaf37eff9adfd3aa9f5dbd4dda2e387c1e2053ab26acc19"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -189,6 +213,10 @@
     "fingerprint": "41ceba29e8e0b39717401f36",
     "source_event_id": "FE-20261030-41ceba29e8e0"
   },
+  "validation_evidence": [
+    "validation-receipt: id=0583af04728edfd7 commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_tushare_sync_engine.py -q` result=`403 passed, 1 skipped`",
+    "validation-receipt: id=f258b29303d6ca3a commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install -- backend/services/sw_industry_history_store.py backend/ingestion/tdx_scheduler.py backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
