@@ -163,3 +163,30 @@ def test_fetch_retry_selection_can_spread_latest_dates_before_global_limit():
     repo.list_fillable_targets(due_at=due_at, limit=100)
     assert "ROW_NUMBER" not in cursor.query
     assert "ORDER BY priority ASC, COALESCE(required_before, created_at) ASC" in cursor.query
+
+
+def test_repeated_integrity_target_keeps_fetch_backoff_and_due_time():
+    from contextlib import nullcontext
+
+    class Cursor:
+        description = [("target_id",)]
+
+        def execute(self, query, params):
+            self.query = " ".join(query.split())
+
+        def fetchall(self):
+            return [{"target_id": "probe"}]
+
+    cursor = Cursor()
+
+    class Connection:
+        def cursor(self):
+            return nullcontext(cursor)
+
+    repo = DataSyncTargetRepository(lambda: nullcontext(Connection()))
+    repo.upsert_target({"dataset": "bak_basic", "data_source": "integrity_repair",
+                        "target_date": dt.date(2026, 10, 28)})
+    assignment = cursor.query.split("next_retry_at = CASE", 1)[1].split("required_before", 1)[0]
+    assert "LEAST(" not in assignment
+    assert "GREATEST(" not in assignment  # repeated checks must not postpone due work either
+    assert "THEN data_sync_targets.next_retry_at ELSE EXCLUDED.next_retry_at END" in assignment

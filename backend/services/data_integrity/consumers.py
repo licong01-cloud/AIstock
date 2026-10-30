@@ -130,7 +130,8 @@ def package_dependencies(manifest, asset_store) -> ConsumerDependencies:
 
 
 def project_readiness(dependencies: ConsumerDependencies | None, dates: Sequence[date], partitions: Mapping,
-                      *, pit_binding: Mapping | None, reason: str | None = None):
+                      *, pit_binding: Mapping | None, reason: str | None = None,
+                      input_scope: Mapping | None = None, members=None):
     refs, blockers = [], []
     if dependencies is None or not dependencies.datasets or not dates or not pit_binding:
         return {"consumer_ready": False, "prediction_ready": False, "state": "UNKNOWN",
@@ -139,14 +140,25 @@ def project_readiness(dependencies: ConsumerDependencies | None, dates: Sequence
         for dataset in dependencies.datasets:
             row = partitions.get((day, canonical_dataset(dataset)))
             effective = effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
-            if not effective["source_complete"]:
+            projection = None
+            if not effective["source_complete"] and input_scope is not None and members is not None:
+                from .advisory_scope import partition_projection
+                projection = partition_projection(row, input_scope, members)
+            if not effective["source_complete"] and projection is None:
                 blockers.append({"dataset": dataset, "fact_date": str(day), "state": effective["state"]})
             else:
                 refs.append({"dataset": dataset, "fact_date": str(day), **{key: row.get(key) for key in
-                    ("data_revision", "validation_id", "scope_version", "rule_version")}})
-    binding = digest({"dependencies": asdict(dependencies), "dates": dates, "partitions": refs, "pit": pit_binding})
+                    ("data_revision", "validation_id", "scope_version", "rule_version")},
+                    **({"consumer_projection": projection} if projection is not None else {})})
+    scope_fields = {"input_scope": dict(input_scope)} if input_scope is not None else {}
+    quality = {"outside_scope_gap_count": sum(len(r.get("consumer_projection", {}).get("outside_scope", [])) for r in refs),
+               "missing_chip_key_count": sum(len(r.get("consumer_projection", {}).get("missing_as_nan", [])) for r in refs),
+               "source_completeness_unchanged": True} if input_scope is not None else None
+    binding = digest({"dependencies": asdict(dependencies), "dates": dates, "partitions": refs,
+                      "pit": pit_binding, **scope_fields})
     return {"consumer_ready": not blockers, "prediction_ready": not blockers,
             "state": "READY" if not blockers else "WAITING", "blockers": blockers,
             "partition_refs": refs, "input_binding_sha256": binding,
             "dependencies": asdict(dependencies), "global_pit": dict(pit_binding),
-            "historical_first_availability_claimed": False, "prediction_started": False}
+            "historical_first_availability_claimed": False, "prediction_started": False, **scope_fields,
+            **({"input_quality": quality} if quality is not None else {})}

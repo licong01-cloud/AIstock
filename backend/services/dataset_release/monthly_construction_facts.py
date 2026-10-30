@@ -4,18 +4,17 @@ from __future__ import annotations
 from datetime import date
 from contextlib import AbstractContextManager
 import hashlib
-import json
-from pathlib import Path
 import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import pandas as pd
 
-from .monthly_legacy_factor import read_legacy_factor_tail
+from .monthly_legacy_factor import legacy_factor_inventory, read_legacy_factor_tail
 from .errors import SourceManifestError
 from .index_contract import DOMESTIC_INDEX_DEFINITIONS
 from .monthly_legacy_prefix import (
-    LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature, read_legacy_qfq_anchors,
+    LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature,
+    read_legacy_qfq_anchors, resolve_legacy_component_pin,
 )
 
 
@@ -24,13 +23,7 @@ DAILY_CATALOG_SCHEMA = 'aistock_monthly_daily_catalog_construction_v1'
 
 def daily_catalog_provider(prefix):
     """Resolve a pinned provider in direct-v2 or unified manifest layout."""
-    pins = prefix.manifest['components']
-    pin = pins.get('day_meta_export', pins.get('daily_meta_export'))
-    if pin is None:
-        matches = [row for row in pins.values() if row.get('path') == 'daily_bin/qlib/meta_export.json']
-        if len(matches) != 1:
-            raise ValueError('daily catalogue provider pin is absent or ambiguous')
-        pin = matches[0]
+    pin = resolve_legacy_component_pin(prefix, 'day_meta_export')
     return prefix.root / _relative(pin['path']).parent
 
 
@@ -300,7 +293,7 @@ def collect_qfq_construction_anchors(
     """
     if prefix.cutoff != month_start - date.resolution:
         raise LegacyMonthlyPrefixError("construction prefix does not precede target month")
-    provider = _relative(prefix.manifest["components"]["day_meta_export"]["path"]).parent
+    provider = _relative(resolve_legacy_component_pin(prefix, "day_meta_export")["path"]).parent
     catalog = prefix.root / provider / "instruments/all.txt"
     _plain_chain(catalog)
     lines = [line.split("\t") for line in catalog.read_text(encoding="utf-8").splitlines()]
@@ -319,18 +312,9 @@ def collect_qfq_construction_anchors(
                   "query_id": "adj_factor_construction", "partition_key": dataset})
         for code, row in read_legacy_qfq_anchors(prefix, dataset=dataset, instruments=codes, checkpoint=checkpoint).items():
             result.add((code, date.fromisoformat(row["trade_date"])))
-    factor_path = prefix.root / Path(prefix.manifest["components"]["factor_meta"]["path"]).parent / "daily_pv.h5"
+    inventory, factor_root = legacy_factor_inventory(prefix)
+    factor_path = prefix.root / factor_root / "daily_pv.h5"
     _plain_chain(factor_path)
-    inventory_pin = prefix.manifest["components"]["factor_content_manifest"]
-    inventory_path = prefix.root / _relative(inventory_pin["path"])
-    _plain_chain(inventory_path)
-    before = _signature(inventory_path)
-    if before[2] != inventory_pin["size"] or before[2] > 16 * 1024 * 1024:
-        raise LegacyMonthlyPrefixError("construction factor inventory size differs")
-    raw = inventory_path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != inventory_pin["sha256"] or _signature(inventory_path) != before:
-        raise LegacyMonthlyPrefixError("construction factor inventory identity differs")
-    inventory = json.loads(raw)
     pins = [item for item in inventory.get("files", ())
             if item.get("path") == factor_path.relative_to(prefix.root).as_posix()]
     if len(pins) != 1 or factor_path.stat().st_size != pins[0]["size"]:

@@ -8210,6 +8210,20 @@ class SimulationLifecycleScheduler:
                 "LOCALSIM_POST_CLOSE_CAPACITY_RESIDUAL_TERMINAL",
                 "failed_terminal_after_close",
             )
+        if persistence_status == "PERSISTED_WITH_RESIDUAL":
+            return (
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+                "localsim_post_close_execution_residual_terminal_failed",
+                "LOCALSIM_POST_CLOSE_EXECUTION_RESIDUAL_TERMINAL",
+                "failed_terminal_after_close",
+            )
+        if persistence_status == "PERSISTED_WITH_TERMINAL_FAILURE":
+            return (
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+                "localsim_post_close_persisted_execution_terminal_failed",
+                "LOCALSIM_POST_CLOSE_PERSISTED_EXECUTION_FAILURE",
+                "failed_terminal_after_close",
+            )
         if bool(payload.get("no_rebalance_required")) and not bool(payload.get("broker_called")):
             return (
                 SimulationDailyRunStatus.SUCCEEDED,

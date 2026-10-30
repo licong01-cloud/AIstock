@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from backend.services.position_timing.intraday.replay import FileRef
+from backend.services.position_timing.intraday.store import IntradayError
 from backend.services.simulation_execution.localsim import dual_mode_research as dual
 from backend.services.simulation_execution.localsim.timing_research import ref
 from backend.services.simulation_execution.localsim.timing_store import read_json, publish
@@ -35,6 +36,89 @@ def dual_fixture(tmp_path, monkeypatch, *, two_days=True, matrix="FULL_13"):
     frozen = dual.freeze_study(source_request=FileRef.model_validate(source["request"]),
                               output_root=tmp_path / "dual", producer_commit="2" * 40, matrix=matrix)
     return FileRef.model_validate(frozen["request"]), tmp_path / "dual"
+
+
+def test_report_only_recovery_preserves_old_study_and_exact_retry_never_computes_accounts(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, matrix="BASIC_2")
+    first = dual.run_study(request)
+    original = read_json(Path(first["results"]["path"]))
+    root = Path(request.path).parent
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    monkeypatch.setattr(dual, 'implementation_identity', lambda: {'report_fix': 'new_source'})
+    with pytest.raises(ValueError, match='REQUEST_IDENTITY'):
+        dual.run_study(request)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    # The refused run appends its existing immutable operational failure receipt.
+    # Report-only recovery itself must add or modify nothing in this origin.
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    def forbidden(*args, **kwargs):
+        raise AssertionError('report recovery cannot calculate or trade')
+    monkeypatch.setattr(dual, '_compute_account_day', forbidden)
+    revised = dual.resummarize_study(request_ref=request,
+        results_ref=FileRef.model_validate(first['results']), output_root=tmp_path / 'revisions',
+        producer_commit='3' * 40)
+    assert revised['status'] == 'MATERIALIZED' and revised['computed_account_days'] == 0
+    assert revised['verified_account_days'] == 4
+    new = read_json(Path(revised['results']['path']))
+    assert new['accounts'] == original['accounts']
+    assert new['producer_source_commit'] == original['producer_source_commit']
+    assert new['report_only_revision']['producer_source_commit'] == '3' * 40
+    again = dual.resummarize_study(request_ref=request,
+        results_ref=FileRef.model_validate(first['results']), output_root=tmp_path / 'revisions',
+        producer_commit='3' * 40)
+    assert again['status'] == 'ALREADY_MATERIALIZED' and again['results'] == revised['results']
+    assert before == {p: p.read_bytes() for p in root.rglob('*.json')}
+
+
+@pytest.mark.parametrize('target', ['day', 'receipt'])
+def test_report_only_recovery_rejects_corrupt_original_prefix_before_publication(tmp_path, monkeypatch, target):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    first = dual.run_study(request)
+    original = read_json(Path(first['results']['path']))
+    day_path = Path(original['accounts'][0]['days'][0]['path'])
+    target_path = day_path if target == 'day' else Path(read_json(day_path)['account_receipt']['path'])
+    target_path.write_bytes(target_path.read_bytes() + b' ')
+    with pytest.raises(IntradayError, match='RESEARCH_SOURCE_IDENTITY_MISMATCH'):
+        dual.resummarize_study(request_ref=request, results_ref=FileRef.model_validate(first['results']),
+            output_root=tmp_path / 'revisions', producer_commit='3' * 40)
+    assert not (tmp_path / 'revisions').exists()
+
+
+def test_report_recovery_inspects_complete_sources_before_any_outcome(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    first = dual.run_study(request)
+    result_path = Path(first['results']['path'])
+    real_read = dual.read_json
+    def guarded(path):
+        assert Path(path) != result_path, 'outcomes must stay unread after source failure'
+        return real_read(path)
+    def unavailable(*args, **kwargs):
+        raise ValueError('SOURCE_BATCH_UNAVAILABLE')
+    monkeypatch.setattr(dual, 'read_json', guarded)
+    monkeypatch.setattr(dual, '_source_inspect', unavailable)
+    with pytest.raises(ValueError, match='SOURCE_BATCH_UNAVAILABLE'):
+        dual.resummarize_study(request_ref=request, results_ref=FileRef.model_validate(first['results']),
+            output_root=tmp_path / 'revisions', producer_commit='3' * 40)
+    assert not (tmp_path / 'revisions').exists()
+
+
+def test_report_revision_conflict_is_not_silently_overwritten(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    first = dual.run_study(request)
+    kwargs = dict(request_ref=request, results_ref=FileRef.model_validate(first['results']),
+                  output_root=tmp_path / 'revisions', producer_commit='3' * 40)
+    revised = dual.resummarize_study(**kwargs)
+    path = Path(revised['results']['path'])
+    before = path.read_bytes()
+    original = dual.summarize_accounts
+    def changed(*args, **kw):
+        rows = original(*args, **kw)
+        rows[0]['fee_difference_cny'] = '0.0000000000000000000001'
+        return rows
+    monkeypatch.setattr(dual, 'summarize_accounts', changed)
+    with pytest.raises(ValueError, match='IMMUTABLE_ARTIFACT_CONFLICT'):
+        dual.resummarize_study(**kwargs)
+    assert path.read_bytes() == before
 
 
 def test_continuous_comparisons_are_byte_identical_across_fresh_processes():
