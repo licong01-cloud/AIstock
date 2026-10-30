@@ -148,8 +148,8 @@
   },
   "first_seen_at": "2026-10-30T05:45:25.891648Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "96d108e534e122086e7ed0decf2dec26bd33953b",
+  "fixed_at": "2026-10-30T06:12:22Z",
   "github_issue_number": 6931,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6931",
   "last_seen_at": "2026-10-30T05:45:25.891648Z",
@@ -157,6 +157,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6933",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -180,6 +181,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -191,7 +193,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2151",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b79b8c54350d3646",
+    "recorded_at": "2026-10-30T06:14:04.547426Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2d26bcd9d0058ceab87225c26ddacdcb3f76503c",
+    "source_merge_commit": "96d108e534e122086e7ed0decf2dec26bd33953b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6933",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "rtk pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_monthly_postgres_source.py -q -> 185 passed, 1 skipped"
+    ],
+    "validation_evidence_digest": "b9c600c7eb378402d2c408f33cb2db66c3ca93ec03956cb3c8ac35a165e6f6e1"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -200,6 +224,10 @@
     "fingerprint": "06a422331b540b00f28891f8",
     "source_event_id": "FE-20261030-06a422331b54"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "rtk pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_monthly_postgres_source.py -q -> 185 passed, 1 skipped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
