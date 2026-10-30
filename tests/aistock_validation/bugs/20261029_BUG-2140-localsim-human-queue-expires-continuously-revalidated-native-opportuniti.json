@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2140",
-  "closed_at": null,
+  "closed_at": "2026-10-30T17:27:18.977730Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -187,10 +187,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2140/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2140",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "673a9c486d5e447c295ab056eee2146f95550559",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T17:21:24.183043Z",
+      "mode": "read_only",
+      "observed_identity": "0a45d94c98fcf8704802702e0ce3f8f7540a51eb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4e7ab1a33294f974602846583b596223890d36f31e7b13b532e1e14a85ee4648",
+      "receipt_sha256": "3f2ce0f56fc65bac67e9791debd39b1f951e75154d873d2a397e95fff469faa6",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7b29f91312f65f8d4044b09eab700bc8f4fe55aadb0590904b9f644077b5083a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -224,7 +246,7 @@
     ],
     "validation_evidence_digest": "4181c7a68169b2e5662714f4ab991858bf45f1779aeb8be60cc388e4d83393cc"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -237,7 +259,8 @@
     "validation-receipt: id=7049154a85997a57 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py -k 'not continuously or 300' backend/tests/simulation_execution/test_localsim_human_operation.py::test_two_stocks_share_one_operator_and_no_double_delay` result=`passed (18 selected nodes, review-regression.xml)`",
     "validation-receipt: id=4ab9055189f0af3b commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_execution/localsim/human_operation.py backend/services/simulation_execution/localsim/human_portfolio.py backend/tests/simulation_execution/test_localsim_human_operation.py backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py` result=`passed`",
     "validation-receipt: id=102c7477154fb55a commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
-    "validation-receipt: id=28583de8b22b3776 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- five scoped files` result=`passed (0 blocking)`"
+    "validation-receipt: id=28583de8b22b3776 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- five scoped files` result=`passed (0 blocking)`",
+    "2026-10-31 formal post-restart identity and scoped scheduler business semantic passed. New independent full study 181 days/13 accounts/2353 account-days completed; six long-delay accounts have actual fills; full retry zero recomputation; original negative artifacts preserved. PR6952 report. Online human mode not activated. X:/AIstock_temp/localsim-runtime-activation-20261031/historical-business-acceptance-r1.json. Original source validation receipts retained."
   ],
   "verification_budget": {
     "budget": "standard",
