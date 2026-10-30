@@ -109,7 +109,8 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_legacy_factor.py -q -> 23 passed; six inherited NULL/absent-row cases, immutable prefix and non-calendar-month-end cutoff. Current three frozen H5 inputs have datetime/instrument indexes; projection uses bounded chunks and no DB reads"],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
