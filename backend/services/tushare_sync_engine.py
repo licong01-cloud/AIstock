@@ -1631,9 +1631,12 @@ class TushareSyncEngine:
                     result.success_batches += 1
                 else:
                     result.failed_batches += 1
-                    result.error = f"{spec.name}/{d}: {audit_quality.get('failure_category', 'quality_incomplete')}"
+                    message = f"{spec.name}/{d}: {audit_quality.get('failure_category', 'quality_incomplete')}"
+                    result.error = "; ".join(filter(None, (result.error, message)))[:4000]
             except Exception as exc:
                 result.failed_batches += 1
+                message = f"{spec.name}/{d}: {exc}"
+                result.error = "; ".join(filter(None, (result.error, message)))[:4000]
                 self._log(conn, job_id, "error", f"{spec.name} {d} failed: {exc}")
                 try:
                     failure_category = str(

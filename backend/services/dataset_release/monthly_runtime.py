@@ -9,11 +9,13 @@ code.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from calendar import monthrange
+from datetime import UTC, date, datetime, time
 import os
 from pathlib import Path, PurePosixPath
 import re
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from .monthly_registry import OfficialMonthlyProducerRegistry
 from .monthly_unified import (
@@ -30,6 +32,27 @@ _POSIX_ROOT = re.compile(r"^/(?:[^/\\\x00]+/)*[^/\\\x00]+$")
 
 class MonthlyRuntimeConfigurationError(MonthlyReleaseError):
     code = "MONTHLY_RELEASE_RUNTIME_UNAVAILABLE"
+
+
+def resolve_monthly_cutoff(value: datetime) -> date:
+    """Permit the current trading month after its official final session closes.
+
+    This selects a date only. SOURCE still checks actual published inputs;
+    market close never implies that delayed datasets have already arrived.
+    Historical direct-v2 calendar-month replay keeps its original resolver.
+    """
+    from backend.services.trading_calendar_status import TradingCalendarStatusService
+    from .control_service import resolve_previous_month_trading_cutoff
+
+    zone = ZoneInfo("Asia/Shanghai")
+    observed = value.replace(tzinfo=zone) if value.tzinfo is None else value.astimezone(zone)
+    month_end = observed.date().replace(day=monthrange(observed.year, observed.month)[1])
+    last = TradingCalendarStatusService().latest_trading_day_on_or_before(month_end)
+    if last is None or (last.year, last.month) != (observed.year, observed.month):
+        raise MonthlyRuntimeConfigurationError("official calendar cannot resolve the current trading month")
+    if observed >= datetime.combine(last, time(15), zone):
+        return last
+    return resolve_previous_month_trading_cutoff(value)
 
 
 class SubmissionOnlyPipeline(MonthlyPipeline):
@@ -153,9 +176,7 @@ class MonthlyRuntimeSettings:
         cutoff_resolver: Callable[[], date] | None = None,
     ) -> MonthlyReleaseService:
         def official_cutoff() -> date:
-            from .control_service import resolve_previous_month_trading_cutoff
-
-            return resolve_previous_month_trading_cutoff(datetime.now(UTC))
+            return resolve_monthly_cutoff(datetime.now(UTC))
 
         return MonthlyReleaseService(
             MonthlyOperationStore(self.state_root),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from datetime import date, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -59,6 +61,12 @@ class _Calendar:
 
 
 class _Repository:
+    def cycle_lock(self):
+        return nullcontext(True)
+
+    def pending_publications(self, **_kwargs):
+        return []
+
     def __init__(self) -> None:
         self.run: dict[str, object] | None = None
         self.observation = None
@@ -195,6 +203,8 @@ def test_one_program_failure_does_not_block_another_program() -> None:
 
     service = _Service(
         repository=SimpleNamespace(
+            cycle_lock=lambda: nullcontext(True),
+            pending_publications=lambda **_kwargs: [],
             pending_settlements=lambda **_kwargs: [],
             pending_mature_model_observations=lambda **_kwargs: [],
             retryable_model_observations=lambda **_kwargs: [],
