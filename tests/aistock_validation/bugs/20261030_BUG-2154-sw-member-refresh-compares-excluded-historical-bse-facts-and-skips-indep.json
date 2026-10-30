@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2154",
-  "closed_at": null,
+  "closed_at": "2026-10-30T15:32:33.764530Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,19 +29,19 @@
   "expected": "沪深新旧成员按同一支持范围比较；旧北交所事实保留且不阻断；沪深真实遗漏仍报错；成员失败仍尝试报价，组合失败不伪报成功；当日155报价及行业派生正常验证。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/sw_industry_history_store.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_sw_industry_history_store.py"
+      "backend/tests/test_sw_industry_history_store.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/sw_industry_history_store.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_sw_industry_history_store.py"
+      "backend/tests/test_sw_industry_history_store.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -133,8 +133,8 @@
   },
   "first_seen_at": "2026-10-30T13:15:10.145831Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f39a668306dd676101a6f6f2fcc5e197553f55aa",
+  "fixed_at": "2026-10-30T13:45:12Z",
   "github_issue_number": 6944,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6944",
   "last_seen_at": "2026-10-30T13:15:10.145831Z",
@@ -142,6 +142,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6945",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -168,9 +169,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2154-postrestart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2154",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "f39a668306dd676101a6f6f2fcc5e197553f55aa",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T15:23:57.958966Z",
+      "mode": "read_only",
+      "observed_identity": "f39a668306dd676101a6f6f2fcc5e197553f55aa",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "907756cb3e2ab32151a0be05fd18689b4a9bd12113166219ced08ad7f6fe0525",
+      "receipt_sha256": "5cd3c5052cff0077afe19ad5ac68a25aff024c81a0adbaa9fb26555dd044742e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "468a7483c4464be584e4363427a1f5929d06fa798320aa001de22c429f12feb3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -180,7 +204,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2154",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "061b6cfff586b4c1",
+    "recorded_at": "2026-10-30T13:46:12.787149Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3351c3301701dd78705f30aaf944def1c56c2942",
+    "source_merge_commit": "f39a668306dd676101a6f6f2fcc5e197553f55aa",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6945",
+    "validation_evidence": [
+      "validation-receipt: id=0583af04728edfd7 commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_tushare_sync_engine.py -q` result=`403 passed, 1 skipped`",
+      "validation-receipt: id=f258b29303d6ca3a commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install -- backend/services/sw_industry_history_store.py backend/ingestion/tdx_scheduler.py backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json` result=`passed`"
+    ],
+    "validation_evidence_digest": "518d38980570c6f2efaf37eff9adfd3aa9f5dbd4dda2e387c1e2053ab26acc19"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -189,6 +235,11 @@
     "fingerprint": "41ceba29e8e0b39717401f36",
     "source_event_id": "FE-20261030-41ceba29e8e0"
   },
+  "validation_evidence": [
+    "validation-receipt: id=0583af04728edfd7 commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_tushare_sync_engine.py -q` result=`403 passed, 1 skipped`",
+    "validation-receipt: id=f258b29303d6ca3a commit=3351c3301701dd78705f30aaf944def1c56c2942 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install -- backend/services/sw_industry_history_store.py backend/ingestion/tdx_scheduler.py backend/tests/test_sw_industry_history_store.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261030_BUG-2154-sw-member-refresh-compares-excluded-historical-bse-facts-and-skips-indep.json` result=`passed`",
+    "Post-restart backend-main identity f39a668306dd; official day integrity sw_index_member 7546/7546 VALID, sw_daily155 VALID, sector_data4918 VALID; DEV all134 production-input replay passed and all382 excluded historical rows preserved; original real HTTP502 failure retained."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
