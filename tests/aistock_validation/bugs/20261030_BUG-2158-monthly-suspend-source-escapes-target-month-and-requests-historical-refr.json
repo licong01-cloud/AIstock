@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20261030_BUG-2158-monthly-suspend-source-escapes-target-month-and-requests-historical-refr.json",
     "backend/services/dataset_release/monthly_source_progress.py",
-    "backend/tests/dataset_release/test_source_authority.py"
+    "backend/tests/dataset_release/test_source_authority.py",
+    "backend/tests/dataset_release/test_monthly_construction_facts.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2158",
@@ -39,7 +40,8 @@
     },
     "planned_files": [
       "backend/services/dataset_release/monthly_source_progress.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/tests/dataset_release/test_monthly_construction_facts.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
@@ -66,7 +68,8 @@
     "1: RED on suspend_d requesting 2018; other dated domains bounded. GREEN for all 13 dated query domains after one scope correction.",
     "2: Existing DEV read-only native SQL excludes 2018 and September fixture facts and reads October only. Current predecessor metadata confirms 30318 suspension facts through 2026-09-30 and all_frozen_shsz_suspension_facts_v1.",
     "3: Eleven suspension prefix/interval/explicit historical repair regressions pass, including unchanged old bytes and unresolved/duplicate failures. Full related matrix 290 passed, 1 skipped.",
-    "4: Scope/security/DESIGN-COMPLIANCE-001 review: only monthly adapter, existing direct tests and BUG record changed; no market fact/profile/candidate/consumer changes and no new gate. Runtime remains pending user restart."
+    "4: Scope/security/DESIGN-COMPLIANCE-001 review: only monthly adapter, existing direct tests and BUG record changed; no market fact/profile/candidate/consumer changes and no new gate. Runtime remains pending user restart.",
+    "5: CI passed 2220 tests and exposed one outdated test asserting monthly suspend start=2018. Update it to the approved month-only contract and explicitly preserve legacy full-source history; rerun that failure before CI."
   ],
   "design_compliance": {
     "no_unapproved_subset": "PASS: all 13 dated query domains and existing suspension prefix behavior covered",
