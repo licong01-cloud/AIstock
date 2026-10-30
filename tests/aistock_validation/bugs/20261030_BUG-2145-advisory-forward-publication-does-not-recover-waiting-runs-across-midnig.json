@@ -11,7 +11,8 @@
     "backend/tests/advisory_model_first/test_forward_boundaries.py",
     "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
     "backend/tests/advisory_model_first/test_forward_recovery_devdb.py",
-    "tests/aistock_validation/catalog/file_ownership.yaml"
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/advisory_model_first/test_forward_postgres.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2145",
@@ -40,6 +41,7 @@
       "backend/tests/advisory_model_first/test_forward_boundaries.py",
       "backend/tests/advisory_model_first/test_forward_date_clock.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
       "backend/tests/advisory_model_first/test_forward_recovery.py",
       "backend/tests/advisory_model_first/test_forward_recovery_devdb.py",
       "docs/analysis/advisory_cross_day_recovery_20261030.md",
@@ -58,6 +60,7 @@
       "backend/tests/advisory_model_first/test_forward_boundaries.py",
       "backend/tests/advisory_model_first/test_forward_date_clock.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
       "backend/tests/advisory_model_first/test_forward_recovery.py",
       "backend/tests/advisory_model_first/test_forward_recovery_devdb.py",
       "docs/analysis/advisory_cross_day_recovery_20261030.md",
@@ -223,7 +226,8 @@
   "validation_evidence": [
     "rtk pytest backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_model_evaluation.py -q -> 50 passed; failed fixture protocol repaired and exact failed node -> 1 passed",
     "AISTOCK_DEV_DB_E2E=1 rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -> 3 passed across exact nodes, rolled back",
-    "rtk ruff check changed Python files -> passed"
+    "rtk ruff check changed Python files -> passed",
+    "rtk pytest backend/tests/advisory_model_first/test_forward_postgres.py -q -> 13 passed"
   ],
   "verification_budget": {
     "budget": "standard",

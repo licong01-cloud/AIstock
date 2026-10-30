@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 import pytest
 
@@ -45,7 +45,10 @@ class _Cursor:
                 "forward_run_id": "advfwd-test",
                 "publication_status": "PENDING",
                 "settlement_status": "NOT_DUE",
+                "target_trade_date": date(2026, 8, 17),
             }
+        elif "SELECT clock_timestamp()" in normalized:
+            self.one = {"published_at": datetime(2026, 8, 14, 9, tzinfo=UTC)}
         elif "SELECT version, status FROM app.advisory_program" in normalized:
             self.one = {"version": 3, "status": "ENABLED"}
         elif "SELECT binding_version_id FROM app.advisory_strategy_binding_version" in normalized:
