@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
 
 import pandas as pd
 
-from qe_l2_continuous_admission import CONTRACT, validate_admission, validate_reference
+from qe_l2_continuous_admission import CONTRACT, validate_admission, validate_reference, validate_projection
 from qe_l2_risk_consumer import checked_asset, require, symbol_key
 from qe_l2_risk_admission import canonical_sha
 
@@ -55,6 +56,32 @@ def adjust_targets(base, probabilities, *, reference_exposure=None):
     }
 
 
+def prediction_panel_sha256(frame):
+    """Canonical ordered panel pin, shared with the existing replay contract."""
+    metadata = json.dumps({"index_names": [str(v) for v in frame.index.names],
+                           "columns": [str(v) for v in frame.columns],
+                           "dtypes": [str(v) for v in frame.dtypes], "rows": len(frame)},
+                          sort_keys=True, separators=(",", ":")).encode("utf-8")
+    values = pd.util.hash_pandas_object(frame, index=True, categorize=True).values.tobytes()
+    return hashlib.sha256(metadata + b"\n" + values).hexdigest()
+
+
+def project_prediction(pred, projection, *, source_sha256, calendar):
+    """Select all source rows within the explicit window; no imputation or scoring."""
+    projection = validate_projection(projection, source_sha256=source_sha256)
+    require(isinstance(pred, pd.DataFrame) and list(pred.columns) == ["score"]
+            and isinstance(pred.index, pd.MultiIndex) and pred.index.names == ["datetime", "instrument"]
+            and pred.index.is_unique and pred.index.is_monotonic_increasing
+            and pred.score.map(lambda x: math.isfinite(float(x))).all(),
+            "QE_L2_CONTINUOUS_PREDICTION_INVALID")
+    dates = pred.index.get_level_values("datetime")
+    source_days = calendar[(calendar >= projection["source_start"]) & (calendar <= projection["source_end"])]
+    require(pd.DatetimeIndex(dates.unique()).equals(source_days), "QE_L2_CONTINUOUS_AF_SOURCE_DATE_GRID")
+    result = pred.loc[(dates >= projection["start"]) & (dates <= projection["end"])]
+    require(prediction_panel_sha256(result) == projection["panel_sha256"], "QE_L2_CONTINUOUS_AF_PROJECTED_PANEL_PIN")
+    return result
+
+
 class ContinuousInputs:
     def __init__(self, manifest_file):
         self.manifest = m = json.loads(Path(manifest_file).read_text(encoding="utf-8"))
@@ -69,6 +96,7 @@ class ContinuousInputs:
         require(required.issubset(paths), "QE_L2_CONTINUOUS_ASSETS_MISSING")
         self._validate_dataset(m)
         calendar = pd.DatetimeIndex(pd.to_datetime(paths["calendar"].read_text().splitlines()))
+        self._calendar = calendar
         require(calendar.is_unique and calendar.is_monotonic_increasing, "QE_L2_CONTINUOUS_CALENDAR_INVALID")
         selected = calendar[(calendar >= m["start"]) & (calendar <= m["end"])]
         require(
@@ -109,6 +137,8 @@ class ContinuousInputs:
             "historical_as_known": False,
             "untouched_holdout": False,
         }
+        if m.get("prediction_projection") is not None:
+            self.receipt["prediction_projection"] = m["prediction_projection"]
 
     @staticmethod
     def _validate_dataset(m):
@@ -287,6 +317,9 @@ class ContinuousInputs:
             "QE_L2_CONTINUOUS_MAPPING_CLOCK",
         )
         pred = pd.read_pickle(paths["prediction"])
+        if m.get("prediction_projection") is not None:
+            pred = project_prediction(pred, m["prediction_projection"],
+                                      source_sha256=m["assets"]["prediction"]["sha256"], calendar=self._calendar)
         require(
             isinstance(pred, pd.DataFrame)
             and list(pred.columns) == ["score"]
@@ -351,6 +384,13 @@ class ContinuousMixin:
         self._continuous_seen = set()
         self._continuous_reduced = set()
         self._continuous_day = None
+        parent = super()
+        require(
+            all(callable(getattr(parent, name, None)) for name in (
+                "_adjust_target_weight_map", "_build_additional_rebalance_orders"
+            )),
+            "QE_L2_CONTINUOUS_BASE_HOOKS_MISSING",
+        )
         super().__init__(*args, **kwargs)
 
     def _adjust_target_weight_map(self, weight_map, trade_start_time):
@@ -523,6 +563,7 @@ class ContinuousMixin:
         self._continuous_day = None
         decision = super().generate_trade_decision(execute_result)
         if self._continuous_day is None:
+            require(not decision.get_decision(), "QE_L2_CONTINUOUS_BASE_TARGET_MISSING_WITH_ORDERS")
             require(not self.trade_position.get_stock_list(), "QE_L2_CONTINUOUS_BASE_TARGET_UNAVAILABLE_WITH_HOLDINGS")
             require(
                 inputs.manifest["arm"] not in ("X0", "X1") or inputs.references[day] == 0,

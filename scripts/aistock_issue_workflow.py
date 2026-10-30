@@ -3495,6 +3495,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/reranking-shadow$"),
+     "advisory_lstm_shadow_capture", _runtime_semantics._validate_advisory_lstm_shadow_capture),
     (re.compile(r"^/api/v1/simulation-runtime/localsim/replays/[^/]+/recovery$"),
      "localsim_replay_recovery", _runtime_semantics._validate_localsim_replay_recovery),
     (re.compile(r"^/api/v1/simulation-runtime/localsim/workbench/overview$"),
@@ -3691,6 +3693,7 @@ def _evaluate_business_smoke_semantics(
         "hmm_database_daily_coefficient_jobs",
         "hmm_frozen_coefficient_extension",
         "advisory_entry_price_status",
+        "advisory_lstm_shadow_capture",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
         "advisory_calendar_defaults_only",
@@ -12696,6 +12699,10 @@ def build_triage_ci_issue_plan(
     linked = _find_bug_by_github_issue(issue["number"])
     body = str(issue.get("body") or "")
     detected_run_id = run_id or _extract_run_id_from_issue_body(body)
+    try:
+        nightly_group = ci_failure_summary.nightly_issue_group(body)
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from exc
     summary: dict[str, Any]
     extraction_errors: list[str] = []
     if summary_json:
@@ -12706,6 +12713,7 @@ def build_triage_ci_issue_plan(
             run_id=detected_run_id,
             run_url=None,
             severity="P1",
+            **({"nox_sessions": nightly_group["sessions"]} if nightly_group else {}),
         )
     else:
         extraction_errors.append("No Actions run id was found in the GitHub Issue body.")
@@ -12723,6 +12731,11 @@ def build_triage_ci_issue_plan(
                 "extraction_errors": extraction_errors,
             }
         )
+    if nightly_group:
+        try:
+            summary = ci_failure_summary.bind_nightly_issue_group(summary, nightly_group)
+        except ValueError as exc:
+            raise WorkflowError(str(exc)) from exc
     summary = _merge_issue_body_regression_locator(summary, body)
     classification = _classify_ci_issue(summary, issue)
     superseding_run = _find_superseding_main_success(summary)

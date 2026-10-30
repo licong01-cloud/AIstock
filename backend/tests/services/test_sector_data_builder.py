@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import datetime as dt
 import hashlib
 import json
@@ -22,6 +23,16 @@ from backend.services.industry_pit.contracts import (
     TaxonomyIdentity,
     make_candidate_interval,
 )
+
+
+def test_derived_sector_paths_use_same_versioned_history_with_explicit_tail_fallback():
+    for query in (module._PREFLIGHT_DAY_SQL, module._BUILD_DAY_SQL, module._DELETE_STALE_DAY_SQL):
+        assert "market.sw_industry_classification_history_v1" in query
+        assert "taxonomy_version = 'SW2021'" in query
+        assert "effective_from <= %(trade_date)s" in query
+        assert "effective_to >= %(trade_date)s" in query
+        assert "FROM dated_members AS member" in query
+        assert "NOT EXISTS (SELECT 1 FROM historical_members h WHERE h.ts_code = m.ts_code)" in query
 
 
 class _Cursor:
@@ -166,6 +177,18 @@ def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     assert "sd.open, sd.high, sd.low, sd.close, sd.pct_change" in module._BUILD_DAY_SQL
     assert "sw2_close           = EXCLUDED.sw2_close" in module._BUILD_DAY_SQL
     assert "COALESCE(sd." not in module._BUILD_DAY_SQL
+
+
+def test_missing_provider_pe_does_not_discard_real_sector_quotes():
+    # 801952.SI: source quotes/volume are present while provider PE is NULL.
+    # Keep this nullable valuation field verbatim, not a missing-quote alarm.
+    assert "sd.pe IS NULL" not in module._PREFLIGHT_DAY_SQL
+    for field in ("open", "high", "low", "close", "pct_change", "vol", "amount"):
+        assert f"sd.{field} IS NULL" in module._PREFLIGHT_DAY_SQL
+    assert "sd.ts_code IS NULL" in module._PREFLIGHT_DAY_SQL
+    assert "sd.vol, sd.amount, sd.pe, sd.pb, sd.total_mv" in module._BUILD_DAY_SQL
+    assert "sw2_pe              = EXCLUDED.sw2_pe" in module._BUILD_DAY_SQL
+    assert "COALESCE(sd.pe" not in module._BUILD_DAY_SQL
 
 
 def test_failed_insert_rolls_back_delete_without_clearing_revision(monkeypatch):

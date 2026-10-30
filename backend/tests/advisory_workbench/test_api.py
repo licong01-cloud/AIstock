@@ -43,5 +43,23 @@ def test_snapshot_conflict_and_source_errors_are_not_empty_success():
 def test_operator_routes_never_offer_mutation_or_inference():
     app = client(SimpleNamespace()).app
     routes = [r for r in app.routes if r.path.startswith("/workbench")]
-    assert len(routes) == 8 and all(r.methods == {"GET"} for r in routes)
+    assert len(routes) == 10 and all(r.methods == {"GET"} for r in routes)
     assert client(SimpleNamespace()).post("/workbench/overview").status_code == 405
+
+
+def test_returns_requires_a_pinned_list_and_preserves_identity_errors():
+    from backend.routers.advisory_workbench import get_returns
+    from backend.services.advisory_workbench.quotes import symbols_from_query
+    def get(program, version, symbols):
+        symbols_from_query(symbols)
+        if version == 'wrong':
+            raise WorkbenchError('LIST_IDENTITY_CHANGED', '名单身份不可用', 409)
+        return dict(program_id=program, list_version_id=version)
+    c = client(SimpleNamespace())
+    c.app.dependency_overrides[get_returns] = lambda: SimpleNamespace(get=get)
+    prefix = '/workbench/programs/p/returns?'
+    assert c.get(prefix + 'symbols=600001.SH').status_code == 422
+    assert c.get(prefix + 'list_version_id=v&symbols=bad').status_code == 422
+    assert c.get(prefix + 'list_version_id=wrong&symbols=600001.SH').status_code == 409
+    assert c.get(prefix + 'list_version_id=v&symbols=600001.SH').json() == dict(program_id='p', list_version_id='v')
+    assert c.post(prefix + 'list_version_id=v&symbols=600001.SH').status_code == 405

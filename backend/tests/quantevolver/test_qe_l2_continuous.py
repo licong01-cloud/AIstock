@@ -19,9 +19,13 @@ from qe_l2_continuous_consumer import (
     ContinuousMixin,
     adjust_targets,
     validate_reference,
+    project_prediction,
+    prediction_panel_sha256,
 )
 from qe_l2_continuous_plan import build_plan, exposure_reference, baseline_contract
-from backend.services.quantevolver.l2_continuous_consumer import extract_continuous, apply_continuous
+from backend.services.quantevolver.l2_continuous_consumer import (
+    extract_continuous, apply_continuous, bind_base_target_hooks,
+)
 from backend.services.quantevolver.l2_continuous_evaluation import evaluate
 
 
@@ -111,6 +115,124 @@ def test_missing_whole_AF_signal_date_never_shrinks_window(data):
     _write(data.root / "manifest.json", data.manifest)
     with pytest.raises(ValueError, match="PREDICTION_DATE_GRID"):
         ContinuousInputs(data.root / "manifest.json")
+
+
+def _projection_case():
+    calendar = pd.bdate_range("2026-01-05", "2026-09-30")
+    index = pd.MultiIndex.from_product([calendar, ["SH600000", "SZ000001"]], names=["datetime", "instrument"])
+    source = pd.DataFrame({"score": np.arange(len(index), dtype=float) / 1000}, index=index)
+    target = source.loc[source.index.get_level_values("datetime") >= "2026-03-31"]
+    projection = dict(schema_version="qe_l2_af_projection_v1", source_prediction_sha256="a" * 64,
+                      source_start="2026-01-05", source_end="2026-09-30", start="2026-03-31", end="2026-09-30",
+                      panel_sha256=prediction_panel_sha256(target))
+    return source, target, projection, calendar
+
+
+def test_projection_keeps_every_source_value_and_security_in_declared_window():
+    source, expected, projection, calendar = _projection_case()
+    before = source.copy(deep=True)
+    actual = project_prediction(source, projection, source_sha256="a" * 64, calendar=calendar)
+    pd.testing.assert_frame_equal(actual, expected)
+    pd.testing.assert_frame_equal(source, before)
+
+
+@pytest.mark.parametrize("change", ["missing_day", "missing_stock", "nan", "reordered", "values", "pin", "shortened"])
+def test_projection_cannot_hide_missing_data_or_change_the_plan(change):
+    source, expected, projection, calendar = _projection_case()
+    if change == "missing_day":
+        source = source.loc[source.index.get_level_values("datetime") != "2026-08-03"]
+    elif change == "missing_stock":
+        source = source.drop(source.index[-1])
+    elif change == "nan":
+        source.iloc[-1, 0] = np.nan
+    elif change == "reordered":
+        source = source.iloc[::-1]
+    elif change == "values":
+        source.iloc[-1, 0] += 0.1
+    elif change == "pin":
+        projection["source_prediction_sha256"] = "b" * 64
+    else:
+        projection["end"] = "2026-09-29"
+    with pytest.raises(ValueError, match="QE_L2_CONTINUOUS_"):
+        project_prediction(source, projection, source_sha256="a" * 64, calendar=calendar)
+
+
+def test_projection_must_be_reviewed_for_this_seed(data, monkeypatch):
+    _, _, projection, _ = _projection_case()
+    projection["source_prediction_sha256"] = data.manifest["assets"]["prediction"]["sha256"]
+    manifest = {**data.manifest, "prediction_projection": projection}
+    with pytest.raises(ValueError, match="PROJECTION_ADMISSION_MISMATCH"):
+        admission.validate_admission(manifest)
+    record = {**data.record, "AF_projection_by_seed": {"42": projection}}
+    monkeypatch.setattr(admission, "ADMISSIONS", {"TEST_ONLY": record})
+    admission.validate_admission(manifest)
+    changed = deepcopy(manifest)
+    changed["prediction_projection"]["panel_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="PROJECTION_ADMISSION_MISMATCH"):
+        admission.validate_admission(changed)
+
+
+def test_legacy_reader_still_rejects_unapproved_extra_source_dates(data):
+    import hashlib
+
+    path = Path(data.manifest["assets"]["prediction"]["path"])
+    pred = pd.read_pickle(path)
+    extra = pred.iloc[:1].copy()
+    extra.index = pd.MultiIndex.from_tuples([(pd.Timestamp("2026-01-05"), "000001.SZ")], names=pred.index.names)
+    pd.concat([extra, pred]).sort_index().to_pickle(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    data.manifest["assets"]["prediction"]["sha256"] = digest
+    data.record["AF_predictions_by_seed"] = {"42": digest}
+    _write(data.root / "manifest.json", data.manifest)
+    with pytest.raises(ValueError, match="PREDICTION_DATE_GRID"):
+        ContinuousInputs(data.root / "manifest.json")
+
+
+def test_complete_reader_explicit_projection_preserves_full_parent_asset(data, monkeypatch):
+    import hashlib
+
+    m = data.manifest
+    calendar_path = Path(m["assets"]["calendar"]["path"])
+    prefix = pd.bdate_range("2026-01-05", "2026-03-30")
+    calendar = prefix.append(data.calendar)
+    calendar_path.write_text("\n".join(str(d.date()) for d in calendar) + "\n", encoding="utf-8")
+    calendar_sha = hashlib.sha256(calendar_path.read_bytes()).hexdigest()
+    m["assets"]["calendar"]["sha256"] = calendar_sha
+    m["dataset_binding"]["day_pins"]["calendar_sha256"] = calendar_sha
+    m["release_identity"]["metadata_sha256"]["calendar"] = calendar_sha
+    record = deepcopy(data.record)
+    record["dataset_binding_sha256"] = admission.canonical_sha(admission.physical_binding(m["dataset_binding"]))
+    record["release_identity_sha256"] = admission.canonical_sha(m["release_identity"])
+    for arm in ("M0", "M1"):
+        risk = deepcopy(data.risks[arm])
+        risk["input_identity"]["calendar_sha256"] = calendar_sha
+        for index, bundle in enumerate(risk["model_bundles"]):
+            bundle["training_input_identity"]["calendar_sha256"] = calendar_sha
+            risk["model_bundles"][index] = _seal({k: v for k, v in bundle.items() if k != "receipt_sha256"})
+        ref = _write(data.root / f"{arm}.json", _seal({k: v for k, v in risk.items() if k != "receipt_sha256"}))
+        m["assets"][arm] = ref
+        record[arm + "_sha256"] = ref["sha256"]
+    path = Path(m["assets"]["prediction"]["path"])
+    target = pd.read_pickle(path)
+    extra_index = pd.MultiIndex.from_product([prefix, ["000001.SZ"]], names=target.index.names)
+    extra = pd.DataFrame({"score": np.full(len(extra_index), 0.1)}, index=extra_index)
+    pd.concat([extra, target]).sort_index().to_pickle(path)
+    parent_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    m["assets"]["prediction"]["sha256"] = parent_sha
+    projection = dict(schema_version="qe_l2_af_projection_v1", source_prediction_sha256=parent_sha,
+                      source_start="2026-01-05", source_end="2026-09-30", start="2026-03-31", end="2026-09-30",
+                      panel_sha256=prediction_panel_sha256(target))
+    record["AF_predictions_by_seed"] = {"42": parent_sha}
+    record["AF_projection_by_seed"] = {"42": projection}
+    m["prediction_projection"] = projection
+    monkeypatch.setattr(admission, "ADMISSIONS", {"TEST_ONLY": record})
+    _write(data.root / "manifest.json", m)
+    inputs = ContinuousInputs(data.root / "manifest.json")
+    assert len(inputs.mapping) == len(target) == 126
+    assert inputs.receipt["days"] == 125 and inputs.receipt["catalog_count"] == 131
+    assert inputs.receipt["prediction_projection"] == projection
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == parent_sha
+    assert len(pd.read_pickle(path)) > 126
 
 
 def test_absolute_targets_cash_no_normalization_or_compounding():
@@ -206,7 +328,10 @@ def test_compose_all_five_arms_and_default_identity(data):
             )
         conf = _conf(manifest)
         original = {
-            "experiment_files": {"conf.yaml": yaml.safe_dump(conf)},
+            "experiment_files": {
+                "conf.yaml": yaml.safe_dump(conf),
+                "custom_strategy.py": (ROOT / "scripts/score_weighted_strategy_v2.py").read_text(encoding="utf-8"),
+            },
             "direct_v2_dataset_binding": deepcopy(manifest["dataset_binding"]),
             "wsl_command": "python qrun_limit_minute.py conf.yaml",
         }
@@ -306,6 +431,11 @@ def test_actual_account_net_and_exposure_pairing_no_double_fees(data):
     row = result["accounts"][0]["periods"]["full"]
     assert row["net_return"] == pytest.approx(1.001**125 - 1)
     assert row["fees_currency"] == 12500.0
+    july_august = result["accounts"][0]["periods"]["2026-07_08"]
+    expected_days = int(((dates >= "2026-07-01") & (dates <= "2026-08-31")).sum())
+    assert july_august["days"] == expected_days
+    assert july_august["net_return"] == pytest.approx(1.001**expected_days - 1)
+    assert july_august["fees_currency"] == 100.0 * expected_days
     actions[42, "X0"][0]["target_exposure"] = 0.4
     actions[42, "X0"][0]["target_weights"] = {"A": 0.4}
     with pytest.raises(ValueError, match="REFERENCE_EXPOSURE_MISMATCH"):
@@ -441,3 +571,85 @@ def test_untradable_or_missing_quote_is_audited_not_filled(strategy):
 def test_fresh_process_real_qlib_strategy_and_fee_cash_closure(data, monkeypatch):
     pytest.importorskip("qlib")
     validate_native(data, monkeypatch)
+
+
+LEGACY_BASE_SOURCE = '''
+class ScoreWeightedTopkStrategyV2:
+    def generate_trade_decision(self):
+        trade_step = self.day
+        trade_start_time, trade_end_time = self.day, self.day
+        current_holdings = list(self.holdings)
+        final_holdings = ['A', 'B']
+        weights = [0.6, 0.35]
+        weight_map = {}
+        for i, sid in enumerate(final_holdings):
+            weight_map[sid] = weights[i]
+        sell_orders = []
+        total_account_value = 1000.0
+        buy_orders = [Order(sid, total_account_value * weight_map[sid], OrderDir.BUY)
+                      for sid in final_holdings if sid not in current_holdings]
+        self.backup_candidates = ['C', 'D']
+        return TradeDecisionWO(sell_orders + buy_orders, self)
+'''
+
+
+def _load_legacy_base(source):
+    from collections import namedtuple
+
+    namespace = {
+        "Order": namedtuple("Order", "stock_id amount direction"),
+        "OrderDir": types.SimpleNamespace(BUY=1, SELL=0),
+        "TradeDecisionWO": lambda orders, _strategy: orders,
+    }
+    exec(compile(source, "selected_strategy.py", "exec"), namespace)
+    return namespace["ScoreWeightedTopkStrategyV2"]
+
+
+def test_selected_legacy_base_orders_and_backups_preserved_across_held_day():
+    adapted, receipt = bind_base_target_hooks(LEGACY_BASE_SOURCE)
+    assert receipt["mode"] == "legacy_source_instrumented"
+    assert receipt["original_AST_preserved_after_removing_hooks"] is True
+    old, new = _load_legacy_base(LEGACY_BASE_SOURCE)(), _load_legacy_base(adapted)()
+    for day, holdings in [(0, []), (1, ["A", "B"]), (2, ["A"])]:
+        old.day = new.day = day
+        old.holdings = new.holdings = holdings
+        assert old.generate_trade_decision() == new.generate_trade_decision()
+        assert old.backup_candidates == new.backup_candidates == ["C", "D"]
+
+
+def test_selected_legacy_source_invokes_both_hooks_even_without_new_buys():
+    source, _ = bind_base_target_hooks(LEGACY_BASE_SOURCE)
+
+    class Consumer(_load_legacy_base(source)):
+        def _adjust_target_weight_map(self, weights, day):
+            self.target_days.append(day)
+            return {stock: weight * 0.5 for stock, weight in weights.items()}
+
+        def _build_additional_rebalance_orders(self, **kwargs):
+            self.rebalance_days.append(kwargs["trade_step"])
+            assert sum(kwargs["weight_map"].values()) == pytest.approx(0.475)
+            assert kwargs["current_holdings"] == self.holdings
+            return []
+
+    obj = Consumer()
+    obj.target_days, obj.rebalance_days = [], []
+    for obj.day, obj.holdings in [(0, []), (1, ["A", "B"])]:
+        orders = obj.generate_trade_decision()
+        assert sum(order.amount for order in orders) == (475.0 if obj.day == 0 else 0.0)
+    assert obj.target_days == obj.rebalance_days == [0, 1]
+
+
+@pytest.mark.parametrize("source", [
+    "class Other: pass",
+    LEGACY_BASE_SOURCE.replace("return TradeDecisionWO(sell_orders + buy_orders, self)", "return None"),
+    LEGACY_BASE_SOURCE + "\n    def _adjust_target_weight_map(self, weights, day): return weights\n",
+])
+def test_unknown_or_partial_base_strategy_rejected(source):
+    with pytest.raises(ValueError, match="QE_L2_CONTINUOUS_BASE_"):
+        bind_base_target_hooks(source)
+
+
+def test_selected_repository_base_with_existing_hooks_is_not_replaced():
+    source = (ROOT / "scripts/score_weighted_strategy_v2.py").read_text(encoding="utf-8")
+    adapted, receipt = bind_base_target_hooks(source)
+    assert adapted == source and receipt["mode"] == "existing_hooks"

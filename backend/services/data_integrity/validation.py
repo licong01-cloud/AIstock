@@ -6,7 +6,9 @@ facts use independent dated scope; sparse scans must be tied to this revision.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 import hashlib
+import math
 
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
@@ -45,11 +47,66 @@ def key_result(expected, facts, *, required_fields=(), positive_fields=(), check
                             (counts,), {**(checks or {}), "physical_rows": len(facts)}, gaps)
 
 
-def daily_basic_result(expected, facts):
+def index_quote_result(expected, facts):
+    """A published index needs close; close-only currency/return variants have no OHLC.
+
+    Keep source NULLs explicit. Any provided quote must still be finite and
+    economically valid; this is not a stock/minute or consumer-field exemption.
+    """
+    expected = set(expected)
+    base = key_result(expected, facts, required_fields=("close",), positive_fields=("close",),
+        checks={"required_fields": ["close"], "nullable_fields": ["open", "high", "low", "vol", "amount"],
+                "schema_version": "published_index_quote_fields_v1"})
+    legal, invalid, gaps = 0, 0, list(base.gaps)
+    for field in ("open", "high", "low", "vol", "amount"):
+        bad = []
+        for code in expected & facts.keys():
+            value = facts[code].get(field)
+            if value is None:
+                legal += 1
+            elif (not finite_number(value, positive=field in {"open", "high", "low"})
+                    or value < 0):
+                bad.append(code)
+        invalid += len(bad)
+        if bad:
+            gaps.append({"classification": "INVALID", "symbols": sorted(bad), "fields": [field]})
+    total = 5*len(expected & facts.keys())
+    optional = CheckCounts("published_optional_index_quote_cell", total, total-legal-invalid, legal, 0, invalid, 0)
+    return ValidationResult(PartitionState.VALID if base.state == PartitionState.VALID and optional.complete
+        else PartitionState.INCOMPLETE, base.counts+(optional,), base.checks, tuple(gaps))
+
+
+def adj_factor_result(expected, facts, history=None):
+    """A finite latest value cannot certify a known unresolved factor baseline."""
+    result = key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
+    history = history or {}
+    state = history.get("status")
+    if state in {"RUNNING", "INTERRUPTED"}:
+        return unverified("adj_factor_history_not_completed", physical_rows=len(facts), history_status=state)
+    blocked = set(history.get("failed_symbols", ())) & set(expected)
+    if state == "PARTIAL" and blocked:
+        return ValidationResult(PartitionState.INCOMPLETE, result.counts + (
+            CheckCounts("history_baseline", len(blocked), 0, 0, 0, len(blocked), 0),),
+            {**result.checks, "history_status": state}, result.gaps + (
+                {"classification": "HISTORY_CONFLICT", "symbols": sorted(blocked)},))
+    return result
+
+
+def _volume_ratio_na(value):
+    # Legacy pandas imports stored SQL numeric NaN instead of NULL. This is
+    # only a representation test; independent listing/calendar proof is still
+    # required. Infinity, strings and other required fields are not exempted.
+    return (value is None or isinstance(value, Decimal) and value.is_nan()
+            or isinstance(value, float) and math.isnan(value))
+
+
+def daily_basic_result(expected, facts, *, volume_ratio_warmup=None):
     """Keep ingestion's admission ratio, but never call residual gaps complete.
 
     Nullable valuations remain legal NA; the existing five mandatory fields
     have no blanket five-percent missing-data exemption in the day ledger.
+    A new listing has no five-prior-session volume ratio yet; only proven
+    calendar/listing warmup may retain the real source NULL as explicit NA.
     """
     from backend.services.tushare_sync_engine import (
         DAILY_BASIC_REQUIRED_FIELDS, DAILY_BASIC_REQUIRED_RATIO, _daily_basic_required_field_coverage_receipt,
@@ -59,22 +116,49 @@ def daily_basic_result(expected, facts):
     matched = expected & facts.keys()
     coverage = _daily_basic_required_field_coverage_receipt([facts[code] for code in sorted(matched)])
     field_counts, gaps = [], list(keys.gaps)
+    warmup = volume_ratio_warmup or {}
     for field in DAILY_BASIC_REQUIRED_FIELDS:
-        missing = sorted(code for code in expected if code not in facts or facts[code].get(field) is None)
-        invalid = sorted(code for code in matched if facts[code].get(field) is not None
+        legal = {code for code in matched if field == "volume_ratio" and code in warmup
+                 and _volume_ratio_na(facts[code].get(field))}
+        missing = sorted(code for code in expected-legal if code not in facts or facts[code].get(field) is None)
+        invalid = sorted(code for code in matched-legal if facts[code].get(field) is not None
             and not finite_number(facts[code][field], positive=field in {"total_mv", "circ_mv"}))
         field_counts.append(CheckCounts("field_cell:"+field, len(expected),
-            len(expected)-len(missing)-len(invalid), 0, len(missing), len(invalid), 0))
+            len(expected)-len(missing)-len(invalid)-len(legal), len(legal), len(missing), len(invalid), 0))
+        if legal:
+            gaps.append({"classification": "LEGAL_NA", "symbols": sorted(legal), "fields": [field],
+                         "reason": "new_listing_fewer_than_five_prior_trading_days"})
         gaps.extend({"classification": kind, "symbols": symbols, "fields": [field]}
                     for kind, symbols in (("MISSING", missing), ("INVALID", invalid)) if symbols)
     complete = keys.state == PartitionState.VALID and all(count.complete for count in field_counts)
     return ValidationResult(PartitionState.VALID if complete else PartitionState.INCOMPLETE,
         keys.counts+tuple(field_counts), {**keys.checks, "required_fields": list(DAILY_BASIC_REQUIRED_FIELDS),
             "existing_ingestion_admission_ratio": DAILY_BASIC_REQUIRED_RATIO,
-            "coverage": coverage, "nullable_valuation_threshold_added": False}, tuple(gaps))
+            "coverage": coverage, "nullable_valuation_threshold_added": False,
+            "volume_ratio_warmup": warmup}, tuple(gaps))
 
 
 class PhysicalValidator:
+    def _volume_ratio_warmup(self, conn, day, facts):
+        suspects = [code for code, fact in facts.items() if _volume_ratio_na(fact.get("volume_ratio"))]
+        if not suspects:
+            return {}
+        # stock_basic is the shared listing authority, not a consumer buy pool.
+        # Calendar continuity and both endpoints must be proven: an incomplete
+        # calendar cannot turn an old stock or an absent row into legal NA.
+        listing = rows(conn, """SELECT b.ts_code,b.list_date,
+                   count(*) FILTER (WHERE c.is_trading) AS listed_trading_days
+            FROM market.stock_basic b JOIN market.trading_calendar c
+              ON c.cal_date BETWEEN b.list_date AND %s
+            WHERE b.ts_code=ANY(%s::text[]) AND b.list_date<=%s
+            GROUP BY b.ts_code,b.list_date
+            HAVING count(c.cal_date)=(%s::date-b.list_date+1)
+               AND count(*) FILTER (WHERE c.is_trading) BETWEEN 1 AND 5
+               AND bool_or(c.cal_date=b.list_date AND c.is_trading)
+               AND bool_or(c.cal_date=%s AND c.is_trading)""", (day, suspects, day, day, day))
+        return {str(r["ts_code"]).strip(): {"list_date": str(r["list_date"]),
+            "listed_trading_days": int(r["listed_trading_days"])} for r in listing}
+
     def _raw_scheduler(self, conn, *, source_aliases=True):
         # Reuse the existing exact date/key contract without opening its usual
         # independent connections or initializing/running a scheduler.
@@ -95,6 +179,12 @@ class PhysicalValidator:
 
     @staticmethod
     def _canonical_raw_codes(authority, codes, day):
+        from backend.services.market_data.instrument_validator import normalize_ts_code
+        from .stock_scope import is_excluded_stock_code
+        # Same notation contract as shared QE/Selection/Paper readers; this
+        # changes no economic identity, pool, date or stored quote.
+        codes = {normalize_ts_code(code) for code in codes}
+        codes = {code for code in codes if not is_excluded_stock_code(code)}
         aliases = {}
         for row in authority.rows:
             if (row.source_dataset == "market.kline_daily_raw" and row.effective_start is not None
@@ -115,7 +205,7 @@ class PhysicalValidator:
 
     def validate(self, conn, obligation: Obligation, day: date, revision: int) -> ValidationResult:
         dataset = obligation.dataset
-        if dataset in {"kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts"}:
+        if dataset in {"kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts", "cyq_perf", "bak_basic"}:
             from .catalog import SCOPE_VERSION, RULE_VERSION
             dependency = rows(conn, """SELECT * FROM market.dataset_date_refresh_audit
                 WHERE dataset='kline_daily_raw' AND trade_date=%s AND data_source='canonical_db'""", (day,))
@@ -164,7 +254,7 @@ class PhysicalValidator:
                            "scope": "full_provider_not_buy_universe"},
                 tuple({"classification": kind, "symbols": sorted(values), "fact_date": str(day)}
                       for kind, values in (("MISSING", absent), ("INVALID", invalid)) if values))
-        if dataset in {"daily_basic", "adj_factor", "stk_limit", "moneyflow_ts"}:
+        if dataset in {"daily_basic", "adj_factor", "stk_limit", "moneyflow_ts", "cyq_perf", "bak_basic"}:
             table = f"market.{dataset}"
             if dataset == "adj_factor":
                 authority = load_default_security_source_identity_manifest()
@@ -176,11 +266,25 @@ class PhysicalValidator:
                 return unverified("independent_stock_scope_empty")
             observed = rows(conn, sql.SQL("SELECT * FROM {}.{} WHERE trade_date=%s").format(
                 sql.Identifier("market"), sql.Identifier(dataset)), (day,))
+            from .stock_scope import filter_stock_rows
+            observed = filter_stock_rows(observed)
             facts = {str(row["ts_code"]).strip(): row for row in observed}
             if len(facts) != len(observed):
                 return ValidationResult(PartitionState.ERROR, (), {}, reason="duplicate_physical_key")
             if dataset == "daily_basic":
-                return daily_basic_result(expected, facts)
+                return daily_basic_result(expected, facts,
+                    volume_ratio_warmup=self._volume_ratio_warmup(conn, day, facts))
+            if dataset in {"cyq_perf", "bak_basic"}:
+                # These are dated stock panels, not sparse event catalogues.
+                # Independent traded keys certify stored history; never invent
+                # an old provider scan or use a present-day listing snapshot.
+                return key_result(expected, facts,
+                    required_fields=("his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate")
+                        if dataset == "cyq_perf" else (),
+                    checks={"coverage_basis": "independent_dated_traded_stock_keys",
+                            "historical_provider_scan_required": False,
+                            "required_fields": ["his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate"]
+                                if dataset == "cyq_perf" else []})
             if dataset == "stk_limit":
                 from backend.services.tushare_sync_engine import _stk_limit_source_prices_valid
                 result = key_result(expected, facts)
@@ -196,7 +300,11 @@ class PhysicalValidator:
                 from backend.data_service.moneyflow_contract import TUSHARE_MONEYFLOW_AMOUNT_COLUMNS, TUSHARE_MONEYFLOW_VOLUME_COLUMNS
                 return key_result(expected, facts, required_fields=TUSHARE_MONEYFLOW_AMOUNT_COLUMNS+TUSHARE_MONEYFLOW_VOLUME_COLUMNS,
                     checks={"source_units": {"amount": "10k_cny", "volume": "hand"}, "alias_authority": "shared_security_source_identity"})
-            return key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
+            history_rows = rows(conn, """SELECT metadata->'adj_factor_history' AS history
+                FROM market.dataset_date_refresh_audit WHERE dataset='adj_factor'
+                  AND trade_date=%s AND data_source='canonical_db'""", (day,))
+            history = history_rows[0].get("history") if history_rows else None
+            return adj_factor_result(expected, facts, history)
         if dataset == "index_daily":
             # index_basic is a request catalogue (including nonquoted variants),
             # not a dated publication authority. Never turn it into fake gaps.
@@ -217,10 +325,11 @@ class PhysicalValidator:
         if dataset == "sector_data":
             from backend.services.sector_data_builder import _PREFLIGHT_DAY_SQL, sector_fact_comparison_sql
             from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
+            from .stock_scope import stock_scope_sql
             with conn.cursor() as cur:
                 cur.execute(_PREFLIGHT_DAY_SQL, {"trade_date": day, "authority_id": CANONICAL_PIT_AUTHORITY_ID})
                 values = list(cur.fetchone())
-                cur.execute("SELECT count(*) FROM market.sector_data WHERE trade_date=%s", (day,))
+                cur.execute("SELECT count(*) FROM market.sector_data WHERE trade_date=%s"+stock_scope_sql(), (day,))
                 actual = cur.fetchone()[0]
             mismatches = rows(conn, sector_fact_comparison_sql(), {"trade_date": day, "authority_id": CANONICAL_PIT_AUTHORITY_ID})
             # Keep the activated producer's existing six semantic checks and
@@ -268,7 +377,7 @@ class PhysicalValidator:
         if dataset == "index_daily" and metadata.get("provider_query_scope_complete") is not True:
             return unverified("index_quote_query_scope_incomplete")
         if scan:
-            from .provider import verify_scan
+            from .provider import verify_scan, scoped_scan_entries
             if obligation.category == "reference" and spec.snapshot_date_column is None:
                 query = sql.SQL("SELECT {} FROM {}").format(
                     sql.SQL(",").join(sql.Identifier(c) for c in spec.columns), sql.Identifier(*spec.target_table.split(".")))
@@ -279,7 +388,9 @@ class PhysicalValidator:
                     sql.Identifier(spec.date_column))
                 actual = rows(conn, query, (day,))
             missing, invalid = verify_scan(spec, scan, actual)
-            expected = len(scan["entries"])
+            from .stock_scope import filter_dataset_rows
+            actual = filter_dataset_rows(spec, actual)
+            expected = len(scoped_scan_entries(spec, scan))
             if obligation.category != "event" and expected == 0:
                 return unverified("reference_or_series_provider_scope_empty")
             check = CheckCounts("provider_fact_identity", expected, expected-len(missing)-len(invalid), 0,
@@ -288,11 +399,10 @@ class PhysicalValidator:
             checks = {"provider": source["data_source"], "scan_sha256": scan["scan_sha256"],
                       "physical_rows": len(actual), "as_of_policy": "CURRENT_SOURCE_NOT_HISTORICAL_VINTAGE"}
             if dataset == "index_daily":
-                quotes = key_result({entry["key"][0] for entry in scan["entries"]},
-                    {str(r["ts_code"]).strip(): r for r in actual},
-                    required_fields=("open", "high", "low", "close", "vol", "amount"),
-                    positive_fields=("open", "high", "low", "close"))
-                checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability")
+                quotes = index_quote_result({entry["key"][0] for entry in scan["entries"]},
+                    {str(r["ts_code"]).strip(): r for r in actual})
+                checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability",
+                              quote_field_contract=quotes.checks)
                 gaps = tuple({"classification": kind, "keys": keys} for kind, keys in
                              (("MISSING", missing), ("INVALID", invalid)) if keys)+quotes.gaps
                 return ValidationResult(PartitionState.VALID if check.complete and quotes.state == PartitionState.VALID
@@ -313,6 +423,8 @@ class PhysicalValidator:
                 return unverified("event_scan_scope_not_proven")
             actual = rows(conn, sql.SQL("SELECT * FROM {} WHERE {}=%s").format(
                 sql.Identifier(*spec.target_table.split(".")), sql.Identifier(spec.date_column)), (day,))
+            from .stock_scope import filter_dataset_rows
+            actual = filter_dataset_rows(spec, actual)
             if dataset == "suspend_d":
                 from backend.data_service.suspension_day_authority import publication_quality
                 publication, quality = publication_quality(actual, day)

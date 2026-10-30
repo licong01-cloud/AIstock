@@ -1,6 +1,6 @@
 # LocalSIM 连续离线回放性能 F2 详细设计
 
-日期：2026-10-28。Feature tier：F2；风险：T3。状态：设计及实现中。
+日期：2026-10-28，交付复核：2026-10-29。Feature tier：F2；风险：T3。状态：共享批量完整账户与恢复验证完成；BUG-2112 正式预检已通过，源码 CI 与合入按独立阶段确认。
 
 用户授权：按批量行情准备、重复计算优化、独立账户并行的顺序开发，完成多轮审核、定向回归、L0及最终HEAD CI后可以直接提交合入。当前181日研究继续使用其冻结工作树，不热更、停止、迁移或重置。
 
@@ -28,7 +28,8 @@
 - `backend/services/simulation_execution/localsim/timing_portfolio.py`
 - `backend/tests/simulation_execution/test_localsim_replay_performance.py`
 - `backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py`
-- `backend/tests/simulation_runtime/test_daily_trading_context.py`??????DEV??????????????????/???????
+
+DEV 日上下文夹具问题由独立 BUG-2117 / PR #6814 处理，不纳入本性能修复写入范围。
 
 任务记录、基准输入引用及回执仅写`X:/AIstock_temp/localsim-replay-performance-20261028/`；WSL使用`/mnt/x/AIstock_temp/localsim-replay-performance-20261028/`。不复制大型数据或模型。
 
@@ -37,6 +38,8 @@
 原双模式设计§11规定：缺正式公共接口时交对应owner，不跨模块修改。目前CandidateReader无批量准备接口。需要其owner提供§5.1的最小无策略读取合同，或者用户明确扩大本任务写入范围。未获得授权前不修改`backend/services/position_timing/`、数据模块或比较器；LocalSIM其余优化继续独立实施。共享内核规则、阈值和研究人口始终不在修改范围。
 
 用户随后明确选择“共享接口仍交择时窗口实现”。因此本PR交付LocalSIM消费接缝、计算优化、账户并行及各自完整验收；共享Reader的真实批量读取实现和其提速验收由owner独立PR交付。F-002按消费侧已完成范围核验，外部生产能力不伪报完成；缺接口时显式不可用的行为是正式合同，不是逐日静默降级。整体跨模块批量优化仍保持待owner交付状态。
+
+2026-10-28后续交付：共享Reader已通过PR #6791合入，正式合同见`docs/analysis/position_timing_bounded_reader_delivery_20261028.md`。LocalSIM现有接缝实际消费通过。完整三日FULL_13对照发现BUG-2112：前日物理FileRef及其处理时钟SHA进入账户日身份，使独立输出目录产生不同计划顺序和排队峰值。该差异必须修复并重新冻结研究复验，不能将只有读取接缝通过表述为完整账户状态通过。旧证据保留，活动181日任务不迁移。
 
 ## 3. Non-goals / 边界
 
@@ -72,6 +75,8 @@
 旧CLI默认仍使用既有串行路径。新增显式离线性能选项：batch_days、account_workers及优化开关；合法范围与并发预算严格校验，未知值报错。这些是计算资源参数，不改变交易政策或既有研究人口；写独立操作回执，经济结果不掺计时/资源噪声。同一冻结request在不同合法资源参数下必须生成相同经济事实及exact retry结果。
 
 源码身份包含新增性能模块；旧冻结研究继续由旧工作树运行，不能拿新源码恢复旧前缀。新进程加载、后端运行态和经济支持分别报告。
+
+BUG-2112补充合同：账户日逻辑身份绑定冻结request、账户、交易日及账户计算实际消费的前日现金、持仓和参考价。物理输出路径、含处理时钟的前日日报SHA、排队审计指标均不进入该身份。前日FileRef的完整内容SHA、原生journal、开盘资金/持仓核对及不可变日报发布仍承担完整前缀与恢复校验；不能为固定身份而跳过它们。命名空间升级仅作用于新源码冻结的新研究，旧request的源码身份保护保持。相同冻结request在独立输出目录和合法资源配置下，计划、订单、成交、队列及完整经济业务事实应一致；仅原生处理时钟、原生随机撤拒事件ID和物理收据引用按既有审计规则分开核验。
 
 ### 5.3 计算与提交分离
 
@@ -136,20 +141,22 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | dual_mode_research.py?native_research.py | backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py | verified | - |
-| F-002 | research_performance.py??5.1???? | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified_consumer_stage | approved_by_user????????????????????Reader??????????owner???? |
+| F-001 | dual_mode_research.py；native_research.py | backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py | verified | - |
+| F-002 | research_performance.py；第5.1节共享接缝 | backend/tests/simulation_execution/test_localsim_replay_performance.py；artifact: X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/strict-equivalence-receipt.json | verified | - |
 | F-003 | dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
-| F-004 | human_portfolio.py???timing.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
-| F-005 | research_performance.py?human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
-| F-006 | native_research.py?human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
-| F-007 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
-| F-008 | research_performance.py?dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
-| F-009 | dual_mode_research.py?timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py?artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-continuation-receipt.json | verified | - |
-| F-010 | dual_mode_research.py | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
+| F-004 | human_portfolio.py；timing.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-005 | research_performance.py；human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-006 | native_research.py；human_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-007 | dual_mode_research.py；timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-008 | research_performance.py；dual_mode_research.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
+| F-009 | dual_mode_research.py；timing_portfolio.py | backend/tests/simulation_execution/test_localsim_replay_performance.py；artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-continuation-receipt.json | verified | - |
+| F-010 | dual_mode_research.py::_account_day_identity；test_localsim_replay_performance.py | docs/analysis/localsim_batch_reader_acceptance_20261028.md；artifact: X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/strict-equivalence-receipt.json | verified | - |
 | F-011 | research_performance.py | backend/tests/simulation_execution/test_localsim_replay_performance.py | verified | - |
 | F-012 | docs/analysis/localsim_replay_performance_implementation_acceptance_20261028.md | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
-| F-013 | ????3/?8????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/real-validation-receipt-v2.json | verified | - |
-| F-014 | ?????6??????? | artifact: X:/AIstock_temp/localsim-replay-performance-20261028/final-directed-receipt.json | verified_local_pr_gate | - |
+| F-013 | 第3/8节完整人口及旧产物保护 | artifact: X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/final-consumer-acceptance.json | verified | - |
+| F-014 | 第6节验收索引及BUG-2112工作流 | artifact: X:/AIstock_temp/localsim-merge-after-runtime-contract-20261029/bug2112-runtime-preflight.json；docs/analysis/localsim_batch_reader_acceptance_20261028.md | verified | - |
+
+F-014 验证的是各交付状态分别报告：多轮审核、11 项定向检查及 L0 有既有证据，公共目录 PR #6858 已合入，原工作树正式预检得到 `closure_ready=true`、`runtime_impact=none`、无目录阻断。最终源码 HEAD CI 和合入仍由后续 PR 收据单独确认；本条不提前宣称源码已合入或原 181 日任务已恢复。最终合入标准仍要求 HEAD CI 通过。
 
 ## 12. DESIGN-COMPLIANCE-001 / 逐项复核
 

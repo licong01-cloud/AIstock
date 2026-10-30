@@ -36,7 +36,8 @@ def trial(tmp_path, monkeypatch):
                        target_date="2026-10-28", list_version_id="advlv_test", selection_run_id="sel_test",
                        created_at="2026-10-27T08:45:00+00:00")
     now = [datetime(2026, 10, 27, 9, tzinfo=timezone.utc)]
-    source = NS(publications=lambda: [publication], inputs=lambda p: (rows, {}), finance=lambda p: None)
+    source = NS(publications=lambda: [publication], inputs=lambda p: (rows, {}), finance=lambda p: None,
+                verify_capture=lambda receipt: None)
     service = app.LstmSpoShadowService(root=tmp_path, source=source, now=lambda: now[0])
     service.root.mkdir()
     (service.root / "model.json").write_bytes(raw)
@@ -81,6 +82,39 @@ def test_late_capture_never_publishes_or_reads_inputs(trial):
     assert trial.service.run_once()["results"][0]["status"] == "MISSED_CAPTURE_WINDOW"
     assert not trial.path.exists()
     assert len(trial.service.status(program_id=app.PROGRAM)["missed"]) == 1
+
+
+@pytest.mark.parametrize("phase", ["read", "post_compute"])
+def test_waiting_is_durable_retries_without_fit_and_clears_after_capture(trial, phase):
+    from backend.services.data_integrity.inputs import InputReadinessError
+    original = trial.source.inputs
+    def waiting(*_): raise InputReadinessError("benchmark revision is unverified", context={"dataset": "index_daily"})
+    if phase == "read":
+        trial.source.inputs = waiting
+    else:
+        trial.source.verify_capture = waiting
+    assert trial.service.run_once()["results"][0]["status"] == "WAITING_DATA"
+    assert not trial.path.exists()
+    status = trial.service.status(program_id=app.PROGRAM)
+    assert status["last_waiting"] and status["last_failure"] is None
+    trial.source.inputs, trial.source.verify_capture = original, lambda *_: None
+    assert trial.service.run_once()["results"][0]["status"] == "PREDICTED"
+    assert trial.service.status(program_id=app.PROGRAM)["last_waiting"] is None
+
+
+def test_extra_twenty_sessions_require_benchmark_and_adjustments(monkeypatch):
+    from backend.services.advisory_model_first import lstm_spo_shadow_source_v1 as source
+    from backend.services.data_integrity.inputs import InputReadinessError
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    days = list(pd.bdate_range("2026-09-01", periods=20).date)
+    rows = [{"trade_date": str(d), "dataset": ds, "data_revision": 1, "validated_revision": 1,
+             "validation_status": "VALID", "validation_id": "v", "scope_version": SCOPE_VERSION,
+             "rule_version": RULE_VERSION} for d in days for ds in source.EXTRA_DATASETS]
+    monkeypatch.setattr(source, "partition_pins", lambda *_: rows)
+    assert len(source.extra_input_capture(object(), days)["partition_refs"]) == 60
+    rows[-1]["validated_revision"] = 0
+    with pytest.raises(InputReadinessError):
+        source.extra_input_capture(object(), days)
 
 
 def test_crossing_open_never_publishes_as_prospective(trial):
@@ -159,6 +193,93 @@ def test_original_score_top50_not_truncated_native_list(trial):
     run.package_results[app.TARGET["package_id"]][0].score += 1
     with pytest.raises(ValueError, match="consumed scores"):
         top50(run, artifact, trial.publication)
+
+
+@pytest.fixture
+def publication_reader(trial, monkeypatch):
+    from backend.services.advisory_program import AdvisoryProgramPGRepository
+    from backend.services.selection_center.repository import SelectionCenterRepository
+
+    class AssetReadReached(RuntimeError):
+        pass
+
+    calls = []
+
+    class Session:
+        @contextmanager
+        def connection(self):
+            yield object()
+
+        def close(self):
+            pass
+
+    version = NS(program_id=app.PROGRAM, binding_version_id=app.BINDING,
+        version_status="PUBLISHED", created_at=datetime.fromisoformat(trial.publication["created_at"]),
+        summary_json={"selection_run_id": "sel_test", "advisory_date_context": {
+            "decision_as_of_trade_date": "2026-10-27", "target_trade_date": "2026-10-28"}})
+    monkeypatch.setattr(AdvisoryProgramPGRepository, "get_list_version", lambda *_: version)
+
+    def get_run(_repo, run_id):
+        calls.append(run_id)
+        raise AssetReadReached("publication accepted before any score or feature read")
+
+    monkeypatch.setattr(SelectionCenterRepository, "get_run", get_run)
+    return NS(source=LstmSpoShadowSource(session_factory=Session, now=lambda: trial.now[0]),
+              version=version, calls=calls, accepted=AssetReadReached)
+
+
+@pytest.mark.parametrize("stamp", ["2026-10-27T16:45:00+08:00", "2026-10-27T14:15:00+05:30",
+                                  "2026-10-27T08:45:00Z"])
+def test_source_accepts_same_publication_instant_across_timezones(trial, publication_reader, stamp):
+    trial.publication["created_at"] = stamp
+    with pytest.raises(publication_reader.accepted):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == ["sel_test"]
+
+
+@pytest.mark.parametrize("stamp", ["2026-10-27T16:45:00.000001+08:00", "2026-10-27T08:45:00",
+                                  "not-a-time"])
+def test_source_rejects_changed_or_ambiguous_clock_before_asset_reads(trial, publication_reader, stamp):
+    trial.publication["created_at"] = stamp
+    with pytest.raises(ValueError):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == []
+
+
+@pytest.mark.parametrize("field", ["program_id", "binding_version_id", "selection_run_id", "decision_date", "target_date"])
+def test_equivalent_clock_does_not_relax_publication_identity(trial, publication_reader, field):
+    trial.publication["created_at"] = "2026-10-27T16:45:00+08:00"
+    trial.publication[field] = "changed"
+    with pytest.raises(ValueError, match="original publication reference differs"):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == []
+
+
+@pytest.mark.parametrize("invalid", ["future", "naive_stored", "unpublished"])
+def test_source_rejects_invalid_stored_publication(trial, publication_reader, invalid):
+    if invalid == "future":
+        trial.now[0] = datetime(2026, 10, 27, 8, tzinfo=timezone.utc)
+    elif invalid == "naive_stored":
+        publication_reader.version.created_at = publication_reader.version.created_at.replace(tzinfo=None)
+    else:
+        publication_reader.version.version_status = "FAILED"
+    with pytest.raises(ValueError, match="original publication reference differs"):
+        publication_reader.source.inputs(trial.publication)
+    assert publication_reader.calls == []
+
+
+def test_old_publication_without_input_pin_cannot_acquire_new_completeness(trial, publication_reader, monkeypatch):
+    from backend.services.selection_center.repository import SelectionCenterRepository
+    from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactRepository
+    from backend.services.data_integrity.inputs import InputReadinessError
+    from backend.services.advisory_model_first.generic_daily_db_input_v1 import GenericDailyReadonlyDBInputV1
+    run = NS(runtime_config={"package_runtime_configs": {app.TARGET["package_id"]: {}}},
+             trade_date=date(2026, 10, 28), data_source="DB_HISTORICAL", completed_at=trial.now[0])
+    monkeypatch.setattr(SelectionCenterRepository, "get_run", lambda *_: run)
+    monkeypatch.setattr(StrategyPackageSelectionArtifactRepository, "get", lambda *_, **kw: NS(created_at=trial.now[0]))
+    monkeypatch.setattr(GenericDailyReadonlyDBInputV1, "load_day", lambda *_, **kw: pytest.fail("unbound publication cannot read new features"))
+    with pytest.raises(InputReadinessError):
+        publication_reader.source.inputs(trial.publication)
 
 
 def test_calendar_check_precedes_mature_market_reads_and_real_valuation(trial):

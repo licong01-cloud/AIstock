@@ -145,6 +145,25 @@ class BacktestExecutor(BaseExecutor):
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
+        from ..terminal_replay_consumer import require_terminal_replay_mode
+
+        require_terminal_replay_mode(
+            custom_params.get("qe_terminal_replay"), mode=mode.value, source=ctx.prediction_replay_source
+        )
+        relative_study = custom_params.get("qe_l2_relative_manifest")
+        if relative_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_L2_RELATIVE_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(relative_study, dict)
+                    or relative_study.get("assets", {}).get("prediction", {}).get("sha256") != source.sha256):
+                raise ValueError("QE_L2_RELATIVE_SOURCE_PREDICTION_MISMATCH")
+        probability_study = custom_params.get("qe_stock_probability_study")
+        if probability_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_STOCK_PROBABILITY_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(probability_study, dict)
+                    or probability_study.get("manifest", {}).get("prediction_sha256") != source.sha256):
+                raise ValueError("QE_STOCK_PROBABILITY_SOURCE_PREDICTION_MISMATCH")
         runtime_flags = config.build_runtime_flags()
         fixed_seed = extract_qe_random_seed(runtime_flags)
         require_fixed_seed = bool(ctx.require_fixed_seed or kwargs.get("require_fixed_seed"))

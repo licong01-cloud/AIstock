@@ -219,3 +219,83 @@ def test_noncurrent_business_day_does_not_admit_new_live_lease(monkeypatch, offs
     assert scheduler._renew_unattended_localsim_pit_binding(
         binding=binding, trade_date=TRADE_DATE + timedelta(days=offset)) == binding
     assert len(repo.releases) == 1
+
+
+def _sweep_missed_day(monkeypatch, scheduler):
+    import backend.services.simulation_runtime.scheduler as scheduler_module
+
+    today = TRADE_DATE + timedelta(days=2)
+    monkeypatch.setattr(scheduler_module, 'scheduler_now', lambda: datetime.combine(
+        today, datetime.min.time(), ZoneInfo('Asia/Shanghai')).replace(hour=10))
+    return scheduler._terminalize_stale_localsim_failed_runs(
+        trade_date=today, broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None, limit=100, as_of_time=None, raise_on_error=True)
+
+
+def test_missed_zero_effect_pit_day_closes_without_backfill_and_exact_retry_is_noop(monkeypatch):
+    scheduler, repo, release, binding = _scheduler(monkeypatch)
+    failed = _failed_run(scheduler, repo, release, binding)
+    original_failure = deepcopy(failed.run_payload_json['pre_run_failure'])
+    original_release = release.model_dump(mode='json')
+    before = (len(repo.releases), len(repo.bindings), len(repo.execution_plans))
+
+    result = _sweep_missed_day(monkeypatch, scheduler)
+
+    assert len(result) == 1
+    closed = repo.get_simulation_daily_run(failed.run_id)
+    assert closed.status is SimulationDailyRunStatus.FAILED_TERMINAL
+    audit = closed.run_payload_json['localsim_historical_pit_admission_failure_v1']
+    assert audit['reason_code'] == 'LOCALSIM_HISTORICAL_PIT_ADMISSION_MISSED'
+    assert audit['trade_date'] == str(TRADE_DATE + timedelta(days=1))
+    assert audit['broker_called'] is False and audit['submitted_intents'] == 0
+    assert audit['historical_orders_backfilled'] is False
+    assert closed.run_payload_json['pre_run_failure'] == original_failure
+    assert repo.get_strategy_runtime_release(release.release_id).model_dump(mode='json') == original_release
+    assert (len(repo.releases), len(repo.bindings), len(repo.execution_plans)) == before
+    assert _sweep_missed_day(monkeypatch, scheduler) == []
+
+
+@pytest.mark.parametrize('changes', [
+    {'status': SimulationDailyRunStatus.FAILED_TERMINAL},
+    {'execution_plan_id': 'existing_plan'},
+    {'selection_evidence_id': 'existing_scores'},
+    {'run_payload_json': {'broker_called': True}},
+    {'run_payload_json': {'broker_side_effect_state': 'UNKNOWN'}},
+])
+def test_missed_pit_sweep_preserves_unproved_or_economic_failures(monkeypatch, changes):
+    scheduler, repo, release, binding = _scheduler(monkeypatch)
+    failed = _failed_run(scheduler, repo, release, binding, **changes)
+    before = failed.model_dump(mode='json')
+    _sweep_missed_day(monkeypatch, scheduler)
+    after = repo.get_simulation_daily_run(failed.run_id)
+    assert after.status == failed.status
+    assert 'localsim_historical_pit_admission_failure_v1' not in after.run_payload_json
+    assert after.execution_plan_id == before['execution_plan_id']
+
+
+def test_missed_pit_sweep_never_rebinds_frozen_replay_plan(monkeypatch):
+    scheduler, repo, release, binding = _scheduler(monkeypatch)
+    failed = _failed_run(scheduler, repo, release, binding)
+    config = deepcopy(release.release_config_json)
+    config['metadata']['localsim_task_input_source_plan_v1'] = {'frozen': True}
+    repo.releases[release.release_id] = release.model_copy(update={'release_config_json': config})
+    _sweep_missed_day(monkeypatch, scheduler)
+    assert repo.get_simulation_daily_run(failed.run_id).status is SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert len(repo.releases) == 1 and not repo.execution_plans
+
+
+def test_missed_pit_sweep_rejects_frozen_identity_drift(monkeypatch):
+    scheduler, repo, release, binding = _scheduler(monkeypatch)
+    failed = _failed_run(scheduler, repo, release, binding)
+    repo.bindings[binding.binding_id] = binding.model_copy(update={'binding_hash': '0' * 64})
+    with pytest.raises(migration.TradingCoreError, match='frozen admission'):
+        _sweep_missed_day(monkeypatch, scheduler)
+    assert repo.get_simulation_daily_run(failed.run_id).status is SimulationDailyRunStatus.FAILED_RETRYABLE
+
+
+def test_current_day_pit_failure_keeps_existing_renewal_path(monkeypatch):
+    scheduler, repo, release, binding = _scheduler(monkeypatch)
+    failed = _failed_run(scheduler, repo, release, binding)
+    assert scheduler._terminalize_missed_localsim_pit_admission(
+        run=failed, scheduler_trade_date=failed.trade_date) is None
+    assert repo.get_simulation_daily_run(failed.run_id).status is SimulationDailyRunStatus.FAILED_RETRYABLE

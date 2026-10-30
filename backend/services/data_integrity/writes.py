@@ -14,9 +14,18 @@ def sql_revision_marker(dataset, dates_variable="changed_dates"):
     """Fragment inside a managed repair transaction, not a new DML authority."""
     if any(not re.fullmatch(r"[a-z][a-z0-9_]*", value) for value in (dataset, dates_variable)):
         raise ValueError("invalid managed repair identity")
+    derived = ""
+    if dataset in {"moneyflow_ts", "sw_daily"}:
+        from backend.services.sector_data_repair import _MARK_SQL
+        dates = (f"(SELECT array_agg(d) FROM unnest({dates_variable}) AS t(d) "
+                 "WHERE d >= DATE '2021-07-30')")
+        derived = _MARK_SQL.replace("%s", f"'{dataset}'", 1).replace("%s", dates, 1) + ";"
+        derived += f"""PERFORM market.mark_data_integrity_changed('sector_data',d,'dependency_changed','{dataset}')
+            FROM (SELECT DISTINCT unnest({dates_variable}) AS d) AS dates WHERE d >= DATE '2021-07-30';"""
     return f"""IF to_regprocedure('market.mark_data_integrity_changed(text,date,text,text)') IS NOT NULL THEN
         PERFORM market.mark_data_integrity_changed('{dataset}',d,'managed_repair','controlled_sql')
         FROM (SELECT DISTINCT unnest({dates_variable}) AS d) AS dates WHERE d IS NOT NULL;
+        {derived}
         END IF;"""
 
 
@@ -52,7 +61,11 @@ def changed_values(conn, query, values, *, dataset, source, **options):
     try:
         with conn.cursor() as cur:
             changed = extras.execute_values(cur, query, values, fetch=True, **options)
-        mark_changed(conn, dataset, [fact_day(row[0]) for row in changed], reason="batch_fact_changed", source=source)
+        days = sorted({fact_day(row[0]) for row in changed})
+        mark_changed(conn, dataset, days, reason="batch_fact_changed", source=source)
+        if days and dataset in {"moneyflow_ts", "sw_daily"}:
+            from backend.services.sector_data_repair import mark_revision_dates
+            mark_revision_dates(conn, days, dataset)
         if owns:
             conn.commit()
     except BaseException:

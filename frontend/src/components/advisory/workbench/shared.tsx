@@ -10,7 +10,7 @@ export const labels: Record<string, string> = {
   PUBLISHED: "名单已发布", ASSET_BLOCKED: "资产阻断", WAITING_DATA: "等待数据", FAILED: "运行失败", NO_CURRENT_LIST: "无当前名单",
   SETTLED: "已结算", NOT_DUE: "未到结算时间", NOT_ENTERED: "未进入", NEW: "新加入", CONTINUING: "继续推荐", REMOVED: "移出名单",
   IN_SCOPE: "荐股范围内", OBSERVATION: "观察候选", OUTSIDE_PENDING: "范围外待复评", OUTSIDE_EXIT: "退出建议", UNKNOWN: "待核验",
-  TRACKING: "跟踪中", PENDING_ENTRY: "待进入", PENDING_EXIT: "待退出确认", WAITING_REVIEW: "待复评", ENDED: "已结束",
+  TRACKING: "跟踪中", PENDING_ENTRY: "策略基准待确认", PENDING_EXIT: "待退出确认", WAITING_REVIEW: "待复评", ENDED: "已结束",
   ENTER: "进入", HOLD: "继续跟踪", EXIT: "退出", WATCH: "观察", WAITING: "等待确认", SUCCEEDED: "复评完成",
   TAKE_PROFIT: "止盈", TRAILING_TAKE_PROFIT: "移动止盈", STOP_LOSS: "止损", RANK_EXIT: "排名退出", RANK_WEAK: "排名转弱",
   TIME_EXIT: "期限退出", MAX_HOLDING_DAYS: "期限退出", FORWARD: "日常前向", REPLAY: "历史回放", ALL: "全部记录",
@@ -22,6 +22,7 @@ export const labels: Record<string, string> = {
   MARK_SOURCE_UNAVAILABLE: "估值来源不可读", ENTRY_NOT_FINALIZED: "进入尚未确认", EXIT_NOT_FINALIZED: "退出尚未结算",
 };
 export const readinessReason = (reason?: string | null) => !reason ? "" :
+  reason.startsWith("等待验证：") ? reason :
   reason.includes("factor dependencies") ? "因子输入依赖尚未完整解析，不能确认就绪。" :
   reason.includes("sequence window") ? "模型所需历史窗口尚未完整声明，不能确认就绪。" :
   reason.includes("asset") || reason.includes("frozen factor") ? "冻结资产身份或输入定义尚未确认。" :

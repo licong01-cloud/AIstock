@@ -15,9 +15,11 @@ Environment:
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, closing
 import datetime as dt
 import json
 import os
+import math
 from pathlib import Path
 import sys
 import threading
@@ -57,6 +59,7 @@ DB_CFG = dict(
 )
 
 _HISTORY_PROVIDER_LOCAL = threading.local()
+_CHECKPOINT_SCHEMA = "adj_factor_per_security_checkpoint_v1"
 
 
 def _load_tushare():
@@ -140,7 +143,8 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
 
 def _get_max_trade_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(trade_date) FROM market.adj_factor")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(trade_date) FROM market.adj_factor WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -274,6 +278,8 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _insert_adj_factor_init(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = "INSERT INTO market.adj_factor (ts_code, trade_date, adj_factor) VALUES %s"
@@ -295,6 +301,8 @@ def _insert_adj_factor_init(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def _upsert_adj_factor(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = (
@@ -320,19 +328,166 @@ def _upsert_adj_factor(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def _fetch_adj_factor_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     ymd = trade_date.strftime("%Y%m%d")
     df = pro.adj_factor(trade_date=ymd)
     rows: List[Dict[str, Any]] = []
+    codes = set()
     if df is not None and not df.empty:
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
+            code = str(row.get("ts_code") or "").strip().upper()
+            if not code or code in codes or str(row.get("trade_date") or "") != ymd:
+                raise ValueError("adj_factor source has an invalid/duplicate security-date identity")
+            value = row.get("adj_factor")
+            if isinstance(value, bool) or value is None or not math.isfinite(float(value)) or float(value) <= 0:
+                raise ValueError("adj_factor source must be finite and positive")
+            codes.add(code)
             rows.append(
                 {
                     "trade_date": trade_date,
-                    "ts_code": row.get("ts_code"),
-                    "adj_factor": row.get("adj_factor"),
+                    "ts_code": code,
+                    "adj_factor": value,
                 }
             )
+    if not rows:
+        raise RuntimeError(f"adj_factor {trade_date}: empty provider response is not a completed trading day")
     return rows
+
+
+def _trading_dates(conn, start: dt.date, end: dt.date) -> List[dt.date]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT cal_date,is_trading FROM market.trading_calendar "
+                    "WHERE cal_date BETWEEN %s AND %s ORDER BY cal_date", (start, end))
+        calendar = cur.fetchall()
+    if {r[0] for r in calendar} != set(_date_range(start, end)):
+        raise RuntimeError("adj_factor requested range has an unknown trading calendar")
+    return [day for day, is_trading in calendar if is_trading]
+
+
+def _resume_checkpoint(conn, end_date: dt.date, job_id) -> Dict[str, Any]:
+    """Resume only an unfinished same-day collection, never a new day's audit."""
+    with conn.cursor() as cur:
+        cur.execute("""SELECT status,summary->'adj_factor_checkpoint',job_id FROM market.ingestion_jobs
+            WHERE summary->>'dataset'='adj_factor' AND summary->>'mode'='incremental'
+              AND summary#>>'{adj_factor_checkpoint,end_date}'=%s AND job_id<>%s AND created_at>=CURRENT_DATE
+            ORDER BY created_at DESC LIMIT 1""", (end_date.isoformat(), job_id))
+        row = cur.fetchone()
+    if not row or row[0] != "failed" or not isinstance(row[1], dict):
+        return {}
+    checkpoint = row[1]
+    if checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA or checkpoint.get("end_date") != end_date.isoformat():
+        return {}
+    return {"completed": {str(k): str(v) for k, v in checkpoint.get("completed", {}).items()},
+            "collection_id": str(checkpoint.get("collection_id") or row[2]),
+            "collection_started_at": checkpoint.get("collection_started_at")}
+
+
+def _record_history_state(conn, day: dt.date, status: str, *, failures=(), job_id=None) -> None:
+    """Reuse the existing partition metadata; no extra table or success authority."""
+    from backend.services.data_integrity.repository import schema_installed, enqueue_validation, IntegrityRepository
+    if not schema_installed(conn):
+        return
+    previous = conn.autocommit
+    if previous:
+        conn.autocommit = False
+    try:
+        IntegrityRepository().ensure_partition(conn, "adj_factor", day)
+        value = {"status": status, "end_date": day.isoformat(), "job_id": str(job_id),
+                 "failed_symbols": sorted({f["symbol"] for f in failures})}
+        with conn.cursor() as cur:
+            cur.execute("""SELECT metadata->'adj_factor_history' FROM market.dataset_date_refresh_audit
+                WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db' FOR UPDATE""", (day,))
+            row = cur.fetchone()
+            previous_value = (row[0] if row else None) or {}
+            if all(previous_value.get(key) == value[key] for key in ("status", "end_date", "failed_symbols")):
+                conn.commit()
+                return
+            cur.execute("""UPDATE market.dataset_date_refresh_audit SET
+                metadata=COALESCE(metadata,'{}'::jsonb)||jsonb_build_object('adj_factor_history',%s::jsonb),
+                validated_revision=NULL,validation_id=NULL,validation_status='UNVERIFIED'
+                WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db'""",
+                (json.dumps(value), day))
+        enqueue_validation(conn, "adj_factor", day)
+        # Fence validators of the previous verdict without inventing a change
+        # to physical facts. Lock order remains partition, then persistent target.
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE market.data_sync_targets SET target_status='pending',
+                next_retry_at=clock_timestamp(),metadata=metadata-'lease_token'-'lease_until',
+                updated_at=clock_timestamp() WHERE dataset='adj_factor' AND target_date=%s
+                AND data_source='canonical_db' AND target_scope->>'operation'='VALIDATE_ONLY'""", (day,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if previous:
+            conn.autocommit = True
+
+
+def run_history_ingestion(conn, args, job_id, end_date: dt.date) -> Dict[str, Any]:
+    repository = PostgresAdjFactorHistoryRepository(conn)
+    with repository.writer_lock():
+        # A historical retry must never replace a prefix below a newer local suffix.
+        effective_end = max(end_date, _get_max_trade_date(conn) or end_date)
+        full_scope = not args.history_reconcile_symbol
+        dry_run = args.history_reconcile_dry_run
+        seed = {} if dry_run else _resume_checkpoint(conn, effective_end, job_id)
+        completed = seed.get("completed", {})
+        from backend.services.data_integrity.stock_scope import is_supported_stock_code
+        completed = {code: identity for code, identity in completed.items() if is_supported_stock_code(code)}
+        collection_id = seed.get("collection_id") or str(job_id)
+        collection_started_at = seed.get("collection_started_at") or dt.datetime.now(dt.timezone.utc).isoformat()
+        last_flush = 0.0
+        latest = {}
+
+        def checkpoint(value, *, force=False):
+            nonlocal last_flush, latest
+            latest = {"schema_version": _CHECKPOINT_SCHEMA, **value, "collection_id": collection_id,
+                      "collection_started_at": collection_started_at}
+            if dry_run:
+                return
+            now = time.monotonic()
+            done = len(value["completed"])+len(value["failures"])
+            if not force and now-last_flush < 30:
+                return
+            last_flush = now
+            counters = {"unit": "security", "total": value["total"], "done": done,
+                        "success": len(value["completed"]), "failed": len(value["failures"]),
+                        "pending": value["total"]-done, "inserted_rows": value["written_row_count"]}
+            payload = {"adj_factor_checkpoint": latest, "counters": counters,
+                       "progress": round(100 * done/value["total"], 2) if value["total"] else 0}
+            with conn.cursor() as cur:
+                cur.execute("""UPDATE market.ingestion_jobs SET summary=COALESCE(summary,'{}'::jsonb)||%s::jsonb
+                    WHERE job_id=%s""", (json.dumps(payload), job_id))
+            print(f"[PROGRESS] adj_factor checked={done}/{value['total']} "
+                  f"failed={len(value['failures'])} written={value['written_row_count']}", flush=True)
+
+        try:
+            receipt = AdjFactorHistoryReconciler(
+                repository=repository, provider_factory=_history_provider_factory,
+                workers=args.history_reconcile_workers,
+                calls_per_minute=args.history_reconcile_rate_per_minute,
+                max_pages=args.history_reconcile_max_pages,
+            ).reconcile(end_date=effective_end, symbols=args.history_reconcile_symbol,
+                        dry_run=dry_run, independent=True, progress=checkpoint, completed=completed)
+            if latest and not dry_run:
+                checkpoint(latest, force=True)
+            receipt["collection_id"] = collection_id
+            receipt["collection_started_at"] = collection_started_at
+            receipt["collection_finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            receipt["source_observation_policy"] = "per_security_stable_reads_same_collection_checkpoints"
+            if full_scope and not dry_run:
+                _record_history_state(conn, end_date, "PARTIAL" if receipt["failures"] else "COMPLETE",
+                                      failures=receipt["failures"], job_id=job_id)
+            return receipt
+        except Exception:
+            if latest and not dry_run:
+                checkpoint(latest, force=True)
+            if full_scope and not dry_run:
+                _record_history_state(conn, end_date, "INTERRUPTED", job_id=job_id)
+            raise
 
 
 def run_ingestion(
@@ -345,7 +500,7 @@ def run_ingestion(
     batch_sleep: float,
 ) -> Dict[str, Any]:
     stats: Dict[str, Any] = {"total_days": 0, "success_days": 0, "failed_days": 0, "inserted_rows": 0}
-    days = _date_range(start_date, end_date)
+    days = _trading_dates(conn, start_date, end_date)
     stats["total_days"] = len(days)
     for idx, d in enumerate(days, start=1):
         try:
@@ -416,9 +571,14 @@ def main() -> None:
     else:
         end_date = today
 
-    with psycopg2.connect(**DB_CFG) as conn:
+    # psycopg2's connection context starts a transaction even in autocommit
+    # mode. The repository owns fact/checkpoint/verdict transactions; this
+    # outer scope owns only connection lifetime and must not roll them back.
+    with closing(psycopg2.connect(**DB_CFG)) as conn, ExitStack() as stack:
         # 启用 autocommit，同时在 run_ingestion 中对进度更新显式调用 conn.commit()
         conn.autocommit = True
+        # Acquire before touching job ownership, not only before fact writes.
+        stack.enter_context(PostgresAdjFactorHistoryRepository(conn).writer_lock())
         pro = pro_api()
 
         if mode == "init":
@@ -450,11 +610,6 @@ def main() -> None:
             print(f"[ERROR] unsupported mode: {mode}")
             sys.exit(1)
 
-        if mode == "init" and args.truncate:
-            with conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE market.adj_factor")
-            print("[WARN] TRUNCATE market.adj_factor executed before full adj_factor ingestion")
-
         job_summary = {
             "dataset": "adj_factor",
             "mode": mode,
@@ -478,17 +633,10 @@ def main() -> None:
                     "start mandatory no-LLM adj_factor complete-history reconciliation; "
                     "this is the only incremental market.adj_factor write path",
                 )
-                history_receipt = AdjFactorHistoryReconciler(
-                    repository=PostgresAdjFactorHistoryRepository(conn),
-                    provider_factory=_history_provider_factory,
-                    workers=args.history_reconcile_workers,
-                    calls_per_minute=args.history_reconcile_rate_per_minute,
-                    max_pages=args.history_reconcile_max_pages,
-                ).reconcile(
-                    end_date=end_date,
-                    symbols=args.history_reconcile_symbol,
-                    dry_run=args.history_reconcile_dry_run,
-                )
+                history_receipt = run_history_ingestion(conn, args, job_id, end_date)
+                if history_receipt.get("failures"):
+                    _finish_job(conn, job_id, "failed", {"history_reconciliation": history_receipt})
+                    raise RuntimeError(f"adj_factor history unresolved: {history_receipt['failed_symbols']}")
                 _log(
                     conn,
                     job_id,
@@ -506,19 +654,16 @@ def main() -> None:
                     "inserted_rows": history_receipt["written_row_count"],
                 }
             else:
-                stats = run_ingestion(
-                    conn,
-                    pro,
-                    mode,
-                    start_date,
-                    end_date,
-                    job_id,
-                    args.batch_sleep,
-                )
+                with PostgresAdjFactorHistoryRepository(conn).writer_lock():
+                    if args.truncate:
+                        with conn.cursor() as cur:
+                            cur.execute("TRUNCATE TABLE market.adj_factor")
+                    stats = run_ingestion(conn, pro, mode, start_date, end_date, job_id, args.batch_sleep)
                 if stats["failed_days"]:
                     raise RuntimeError(f"adj_factor ingestion has {stats['failed_days']} failed date batches")
             # 更新 data_stats.last_updated_at，仅针对 adj_factor
-            _touch_data_stats_last_updated(conn)
+            if not (mode == "incremental" and args.history_reconcile_dry_run):
+                _touch_data_stats_last_updated(conn)
             # 结束时写一条总览日志，汇总成功/失败天数与插入行数
             _log(
                 conn,

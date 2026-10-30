@@ -11,6 +11,9 @@ from .generic_daily_price_input_v1 import ROSTER, _records
 from .lstm_spo_shadow_v1 import BINDING, PROGRAM, RELEASE, TARGET, TZ, clock, frame
 from .multiperiod_top10_5td_inputs_v1 import IDENTITY, INPUT_FEATURES, STOCK_FEATURES, make_finance
 from .spo_top10_5td_v1 import sha
+from backend.services.data_integrity.inputs import (
+    InputReadinessError, check_binding, partition_pins, verify_capture, verify_current, verify_partition_refs,
+)
 
 
 def top50(run, artifact, publication):
@@ -134,6 +137,7 @@ class LstmSpoShadowSource:
             StrategyPackageSelectionArtifactRepository, selection_artifact_runtime_hash_v2,
         )
         started = self.now()
+        published = datetime.fromisoformat(publication["created_at"])
         with self.connection() as connection:
             @contextmanager
             def pinned():
@@ -147,7 +151,8 @@ class LstmSpoShadowSource:
                     or version.summary_json.get("selection_run_id") != publication["selection_run_id"]
                     or context.get("decision_as_of_trade_date") != publication["decision_date"]
                     or context.get("target_trade_date") != publication["target_date"]
-                    or version.created_at.isoformat() != publication["created_at"]
+                    or published.utcoffset() is None or version.created_at.utcoffset() is None
+                    or version.created_at != published
                     or version.created_at > started):
                 raise ValueError("original publication reference differs")
             run = SelectionCenterRepository(conn_factory=pinned).get_run(publication["selection_run_id"])
@@ -161,8 +166,23 @@ class LstmSpoShadowSource:
                 trade_date=run.trade_date, data_source=run.data_source, runtime_config_hash=digest)
             if artifact is None or artifact.created_at > run.completed_at:
                 raise ValueError("original configuration's score asset is absent or newer than the native run")
+            bindings = (config.get("selection_artifact_config") or {}).get("input_readiness_by_package") or {}
+            baseline_binding = bindings.get(TARGET["package_id"])
+            check_binding(baseline_binding)
+            published_binding = (version.summary_json.get("input_readiness") or {}).get(TARGET["package_id"], {})
+            if published_binding.get("binding_sha256") != baseline_binding["binding_sha256"]:
+                raise InputReadinessError("原始推荐名单缺少同版本输入绑定")
+            captured = (artifact.metadata.get("artifact_input_context") or {}).get("input_capture")
+            verify_capture(baseline_binding, captured)
+            if captured.get("readiness_binding_sha256") != baseline_binding["binding_sha256"]:
+                raise InputReadinessError("原始分数资产输入绑定不符")
+            verify_current(connection, bindings)
             roster = top50(run, artifact, publication)
-        features, price_receipt = GenericDailyReadonlyDBInputV1(session_factory=self.session_factory, now=self.now).load_day(
+        def check_extra(connection, dates):
+            verify_current(connection, bindings)
+            return extra_input_capture(connection, dates)
+        features, price_receipt = GenericDailyReadonlyDBInputV1(session_factory=self.session_factory, now=self.now,
+            integrity_check=check_extra).load_day(
             decision_date=date.fromisoformat(publication["decision_date"]), target_date=date.fromisoformat(publication["target_date"]),
             candidates=roster.loc[:, ROSTER], metadata=dict(package_id=TARGET["package_id"], run_id=run.run_id,
                 list_version_id=version.list_version_id, universe_identity=run.runtime_config.get("universe_selection")))
@@ -174,8 +194,16 @@ class LstmSpoShadowSource:
             score_binding="ORIGINAL_CONFIG_UNIQUE_ASSET_PLUS_CONSUMED_SCORE_PARITY", price=price_receipt,
             missing_by_field={name: int(inputs[name].isna().sum()) for name in INPUT_FEATURES},
             original_top50_sha256=sha(_records(roster)), native_list_changed=False, outcomes_read=False,
-            historical_vintage_proven=False, eod_ingestion_completeness_attested=False)
+            historical_vintage_proven=False, eod_ingestion_completeness_attested=True,
+            baseline_input_bindings=bindings)
         return inputs, receipt
+
+    def verify_capture(self, receipt):
+        with self.connection() as connection:
+            verify_current(connection, receipt["baseline_input_bindings"])
+            extra = receipt["price"]["input_readiness"]
+            verify_partition_refs(extra["partition_refs"], partition_pins(connection,
+                date.fromisoformat(extra["start"]), date.fromisoformat(extra["end"]), EXTRA_DATASETS))
 
     def finance(self, prediction):
         """Calendar-only maturity check precedes all D..H price/limit/suspension reads."""
@@ -227,3 +255,24 @@ class LstmSpoShadowSource:
             suspension_sha256=sha([[s, str(day), kind, timing] for s, day, kind, timing in suspensions]),
             read_after_maturity=True, actual_fill_proven=False, database_write=False)
         return finance, receipt
+
+
+EXTRA_DATASETS = ["kline_daily_raw", "adj_factor", "index_daily"]
+
+
+def extra_input_capture(connection, dates):
+    """The unchanged nine features need twenty sessions, including the benchmark."""
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    dates = [str(d) for d in dates]
+    if len(dates) != 20 or dates != sorted(set(dates)):
+        raise InputReadinessError("重排序输入需精确二十个交易日")
+    rows = partition_pins(connection, date.fromisoformat(dates[0]), date.fromisoformat(dates[-1]), EXTRA_DATASETS)
+    by_key = {(r["dataset"], r["trade_date"]): r for r in (rows or [])}
+    refs = [{"dataset": dataset, "fact_date": day,
+        "data_revision": by_key.get((dataset, day), {}).get("data_revision"),
+        "validation_id": by_key.get((dataset, day), {}).get("validation_id"),
+        "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION}
+        for day in dates for dataset in EXTRA_DATASETS]
+    verify_partition_refs(refs, rows)
+    return dict(start=dates[0], end=dates[-1], partition_refs=refs,
+        snapshot_kind="REPEATABLE_READ_READ_ONLY", historical_first_availability_claimed=False)

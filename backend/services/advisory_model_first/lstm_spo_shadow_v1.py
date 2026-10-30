@@ -173,6 +173,7 @@ class LstmSpoShadowService:
         if (not inputs[KEY[0]].eq(pd.Timestamp(d)).all() or not inputs[KEY[1]].eq(pd.Timestamp(t)).all()):
             raise ValueError("prediction input dates differ from frozen publication")
         prediction = predict_current(inputs, checked_model((self.root / "model.json").read_bytes()))
+        self._source().verify_capture(receipt)
         observed = self.now()
         if observed >= clock(t, 9, 30):
             raise ValueError("prediction finished after target open; no retrospective capture")
@@ -248,10 +249,20 @@ class LstmSpoShadowService:
                 error_path = self.root / "failures" / day / (spo.sha(failures) + ".json")
                 if not error_path.exists():
                     publish(error_path, result)
+            waiting = [r for r in results if r["status"] == "WAITING_DATA"]
+            if waiting:
+                day = self.now().astimezone(TZ).date().isoformat()
+                wait_path = self.root / "waiting" / day / (spo.sha(waiting) + ".json")
+                if not wait_path.exists():
+                    publish(wait_path, result)
             return result
 
     @staticmethod
     def _failure(stage, error, **context):
+        from backend.services.trading_core.errors import DataUnavailableError
+        if isinstance(error, DataUnavailableError):
+            return dict(status="WAITING_DATA", stage=stage, reason_code=error.error_code,
+                        message=str(error), context=error.context, **context)
         return dict(status="FAILED", stage=stage, error_type=type(error).__name__, message=str(error), **context)
 
     def status(self, *, program_id, target_date=None):
@@ -280,9 +291,16 @@ class LstmSpoShadowService:
                 details = dict(**day, predictions=p["predictions"], source_receipt=p["source_receipt"])
         complete = [d["evaluation"] for d in days if d["evaluation"]["status"] == "COMPLETE"]
         failures = sorted((self.root / "failures").glob("*/*.json"), key=lambda p: p.stat().st_mtime)
+        waits = sorted((self.root / "waiting").glob("*/*.json"), key=lambda p: p.stat().st_mtime)
+        last_waiting = read_packet(waits[-1]) if waits else None
+        if last_waiting:
+            finished = {d["decision_date"] for d in days} | {p.parent.name for p in (self.root / "days").glob("*/missed.json")}
+            if all(r.get("decision_date") in finished for r in last_waiting["results"] if r["status"] == "WAITING_DATA"):
+                last_waiting = None
         return dict(status="SHADOW_ONLY" if enabled() else "PAUSED", program_id=PROGRAM, release=release, days=days, selected=details,
                     captured_days=len(days), complete_days=len(complete),
                     mean_delta_bps=sum(v["delta_bps"] for v in complete)/len(complete) if complete else None,
                     missed=[read_packet(p) for p in sorted((self.root / "days").glob("*/missed.json"))],
                     last_failure=read_packet(failures[-1]) if failures else None,
+                    last_waiting=last_waiting,
                     independent_economic_confirmation=False, production_ranking_replaced=False)

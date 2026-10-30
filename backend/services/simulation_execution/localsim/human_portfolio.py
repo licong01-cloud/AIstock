@@ -188,6 +188,8 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                                        symbol=plan.symbol, side=plan.side,
                                        visible_at=decision.advice_available_at or decision.as_of,
                                        valid_until=min(plan.valid_until, decision.valid_until))
+                action = queue.revalidate_opportunity(action.action_id, decision=decision, as_of=clock,
+                                                     plan_valid_until=plan.valid_until)
                 schedule(action.ready_at)
         # Existing orders match independently; new human orders cannot use this bar.
         any_fill = False

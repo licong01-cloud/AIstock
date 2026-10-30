@@ -1634,6 +1634,14 @@ class InferenceEngine:
                 raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
             task_dir = self.assets_root / task_id
 
+        input_readiness = manifest.get("input_readiness")
+        if input_readiness is not None:
+            from .services.data_integrity.inputs import check_binding, InputReadinessError
+            check_binding(input_readiness)
+            if self.input_session is not None or actual_date.date().isoformat() != input_readiness["data_date"]:
+                raise InputReadinessError("bound daily inference requires the exact database decision date")
+            allow_external_market_fallback = False
+            universe_ensure = False
         source_route = getattr(self.input_session, "source_plan_route", None)
         if source_route is not None:
             from .services.advisory_historical_range.input_source_plan import session_pit_identity
@@ -1742,6 +1750,11 @@ class InferenceEngine:
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
         required_window = (self.required_window_resolver or get_required_data_window)(factor_order) + sequence_length - 1
+        if input_readiness is not None:
+            pinned_window = input_readiness["dependencies"]["window_trading_days"] - 5
+            if pinned_window < required_window:
+                raise InputReadinessError("model window exceeds frozen input readiness")
+            required_window = pinned_window
         start_date, start_date_source = self._resolve_inference_start_date(
             actual_date, required_window, buffer_days=5
         )
@@ -1763,7 +1776,8 @@ class InferenceEngine:
         # immutable source; neither kind silently rebinds a frozen task.
         from .services.data_integrity.inputs import capture_inputs
         capture = self.input_session.capture if self.input_session is not None else capture_inputs
-        with capture(start_date.date(), actual_date.date()) as input_capture:
+        capture_options = {"datasets": list(input_readiness["dependencies"]["datasets"])} if input_readiness is not None else {}
+        with capture(start_date.date(), actual_date.date(), **capture_options) as input_capture:
             # The earlier call may have prepared an explicit legacy pool. Actual
             # membership, prices and fundamentals are captured together here.
             universe = self._get_default_universe_excluding_st(
@@ -1772,6 +1786,13 @@ class InferenceEngine:
                 input_capture = {**input_capture, "pit_identity": resolved_pit_identity.as_dict(),
                     "universe_sha256": _inference_receipt_sha256(sorted(universe)),
                     "external_fallback_allowed": allow_external_market_fallback}
+            if input_readiness is not None:
+                from .services.data_integrity.inputs import verify_capture, verify_current
+                verify_capture(input_readiness, input_capture)
+                # get_conn borrows capture_inputs' snapshot; no second source view.
+                with get_conn() as captured_connection:
+                    verify_current(captured_connection, {input_readiness["binding_id"]: input_readiness})
+                input_capture["readiness_binding_sha256"] = input_readiness["binding_sha256"]
             cache = get_selection_data_cache() if use_selection_data_cache and self.input_session is None else None
             if input_capture is None or not input_capture.get("ledger_available"):
                 cache = None  # untracked DB cannot safely certify a legacy cache
@@ -1803,6 +1824,9 @@ class InferenceEngine:
                     raise ValueError("获取历史数据为空")
                 if cache is not None:
                     cache.put(actual_date.date(), universe, df_history, df_fund_raw, source_identity=cache_identity)
+            if input_readiness is not None:
+                from .services.data_integrity.advisory_scope import verify_missing_chip_values
+                verify_missing_chip_values(input_readiness, df_fund_raw)
             self.last_input_capture = input_capture
         timings.mark("market_and_fundamental_read")
         

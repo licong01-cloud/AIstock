@@ -750,12 +750,11 @@ def local_data_integrity_ui(session: nox.Session) -> None:
     """Calendar UI with existing prebuilt dependencies and X-only test runtime."""
     if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
         session.error("Calendar UI requires prebuilt dependencies; no installation is authorized")
-    task_temp = Path(os.environ.get("RUNNER_TEMP") or ("X:/AIstock_temp/DATA_PREPARATION/calendar-ui"
-        if os.name == "nt" else str(ROOT / "tmp" / "calendar-ui")))
-    task_temp.mkdir(parents=True, exist_ok=True)
+    # CI already verified job-owned X-only TEMP/TMP/TMPDIR. RUNNER_TEMP can
+    # reside on F; replacing these values would violate the frontend contract.
     session.run("node", "frontend/node_modules/@playwright/test/cli.js", "test",
                 "--config=frontend/tests/local-data-integrity.config.ts",
-                env=_env({"TEMP": str(task_temp), "TMP": str(task_temp)}), external=True)
+                env=_env(), external=True)
 
 
 @nox.session(venv_backend="none")
@@ -1446,6 +1445,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_tushare_sync_engine.py",
         "backend/tests/test_report_rc_data.py",
         "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+        "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
         "backend/tests/scripts/test_repair_local_sync_incident.py",
         "backend/tests/test_sw_industry_history_store.py",
         "backend/tests/test_etf_share_size_source.py",

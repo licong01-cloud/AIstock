@@ -1,0 +1,332 @@
+{
+  "actual": "首日原始业务事实一致；第二日运行身份变化并造成排队峰值31与29等差异。共享Reader完整市场对象与来源pins已由owner验收，问题由LocalSIM身份绑定复现。",
+  "allowed_write_scope": [
+    "backend/services/simulation_execution/localsim/dual_mode_research.py",
+    "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+    "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+    "docs/analysis/localsim_batch_reader_acceptance_20261028.md",
+    "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2112",
+  "closed_at": "2026-10-29T05:10:49Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-28T04:32:47.411956Z",
+  "description": "首日原始业务事实一致；第二日运行身份变化并造成排队峰值31与29等差异。共享Reader完整市场对象与来源pins已由owner验收，问题由LocalSIM身份绑定复现。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261028-1ee211636a13",
+      "timestamp": "2026-10-28T04:32:47.411956Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/pair-difference-inventory.json",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/cross-root-repro-before.xml",
+    "X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/fresh-process-preflight.json",
+    "X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/strict-equivalence-receipt.json",
+    "X:/AIstock_temp/localsim-batch-reader-fixed-acceptance-20261028/final-consumer-acceptance.json",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-focused-matrix.xml",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-l0-quality.json",
+    "X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/bug2112-l0-guardrails.json"
+  ],
+  "expected": "相同冻结请求、账户、日期在不同输出目录及合法资源配置下具有相同逻辑日身份，完整账户业务状态和排队指标一致；物理前缀篡改仍失败，旧研究不得用新源码恢复。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md",
+      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+      "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json"
+    ],
+    "added_files": [
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+    ],
+    "changed_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md",
+      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+      "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_execution/localsim/dual_mode_research.py",
+        "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+        "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+        "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "simulation.layer_foundation",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "selection_center",
+        "strategy_package",
+        "docs.architecture",
+        "validation.module_quality",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/analysis/localsim_batch_reader_acceptance_20261028.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_execution/localsim/dual_mode_research.py",
+        "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+        "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+        "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+      "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+      "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+    ]
+  },
+  "first_seen_at": "2026-10-28T04:32:47.411956Z",
+  "fix_branch": null,
+  "fix_commit": "6bc04ef5d162929188d616bb161dfadc6c3cf736",
+  "fixed_at": "2026-10-29T05:10:49Z",
+  "github_issue_number": 6796,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6796",
+  "last_seen_at": "2026-10-28T04:32:47.411956Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6864",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest X:/AIstock_temp/localsim-batch-reader-acceptance-20261028/test_cross_root_repro.py -q -x",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2112",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1f664f58639afe39",
+    "recorded_at": "2026-10-29T05:11:41.591279Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "34131558ebf7f88e6582e282804a9adf14267440",
+    "source_merge_commit": "6bc04ef5d162929188d616bb161dfadc6c3cf736",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6864",
+    "validation_evidence": [
+      "gh pr view 6864 --json state,headRefOid,mergeable,statusCheckRollup -> passed: final head CI verdict SUCCESS"
+    ],
+    "validation_evidence_digest": "f68435f376085d7e32083ad4783b8dc7b7f92c369426f8d6a27172ed6795f4cc"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM多日研究的逻辑身份受输出路径和前日审计时钟影响，破坏跨资源模式复现",
+  "trigger_condition": {
+    "fingerprint": "1ee211636a1316e9082b5649",
+    "source_event_id": "FE-20261028-1ee211636a13"
+  },
+  "validation_evidence": [
+    "gh pr view 6864 --json state,headRefOid,mergeable,statusCheckRollup -> passed: final head CI verdict SUCCESS"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "platform_api",
+        "simulation_core"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "platform_api",
+          "simulation_core"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

@@ -4,7 +4,7 @@ import logging
 import hashlib
 import os
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -76,6 +76,7 @@ class AdvisoryForwardService:
         entry_price_service: Any | None = None,
         entry_value_service: Any | None = None,
         lstm_shadow_service: Any | None = None,
+        input_readiness: Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
@@ -87,6 +88,8 @@ class AdvisoryForwardService:
         self.entry_price_service = entry_price_service or AdvisoryEntryPriceDailyService(now_provider=now_provider)
         self.entry_value_service = entry_value_service
         self.lstm_shadow_service = lstm_shadow_service
+        from .input_readiness import AdvisoryInputReadiness
+        self.input_readiness = input_readiness or AdvisoryInputReadiness()
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
         if after_close_hour is None and after_close_minute is None:
             self.after_close_hour, self.after_close_minute = _after_close_time()
@@ -109,6 +112,12 @@ class AdvisoryForwardService:
         }
 
     def run_once(self) -> dict[str, Any]:
+        with self.repository.cycle_lock() as acquired:
+            if not acquired:
+                return {"status": "ALREADY_RUNNING", "publication_due": False, "results": []}
+            return self._run_once()
+
+    def _run_once(self) -> dict[str, Any]:
         now = self.now_provider().astimezone(SHANGHAI_TZ)
         results: list[dict[str, Any]] = []
         blocked_program_ids: set[str] = set()
@@ -134,6 +143,7 @@ class AdvisoryForwardService:
             except Exception as exc:
                 results.append(self._visible_failure(pending, stage="TARGET_OPEN_SETTLE", exc=exc))
                 blocked_program_ids.add(pending_program_id)
+        self._recover_pending_publications(now, results, blocked_program_ids)
         self._evaluate_mature_model_observations(results, on_or_before=now.date())
         if not self._publication_due(now):
             self._retry_one_model_observation(results)
@@ -183,6 +193,85 @@ class AdvisoryForwardService:
             "entry_value": self._entry_value_after_baseline(),
             "lstm_spo_shadow": self._lstm_shadow_after_baseline(),
         }
+
+    def recover_pending_publications(self, *, through: date, program_ids: list[str]) -> dict[str, Any]:
+        """Explicit bounded recovery using the same path as the daily scheduler."""
+        now = self.now_provider().astimezone(SHANGHAI_TZ)
+        if through >= now.date() or not program_ids or len(set(program_ids)) != len(program_ids):
+            raise ValueError("recovery requires a past decision date and distinct explicit programs")
+        for pid in program_ids:
+            if not _scheduled(self.program_service.get_program(pid)):
+                raise ValueError("recovery requires enabled daily programs")
+        with self.repository.cycle_lock() as acquired:
+            if not acquired:
+                return {"status": "ALREADY_RUNNING", "results": []}
+            results: list[dict[str, Any]] = []
+            blocked: set[str] = set()
+            # Close already-published prior work before changing that program's
+            # recommendation sequence. Other programs remain independent.
+            for pending in self.repository.pending_settlements(on_or_before=now.date()):
+                pid = str(pending["program_id"])
+                if pid not in program_ids or pid in blocked or pending["decision_as_of_trade_date"] > through:
+                    continue
+                try:
+                    result = self._settle(pending)
+                except Exception as exc:
+                    result = self._visible_failure(pending, stage="TARGET_OPEN_SETTLE", exc=exc)
+                results.append(result)
+                if result.get("status") in {"WAITING_DATA", "FAILED"}:
+                    blocked.add(pid)
+            self._recover_pending_publications(now, results, blocked, through=through, program_ids=program_ids)
+            return {"status": "BLOCKED" if blocked else "COMPLETE", "through": through.isoformat(),
+                    "results": results, "blocked_program_ids": sorted(blocked)}
+
+    def _recover_pending_publications(
+        self, now: datetime, results: list[dict[str, Any]], blocked: set[str], *,
+        through: date | None = None, program_ids: list[str] | None = None,
+    ) -> None:
+        pending_rows = self.repository.pending_publications(before=now.date(), program_ids=program_ids)
+        for pending in sorted(pending_rows, key=lambda row: (row["decision_as_of_trade_date"], row["program_id"])):
+            pid = str(pending["program_id"])
+            decision = pending["decision_as_of_trade_date"]
+            if through is not None and decision > through:
+                continue
+            if pending.get("newer_published"):
+                results.append({"program_id": pid, "forward_run_id": pending["forward_run_id"],
+                                "status": "SKIPPED_SUPERSEDED_BY_PUBLISHED", "stage": "CROSS_DAY_RECOVERY",
+                                "decision_as_of_trade_date": decision.isoformat()})
+                continue
+            if pid in blocked:
+                results.append({"program_id": pid, "forward_run_id": pending["forward_run_id"],
+                                "status": "SKIPPED_PREVIOUS_PUBLICATION_PENDING", "stage": "CROSS_DAY_RECOVERY"})
+                continue
+            try:
+                program = self.program_service.get_program(pid)
+                if not _scheduled(program):
+                    raise DataUnavailableError("pending publication program is no longer enabled for daily review")
+                binding = self.program_service.active_binding(pid)
+                if (program.version != pending["program_version"]
+                        or binding["binding_version_id"] != pending["binding_version_id"]):
+                    raise DataUnavailableError("historical pending publication binding differs from the active binding")
+                target = self.calendar.next_trading_day(decision, inclusive=False)
+                if target != pending["target_trade_date"]:
+                    raise DataUnavailableError("historical pending target date differs from the trading calendar")
+                result = self._publish(pid, decision_date=decision, target_date=target)
+                results.append({**result, "stage": "CROSS_DAY_RECOVERY", "decision_as_of_trade_date": decision.isoformat()})
+                if result.get("status") not in {"PUBLISHED", "IDEMPOTENT_REPLAY"}:
+                    blocked.add(pid)
+                    continue
+                committed = self.repository.get(str(pending["forward_run_id"]))["forward_run"]
+                if (committed["settlement_status"] not in {"SETTLED", "NOT_ENTERED"}
+                        and now >= datetime.combine(target, time(9, 30), SHANGHAI_TZ)):
+                    try:
+                        settlement = self._settle(committed)
+                    except Exception as exc:
+                        settlement = self._visible_failure(committed, stage="TARGET_OPEN_SETTLE", exc=exc)
+                    results.append(settlement)
+                    if settlement.get("status") in {"WAITING_DATA", "FAILED"}:
+                        blocked.add(pid)
+            except Exception as exc:
+                results.append(self._visible_failure(pending, stage="CROSS_DAY_RECOVERY", exc=exc))
+                blocked.add(pid)
 
     def _lstm_shadow_after_baseline(self) -> dict[str, Any]:
         try:
@@ -483,11 +572,14 @@ class AdvisoryForwardService:
                 "unpublished advisory forward attempt identity differs from the current Program binding"
             )
         publication_payload: dict[str, Any] | None = None
+        input_bindings = None
         try:
+            input_bindings = self.input_readiness.prepare(initial_binding["package_ids"], decision_date)
             program, binding, selection_run, runtime_config = self.program_service.prepare_forward_selection(
                 program_id,
                 decision_as_of_trade_date=decision_date,
                 target_trade_date=target_date,
+                input_bindings=input_bindings,
             )
             if (
                 program.version != initial_program.version
@@ -547,6 +639,8 @@ class AdvisoryForwardService:
                 finished_at=None,
                 created_by="advisory_forward",
             )
+            from .input_readiness import summaries
+            list_version.summary_json["input_readiness"] = summaries(input_bindings)
             try:
                 model_resolution = self._freeze_model_resolution(
                     program=program,
@@ -584,7 +678,9 @@ class AdvisoryForwardService:
                 "active_episode_state_hash": _active_episode_state_hash(active_episodes),
                 "program_snapshot": program_to_dict(program),
                 "items": [list_item_to_dict(item) for item in items],
+                "input_readiness": summaries(input_bindings),
             }
+            self.input_readiness.recheck(input_bindings)
             committed = self.repository.commit_publication(
                 forward_run_id=str(persisted["forward_run_id"]),
                 expected_program_version=program.version,
@@ -596,6 +692,16 @@ class AdvisoryForwardService:
                 publication_payload=publication_payload,
             )
         except Exception as exc:
+            if input_bindings and not isinstance(exc, DataUnavailableError):
+                from backend.services.data_integrity.inputs import InputReadinessError
+                try:
+                    self.input_readiness.recheck(input_bindings)
+                except InputReadinessError as changed:
+                    # A remote inference wrapper may report a generic provider
+                    # failure when a writer invalidated the captured version.
+                    exc = changed
+                except Exception:
+                    LOGGER.exception("input recheck failed while recording forward publication failure")
             failed = self.repository.mark_failure(
                 forward_run_id=str(persisted["forward_run_id"]),
                 stage="AFTER_CLOSE_PUBLISH",
@@ -609,7 +715,7 @@ class AdvisoryForwardService:
             )
             if _published_publication_matches(failed, publication_payload):
                 return self._resume_published_observation(failed)
-            raise
+            raise exc
         try:
             observation = self._model_observation(
                 forward_run_id=str(committed["forward_run_id"]),
@@ -617,7 +723,7 @@ class AdvisoryForwardService:
                 binding_version_id=binding.binding_version_id,
                 decision_date=decision_date,
                 target_date=target_date,
-                frozen_resolution=model_resolution,
+                frozen_resolution=dict(committed.get("model_resolution_json") or model_resolution),
                 selection_run_id=str(committed["selection_run_id"]),
                 review_run_id=str(committed["review_run_id"]),
                 list_version_id=str(committed["list_version_id"]),
@@ -653,6 +759,8 @@ class AdvisoryForwardService:
             "target_trade_date": target_date.isoformat(),
             "model_status": observation.status,
             "model_reason_code": observation.reason_code,
+            "settlement_status": committed.get("settlement_status"),
+            "publication_timing": (committed.get("run_payload_json") or {}).get("publication_timing"),
         }
 
     def _resume_published_observation(self, persisted: Mapping[str, Any]) -> dict[str, Any]:

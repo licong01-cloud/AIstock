@@ -18,7 +18,7 @@ function episode(index: number, p = "lstm") {
   return { episode_id: `episode-${index}`, symbol: index < 2 ? "600001.SH" : `600${String(index).padStart(3, "0")}.SH`, stock_name: index < 2 ? "重复入选股票" : `历史股票 ${index + 1}`, status: "EXITED", signal_date: "2026-10-12", effective_entry_date: "2026-10-13", effective_exit_date: "2026-10-20", exit_signal_date: "2026-10-19", entry_price: 18.5, exit_price: 17.8, current_rank: null, entry_rank: 1, exit_reason: index % 2 ? "STOP_LOSS" : "TAKE_PROFIT", holding_trading_days: 5, performance_state: "SETTLED", performance_reason_code: null, return_bps: index % 2 ? -410 : 620, return_kind: "REALIZED", progress: "ENDED", mark_date: "2026-10-27", mark_price: 17.8, source: index === 40 ? "UNKNOWN" : "FORWARD", binding_version_id: `${p}-binding`, metric_as_of_trade_date: "2026-10-27" };
 }
 const stocks = Array.from({ length: 8 }, (_, i) => ({ symbol: `60010${i}.SH`, stock_name: `当日股票 ${String.fromCharCode(65 + i)}`, episode_id: [0, 2, 6].includes(i) ? null : `episode-${i}`, rank: i + 1, membership: "IN_SCOPE", change: [0, 2, 6].includes(i) ? "NEW" : "CONTINUING", progress: [0, 2, 6].includes(i) ? "PENDING_ENTRY" : "TRACKING", consecutive_days: [0, 2, 6].includes(i) ? 1 : i + 1, reference_price: 42.18, reference_date: "2026-10-27", episode: [0, 2, 6].includes(i) ? undefined : { ...episode(i), status: "ACTIVE", progress: "TRACKING", return_kind: "UNREALIZED" } }));
-type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean };
+type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean };
 async function json(route: Route, body: unknown, status = 200) { await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }); }
 async function setup(page: Page, state: State) {
   await page.route("**/api/**", async route => {
@@ -26,8 +26,12 @@ async function setup(page: Page, state: State) {
     state.seen.push(`${request.method()} ${url.pathname}${url.search}`);
     expect(request.method()).toBe("GET");
     const resource = url.pathname.replace("/api/v1", "");
+    if (resource === api + "/quotes") {
+      const symbols = (url.searchParams.get("symbols") || "").split(",");
+      return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null }])) });
+    }
     if (resource.includes("/integrity/days/")) return json(route, { fact_date: target, all_sync_complete: false });
-    if (resource.endsWith("/reranking-shadow")) return json(route, { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
+    if (resource.endsWith("/reranking-shadow")) return json(route, { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, last_waiting: state.waiting ? { results: [{ status: "WAITING_DATA", decision_date: "2026-10-27", message: "输入分区未验证或已修订", context: { dataset: "index_daily", fact_date: "2026-10-27" } }] } : null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
     if (!resource.startsWith(api)) return json(route, { count: 0, items: [] });
     if (resource === api + "/overview") {
       if (state.fail) return json(route, { detail: { message: "读取失败，请重试" } }, 503);
@@ -36,6 +40,12 @@ async function setup(page: Page, state: State) {
     const parts = resource.slice((api + "/programs/").length).split("/"), p = parts[0], view = parts[1];
     if (state.hold && p === "lstm" && !view) await state.hold;
     if (!view) return json(route, { ...summary(p), program_id: state.wrongIdentity ? "wrong" : p });
+    if (view === "returns") {
+      if (state.dense) await new Promise(resolve => setTimeout(resolve, 200));
+      const symbols = (url.searchParams.get("symbols") || "").split(",");
+      return json(route, { schema_version: "advisory_display_quotes_v1", return_schema_version: "advisory_recommendation_returns_v1", program_id: p, list_version_id: url.searchParams.get("list_version_id"), items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, today_return_bps: symbol === "600102.SH" ? null : 500, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null,
+        recommendation: { segment_id: `${p}-${symbol}`, start_date: "2026-10-26", base_price: 42.18, known_through_date: target, end_date: symbol.startsWith("6002") ? target : null, end_price: symbol.startsWith("6002") ? 43 : null, return_bps: symbol === "600102.SH" ? null : symbol.startsWith("6002") ? 194.405 : 1000, state: symbol.startsWith("6002") ? "ENDED" : "RECOMMENDED", valuation_date: target, reason_code: symbol === "600102.SH" ? "QUOTE_NOT_VALID_FOR_SEGMENT" : null } }])) });
+    }
     if (view === "readiness") return json(route, { program_id: p, data_date: "2026-10-27", status: "AVAILABLE", items: [{ consumer_ready: false, all_sync_complete: false }], errors: [] });
     if (state.conflict) return json(route, { detail: { reason_code: "SNAPSHOT_CHANGED", message: "读取期间数据已更新，请刷新后继续查看。" } }, 409);
     const limit = Number(url.searchParams.get("limit") || 20), offset = Number(url.searchParams.get("offset") || 0);
@@ -44,6 +54,7 @@ async function setup(page: Page, state: State) {
       if (p === "parent") return json(route, { ...envelope(p), status: "NO_CURRENT_LIST", items: [], total_count: 0, limit, offset, summary: null });
       const group = url.searchParams.get("group") || "IN_SCOPE";
       let items = group === "IN_SCOPE" ? stocks : group === "REMOVED" || group === "OUTSIDE_PENDING" ? ["I", "J"].map((name, i) => ({ ...stocks[i], symbol: `60020${i}.SH`, stock_name: `移出股票 ${name}`, membership: "OUTSIDE_PENDING", change: "REMOVED", progress: "WAITING_REVIEW", reason_code: "PENDING_TARGET_OPEN_REVIEW" })) : [];
+      if (state.dense && group === 'IN_SCOPE') items = Array.from({ length: 25 }, (_, i) => ({ ...stocks[i % stocks.length], symbol: `600${100 + i}.SH`, stock_name: `密集名单 ${i + 1}`, rank: i + 1 }));
       const change = url.searchParams.get("change"), q = url.searchParams.get("q");
       if (change) items = items.filter(row => row.change === change);
       if (q) items = items.filter(row => row.stock_name.includes(q));
@@ -62,6 +73,82 @@ async function setup(page: Page, state: State) {
 }
 const main = (page: Page) => page.getByTestId("advisory-workbench");
 
+test('dense recommendation rows do not refetch on quote-induced height changes', async ({ page }) => {
+  const state: State = { seen: [], dense: true };
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const row = main(page).getByRole('row').filter({ has: page.getByRole('button', { name: '密集名单 12', exact: true }) });
+  await row.scrollIntoViewIfNeeded();
+  await expect(row.getByTestId('advisory-recommendation-return')).toContainText('+10.00%');
+  // Observe real layout/IntersectionObserver callbacks; do not fake the visibility contract.
+  await page.waitForTimeout(5500);
+  const reads = state.seen.filter(url => url.includes('/returns?'));
+  expect(reads.length, 'initial visibility stabilization must not become a request loop').toBeLessThanOrEqual(6);
+  await expect(row.getByTestId('advisory-recommendation-return')).toContainText('+10.00%');
+});
+
+test("recommendation returns include new stocks without an episode and keep process returns separate", async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  const row = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "当日股票 A", exact: true }) });
+  await expect(row.getByTestId("advisory-current-price")).toContainText("¥46.40");
+  await expect(row.getByTestId("advisory-current-price")).toContainText("最近收盘");
+  await expect(row.getByTestId("advisory-recommendation-return")).toContainText("+10.00%");
+  await expect(row.getByTestId("advisory-today-change")).toContainText("+5.00%");
+  await expect(row.getByTestId("advisory-recommendation-base")).toContainText("¥42.18");
+  await expect(row).toContainText("新加入");
+  await expect(main(page)).not.toContainText("待进入");
+  await expect(row).not.toContainText("过程参考收益");
+  const missing = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "当日股票 C", exact: true }) });
+  await expect(missing.getByTestId("advisory-current-price")).toContainText("TDX暂无收盘价");
+  await expect(missing.getByTestId("advisory-recommendation-return")).toContainText("等待本段有效行情");
+  expect(state.seen.filter(s => s.includes("/returns")).every(s => s.startsWith("GET ") && s.includes("list_version_id="))).toBe(true);
+  const removed = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "移出股票 I", exact: true }) }).first();
+  await removed.scrollIntoViewIfNeeded();
+  await expect(removed.getByTestId("advisory-recommendation-return")).toContainText("已结束·冻结于 2026-10-28 开盘");
+  await main(page).getByRole("button", { name: "历史记录", exact: true }).click();
+  const old = main(page).getByRole("row").filter({ hasText: "重复入选股票" }).first();
+  await expect(old.getByTestId("advisory-current-price")).toContainText("¥46.40");
+  await expect(old).toContainText("+6.20%");
+  await expect(old).toContainText("已结束参考收益");
+});
+
+test("quote request failures remain visible and do not hide recommendation rows", async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.route("**/advisory/workbench/programs/lstm/returns?**", route => json(route, { detail: "TDX unavailable" }, 503));
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  const row = main(page).getByRole("row").filter({ has: page.getByRole("button", { name: "当日股票 A", exact: true }) });
+  await expect(row.getByTestId("advisory-current-price")).toContainText("行情或名单身份不可用，请刷新");
+  await expect(row.getByTestId("advisory-recommendation-return")).toContainText("推荐涨跌暂不可用");
+  await expect(row.getByRole("button", { name: "当日股票 A", exact: true })).toBeVisible();
+});
+
+test("polling removes previous returns when the pinned response identity changes", async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { seen: [] });
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  await page.clock.runFor(100);
+  const row = main(page).getByRole('row').filter({ has: page.getByRole('button', { name: '当日股票 A', exact: true }) });
+  await expect(row.getByTestId('advisory-recommendation-return')).toContainText('+10.00%');
+  await page.route('**/advisory/workbench/programs/lstm/returns?**', async route => {
+    await json(route, { schema_version: 'advisory_display_quotes_v1', return_schema_version: 'advisory_recommendation_returns_v1', program_id: 'wrong-program', list_version_id: 'wrong-list', items: {} });
+  });
+  await page.clock.runFor(15100);
+  await expect(row.getByTestId('advisory-recommendation-return')).toContainText('推荐涨跌暂不可用');
+  await expect(row.getByTestId('advisory-recommendation-return')).not.toContainText('+10.00%');
+  await expect(row.getByRole('button', { name: '当日股票 A', exact: true })).toBeVisible();
+});
+
+test("model waiting shows precise source reason without a task action", async ({ page }) => {
+  const state: State = { seen: [], waiting: true }; await setup(page, state);
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
+  await expect(main(page).getByText(/等待输入数据完成验证/)).toBeVisible();
+  await expect(main(page).getByText(/index_daily 2026-10-27/)).toBeVisible();
+  expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
+});
+
 test("overview exposes the five tasks, true old date and null samples; sidebar links to overview", async ({ page }) => {
   const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
   await expect(main(page).getByRole("heading", { name: "荐股总览" })).toBeVisible();
@@ -73,7 +160,7 @@ test("overview exposes the five tasks, true old date and null samples; sidebar l
   expect(state.seen.some(x => x.includes("model-shadow") || x.includes("reranking-shadow"))).toBe(false);
 });
 
-test("daily membership separates additions, continuing and removed; awaiting entry has no fake entry price", async ({ page }) => {
+test("daily membership separates additions and removals from strategy tracking", async ({ page }) => {
   const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory?program_id=lstm");
   await expect(main(page).getByRole("heading", { name: "当日推荐名单" })).toBeVisible();
   await expect(main(page).getByText("范围内 · 8 只", { exact: true })).toBeVisible();
@@ -82,7 +169,10 @@ test("daily membership separates additions, continuing and removed; awaiting ent
   await expect(main(page).getByRole("button", { name: "当日股票 B", exact: true })).toHaveCount(0);
   await main(page).getByRole("button", { name: "当日股票 A", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "股票荐股详情" }); await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(/尚未建立有效进入/)).toBeVisible();
+  await expect(dialog.getByTestId("advisory-recommendation-return")).toContainText("+10.00%");
+  await dialog.getByText("策略过程复盘 · 与名单累计涨跌分别计算", { exact: true }).click();
+  await expect(dialog.getByText(/尚无可关联的策略跟踪过程/)).toBeVisible();
+  await expect(dialog).not.toContainText("待进入");
   await page.keyboard.press("Escape"); await expect(dialog).toHaveCount(0);
   await expect(main(page).getByRole("heading", { name: /今日移出/ })).toBeVisible();
   expect(state.seen.some(x => x.includes("model-shadow"))).toBe(false);

@@ -20,6 +20,8 @@ MONEYFLOW_DATASET = "market.moneyflow_ts"
 SUPPORTED_SOURCE_DATASETS = frozenset(
     {
         "market.daily_basic",
+        "market.cyq_perf",
+        "market.bak_basic",
         "market.kline_daily_raw",
         MONEYFLOW_DATASET,
         "market.stk_limit",

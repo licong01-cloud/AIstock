@@ -1,12 +1,51 @@
 """Direct legacy writer contracts, without opening DB/network connections."""
 from contextlib import contextmanager
 from datetime import date
+import os
+from pathlib import Path
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import ingest_tushare_moneyflow_ts as moneyflow
 from scripts import sync_cninfo_anns_metadata as cninfo
 from backend.services.data_integrity import writes
+
+
+@pytest.mark.parametrize('module,functions', [
+    ('ingest_tushare_adj_factor', ['_insert_adj_factor_init', '_upsert_adj_factor']),
+    ('ingest_tushare_daily_basic', ['_upsert_daily_basic']),
+    ('ingest_tushare_moneyflow_ts', ['_upsert_moneyflow']),
+    ('ingest_tushare_stock_basic', ['_insert_stock_basic']),
+    ('ingest_tushare_stock_st', ['_upsert_stock_st']),
+    ('ingest_tushare_bak_basic', ['_upsert_bak_basic']),
+    ('ingest_tushare_cyq', ['upsert_cyq_perf', 'upsert_cyq_chips']),
+])
+def test_legacy_stock_writers_never_open_db_for_bse_only_payload(monkeypatch, module, functions):
+    import importlib
+    import dotenv
+    monkeypatch.setattr(dotenv, 'load_dotenv', lambda *_a, **_kw: None)
+    script = importlib.import_module('scripts.' + module)
+    # None is intentional: an unsupported-only payload must return before SQL,
+    # marks, factor normalization, or a source retry can happen.
+    for function in functions:
+        assert getattr(script, function)(None, [{'ts_code': '920296.BJ'}, {'ts_code': 'BJ430047'}]) == 0
+
+
+@pytest.mark.parametrize('name', ['ingest_incremental', 'ingest_full_daily_raw', 'ingest_full_minute'])
+def test_legacy_tdx_collectors_expand_all_to_shsz_and_reject_bse_before_io(monkeypatch, name):
+    import importlib
+    script = importlib.import_module('scripts.' + name)
+    queried = []
+    def fetch(_path, params=None):
+        queried.append(params['exchange'])
+        return {'data': {'codes': ['000001', '600000', '430047', '920296', '200001']}}
+    monkeypatch.setattr(script, 'http_get', fetch)
+    assert script.fetch_codes(['bj']) == [] and queried == []
+    assert script.fetch_codes(['all']) == ['000001.SZ', '600000.SH']
+    assert queried == ['sh', 'sz']
 
 
 class Connection:
@@ -19,7 +58,10 @@ class Connection:
 
 @pytest.mark.parametrize("changed", [False, True])
 def test_moneyflow_preserves_finite_values_and_marks_only_actual_changes(monkeypatch, changed):
+    from backend.services import sector_data_repair
     statements, markers = [], []
+    derived = []
+    monkeypatch.setattr(sector_data_repair, "mark_revision_dates", lambda _c, days, dataset: derived.append((dataset, days)))
     def execute(_cur, query, values, **_options):
         statements.append((query, values))
         return [(date(2026, 9, 1),)] if changed else []
@@ -33,6 +75,35 @@ def test_moneyflow_preserves_finite_values_and_marks_only_actual_changes(monkeyp
     assert "IS DISTINCT FROM" in query and "RETURNING trade_date" in query
     assert values[0][3] is None and values[0][-1] == -3.5
     assert markers == [("moneyflow_ts", [date(2026, 9, 1)] if changed else [])]
+    assert derived == ([("moneyflow_ts", [date(2026, 9, 1)])] if changed else [])
+
+
+def test_legacy_fact_and_sector_invalidation_share_one_transaction(monkeypatch):
+    from backend.services import sector_data_repair
+    class Conn(Connection):
+        autocommit = True
+        committed = False
+        rolled_back = False
+        def commit(self): self.committed = True
+        def rollback(self): self.rolled_back = True
+    conn = Conn()
+    monkeypatch.setattr(writes.extras, "execute_values", lambda *_a, **_kw: [(date(2026, 9, 1),)])
+    monkeypatch.setattr(writes, "mark_changed", lambda *_a, **_kw: None)
+    def failed_marker(*_a):
+        assert not conn.autocommit
+        raise RuntimeError("derived invalidation failed")
+    monkeypatch.setattr(sector_data_repair, "mark_revision_dates", failed_marker)
+    with pytest.raises(RuntimeError, match="derived invalidation"):
+        writes.changed_values(conn, "INSERT ... RETURNING trade_date", [(1,)], dataset="moneyflow_ts", source="test")
+    assert conn.rolled_back and not conn.committed and conn.autocommit
+
+
+def test_controlled_source_repair_sql_invalidates_only_affected_derived_dates():
+    marker = writes.sql_revision_marker("moneyflow_ts")
+    assert "sector_dependency_revision" in marker
+    assert "mark_data_integrity_changed('sector_data'" in marker
+    assert "2021-07-30" in marker
+    assert "sector_dependency_revision" not in writes.sql_revision_marker("adj_factor")
 
 
 def test_cninfo_metadata_only_retry_does_not_dirty_facts(monkeypatch):
@@ -47,6 +118,27 @@ def test_cninfo_metadata_only_retry_does_not_dirty_facts(monkeypatch):
     assert "IS DISTINCT FROM" in queries[0] and "RETURNING ann_date" in queries[0]
     assert "last_seen_at=NOW()" in queries[1]
     assert markers == [("anns_metadata", [])]
+
+
+@pytest.mark.parametrize('name', ['bak_basic', 'stock_st'])
+def test_legacy_stock_collectors_do_not_report_success_after_commit_failure(monkeypatch, name):
+    import importlib
+    script = importlib.import_module('scripts.ingest_tushare_' + name)
+    class FailingConnection:
+        rollbacks = 0
+        def commit(self):
+            raise OSError('commit failed')
+        def rollback(self):
+            self.rollbacks += 1
+    conn = FailingConnection()
+    monkeypatch.setattr(script, '_fetch_' + name + '_for_date', lambda *_a: [])
+    monkeypatch.setattr(script, '_upsert_' + name, lambda *_a: 0)
+    if hasattr(script, '_get_trading_days'):
+        monkeypatch.setattr(script, '_get_trading_days', lambda *_a: [date(2026, 10, 28)])
+    monkeypatch.setattr(script, '_update_job_progress', lambda *_a: None)
+    with pytest.raises(OSError, match='commit failed'):
+        script.run_ingestion(conn, None, 'incremental', date(2026, 10, 28), date(2026, 10, 28), None, 0)
+    assert conn.rollbacks == 1
 
 
 @pytest.mark.parametrize("script", ["scripts/import_minutes_gap.py", "scripts/import_minutes_to_db.py"])
@@ -180,3 +272,46 @@ def test_index_scan_published_only_after_all_queries_and_commits_succeed(monkeyp
         assert not calls
         if failure != "commit":
             assert not writes_seen
+
+
+def test_moneyflow_absolute_path_can_load_shared_contracts(tmp_path):
+    script = Path(moneyflow.__file__).resolve()
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    result = subprocess.run([sys.executable, "-c",
+        "import runpy; m=runpy.run_path("+repr(str(script))+"); "
+        "assert m['_upsert_moneyflow'](None,[{'ts_code':'','trade_date':None}])==0"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("failed_days", [0, 1])
+def test_main_owns_connection_lifetime_not_outer_transaction(monkeypatch, failed_days):
+    class Connection:
+        autocommit = False
+        closed = False
+
+        def __enter__(self):
+            raise AssertionError("connection context starts an unwanted outer transaction")
+
+        def close(self):
+            self.closed = True
+
+    conn = Connection()
+    args = SimpleNamespace(mode="incremental", start_date="2026-10-28", end_date="2026-10-28",
+                           job_id=None, bulk_session_tune=False, truncate=False)
+    monkeypatch.setattr(moneyflow, "parse_args", lambda: args)
+    monkeypatch.setattr(moneyflow.psycopg2, "connect", lambda **_kwargs: conn)
+    monkeypatch.setattr(moneyflow, "pro_api", lambda: object())
+    monkeypatch.setattr(moneyflow, "_create_job", lambda *_args: "job")
+    monkeypatch.setattr(moneyflow, "_log", lambda *_args: None)
+    monkeypatch.setattr(moneyflow, "run_ingestion", lambda *_args: {"failed_days": failed_days})
+    finished = []
+    monkeypatch.setattr(moneyflow, "_finish_job", lambda *args: finished.append(args[2]))
+    if failed_days:
+        with pytest.raises(SystemExit) as failure:
+            moneyflow.main()
+        assert failure.value.code == 1
+    else:
+        moneyflow.main()
+    assert finished == ["failed" if failed_days else "success"]
+    assert conn.closed

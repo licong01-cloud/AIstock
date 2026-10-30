@@ -178,6 +178,12 @@ def _is_auto_retry_excluded_dataset(dataset: str) -> bool:
     return ds in _AUTO_RETRY_EXCLUDED_DATASETS or ds.startswith(_AUTO_RETRY_EXCLUDED_PREFIXES)
 
 
+def _terminal_adj_factor_history(outcome: Dict[str, Any]) -> bool:
+    history = outcome.get("history_reconciliation") or {}
+    failures = history.get("failures") or []
+    return bool(failures) and all(f.get("retryable") is False for f in failures)
+
+
 def _coerce_int(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -888,7 +894,7 @@ class TDXScheduler:
     def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
         rows = self._fetchall(
             """
-            SELECT status,
+            SELECT status,summary->'history_reconciliation' AS history_reconciliation,
                    COALESCE(
                        summary->>'inserted_rows',
                        summary#>>'{stats,inserted_rows}',
@@ -1300,11 +1306,13 @@ class TDXScheduler:
         if isinstance(metadata_obj, dict):
             explicit_owner = str(metadata_obj.get("schedule_dataset") or "").strip().lower()
             if explicit_owner:
-                return explicit_owner
+                # Integrity repair metadata can name the physical table. Its
+                # existing composite schedule still owns collection/retries.
+                return _AUTO_RETRY_SCHEDULE_ALIASES.get(explicit_owner, explicit_owner)
         return _AUTO_RETRY_SCHEDULE_ALIASES.get(health_dataset, health_dataset)
 
     def _reconcile_recovered_final_targets(self) -> List[str]:
-        """Recheck final readiness targets so historical recovered families self-heal."""
+        """Refresh existing final targets/alarms using the bounded maintenance sweep."""
 
         now = _now()
         last_sweep = getattr(self, "_last_final_target_recovery_sweep", None)
@@ -1313,10 +1321,11 @@ class TDXScheduler:
         self._last_final_target_recovery_sweep = now
         candidates = self._fetchall(
             """SELECT DISTINCT ON (dataset, target_date)
-                      target_id, dataset, target_date, metadata
+                      target_id, dataset, target_date, metadata, data_source, target_status,
+                      attempt_count, last_error_message AS failure_category
                  FROM market.data_sync_targets
                 WHERE target_status = 'final_blocked'
-                  AND data_source = 'readiness_gate'
+                  AND data_source IN ('readiness_gate','tushare','integrity_repair')
                   AND target_date IS NOT NULL
                 ORDER BY dataset, target_date DESC, updated_at DESC
                 LIMIT 100"""
@@ -1329,6 +1338,10 @@ class TDXScheduler:
             if not dataset or not target_id or target_date is None:
                 continue
             try:
+                if (target.get("data_source", "readiness_gate") != "readiness_gate"
+                        or dataset in {"bak_basic", "cyq_perf"}):
+                    self._flush_final_data_sync_alerts([target])
+                    continue  # no refetch or assumed success for a final provider target
                 readiness = self._check_dataset_recovered(dataset, target_date)
             except Exception as exc:  # noqa: BLE001 - one dataset must not block the sweep.
                 _logger.warning("final target recovery precheck failed for %s/%s: %s", dataset, target_date, exc)
@@ -1352,12 +1365,70 @@ class TDXScheduler:
             reconciled.append(target_id)
         return reconciled
 
+    def _defer_obsolete_integrity_fetch(self, target: Dict[str, Any]) -> bool:
+        """Revalidate obsolete alarms; never refetch unsupported stock gaps.
+
+        Only integrity-generated repair targets qualify. Genuine supported
+        missing facts and normal scheduled/manual collections are unchanged.
+        """
+        if target.get("data_source") != "integrity_repair":
+            return False
+        from backend.services.data_integrity.catalog import canonical_dataset
+        from backend.services.data_integrity.repository import enqueue_validation
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        dataset = canonical_dataset(str(target.get("dataset") or ""))
+        day = self._coerce_target_date(target.get("target_date"))
+        if day is None:
+            return False
+        records = self._fetchall("""SELECT validation_status,metadata->'validation' AS validation
+            FROM market.dataset_date_refresh_audit WHERE dataset=%s AND trade_date=%s
+            AND data_source='canonical_db'""", (dataset, day))
+        if not records:
+            return False
+        verdict = records[0].get("validation") or {}
+        gaps = [g for g in verdict.get("gaps", []) if g.get("classification") != "LEGAL_NA"]
+        unsupported_only = (records[0].get("validation_status") == "INCOMPLETE" and bool(gaps)
+            and all(g.get("classification") in {"MISSING", "INVALID"} and g.get("symbols")
+                    and all(is_excluded_stock_code(code) for code in g["symbols"]) for g in gaps))
+        dense_receipt_only = (dataset in {"cyq_perf", "bak_basic"}
+            and records[0].get("validation_status") == "UNVERIFIED"
+            and verdict.get("reason") in {"complete_source_scan_not_bound_to_revision", "row_count_seed_is_not_a_complete_source_scan"})
+        if dataset in {"bak_basic", "cyq_perf"} and records[0].get("validation_status") == "INCOMPLETE":
+            # Optional selection panels need not be repeatedly fetched during
+            # confirmed delisting consolidation. Do NOT remove these securities
+            # from the fact denominator, change their verdict, or hide quotes.
+            counts = verdict.get("counts") or []
+            missing = {str(code).strip() for gap in gaps for code in gap.get("symbols", [])}
+            closed = (len(counts) == 1 and bool(missing)
+                and all(g.get("classification") == "MISSING" for g in gaps)
+                and counts[0].get("missing") == len(missing)
+                and counts[0].get("invalid") == 0 and counts[0].get("unverified") == 0
+                and all(type(counts[0].get(key)) is int for key in ("expected", "valid", "legal_na"))
+                and counts[0]["expected"] == counts[0]["valid"] + counts[0]["legal_na"] + len(missing))
+            if closed:
+                events = self._fetchall("""SELECT DISTINCT ts_code FROM market.stock_st_events
+                    WHERE ts_code=ANY(%s::text[]) AND st_type='退市整理期'
+                      AND pub_date<=%s AND imp_date<=%s""", (sorted(missing), day, day))
+                if missing <= {str(row["ts_code"]).strip() for row in events}:
+                    DataSyncTargetRepository().mark_retry(str(target["target_id"]),
+                        retry_after=_now() + dt.timedelta(days=1),
+                        reason="delisting_panel_optional_fetch_deferred",
+                        context={"source_gap_preserved": True, "missing_symbols": sorted(missing)})
+                    return True
+        if not (unsupported_only or dense_receipt_only):
+            return False
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            enqueue_validation(conn, dataset, day)
+        return True
+
     def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
         """Resume persisted retry targets that survived scheduler restart."""
 
         repo = DataSyncTargetRepository()
         try:
-            due_targets = repo.list_fillable_targets(limit=100, exclude_operation="VALIDATE_ONLY")
+            due_targets = repo.list_fillable_targets(
+                limit=100, exclude_operation="VALIDATE_ONLY", latest_per_dataset=True,
+            )
         except Exception as exc:  # noqa: BLE001
             _logger.warning("target retry: due-target scan skipped: %s", exc)
             return []
@@ -1385,6 +1456,13 @@ class TDXScheduler:
             retry_mode = (sched or {}).get("mode") or "incremental"
             target_id = str(target.get("target_id") or "").strip()
             target_date = self._coerce_target_date(target.get("target_date"))
+
+            try:
+                if self._defer_obsolete_integrity_fetch(target):
+                    continue
+            except Exception as exc:
+                _logger.warning("integrity repair revalidation failed for %s/%s: %s", health_dataset, target_date, exc)
+                continue
 
             try:
                 readiness = self._check_dataset_recovered(health_dataset, target_date)
@@ -2404,8 +2482,25 @@ class TDXScheduler:
         target_date = self._target_date_for_retry(health_dataset, options)
         recovered = False
         failure_category = "not_ready_after_retry"
+        history_failed = False
+        if health_dataset == "adj_factor" and options.get("job_id"):
+            try:
+                outcome = self._job_update_outcome(uuid.UUID(str(options["job_id"])))
+                history_failed = bool((outcome.get("history_reconciliation") or {}).get("failures"))
+                if _terminal_adj_factor_history(outcome):
+                    context = {"job_id": options["job_id"], "failure_category": "adj_factor_history_conflict",
+                               "history_reconciliation": outcome["history_reconciliation"]}
+                    repo.mark_final_blocked(target_id, reason="adj_factor_history_conflict", context=context)
+                    repo.record_attempt(DataSyncAttemptRecord(target_id=target_id, status="final_blocked",
+                        job_id=options["job_id"], trigger_source="data_sync_target_retry", finished_at=now,
+                        error_message="adj_factor_history_conflict", context_json=context))
+                    return
+            except Exception as exc:
+                history_failed = True
+                error_message = error_message or str(exc)
+                failure_category = "adj_factor_history_outcome_unavailable"
         try:
-            readiness = self._check_dataset_recovered(health_dataset, target_date)
+            readiness = None if history_failed else self._check_dataset_recovered(health_dataset, target_date)
             if readiness is not None and getattr(readiness, "status", None) == "ok":
                 recovered = True
             elif readiness is not None and getattr(readiness, "failure_category", None):
@@ -2516,6 +2611,17 @@ class TDXScheduler:
         finished_at = finished_at or _now()
         with get_conn(autocommit=False, manage_transaction=True) as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                if (context or {}).get("canonical_validation_id"):
+                    from ..services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+                    from ..services.data_integrity.contracts import effective_partition
+                    canonical = {"stock_moneyflow_ts": "moneyflow_ts", "sw_sector": "sw_daily"}.get(dataset_key, dataset_key)
+                    cur.execute("""SELECT * FROM market.dataset_date_refresh_audit
+                        WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db' FOR UPDATE""",
+                        (canonical, target_date))
+                    current = effective_partition(cur.fetchone(), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                    if (not current["source_complete"]
+                            or current["validation_id"] != context["canonical_validation_id"]):
+                        return {"targets_reconciled": 0, "alerts_acknowledged": 0}
                 cur.execute(
                     """SELECT target_id, target_status
                          FROM market.data_sync_targets
@@ -2594,12 +2700,22 @@ class TDXScheduler:
                     """UPDATE market.data_alerts
                           SET acknowledged = TRUE, ack_at = NOW()
                         WHERE dataset = %s
-                          AND alert_type = 'retry_exhausted'
+                          AND (alert_type = 'retry_exhausted' OR alert_type = 'retry_pending')
                           AND acknowledged = FALSE
                           AND details->>'target_id' = ANY(%s)""",
                     (dataset_key, family_ids),
                 )
                 alerts_acknowledged = int(cur.rowcount or 0)
+                if (context or {}).get("canonical_validation_id"):
+                    # The locked, current partition certifies this date even
+                    # when an older alarm belongs to another fetch target.
+                    cur.execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
+                        WHERE dataset=%s AND acknowledged=FALSE
+                          AND alert_type IN ('retry_exhausted','retry_pending')
+                          AND details->>'target_date'=%s
+                          AND details->>'alert_gate'='data_sync_targets_final_state'""",
+                        (dataset_key, str(target_date)))
+                    alerts_acknowledged += int(cur.rowcount or 0)
 
         return {
             "targets_reconciled": targets_reconciled,
@@ -2608,6 +2724,7 @@ class TDXScheduler:
 
     def _flush_final_data_sync_alerts(self, targets: List[Dict[str, Any]]) -> Dict[str, int]:
         alerts = []
+        pending_ack = []
         for target in targets:
             status = str(target.get("target_status") or target.get("status") or "").lower()
             failure_category = str(target.get("failure_category") or "retry_exhausted")
@@ -2615,6 +2732,34 @@ class TDXScheduler:
                 continue
             dataset = str(target.get("dataset") or "?")
             target_date = target.get("target_date")
+            recovery_ids = []
+            if target_date is not None:
+                from ..services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+                from ..services.data_integrity.contracts import effective_partition
+                canonical = {"stock_moneyflow_ts": "moneyflow_ts", "sw_sector": "sw_daily"}.get(dataset, dataset)
+                family = {dataset, canonical, _AUTO_RETRY_SCHEDULE_ALIASES.get(canonical, canonical)}
+                if canonical == "moneyflow_ts":
+                    family.add("stock_moneyflow_ts")
+                observed = self._fetchall("""SELECT
+                    (SELECT to_jsonb(p) FROM market.dataset_date_refresh_audit p
+                     WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db') AS partition,
+                    ARRAY(SELECT target_id FROM market.data_sync_targets t
+                        WHERE dataset=ANY(%s) AND target_date=%s AND target_id IS DISTINCT FROM %s
+                          AND target_status IN ('pending','retry')
+                          AND COALESCE(target_scope->>'operation','FETCH')<>'VALIDATE_ONLY'
+                          AND (data_source='integrity_repair' OR required_before IS NULL
+                               OR required_before>clock_timestamp() OR dataset=ANY(%s))) AS recovery_target_ids""",
+                    (canonical, target_date, sorted(family), target_date, target.get("target_id"),
+                     list(LATE_PUBLICATION_TAIL_DAYS)))
+                context = observed[0] if observed else {}
+                partition = effective_partition(context.get("partition"),
+                    scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                if partition["source_complete"]:
+                    self._reconcile_recovered_target_state(dataset=dataset, target_id=target.get("target_id"),
+                        target_date=target_date, trigger_source="final_alert_readback",
+                        context={"canonical_validation_id": partition["validation_id"]})
+                    continue
+                recovery_ids = context.get("recovery_target_ids") or []
             alerts.append(
                 classify_retry_alert(dataset, "exhausted", original_status=failure_category,
                                      attempt_count=target.get("attempt_count"))
@@ -2629,9 +2774,25 @@ class TDXScheduler:
                     "alert_gate": "data_sync_targets_final_state",
                 }
             )
+            if recovery_ids:
+                # A failed source target is not exhaustion of the dated repair
+                # family. Keep the real gap visible without claiming success.
+                alerts[-1].severity = "warning"
+                alerts[-1].alert_type = "retry_pending"
+                alerts[-1].title = f"{dataset} 数据待补齐，已安排自动修复"
+                alerts[-1].message = f"数据集 {dataset} / {target_date} 尚未通过完整性验证，已保留自动修复任务"
+                alerts[-1].details.update(retry_result="pending", recovery_target_ids=recovery_ids)
+                pending_ack.append((dataset, str(target_date)))
         if not alerts:
             return {}
-        return DataHealthAlerter(self._db_cfg).flush(alerts)
+        counts = DataHealthAlerter(self._db_cfg).flush(alerts)
+        # Retain old errors if persisting the replacement warning failed.
+        for dataset, target_date in pending_ack:
+            self._execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
+                    WHERE dataset=%s AND alert_type='retry_exhausted' AND acknowledged=FALSE
+                      AND details->>'target_date'=%s
+                      AND details->>'alert_gate'='data_sync_targets_final_state'""", (dataset, target_date))
+        return counts
 
     def _schedule_delayed_retry(
         self,
@@ -3505,17 +3666,6 @@ class TDXScheduler:
 
         start_date = None
         end_date = None
-        if options.get("start_date"):
-            try:
-                start_date = _dt.date.fromisoformat(str(options["start_date"]))
-            except Exception as exc:
-                _logger.error("unexpected error: %s", exc)
-        if options.get("end_date"):
-            try:
-                end_date = _dt.date.fromisoformat(str(options["end_date"]))
-            except Exception as exc:
-                _logger.error("unexpected error: %s", exc)
-
         status = "success"
         rows = 0
         error_msg: Optional[str] = None
@@ -3526,6 +3676,16 @@ class TDXScheduler:
         revision_errors: Dict[str, str] = {}
         deferred_revisions = 0
         try:
+            # Parse inside the guarded job boundary: malformed input must
+            # fail this job rather than silently become an automatic rebuild.
+            if options.get("start_date"):
+                start_date = _dt.date.fromisoformat(str(options["start_date"]))
+            if options.get("end_date"):
+                end_date = _dt.date.fromisoformat(str(options["end_date"]))
+            if (start_date is None) != (end_date is None) or (
+                start_date is not None and end_date is not None and start_date > end_date
+            ):
+                raise ValueError("sector_data exact repair requires an ordered start_date/end_date pair")
             # 标记 job 为 running
             if job_id is not None:
                 try:
@@ -3543,6 +3703,11 @@ class TDXScheduler:
                 if start_date is None or end_date is None:
                     raise ValueError("sector_data init requires start_date and end_date")
                 _logger.info("sector_data init: building %s ~ %s", start_date, end_date)
+                rows = builder.build_range(start_date, end_date)
+                audit_start, audit_end = start_date, end_date
+            elif start_date is not None and end_date is not None:
+                # A dated repair must fix that partition, not drain unrelated
+                # source-revision history or infer its range from global MAX.
                 rows = builder.build_range(start_date, end_date)
                 audit_start, audit_end = start_date, end_date
             else:
@@ -3956,7 +4121,7 @@ class TDXScheduler:
         self, dataset: str, trade_date: dt.date, *, include_details: bool = False,
     ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
         """Observe raw totals and the existing 1m completeness contract once."""
-        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+        from backend.services.data_integrity.stock_scope import filter_stock_rows, is_excluded_stock_code
 
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
@@ -3970,7 +4135,7 @@ class TDXScheduler:
                 FROM market.kline_daily_raw WHERE trade_date=%s AND adjust_type='none'""",
             (trade_date,),
         )
-        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        daily_rows = filter_stock_rows(daily_rows)
         daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
         if dataset == "kline_daily_raw":
             # Daily runs before minute collection. A minute-derived denominator
@@ -3979,12 +4144,12 @@ class TDXScheduler:
             # PIT buy pool. Only unambiguous full-day suspension can excuse an
             # absent quote; missing/invalid traded facts remain incomplete.
             population = {code for code in self._go_provider_codes(trade_date, trade_date)
-                          if not is_b_share_ts_code(code)}
+                          if not is_excluded_stock_code(code)}
             from backend.data_service.suspension_day_authority import full_day_keys
             suspension_rows = self._fetchall(
                 """SELECT ts_code,trade_date,suspend_type,suspend_timing FROM market.suspend_d
                     WHERE trade_date=%s""", (trade_date,))
-            suspended = {symbol for symbol, _day in full_day_keys(suspension_rows, required_dates=(trade_date,))}
+            suspended = {symbol for symbol, _day in full_day_keys(filter_stock_rows(suspension_rows), required_dates=(trade_date,))}
             expected = population - suspended
             missing_codes = sorted(expected.difference(daily))
             invalid_codes = sorted(code for code, row in daily.items() if row["invalid_fact"]
@@ -4017,9 +4182,9 @@ class TDXScheduler:
              GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
-        # Old B-share facts remain stored, but must not re-enter the completion
+        # Old unsupported-board facts remain stored, but never enter completion
         # population after their collection has been disabled.
-        minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
+        minute_rows = filter_stock_rows(minute_rows)
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         expected = {code for code, row in daily.items()
                     if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
@@ -4042,13 +4207,9 @@ class TDXScheduler:
         target_date: Optional[dt.date],
         failure_category: Optional[str],
     ) -> Tuple[Optional[dt.date], Optional[dt.date]]:
-        """Anchor repairable same-date quality failures to their exact partition."""
+        """A dated failure repairs that date, never a cursor-derived history scan."""
 
-        if target_date is not None and failure_category in {
-            "required_field_low_coverage",
-            "required_field_coverage_unproven",
-            "required_source_field_unpublished",
-        }:
+        if target_date is not None:
             return target_date, target_date
         return self._compute_auto_range(dataset)
 
@@ -4522,13 +4683,28 @@ class TDXScheduler:
                                 fut.result(timeout=600)
                                 _log.info("auto-retry L%d: %s attempt %d completed",
                                           layer_idx, ds, attempt + 1)
+                            except TimeoutError as wait_exc:
+                                if ds == "adj_factor" and not fut.done():
+                                    entry["retry_status"] = "waiting_active"
+                                    _log.info("adj_factor history owner remains active; preserve it without duplicate retry")
+                                    break
+                                _log.warning("auto-retry L%d: %s failed: %s", layer_idx, ds, wait_exc)
                             except Exception as wait_exc:
                                 _log.warning("auto-retry L%d: %s attempt %d wait failed: %s",
                                             layer_idx, ds, attempt + 1, wait_exc)
 
                         # Re-check freshness after retry
                         try:
-                            r = self._check_dataset_recovered(ds)
+                            outcome = self._job_update_outcome(retry_job_id) if ds == "adj_factor" else {}
+                            if ds == "adj_factor" and _terminal_adj_factor_history(outcome):
+                                entry["retry_status"] = "blocked_history_conflict"
+                                entry["failure_category"] = "adj_factor_history_conflict"
+                                if target_id:
+                                    DataSyncTargetRepository().mark_final_blocked(target_id,
+                                        reason="adj_factor_history_conflict", context={"job_id": str(retry_job_id)})
+                                break
+                            history_failed = bool((outcome.get("history_reconciliation") or {}).get("failures"))
+                            r = None if history_failed else self._check_dataset_recovered(ds)
                             if r is not None:
                                 if r.status == "ok":
                                     _log.info("auto-retry L%d: %s RECOVERED on attempt %d",
@@ -4601,7 +4777,7 @@ class TDXScheduler:
                     # After all attempts: check if exhausted
                     if delayed_no_update:
                         continue
-                    if entry.get("retry_status") == "skipped_duplicate_recent":
+                    if entry.get("retry_status") in {"skipped_duplicate_recent", "waiting_active", "blocked_history_conflict"}:
                         continue
                     if not recovered:
                         _log.error("auto-retry L%d: %s EXHAUSTED after %d attempts",
@@ -4933,6 +5109,7 @@ class TDXScheduler:
             except Exception as exc:
                 _logger.error("unexpected error: %s", exc)
 
+        error_msg = None
         try:
             engine = TushareSyncEngine()
             result = engine.sync(
@@ -4941,8 +5118,11 @@ class TDXScheduler:
                 job_id=job_id,
             )
             status = "success" if result.ok else "failed"
+            if not result.ok:
+                error_msg = result.error or f"{dataset} sync failed without a native error summary"
         except Exception as exc:
             status = "failed"
+            error_msg = str(exc)
             result = None
             if job_id is not None:
                 try:
@@ -4958,7 +5138,7 @@ class TDXScheduler:
 
         if schedule_id:
             self._update_ingestion_schedule(
-                schedule_id, last_run=start_ts, last_status=status, last_error=None,
+                schedule_id, last_run=start_ts, last_status=status, last_error=error_msg,
             )
 
     def _run_suspend_d_refresh(
@@ -5578,11 +5758,11 @@ class TDXScheduler:
         *, requested_codes: Optional[List[str]] = None,
     ) -> List[str]:
         # Reuse the existing global PIT board identity, not its buy-eligible
-        # members: ST/exit-period quotes and Beijing provider scope stay intact.
-        from scripts.build_stock_universe_pit_spans import a_share_ts_code_filter, is_b_share_ts_code
+        # members: preserve ST/exit quotes, but never collect unsupported boards.
+        from backend.services.data_integrity.stock_scope import is_supported_stock_code, stock_scope_sql
 
         if requested_codes is not None:
-            return [str(code).strip() for code in requested_codes if not is_b_share_ts_code(code)]
+            return [str(code).strip() for code in requested_codes if is_supported_stock_code(code)]
         # The stock-basic directory may lag an IPO. A real same-window daily
         # quote is also provider-population evidence, never PIT buy eligibility.
         # delist_date is the effective terminal boundary, not a final trading
@@ -5597,11 +5777,11 @@ class TDXScheduler:
                AND (k.volume_hand>0 OR k.volume_shares>0)
                AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
                  OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
-                 OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+                 )
             ) SELECT ts_code FROM population WHERE TRUE"""
-        sql += a_share_ts_code_filter("ts_code") + " ORDER BY ts_code"
+        sql += stock_scope_sql("ts_code") + " ORDER BY ts_code"
         rows = self._fetchall(sql, (end_date, start_date))
-        return [str(row["ts_code"]).strip() for row in rows if not is_b_share_ts_code(row["ts_code"])]
+        return [str(row["ts_code"]).strip() for row in rows if is_supported_stock_code(row["ts_code"])]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]

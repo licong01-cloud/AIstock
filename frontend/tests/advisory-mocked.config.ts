@@ -44,7 +44,7 @@ Object.assign(process.env, { TEMP: run, TMP: run, TMPDIR: run });
 
 export default defineConfig({
   testDir: path.join(frontend, "tests/paper-v2"),
-  testMatch: ["paper-v2-advisory-ui.spec.ts", "advisory-workbench.spec.ts"],
+  testMatch: ["paper-v2-advisory-ui.spec.ts", "advisory-workbench.spec.ts", "paper-v2-advisory-historical-range.spec.ts"],
   timeout: 60_000,
   expect: { timeout: 20_000 },
   workers: 1, fullyParallel: false,
