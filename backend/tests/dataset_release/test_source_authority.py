@@ -144,6 +144,23 @@ def test_monthly_source_fact_codes_do_not_change_pit_selection(dataset_profile):
                                         pit_snapshot=pit, selected_stock_codes=("000003.SZ",)))
 
 
+@pytest.mark.parametrize("query_id", sorted(q.query_id for q in PRODUCTION_QUERY_SPECS.values()
+    if q.date_expression is not None and q.query_id != "adj_factor_construction"))
+def test_monthly_all_dated_source_requests_stay_in_target_month(dataset_profile, query_id):
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+    source = MonthlyObservedSourceAuthority(dataset_profile, None, progress=lambda _: None,
+        month_start=date(2026, 10, 1), fact_stock_codes=("000001.SZ", "000002.SZ"))
+    pit = SimpleNamespace(spans=(SimpleNamespace(ts_code="000001.SZ"),))
+    requests = list(source._partition_requests(PRODUCTION_QUERY_SPECS[query_id],
+                                              date(2026, 10, 30), pit_snapshot=pit))
+    assert requests
+    assert all(date(2026, 10, 1) <= params["start"] <= params["end"] <= date(2026, 10, 30)
+               for _, params in requests)
+    if query_id == "suspend_d":
+        assert all(params["codes"] == ["000001.SZ", "000002.SZ"] for _, params in requests)
+        assert tuple(span.ts_code for span in pit.spans) == ("000001.SZ",)
+
+
 @pytest.mark.parametrize("query_id", ["kline_daily_raw", "kline_minute_raw", "daily_basic"])
 def test_raw_source_sealer_keeps_row_identity_and_emits_exact_month_leaves(tmp_path, query_id):
     import gzip
