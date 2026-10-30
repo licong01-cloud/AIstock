@@ -1,0 +1,217 @@
+{
+  "actual": "October operation dmr_106d4729334644eb90e2bd01eb97d83f attempt 5 passed ManagedRepairImpactJournal quiet preflight but SOURCE failed active source writer exists during source freeze. Read-only exact ledger query identifies three latest adj_factor attempts still started although their owning ingestion jobs are terminal. source_authority writer ledger does not apply the owner completion contract already used by monthly_repair_journal. Fix the shared source writer classification, retain genuine active or unknown writers as blocking, preserve negative completeness states and all market facts, validate RED-GREEN and existing DEV SQL. No activation or source data writes.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20261030_BUG-2157-monthly-source-treats-terminal-owner-stale-sync-attempts-as-active-write.json",
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2157",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-30T17:37:07.349841Z",
+  "description": "October operation dmr_106d4729334644eb90e2bd01eb97d83f attempt 5 passed ManagedRepairImpactJournal quiet preflight but SOURCE failed active source writer exists during source freeze. Read-only exact ledger query identifies three latest adj_factor attempts still started although their owning ingestion jobs are terminal. source_authority writer ledger does not apply the owner completion contract already used by monthly_repair_journal. Fix the shared source writer classification, retain genuine active or unknown writers as blocking, preserve negative completeness states and all market facts, validate RED-GREEN and existing DEV SQL. No activation or source data writes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261030-32a3f9ce0cf5",
+      "timestamp": "2026-10-30T17:37:07.349841Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-30T17:37:07.349841Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6953,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6953",
+  "last_seen_at": "2026-10-30T17:37:07.349841Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_source_authority.py -q -k terminal_owner --maxfail=1",
+  "root_cause": "The inner SOURCE writer ledger classified a latest started attempt without reading its exact owner job. Three restart-orphaned callbacks belonged to finished timeout executions. The outer managed repair journal already recognized those executions as terminal, so it passed while the inner ledger falsely blocked.",
+  "fix_summary": "Join exact owner only after latest-attempt selection, use the existing shared terminal-job contract plus a valid finished_at, bind owner completion into the source ledger digest, and leave attempt status, missing facts, retry targets and datasets untouched.",
+  "review_rounds": [
+    "1: RED reproduced; 23 targeted liveness, malformed-time, genuine-writer and digest regressions GREEN.",
+    "2: Existing DEV real PostgreSQL temporary ledger verifies four owner cases; production readonly confirms the three exact timeout owners. No production data writes.",
+    "3: Move owner join after latest-attempt selection to avoid joining historical callback rows; rerun existing DEV SQL and exact production readonly check PASS.",
+    "4: Final scope/security/runtime and DESIGN-COMPLIANCE-001 review: only source classifier, existing direct tests and BUG record; source facts/completeness unchanged; no new release or gate; runtime still pending user restart."
+  ],
+  "design_compliance": {
+    "no_unapproved_simplification": "PASS: real SQL and live/unknown/terminal ownership are covered, not a fixture-only resolution",
+    "no_silent_error_or_false_success": "PASS: original started/failed/missing states are retained; real active writers still block",
+    "approved_business_semantics_unchanged": "PASS: no data values, PIT, calendars, source scope, profiles or experiments changed",
+    "no_new_gate_or_approval": "PASS: remove the false liveness blocker without adding release conditions; reuse current operation"
+  },
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh isolated-worktree Python: RED terminal-owner writer fixture, then 232 passed/72 skipped final related matrix; all actual active/unknown/unclosed writers remain blocking.",
+      "Fresh isolated-worktree Python against existing DEV temporary ledger tables: four real PostgreSQL owner joins pass; exact production read-only readback identifies three stale started attempts owned by finished timeout jobs. No production facts/attempt statuses/profile changes. X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2157-dev-writer-check-final.json"
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly SOURCE treats terminal-owner stale sync attempts as active writers",
+  "trigger_condition": {
+    "fingerprint": "32a3f9ce0cf5a24167f28fe1",
+    "source_event_id": "FE-20261030-32a3f9ce0cf5"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

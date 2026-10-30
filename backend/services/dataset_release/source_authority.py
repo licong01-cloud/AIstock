@@ -52,6 +52,7 @@ from .source_manifest import (
     SourceManifest,
 )
 from .monthly_snapshot import SNAPSHOT_ID_RE
+from .monthly_repair_journal import TERMINAL_JOB_STATUSES
 from .source_pool import ReadOnlySourcePool
 from .source_rows_codec import (
     SOURCE_ROWS_CODEC,
@@ -1052,7 +1053,7 @@ WITH normalized_ingestion_job AS (
            attempt.attempt_id,attempt.target_id,attempt.attempt_no,
            attempt.status,attempt.created_at,attempt.started_at,
            attempt.finished_at,attempt.error_message,attempt.context_json,
-           target.dataset,target.data_source
+           target.dataset,target.data_source,attempt.job_id
     FROM market.data_sync_attempts AS attempt
     JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
     WHERE target.dataset = ANY(%(datasets)s)
@@ -1061,11 +1062,12 @@ WITH normalized_ingestion_job AS (
              attempt.created_at DESC,attempt.attempt_id DESC
 )
 SELECT ledger_kind,ledger_identity,status,created_at,started_at,finished_at,
-       opaque_payload
+       opaque_payload,owner_status,owner_finished_at
 FROM (
     SELECT 'ingestion_jobs'::text AS ledger_kind,
            job_id::text AS ledger_identity,status::text,
-           created_at,started_at,finished_at,summary::text AS opaque_payload
+           created_at,started_at,finished_at,summary::text AS opaque_payload,
+           NULL::text AS owner_status,NULL::timestamptz AS owner_finished_at
     FROM relevant_ingestion_job
     UNION ALL
     SELECT 'data_sync_attempts'::text AS ledger_kind,
@@ -1077,8 +1079,9 @@ FROM (
                'data_source',attempt.data_source,
                'error_message',attempt.error_message,
                'context_json',attempt.context_json
-           )::text AS opaque_payload
+           )::text AS opaque_payload,owner.status AS owner_status,owner.finished_at AS owner_finished_at
     FROM latest_data_sync_attempt AS attempt
+    LEFT JOIN market.ingestion_jobs AS owner ON owner.job_id::text=attempt.job_id
     WHERE (attempt.created_at >= %(start)s OR attempt.status='started')
 ) AS writer_ledger
 ORDER BY ledger_kind,ledger_identity
@@ -1127,6 +1130,8 @@ _WRITER_LEDGER_REQUIRED = (
     "started_at",
     "finished_at",
     "opaque_payload",
+    "owner_status",
+    "owner_finished_at",
 )
 
 
@@ -1238,6 +1243,7 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
                         "finished_at",
                         "error_message",
                         "context_json",
+                        "job_id",
                     ),
                 ),
                 self._describe_table(
@@ -2637,7 +2643,18 @@ class MonthlySourceAuthority:
                 "opaque_payload_sha256": _opaque_audit_digest(row.get("opaque_payload")),
             }
             rows.append(safe)
-            if status in {"queued", "pending", "running", "started"}:
+            # A late/unclosed callback is not a live writer once its exact
+            # owning execution is terminal. This proves liveness only: preserve
+            # the original attempt status and all negative completeness facts.
+            owner_terminal = False
+            if kind == "data_sync_attempts" and status == "started":
+                safe["owner_status"] = row.get("owner_status")
+                safe["owner_finished_at"] = _audit_timestamp_text(
+                    row.get("owner_finished_at"), field="writer.owner_finished_at", optional=True,
+                )
+                owner_terminal = (safe["owner_status"] in TERMINAL_JOB_STATUSES
+                                  and safe["owner_finished_at"] is not None)
+            if status in {"queued", "pending", "running", "started"} and not owner_terminal:
                 active.append(safe)
             if row_number % read_chunk_rows == 0:
                 checkpoint()
