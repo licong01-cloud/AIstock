@@ -168,8 +168,8 @@
   },
   "first_seen_at": "2026-10-30T02:27:36.562718Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6b5efb2c1d6aa0da4448b73612477dd3cf9a8a0e",
+  "fixed_at": "2026-10-30T02:49:37Z",
   "github_issue_number": 6911,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6911",
   "last_seen_at": "2026-10-30T02:27:36.562718Z",
@@ -177,6 +177,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6912",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -203,6 +204,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -214,7 +216,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2145",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9dc63e7ed19108ea",
+    "recorded_at": "2026-10-30T02:50:31.518839Z",
+    "runtime_contract_digest": "12312a3c5c72cbce54b214b187d923e852172a6cee215193d2a8773eff187ead",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f2be7d21c91bff8dbb266ed458f18d07a4cd533e",
+    "source_merge_commit": "6b5efb2c1d6aa0da4448b73612477dd3cf9a8a0e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6912",
+    "validation_evidence": [
+      "gh pr checks 6912 -> CI verdict passed",
+      "rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -q -> 3 passed on existing DEV with rollback"
+    ],
+    "validation_evidence_digest": "d455aecea862eb05433acff507df6a8fa3ff2fef7c97900d6c7c47dce947c016"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -227,7 +251,9 @@
     "rtk pytest backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_model_evaluation.py -q -> 50 passed; failed fixture protocol repaired and exact failed node -> 1 passed",
     "AISTOCK_DEV_DB_E2E=1 rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -> 3 passed across exact nodes, rolled back",
     "rtk ruff check changed Python files -> passed",
-    "rtk pytest backend/tests/advisory_model_first/test_forward_postgres.py -q -> 13 passed"
+    "rtk pytest backend/tests/advisory_model_first/test_forward_postgres.py -q -> 13 passed",
+    "gh pr checks 6912 -> CI verdict passed",
+    "rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -q -> 3 passed on existing DEV with rollback"
   ],
   "verification_budget": {
     "budget": "standard",
