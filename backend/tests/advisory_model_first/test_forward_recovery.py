@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
@@ -13,6 +15,7 @@ from backend.services.advisory_forward.service import (
     _settlement_payload,
 )
 from backend.services.advisory_forward.models import AdvisoryForwardRunV1
+from backend.services.advisory_forward.repository import publication_timing, LATE_PUBLICATION_REASON
 from backend.services.advisory_program import (
     AdvisoryCandidate,
     AdvisoryEpisode,
@@ -23,6 +26,151 @@ from backend.services.advisory_program import (
     _forward_episode_id,
 )
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
+
+
+class _CrossDayRepository:
+    def __init__(self, rows, *, acquired=True):
+        self.rows = {r["forward_run_id"]: dict(r) for r in rows}
+        self.acquired = acquired
+
+    def cycle_lock(self):
+        return nullcontext(self.acquired)
+
+    def pending_settlements(self, **_kwargs):
+        return []
+
+    def pending_publications(self, *, before, program_ids=None):
+        return sorted((r for r in self.rows.values() if r["publication_status"] != "PUBLISHED"
+                       and r["decision_as_of_trade_date"] < before
+                       and (program_ids is None or r["program_id"] in program_ids)),
+                      key=lambda r: (r["target_trade_date"], r["program_id"]))
+
+    def get(self, rid):
+        return {"forward_run": self.rows[rid]}
+
+    def mark_failure(self, **kwargs):
+        row = self.rows[kwargs["forward_run_id"]]
+        row["publication_status"] = "WAITING_DATA" if kwargs["waiting_data"] else "FAILED"
+        return row
+
+
+def _cross_day_service(*, failed_program=None, acquired=True, clock=None):
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from backend.services.trading_core.errors import DataUnavailableError
+    rows = [dict(forward_run_id=f"{pid}-{day}", program_id=pid, program_version=3,
+                 binding_version_id="binding", decision_as_of_trade_date=date(2026, 10, day),
+                 target_trade_date=date(2026, 10, day + 1), publication_status="WAITING_DATA",
+                 settlement_status="NOT_DUE", newer_published=False)
+            for day in (28, 29) for pid in ("a", "b")]
+    repo = _CrossDayRepository(rows, acquired=acquired)
+    service = AdvisoryForwardService(repository=repo,
+        program_service=SimpleNamespace(get_program=lambda pid: replace(_program(), program_id=pid),
+                                        active_binding=lambda pid: {"binding_version_id": "binding"}),
+        model_service=SimpleNamespace(),
+        calendar=SimpleNamespace(next_trading_day=lambda d, **kwargs: d + timedelta(days=1)),
+        now_provider=lambda: clock or datetime(2026, 10, 30, 10, tzinfo=ZoneInfo("Asia/Shanghai")))
+    calls = []
+    def publish(pid, *, decision_date, target_date):
+        calls.append((pid, decision_date))
+        if pid == failed_program:
+            raise DataUnavailableError("frozen seed asset unavailable")
+        row = repo.rows[f"{pid}-{decision_date.day}"]
+        row.update(publication_status="PUBLISHED", settlement_status="NOT_ENTERED")
+        return {"status": "PUBLISHED", "program_id": pid, "forward_run_id": row["forward_run_id"]}
+    service._publish = publish
+    return service, repo, calls
+
+
+def test_cross_day_recovery_orders_dates_and_is_idempotent():
+    service, _, calls = _cross_day_service()
+    result = service.recover_pending_publications(through=date(2026, 10, 29), program_ids=["a", "b"])
+    assert result["status"] == "COMPLETE"
+    assert calls == [("a", date(2026, 10, 28)), ("b", date(2026, 10, 28)),
+                     ("a", date(2026, 10, 29)), ("b", date(2026, 10, 29))]
+    service.recover_pending_publications(through=date(2026, 10, 29), program_ids=["a", "b"])
+    assert len(calls) == 4
+
+
+def test_cross_day_failed_program_does_not_block_other_programs_or_skip_its_own_date():
+    service, _, calls = _cross_day_service(failed_program="a")
+    result = service.recover_pending_publications(through=date(2026, 10, 29), program_ids=["a", "b"])
+    assert result["blocked_program_ids"] == ["a"]
+    assert calls == [("a", date(2026, 10, 28)), ("b", date(2026, 10, 28)), ("b", date(2026, 10, 29))]
+    assert any(r["status"] == "SKIPPED_PREVIOUS_PUBLICATION_PENDING" for r in result["results"])
+
+
+@pytest.mark.parametrize("field,value", [("program_version", 2),
+                                        ("binding_version_id", "old"), ("target_trade_date", date(2026, 11, 2))])
+def test_cross_day_recovery_preserves_dated_identity(field, value):
+    service, repo, calls = _cross_day_service()
+    repo.rows["a-28"][field] = value
+    result = service.recover_pending_publications(through=date(2026, 10, 29), program_ids=["a"])
+    assert result["status"] == "BLOCKED" and calls == []
+
+
+def test_cross_day_superseded_failure_is_preserved_without_blocking_current_backlog():
+    service, repo, calls = _cross_day_service()
+    repo.rows["a-28"]["newer_published"] = True
+    result = service.recover_pending_publications(through=date(2026, 10, 29), program_ids=["a"])
+    assert result["status"] == "COMPLETE"
+    assert result["results"][0]["status"] == "SKIPPED_SUPERSEDED_BY_PUBLISHED"
+    assert repo.rows["a-28"]["publication_status"] == "WAITING_DATA"
+    assert calls == [("a", date(2026, 10, 29))]
+
+
+def test_operator_cli_rejects_unbound_apply_before_loading_database(monkeypatch):
+    import sys
+    from scripts import advisory_forward_recover as cli
+    monkeypatch.setattr(sys, "argv", ["recover", "--through", "2020-01-01", "--program-id", "a", "--apply"])
+    monkeypatch.setattr(cli.subprocess, "check_output", lambda args, **kwargs: "a" * 40 if "rev-parse" in args else "")
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+
+
+def test_cross_day_recovery_exact_program_and_end_bound():
+    service, _, calls = _cross_day_service()
+    service.recover_pending_publications(through=date(2026, 10, 28), program_ids=["b"])
+    assert calls == [("b", date(2026, 10, 28))]
+
+
+def test_cross_day_recovery_busy_does_not_write_or_predict():
+    service, _, calls = _cross_day_service(acquired=False)
+    assert service.recover_pending_publications(through=date(2026, 10, 29), program_ids=["a"])["status"] == "ALREADY_RUNNING"
+    assert calls == []
+
+
+@pytest.mark.parametrize("day,hour,is_trading", [(30, 8, True), (31, 10, False)])
+def test_scheduler_recovers_known_pending_rows_before_close_and_on_weekend(day, hour, is_trading):
+    from zoneinfo import ZoneInfo
+    service, _, calls = _cross_day_service(clock=datetime(2026, 10, day, hour, tzinfo=ZoneInfo("Asia/Shanghai")))
+    service.calendar.is_trading_day = lambda d: is_trading
+    service._evaluate_mature_model_observations = lambda *a, **k: None
+    service._retry_one_model_observation = lambda *a: None
+    service._entry_price_after_baseline = lambda: {}
+    service._entry_value_after_baseline = lambda: {}
+    service._lstm_shadow_after_baseline = lambda: {}
+    result = service.run_once()
+    assert not result["publication_due"] and len(calls) == 4
+    assert all(r["stage"] == "CROSS_DAY_RECOVERY" for r in result["results"])
+
+
+def test_cross_day_recovery_does_not_allow_future_or_duplicate_scope():
+    service, _, calls = _cross_day_service()
+    for through, ids in [(date(2026, 10, 30), ["a"]), (date(2026, 10, 29), []), (date(2026, 10, 29), ["a", "a"])]:
+        with pytest.raises(ValueError):
+            service.recover_pending_publications(through=through, program_ids=ids)
+    assert calls == []
+
+
+@pytest.mark.parametrize("hour,minute,eligible", [(1, 29, True), (1, 30, False), (2, 0, False)])
+def test_publication_open_boundary_uses_real_aware_time(hour, minute, eligible):
+    timing = publication_timing(datetime(2026, 10, 30, hour, minute, tzinfo=UTC), date(2026, 10, 30))
+    assert timing["execution_eligible"] is eligible
+    assert timing["reason_code"] == (None if eligible else LATE_PUBLICATION_REASON)
+    with pytest.raises(ValueError):
+        publication_timing(datetime(2026, 10, 30, hour, minute), date(2026, 10, 30))
 
 
 def _program() -> AdvisoryProgram:
@@ -72,6 +220,12 @@ def _episode() -> AdvisoryEpisode:
 
 
 class _RecoveryRepository:
+    def cycle_lock(self):
+        return nullcontext(True)
+
+    def pending_publications(self, **_kwargs):
+        return []
+
     def __init__(
         self,
         persisted: dict[str, object],

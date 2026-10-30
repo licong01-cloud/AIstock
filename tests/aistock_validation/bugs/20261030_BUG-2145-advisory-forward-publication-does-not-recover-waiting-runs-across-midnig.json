@@ -7,7 +7,11 @@
     "backend/tests/advisory_model_first/test_forward_date_clock.py",
     "scripts/advisory_forward_recover.py",
     "docs/analysis/advisory_cross_day_recovery_20261030.md",
-    "tests/aistock_validation/bugs/20261030_BUG-2145-advisory-forward-publication-does-not-recover-waiting-runs-across-midnig.json"
+    "tests/aistock_validation/bugs/20261030_BUG-2145-advisory-forward-publication-does-not-recover-waiting-runs-across-midnig.json",
+    "backend/tests/advisory_model_first/test_forward_boundaries.py",
+    "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+    "backend/tests/advisory_model_first/test_forward_recovery_devdb.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2145",
@@ -32,13 +36,17 @@
   "file_scope_contract": {
     "added_files": [
       "scripts/advisory_forward_recover.py",
-      "docs/analysis/advisory_cross_day_recovery_20261030.md"
+      "docs/analysis/advisory_cross_day_recovery_20261030.md",
+      "backend/tests/advisory_model_first/test_forward_recovery_devdb.py"
     ],
     "changed_files": [
       "backend/services/advisory_forward/service.py",
       "backend/services/advisory_forward/repository.py",
       "backend/tests/advisory_model_first/test_forward_recovery.py",
-      "backend/tests/advisory_model_first/test_forward_date_clock.py"
+      "backend/tests/advisory_model_first/test_forward_date_clock.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -161,17 +169,22 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "backend",
+    "backend_restart_owner": "user",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "fresh_process_evidence": [
+      "python scripts/advisory_forward_recover.py --env-file F:/Dev/AIstock/.env --through 2026-10-29 --program-id <four authorized programs> -> fresh-process read-only preflight found 8 READY current backlog rows; preserved earlier superseded failed rows; no production writes or process control",
+      "AISTOCK_DEV_DB_E2E=1 pytest test_forward_recovery_devdb -> 3 existing DEV database rollback checks passed: real publication clock, idempotence, no episode writes, terminal late publication, unavailable non-prospective observation, cross-session lock"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
@@ -296,5 +309,10 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_model_evaluation.py -q -> 50 passed; failed fixture protocol repaired and exact failed node -> 1 passed",
+    "AISTOCK_DEV_DB_E2E=1 rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -> 3 passed across exact nodes, rolled back",
+    "rtk ruff check changed Python files -> passed"
+  ]
 }
