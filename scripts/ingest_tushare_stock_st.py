@@ -13,6 +13,10 @@ import datetime as dt
 import json
 import os
 import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -108,7 +112,8 @@ def _get_trading_days(conn, start: dt.date, end: dt.date) -> List[dt.date]:
 
 def _get_max_ann_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(ann_date) FROM market.stock_st")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(ann_date) FROM market.stock_st WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -195,6 +200,7 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _fetch_stock_st_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     ymd = trade_date.strftime("%Y%m%d")
     offset = 0
     limit = 1000  # Tushare 单次最大 1000；该接口每日数据实际不应超过 1000
@@ -205,6 +211,8 @@ def _fetch_stock_st_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
         if df is None or df.empty:
             break
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
             rows.append(
                 {
                     "ts_code": row.get("ts_code"),
@@ -235,11 +243,13 @@ def _parse_ymd(val) -> dt.date | None:
         if len(s) == 8:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
-    except Exception:
-        return None
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid source date: {val!r}") from exc
 
 
 def _upsert_stock_st(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = (
@@ -289,17 +299,9 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
         try:
             _update_job_progress(conn, job_id, stats)
             conn.commit()
-        except Exception as exc:  # noqa: BLE001
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            msg = f"failed to update job progress: {exc}"
-            print(f"[WARN] {msg}")
-            try:
-                _log(conn, job_id, "warn", msg)
-            except Exception:
-                pass
+        except Exception:
+            conn.rollback()
+            raise
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats

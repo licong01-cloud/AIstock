@@ -1,0 +1,744 @@
+{
+  "actual": "The 23 daily repair keys and 15 halt keys are all BSE; current raw/factor/basic/moneyflow daily partitions retain 353 BSE equities while active PIT contains none.",
+  "allowed_write_scope": [
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/services/sector_data_builder.py",
+    "scripts/repair_minute_via_minute_api.py",
+    "scripts/import_minutes_to_db.py",
+    "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/services/tushare_dataset_specs.py",
+    "backend/services/data_integrity/validation.py",
+    "backend/services/data_integrity/provider.py",
+    "backend/services/adj_factor_history_reconciler.py",
+    "scripts/build_stock_universe_pit_spans.py",
+    "scripts/ingest_tushare_adj_factor.py",
+    "scripts/ingest_tushare_daily_basic.py",
+    "scripts/ingest_tushare_moneyflow_ts.py",
+    "scripts/ingest_tushare_stock_basic.py",
+    "scripts/ingest_tushare_stock_st.py",
+    "scripts/ingest_tushare_bak_basic.py",
+    "scripts/ingest_tushare_cyq.py",
+    "scripts/ingest_tushare_weekly.py",
+    "scripts/ingest_incremental.py",
+    "scripts/ingest_full_minute.py",
+    "scripts/ingest_full_daily_raw.py",
+    "backend/qlib_exporter/db_reader.py",
+    "backend/services/dataset_release/adj_factor_candidate_repair.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/scripts/test_daily_integrity_writers.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/services/data_integrity/stock_scope.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2129",
+  "closed_at": "2026-10-29T04:52:45.235856Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T04:02:04.706128Z",
+  "description": "The 23 daily repair keys and 15 halt keys are all BSE; current raw/factor/basic/moneyflow daily partitions retain 353 BSE equities while active PIT contains none.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-41e6ac4d4778",
+      "timestamp": "2026-10-29T04:02:04.706128Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "All active local-data stock collection, persistence, validation, retry and export entry points consistently exclude BSE without changing PIT eligibility or relaxing SH/SZ completeness.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/provider.py",
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "backend/services/sector_data_builder.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "scripts/import_minutes_to_db.py",
+      "scripts/ingest_full_daily_raw.py",
+      "scripts/ingest_full_minute.py",
+      "scripts/ingest_incremental.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "scripts/ingest_tushare_bak_basic.py",
+      "scripts/ingest_tushare_cyq.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_moneyflow_ts.py",
+      "scripts/ingest_tushare_stock_basic.py",
+      "scripts/ingest_tushare_stock_st.py",
+      "scripts/ingest_tushare_weekly.py",
+      "scripts/repair_minute_via_minute_api.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "backend/services/data_integrity/stock_scope.py"
+    ],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/provider.py",
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "backend/services/sector_data_builder.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "scripts/import_minutes_to_db.py",
+      "scripts/ingest_full_daily_raw.py",
+      "scripts/ingest_full_minute.py",
+      "scripts/ingest_incremental.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "scripts/ingest_tushare_bak_basic.py",
+      "scripts/ingest_tushare_cyq.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_moneyflow_ts.py",
+      "scripts/ingest_tushare_stock_basic.py",
+      "scripts/ingest_tushare_stock_st.py",
+      "scripts/ingest_tushare_weekly.py",
+      "scripts/repair_minute_via_minute_api.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2129-local-data-collection-and-integrity-scopes-wrongly-include-unsupported-b.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/data_integrity/validation.py",
+        "backend/services/data_integrity/provider.py",
+        "backend/services/adj_factor_history_reconciler.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "scripts/ingest_tushare_adj_factor.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "scripts/ingest_tushare_moneyflow_ts.py",
+        "scripts/ingest_tushare_stock_basic.py",
+        "scripts/ingest_tushare_stock_st.py",
+        "scripts/ingest_tushare_bak_basic.py",
+        "scripts/ingest_tushare_cyq.py",
+        "scripts/ingest_tushare_weekly.py",
+        "scripts/ingest_incremental.py",
+        "scripts/ingest_full_minute.py",
+        "scripts/ingest_full_daily_raw.py",
+        "backend/qlib_exporter/db_reader.py",
+        "backend/services/dataset_release/adj_factor_candidate_repair.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/scripts/test_daily_integrity_writers.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/services/data_integrity/stock_scope.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "scripts",
+        "factor_library",
+        "platform.api",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/tushare_dataset_specs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/data_integrity/validation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/provider.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/adj_factor_history_reconciler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "scripts/build_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "scripts/ingest_tushare_adj_factor.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "scripts/ingest_tushare_daily_basic.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_daily_basic_operator"
+        },
+        {
+          "file": "scripts/ingest_tushare_moneyflow_ts.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "scripts/ingest_tushare_stock_basic.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ingest_tushare_stock_st.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ingest_tushare_bak_basic.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ingest_tushare_cyq.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ingest_tushare_weekly.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ingest_incremental.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "scripts/ingest_full_minute.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "scripts/ingest_full_daily_raw.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/qlib_exporter/db_reader.py",
+          "impact_modules": [
+            "qe.core",
+            "factor_library",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_data_pipeline"
+        },
+        {
+          "file": "backend/services/dataset_release/adj_factor_candidate_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/scripts/test_daily_integrity_writers.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/services/data_integrity/stock_scope.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/data_integrity/validation.py",
+        "backend/services/data_integrity/provider.py",
+        "backend/services/adj_factor_history_reconciler.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "scripts/ingest_tushare_adj_factor.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "scripts/ingest_tushare_moneyflow_ts.py",
+        "scripts/ingest_tushare_stock_basic.py",
+        "scripts/ingest_tushare_stock_st.py",
+        "scripts/ingest_tushare_bak_basic.py",
+        "scripts/ingest_tushare_cyq.py",
+        "scripts/ingest_tushare_weekly.py",
+        "scripts/ingest_incremental.py",
+        "scripts/ingest_full_minute.py",
+        "scripts/ingest_full_daily_raw.py",
+        "backend/qlib_exporter/db_reader.py",
+        "backend/services/dataset_release/adj_factor_candidate_repair.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/scripts/test_daily_integrity_writers.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/services/data_integrity/stock_scope.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/data_integrity/provider.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_moneyflow_ts.py",
+      "scripts/ingest_tushare_stock_basic.py",
+      "scripts/ingest_tushare_stock_st.py",
+      "scripts/ingest_tushare_bak_basic.py",
+      "scripts/ingest_tushare_cyq.py",
+      "scripts/ingest_tushare_weekly.py",
+      "scripts/ingest_incremental.py",
+      "scripts/ingest_full_minute.py",
+      "scripts/ingest_full_daily_raw.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/services/data_integrity/stock_scope.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/data_integrity/provider.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_moneyflow_ts.py",
+      "scripts/ingest_tushare_stock_basic.py",
+      "scripts/ingest_tushare_stock_st.py",
+      "scripts/ingest_tushare_bak_basic.py",
+      "scripts/ingest_tushare_cyq.py",
+      "scripts/ingest_tushare_weekly.py",
+      "scripts/ingest_incremental.py",
+      "scripts/ingest_full_minute.py",
+      "scripts/ingest_full_daily_raw.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/scripts/test_daily_integrity_writers.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/services/data_integrity/stock_scope.py"
+    ]
+  },
+  "first_seen_at": "2026-10-29T04:02:04.706128Z",
+  "fix_branch": null,
+  "fix_commit": "7c90000a1b5ccb187b4f5c4e4641b52f195e584c",
+  "fixed_at": "2026-10-29T04:43:52Z",
+  "github_issue_number": 6851,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6851",
+  "last_seen_at": "2026-10-29T04:02:04.706128Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6856",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "{'command': 'python X:/AIstock_temp/DATA_PREPARATION/BUG-2129-shsz-scope-20261029/validate_dev.py', 'result': 'PASS: real source facts for 2025-09-15 and 2026-10-21 validate in 8 DEV partitions; shared writer stores 3 SH/SZ and 0 BSE rows, repeat changes 0 dates; production read-only'}"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2129-close-sync-20261029\\tmp\\issue_workflow\\BUG-2129\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2129",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "7c90000a1b5ccb187b4f5c4e4641b52f195e584c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T04:50:58.543224Z",
+      "mode": "read_only",
+      "observed_identity": "b2c699f1e206cca5fd1dd11ff3cfe390abe8871f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6494f4d1f79d9f3c3e39c8d469f353058ea22f56ce73221ee79ddf768b620b05",
+      "receipt_sha256": "2b92939ab630da6f16af1288a12f14ca48936702a218b751189749f9deac8ca8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "de8418858c5a03c33a81bb08b3af528adb2d207b0ac3e8de697b09642fd539a2",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2129",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "97616c6cd811b1d4",
+    "recorded_at": "2026-10-29T04:44:40.242818Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "df01b56fb132c1e4980afe89f42e41bce6b1eb01",
+    "source_merge_commit": "7c90000a1b5ccb187b4f5c4e4641b52f195e584c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6856",
+    "validation_evidence": [
+      "validation-receipt: id=bd4c09b6f6333939 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py::test_a_share_ts_code_filter_fragment backend/tests/test_stock_universe_pit_spans.py::test_universe_source_queries_exclude_b_shares -q` result=`2 passed; prior direct matrix 383 passed, 1 skipped`",
+      "validation-receipt: id=5af0db1960b19cb7 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=abbc5c0370f57c2f commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`passed`",
+      "validation-receipt: id=61983d3abd70240d commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`"
+    ],
+    "validation_evidence_digest": "49caa8b252791d56a661aef115d4a53b05658d355d24f17e7a2d3a818e78e6ef"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Local data collection and integrity scopes wrongly include unsupported BSE equities",
+  "trigger_condition": {
+    "fingerprint": "41e6ac4d47785f358f67ed29",
+    "source_event_id": "FE-20261029-41e6ac4d4778"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=bd4c09b6f6333939 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py::test_a_share_ts_code_filter_fragment backend/tests/test_stock_universe_pit_spans.py::test_universe_source_queries_exclude_b_shares -q` result=`2 passed; prior direct matrix 383 passed, 1 skipped`",
+    "validation-receipt: id=5af0db1960b19cb7 commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=abbc5c0370f57c2f commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`passed`",
+    "validation-receipt: id=61983d3abd70240d commit=df01b56fb132c1e4980afe89f42e41bce6b1eb01 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`",
+    "backend-main native runtime descendant readback and business smoke -> passed",
+    "postrestart_readback.py -> nine handed-off partitions VALID; old BSE-only adj_factor and moneyflow failures resolved; no source fact writes"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "qlib_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "qlib_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

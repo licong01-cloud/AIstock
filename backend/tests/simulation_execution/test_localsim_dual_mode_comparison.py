@@ -1,11 +1,17 @@
 """File-contract functional population; not real-history economic evidence."""
 
 from decimal import Decimal
+import hashlib
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from backend.services.position_timing.intraday.replay import FileRef
+from backend.services.position_timing.intraday.store import IntradayError
 from backend.services.simulation_execution.localsim import dual_mode_research as dual
 from backend.services.simulation_execution.localsim.timing_research import ref
 from backend.services.simulation_execution.localsim.timing_store import read_json, publish
@@ -30,6 +36,172 @@ def dual_fixture(tmp_path, monkeypatch, *, two_days=True, matrix="FULL_13"):
     frozen = dual.freeze_study(source_request=FileRef.model_validate(source["request"]),
                               output_root=tmp_path / "dual", producer_commit="2" * 40, matrix=matrix)
     return FileRef.model_validate(frozen["request"]), tmp_path / "dual"
+
+
+def test_report_only_recovery_preserves_old_study_and_exact_retry_never_computes_accounts(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, matrix="BASIC_2")
+    first = dual.run_study(request)
+    original = read_json(Path(first["results"]["path"]))
+    root = Path(request.path).parent
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    monkeypatch.setattr(dual, 'implementation_identity', lambda: {'report_fix': 'new_source'})
+    with pytest.raises(ValueError, match='REQUEST_IDENTITY'):
+        dual.run_study(request)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    # The refused run appends its existing immutable operational failure receipt.
+    # Report-only recovery itself must add or modify nothing in this origin.
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    def forbidden(*args, **kwargs):
+        raise AssertionError('report recovery cannot calculate or trade')
+    monkeypatch.setattr(dual, '_compute_account_day', forbidden)
+    revised = dual.resummarize_study(request_ref=request,
+        results_ref=FileRef.model_validate(first['results']), output_root=tmp_path / 'revisions',
+        producer_commit='3' * 40)
+    assert revised['status'] == 'MATERIALIZED' and revised['computed_account_days'] == 0
+    assert revised['verified_account_days'] == 4
+    new = read_json(Path(revised['results']['path']))
+    assert new['accounts'] == original['accounts']
+    assert new['producer_source_commit'] == original['producer_source_commit']
+    assert new['report_only_revision']['producer_source_commit'] == '3' * 40
+    again = dual.resummarize_study(request_ref=request,
+        results_ref=FileRef.model_validate(first['results']), output_root=tmp_path / 'revisions',
+        producer_commit='3' * 40)
+    assert again['status'] == 'ALREADY_MATERIALIZED' and again['results'] == revised['results']
+    assert before == {p: p.read_bytes() for p in root.rglob('*.json')}
+
+
+@pytest.mark.parametrize('target', ['day', 'receipt'])
+def test_report_only_recovery_rejects_corrupt_original_prefix_before_publication(tmp_path, monkeypatch, target):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    first = dual.run_study(request)
+    original = read_json(Path(first['results']['path']))
+    day_path = Path(original['accounts'][0]['days'][0]['path'])
+    target_path = day_path if target == 'day' else Path(read_json(day_path)['account_receipt']['path'])
+    target_path.write_bytes(target_path.read_bytes() + b' ')
+    with pytest.raises(IntradayError, match='RESEARCH_SOURCE_IDENTITY_MISMATCH'):
+        dual.resummarize_study(request_ref=request, results_ref=FileRef.model_validate(first['results']),
+            output_root=tmp_path / 'revisions', producer_commit='3' * 40)
+    assert not (tmp_path / 'revisions').exists()
+
+
+def test_report_recovery_inspects_complete_sources_before_any_outcome(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    first = dual.run_study(request)
+    result_path = Path(first['results']['path'])
+    real_read = dual.read_json
+    def guarded(path):
+        assert Path(path) != result_path, 'outcomes must stay unread after source failure'
+        return real_read(path)
+    def unavailable(*args, **kwargs):
+        raise ValueError('SOURCE_BATCH_UNAVAILABLE')
+    monkeypatch.setattr(dual, 'read_json', guarded)
+    monkeypatch.setattr(dual, '_source_inspect', unavailable)
+    with pytest.raises(ValueError, match='SOURCE_BATCH_UNAVAILABLE'):
+        dual.resummarize_study(request_ref=request, results_ref=FileRef.model_validate(first['results']),
+            output_root=tmp_path / 'revisions', producer_commit='3' * 40)
+    assert not (tmp_path / 'revisions').exists()
+
+
+def test_report_revision_conflict_is_not_silently_overwritten(tmp_path, monkeypatch):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    first = dual.run_study(request)
+    kwargs = dict(request_ref=request, results_ref=FileRef.model_validate(first['results']),
+                  output_root=tmp_path / 'revisions', producer_commit='3' * 40)
+    revised = dual.resummarize_study(**kwargs)
+    path = Path(revised['results']['path'])
+    before = path.read_bytes()
+    original = dual.summarize_accounts
+    def changed(*args, **kw):
+        rows = original(*args, **kw)
+        rows[0]['fee_difference_cny'] = '0.0000000000000000000001'
+        return rows
+    monkeypatch.setattr(dual, 'summarize_accounts', changed)
+    with pytest.raises(ValueError, match='IMMUTABLE_ARTIFACT_CONFLICT'):
+        dual.resummarize_study(**kwargs)
+    assert path.read_bytes() == before
+
+
+def test_continuous_comparisons_are_byte_identical_across_fresh_processes():
+    accounts = [
+        {"account_id": "native", "operation": {"operation_mode": "NATIVE"},
+         "rule": "LOCALSIM_NATIVE_TWAP", "delay_seconds": None,
+         "terminal_nav_cny": "10000000", "max_drawdown": "0", "fees_cny": "0"},
+        {"account_id": "human", "operation": {"operation_mode": "HUMAN_SIM"},
+         "rule": "FIRST_OBSERVABLE_V1", "delay_seconds": 60,
+         "terminal_nav_cny": "10000000", "max_drawdown": "0", "fees_cny": "0"},
+    ]
+    histories = {
+        a["account_id"]: [{"trade_date": "2026-09-21", "parents": [
+            {"symbol": f"{index:06d}.SZ", "side": "BUY" if index % 2 == 0 else "SELL",
+             "filled_quantity": 1000,
+             "average_price_raw": str(Decimal(10) + Decimal(index % (
+                 113 if a["account_id"] == "human" else 173)) / 100)}
+            for index in range(5000)]}]
+        for a in accounts
+    }
+    script = """
+import json, sys
+from backend.services.simulation_execution.localsim.dual_mode_research import summarize_accounts
+inputs = json.loads(sys.stdin.read())
+result = summarize_accounts(inputs['accounts'], inputs['histories'])
+print('SUMMARY_JSON=' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+"""
+    outputs = []
+    for seed in ("1", "2", "3", "4"):
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", script],
+            input=json.dumps({"accounts": accounts, "histories": histories}),
+            capture_output=True, text=True, encoding="utf-8", check=True, timeout=60,
+            cwd=Path(__file__).resolve().parents[3],
+            env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        outputs.append(next(line.removeprefix("SUMMARY_JSON=") for line in
+                            completed.stdout.splitlines() if line.startswith("SUMMARY_JSON=")))
+    assert len(set(outputs)) == 1, [hashlib.sha256(s.encode()).hexdigest() for s in outputs]
+    comparisons = json.loads(outputs[0])
+    assert len(comparisons) == 2
+    for row in comparisons:
+        assert row["net_increment_cny"] == row["fee_difference_cny"] == row["mdd_reduction"] == "0"
+        for side, count in (("ALL", 5000), ("BUY", 2500), ("SELL", 2500)):
+            paired = row["conditional_execution"][side]
+            assert paired["paired_count"] == paired["union_plan_count"] == count
+            assert paired["missing_fraction"] == "0"
+
+
+@pytest.mark.parametrize("metric", ["fee_difference_cny", "conditional_price_cost_bps"])
+def test_actual_result_conflict_still_rejects_retry_and_preserves_all_old_artifacts(tmp_path, monkeypatch, metric):
+    request, _ = dual_fixture(tmp_path, monkeypatch, two_days=False, matrix="BASIC_2")
+    real_summary = dual.summarize_accounts
+
+    def original(*args, **kwargs):
+        rows = real_summary(*args, **kwargs)
+        if metric == "conditional_price_cost_bps":
+            # A numeric report fixture isolates byte immutability from whether
+            # the small account fixture happens to have matched executions.
+            rows[0]["conditional_execution"]["ALL"][metric] = "1.234567890123456789012345678"
+        return rows
+
+    monkeypatch.setattr(dual, "summarize_accounts", original)
+    first = dual.run_study(request)
+    root = Path(request.path).parent
+    before = {p: p.read_bytes() for p in root.rglob("*.json")}
+    def changed_comparison(*args, **kwargs):
+        rows = original(*args, **kwargs)
+        if metric == "fee_difference_cny":
+            rows[0][metric] = "1"
+        else:
+            paired = rows[0]["conditional_execution"]["ALL"]
+            old = Decimal(paired[metric])
+            new = old.next_plus()
+            assert 0 < new - old < Decimal("1E-20")
+            paired[metric] = str(new)
+        return rows
+
+    monkeypatch.setattr(dual, "summarize_accounts", changed_comparison)
+    with pytest.raises(ValueError, match="LOCALSIM_TIMING_IMMUTABLE_ARTIFACT_CONFLICT"):
+        dual.run_study(request)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    assert ref(Path(first["results"]["path"])) == first["results"]
 
 
 def test_thirteen_accounts_two_days_resume_native_journals_and_exact_retry(tmp_path, monkeypatch):

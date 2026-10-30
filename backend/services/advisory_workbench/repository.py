@@ -103,6 +103,30 @@ class ReadRepository:
             WHERE program_id=%s""" + where + " ORDER BY target_trade_date DESC,updated_at DESC LIMIT 1",
             (program_id, target) if target else (program_id,))
 
+    def recommendation_items(self, program_id, version_ids, symbols):
+        return self.rows("""SELECT list_version_id,program_id,binding_version_id,symbol,
+            item_state,action,reason_code FROM app.advisory_recommendation_list_item
+            WHERE program_id=%s AND list_version_id=ANY(%s) AND symbol=ANY(%s)""",
+            (program_id, version_ids, symbols)) if version_ids else []
+
+    def open_prices(self, symbols, days):
+        if not days:
+            return {}
+        rows = self.rows("""SELECT k.ts_code AS symbol,k.trade_date,
+            CASE WHEN k.volume_hand>0 OR k.volume_shares>0 THEN k.open_li / %s END AS open_price,
+            EXISTS(SELECT 1 FROM market.suspend_d s
+                WHERE s.ts_code=k.ts_code AND s.trade_date=k.trade_date AND s.suspend_type='S') AS suspended
+            FROM market.kline_daily_raw k WHERE k.ts_code=ANY(%s) AND k.trade_date=ANY(%s::date[])""",
+            (MARKET_PRICE_UNIT_DIVISOR, symbols, days))
+        return {(r['symbol'], str(r['trade_date'])): r for r in rows}
+
+    def entry_links(self, program_id, version, symbols):
+        return self.rows("""SELECT code AS symbol,episode_id FROM app.advisory_daily_review
+            WHERE program_id=%s AND list_version_id=%s AND binding_version_id=%s
+              AND trade_date=%s AND code=ANY(%s) AND action='ENTER' AND episode_id IS NOT NULL""",
+            (program_id, version['list_version_id'], version['binding_version_id'],
+             version['trade_date'], symbols)) if symbols else []
+
     def calendar(self, start: date, end: date):
         return self.rows("""SELECT cal_date,is_trading FROM market.trading_calendar
             WHERE cal_date BETWEEN %s AND %s ORDER BY cal_date""", (start, end + timedelta(days=30)))

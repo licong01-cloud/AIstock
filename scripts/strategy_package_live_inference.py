@@ -168,14 +168,23 @@ def main() -> int:
         return _run_historical_plan(args, runtime_workspace)
     if args.resume:
         parser.error("--resume applies only to an explicit historical plan")
+    manifest_path = runtime_workspace / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    bound_daily_input = manifest.get("input_readiness") is not None
+    if bound_daily_input and args.dataset_binding:
+        parser.error("bound daily inputs cannot be replaced by a historical file dataset")
     with ExitStack() as stack:
-        # Same legal DB input adapter for standalone and batch. A standalone
-        # session retains no history; there is no shared cache or fresh fit.
-        inputs = _input_session(args, run_id=args.run_id or uuid.uuid4().hex,
-                                source_identity=args.input_revision or "standalone_read", max_bytes=0)
-        stack.callback(inputs.close)
+        # A readiness-bound daily request uses the engine's pinned DB capture.
+        # Historical sessions have a separate capture contract and must not
+        # replace or bypass its exact date, dataset and revision verification.
+        inputs = None
+        if not bound_daily_input:
+            inputs = _input_session(args, run_id=args.run_id or uuid.uuid4().hex,
+                                    source_identity=args.input_revision or "standalone_read", max_bytes=0)
+            stack.callback(inputs.close)
         engine = InferenceEngine(temp_root=temporary_root, performance_reference=args.performance_reference,
-                                 required_window_resolver=_strategy_package_required_window, input_session=inputs)
+                                 required_window_resolver=_strategy_package_required_window, input_session=inputs,
+                                 fundamental_reader=_strategy_package_fundamental_reader if bound_daily_input else None)
         output_path = Path(args.output_path)
         with inference_output_lease(output_path):
             payload = _run_request(engine, runtime_workspace, args.trade_date, args.cutoff_date, args.historical_read_only, output_path)
@@ -185,7 +194,12 @@ def main() -> int:
 
 def _strategy_package_fundamental_reader(*, universe, start_date, end_date):
     from backend.data_service import qe_data_service
-    return qe_data_service.build_static_factors(universe, start_date, end_date, asof_fill_slow_static=True)
+    # Readiness-bound Advisory accepts audited chip gaps as NaN. Preserve all
+    # other established slow-field handling; never forward-fill chip values.
+    return qe_data_service.build_static_factors(
+        universe, start_date, end_date, asof_fill_slow_static=True,
+        asof_fill_prefixes=tuple(p for p in qe_data_service.LIVE_ASOF_STATIC_PREFIXES if p != "cp_"),
+    )
 
 
 def _run_request(

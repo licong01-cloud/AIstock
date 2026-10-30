@@ -348,3 +348,79 @@ def test_economic_comparison_never_discards_fill_ids_trade_clock_quantity_or_pri
         variants.append(event.model_copy(update={"fill": fill.model_copy(update=updates)}))
     for changed in variants:
         assert economic_account(event) != economic_account(changed)
+
+
+@pytest.mark.parametrize("optimized", [False, True])
+def test_same_frozen_research_keeps_logical_day_identity_across_output_roots(tmp_path, monkeypatch, optimized):
+    from pathlib import Path
+    from backend.services.position_timing.intraday.replay import FileRef
+    from backend.services.simulation_execution.localsim import dual_mode_research as dual
+    from backend.services.simulation_execution.localsim.timing_research import ref
+    from backend.services.simulation_execution.localsim.timing_store import read_json
+    from backend.tests.simulation_execution.test_localsim_dual_mode_comparison import dual_fixture
+
+    request, _ = dual_fixture(tmp_path, monkeypatch, matrix="BASIC_2")
+    other = tmp_path / "independent-output" / Path(request.path).parent.name / "request.json"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(Path(request.path).read_bytes())
+    other_ref = FileRef.model_validate(ref(other))
+    assert request.sha256 == other_ref.sha256
+    options = ResearchPerformanceOptions(optimized=optimized)
+    left = read_json(Path(dual.run_study(request, performance=options)["results"]["path"]))
+    right = read_json(Path(dual.run_study(other_ref, performance=options)["results"]["path"]))
+    assert len(left["trade_dates"]) == len(right["trade_dates"]) == 2
+    assert len(left["accounts"]) == len(right["accounts"]) == 2
+
+    def complete_business(day, native):
+        return economic_account({"day": {k: v for k, v in day.items()
+            if k not in {"account_receipt", "previous_day"}}, "facts": native["facts"], "states": native["states"]})
+
+    for a, b in zip(left["accounts"], right["accounts"]):
+        assert a["account_id"] == b["account_id"]
+        assert len(a["days"]) == len(b["days"]) == 2
+        previous = [None, None]
+        for ar, br in zip(a["days"], b["days"]):
+            da, db = read_json(Path(ar["path"])), read_json(Path(br["path"]))
+            assert da["previous_day"] == previous[0] and db["previous_day"] == previous[1]
+            ra = read_json(Path(da["account_receipt"]["path"]))["payload"]
+            rb = read_json(Path(db["account_receipt"]["path"]))["payload"]
+            assert ra["run_id"] == rb["run_id"], "physical output paths must not change logical day identity"
+            assert complete_business(da, ra) == complete_business(db, rb)
+            previous = [ar, br]
+
+
+def test_day_identity_binds_execution_inputs_and_ignores_audit_only_fields():
+    from backend.services.simulation_execution.localsim import dual_mode_research as dual
+
+    prior = {"cash_cny": "10000000", "positions": {}, "marks_raw_cny": {"000001.SZ": "10"}}
+    args = {"request_identity": "a" * 64, "account_id": "account-a", "trade_date": "2026-01-06", "prior": prior}
+    baseline = dual._account_day_identity(**args)
+    for changed in ({"request_identity": "b" * 64}, {"account_id": "account-b"}, {"trade_date": "2026-01-07"}):
+        assert dual._account_day_identity(**{**args, **changed}) != baseline
+    for changed in ({"cash_cny": "9999999"}, {"positions": {"000001.SZ": {"quantity": 100}}},
+                    {"marks_raw_cny": {"000001.SZ": "10.01"}}):
+        assert dual._account_day_identity(**{**args, "prior": {**prior, **changed}}) != baseline
+    audit_only = {"previous_day": {"path": "/other/output.json", "sha256": "c" * 64},
+                  "human_operation_metrics": {"maximum_queue": 99}, "created_at": "2026-10-28T00:00:00Z"}
+    assert dual._account_day_identity(**{**args, "prior": {**prior, **audit_only}}) == baseline
+
+
+def test_path_independent_day_identity_still_rejects_tampered_committed_account(tmp_path, monkeypatch):
+    from pathlib import Path
+    from backend.services.simulation_execution.localsim import dual_mode_research as dual
+    from backend.services.simulation_execution.localsim.timing_store import read_json
+    from backend.tests.simulation_execution.test_localsim_dual_mode_comparison import dual_fixture
+
+    request, _ = dual_fixture(tmp_path, monkeypatch, matrix="BASIC_2")
+    paused = dual.run_study(request, stop_after_account_days=1)
+    assert paused["status"] == "CHECKPOINTED"
+    root = Path(request.path).parent
+    generations = {p: p.read_bytes() for p in (root / "journals").glob("*/generations/*.json")}
+    day_path = next((root / "days").glob("*/*.json"))
+    day = read_json(day_path)
+    day["cash_cny"] = str(Decimal(day["cash_cny"]) + 1)
+    day_path.write_text(json.dumps(day), encoding="utf-8")
+    with pytest.raises(ValueError, match="LOCALSIM_TIMING_IMMUTABLE_ARTIFACT_CONFLICT"):
+        dual.run_study(request)
+    assert all(p.read_bytes() == body for p, body in generations.items())
+    assert not (root / "results.json").exists()

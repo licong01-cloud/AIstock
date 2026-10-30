@@ -1,0 +1,429 @@
+{
+  "actual": "BUG-2112 and BUG-2125 canonical finish require unrelated backend-main runbook, identity and business smoke contracts.",
+  "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2131-localsim-offline-study-cli-lacks-an-exact-runtime-source-role.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2131",
+  "catalog_owner_review_20261029": {
+    "boundaries": {
+      "business_database_access": false,
+      "business_source_prs_merged": false,
+      "business_worktrees_edited": false,
+      "market_or_dataset_access": false,
+      "original_study_results_changed": false,
+      "qe_or_training": false,
+      "service_control": false
+    },
+    "business_contract_consumption": [
+      {
+        "blocking": [],
+        "bug_id": "BUG-2112",
+        "changed_files": [
+          "tests/aistock_validation/bugs/20261028_BUG-2112-localsim.json",
+          "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "backend/tests/simulation_execution/test_localsim_replay_performance.py",
+          "docs/architecture/localsim_replay_performance_f2_detailed_design_20261028.md",
+          "docs/analysis/localsim_batch_reader_acceptance_20261028.md"
+        ],
+        "main_defined": true,
+        "reconciliation": {
+          "actual_target_ids": [],
+          "applied": true,
+          "planned_target_ids": [
+            "backend-main"
+          ],
+          "status": "narrowed"
+        },
+        "runtime_impact": "none",
+        "source_head": "e06951017627fc3307867ad0949dda61e98c165b",
+        "source_sha256": "636116592ffe9ef95bfe46d210630bb04a3d4bd77d18aaafd53e1f7bd802284c",
+        "target_ids": []
+      },
+      {
+        "blocking": [],
+        "bug_id": "BUG-2125",
+        "changed_files": [
+          "backend/services/simulation_execution/localsim/dual_mode_research.py",
+          "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+          "docs/analysis/localsim_immutable_summary_conflict_20261029.md",
+          "tests/aistock_validation/bugs/20261029_BUG-2125-localsim-continuous-study-exact-retry-conflicts-because-price-comparison.json"
+        ],
+        "main_defined": true,
+        "reconciliation": {
+          "actual_target_ids": [],
+          "applied": true,
+          "planned_target_ids": [
+            "backend-main"
+          ],
+          "status": "narrowed"
+        },
+        "runtime_impact": "none",
+        "source_head": "5b6c60026e63ea6448af399b91fa4f13f38d9951",
+        "source_sha256": "75d7c2a782a9579c5b6757f67a069b0870bdb92a72bc65fa8305577ef13b8747",
+        "target_ids": []
+      }
+    ],
+    "business_issues": [
+      "BUG-2112/#6796",
+      "BUG-2125/#6837"
+    ],
+    "call_closure": [
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
+        "line": 113,
+        "module": "dual_mode_research",
+        "names": [
+          "_compute_account_day"
+        ],
+        "scope": [
+          "_isolated_account_day"
+        ]
+      },
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\research_performance.py",
+        "line": 145,
+        "module": "dual_mode_research",
+        "names": [
+          "_compute_account_day"
+        ],
+        "scope": [
+          "AccountComputations",
+          "result"
+        ]
+      },
+      {
+        "file": "backend\\services\\simulation_execution\\localsim\\dual_mode_research.py",
+        "line": 30,
+        "module": "research_performance",
+        "names": [
+          "ResearchAccountPool",
+          "ResearchMarketWorkspace",
+          "ResearchPerformanceOptions"
+        ],
+        "scope": []
+      }
+    ],
+    "design_compliance": {
+      "business_semantics_unchanged": true,
+      "complete_in_scope": true,
+      "no_false_success": true,
+      "no_unapproved_gates_or_relaxation": true
+    },
+    "reviews": [
+      {
+        "focus": "Real callers",
+        "result": "Standalone main/__main__ coordinator; the only two production imports are deferred _compute_account_day calls in research_performance._isolated_account_day and AccountComputations.result, owned by CLI ResearchAccountPool. Online router reads dual_mode_projection; native runtime imports shared helpers. Only the coordinator is non-runtime.",
+        "round": 1
+      },
+      {
+        "focus": "Specificity and fail-closed boundary",
+        "result": "The exact rule beats backend/**/*.py. The five online/unknown neighbors and mixed scopes remain backend-main; BUG metadata cannot downgrade them. Equal exact runtime/non-runtime specificity remains unknown.",
+        "round": 2
+      },
+      {
+        "focus": "Fresh-process business catalog consumption",
+        "result": "Read original BUG records and actual changed-file sets without editing either business worktree. Canonical build_runtime_contract narrowed provisional backend plans to none, no target and no blockers for both 2112 and 2125. The current 2125 HEAD and normalized source hash match r2.",
+        "round": 3
+      },
+      {
+        "focus": "Verification and unchanged budget",
+        "result": "675 related tests passed in the first matrix; its sole failure was the existing 30% module ratio. Reused classification payload and LocalSIM path fixtures, preserving all scenarios/assertions; final 43-case role/budget matrix and lint pass. Guardrail/ownership, 8 catalog tests and workflow smoke pass. CI performs final broad validation.",
+        "round": 4
+      }
+    ],
+    "source_role": {
+      "catalog_sha256": "dc31068c40698e12dab7ece76250c34e4b82588093ac1233e31bd8a04538c15c",
+      "exact_path": "backend/services/simulation_execution/localsim/dual_mode_research.py",
+      "rule_id": "offline-localsim-dual-mode-study"
+    },
+    "validation": {
+      "catalog_tests_passed": 8,
+      "final_direct_role_and_budget_passed": 43,
+      "guardrail_files": 3,
+      "initial_full_related_passed": 675,
+      "workflow_smoke": "passed"
+    }
+  },
+  "closed_at": "2026-10-29T04:36:58Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T04:27:49.179490Z",
+  "description": "BUG-2112 and BUG-2125 canonical finish require unrelated backend-main runbook, identity and business smoke contracts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-d86060dee51e",
+      "timestamp": "2026-10-29T04:27:49.179490Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/6796",
+    "https://github.com/licong01-cloud/AIstock/issues/6837",
+    "X:/AIstock_temp/localsim-immutable-summary-20261029/runtime-owner-prompt-r2.md"
+  ],
+  "expected": "The exact offline CLI changed set resolves from the catalog to none; online, mixed and unknown adjacent source remains backend-main and cannot be downgraded by BUG metadata.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261029_BUG-2131-localsim-offline-study-cli-lacks-an-exact-runtime-source-role.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261029_BUG-2131-localsim-offline-study-cli-lacks-an-exact-runtime-source-role.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.module_quality",
+        "validation.runner",
+        "validation.workflow_automation"
+      ],
+      "matched_rules": [
+        {
+          "file": "docs/standards/aistock_runtime_targets_v1.yaml",
+          "impact_modules": [
+            "validation.module_quality",
+            "validation.runner"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "runtime_target_catalog"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ]
+  },
+  "first_seen_at": "2026-10-29T04:27:49.179490Z",
+  "fix_branch": null,
+  "fix_commit": "1abb26cbfbe40841f8e558a294854e8095c8c063",
+  "fixed_at": "2026-10-29T04:36:58Z",
+  "github_issue_number": 6854,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6854",
+  "last_seen_at": "2026-10-29T04:27:49.179490Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6858",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k exact_offline_roles -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2131",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "70bfdb4784f4b48d",
+    "recorded_at": "2026-10-29T04:37:53.550680Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "753e85f6521fb8c853d483a5a34fe8b824efa426",
+    "source_merge_commit": "1abb26cbfbe40841f8e558a294854e8095c8c063",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6858",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -> passed (3 explicit changed files)",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_exact_offline_roles_cannot_downgrade_mixed_online_scope backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> passed (43 tests)",
+      "python -m nox -s validation_catalog_integrity -> passed (8 tests)",
+      "python scripts/aistock_issue_workflow.py workflow-smoke -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "8a256d1e6606be51a138ed8ddd512009fe16a4f739323ddd514f75bf80f98599"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "LocalSIM offline study CLI lacks an exact runtime source role",
+  "trigger_condition": {
+    "fingerprint": "d86060dee51ea6cbed62784d",
+    "source_event_id": "FE-20261029-d86060dee51e"
+  },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -> passed (3 explicit changed files)",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_exact_offline_roles_cannot_downgrade_mixed_online_scope backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> passed (43 tests)",
+    "python -m nox -s validation_catalog_integrity -> passed (8 tests)",
+    "python scripts/aistock_issue_workflow.py workflow-smoke -> passed",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

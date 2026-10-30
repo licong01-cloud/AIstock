@@ -10,7 +10,10 @@ from uuid import uuid4
 from psycopg2.extras import Json, RealDictCursor
 
 from backend.db.pg_pool import get_conn
-from .contracts import CANONICAL_SOURCE, CONTRACT_VERSION, ValidationResult, digest
+from .contracts import (
+    CANONICAL_SOURCE, CONTRACT_VERSION, DENSE_TRADED_BASIS, DENSE_TRADED_DATASETS,
+    ValidationResult, digest,
+)
 
 
 class IntegrityRevisionChanged(RuntimeError):
@@ -67,7 +70,9 @@ def enqueue_validation(conn, dataset: str, day: date) -> None:
                 jsonb_build_object('desired_revision',data_revision,'desired_scope',%s::text,'desired_rule',%s::text)
             FROM market.dataset_date_refresh_audit WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db'
               AND (validated_revision IS DISTINCT FROM data_revision OR validation_status NOT IN ('VALID','NOT_APPLICABLE')
-                   OR scope_version IS DISTINCT FROM %s OR rule_version IS DISTINCT FROM %s)
+                   OR scope_version IS DISTINCT FROM %s OR rule_version IS DISTINCT FROM %s
+                   OR (dataset=ANY(%s) AND validation_status='VALID'
+                       AND metadata#>>'{validation,checks,coverage_basis}' IS DISTINCT FROM %s))
             ON CONFLICT (dataset,data_source,target_key_sha256) DO UPDATE SET
                 metadata=CASE WHEN t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
                     OR t.metadata->>'desired_rule' IS DISTINCT FROM EXCLUDED.metadata->>'desired_rule'
@@ -79,7 +84,8 @@ def enqueue_validation(conn, dataset: str, day: date) -> None:
                 next_retry_at=CASE WHEN t.target_status='reconciled' OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
                     OR t.metadata->>'desired_rule' IS DISTINCT FROM EXCLUDED.metadata->>'desired_rule'
                     THEN clock_timestamp() ELSE t.next_retry_at END,
-                updated_at=clock_timestamp()""", ("dst_"+key[:24], key, SCOPE_VERSION, RULE_VERSION, dataset, day, SCOPE_VERSION, RULE_VERSION))
+                updated_at=clock_timestamp()""", ("dst_"+key[:24], key, SCOPE_VERSION, RULE_VERSION, dataset, day,
+                    SCOPE_VERSION, RULE_VERSION, list(DENSE_TRADED_DATASETS), DENSE_TRADED_BASIS))
 
 
 class IntegrityRepository:

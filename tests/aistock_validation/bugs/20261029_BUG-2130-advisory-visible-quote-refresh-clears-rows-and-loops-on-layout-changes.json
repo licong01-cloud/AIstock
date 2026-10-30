@@ -1,0 +1,331 @@
+{
+  "actual": "Live table flickers and repeatedly refetches identical 20-symbol batches approximately every 330ms.",
+  "allowed_write_scope": [
+    "frontend/src/components/advisory/LiveQuotes.tsx",
+    "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+    "backend/routers/advisory.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2130-advisory-visible-quote-refresh-clears-rows-and-loops-on-layout-changes.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2130",
+  "closed_at": "2026-10-29T04:30:02Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T04:14:53.186007Z",
+  "description": "Live table flickers and repeatedly refetches identical 20-symbol batches approximately every 330ms.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-e85f268e29b7",
+      "timestamp": "2026-10-29T04:14:53.185992Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/advisory-returns-postrestart-20261029/browser_receipt.json"
+  ],
+  "expected": "Retain same-context quotes during visible-set changes; poll stable visible rows every 15 seconds; clear all data when program/list identity changes.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261029_BUG-2130-advisory-visible-quote-refresh-clears-rows-and-loops-on-layout-changes.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261029_BUG-2130-advisory-visible-quote-refresh-clears-rows-and-loops-on-layout-changes.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "frontend/src/components/advisory/LiveQuotes.tsx",
+        "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+      ],
+      "impacted_modules": [
+        "advisory.ui"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/components/advisory/LiveQuotes.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "frontend/src/components/advisory/LiveQuotes.tsx",
+        "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+    ]
+  },
+  "first_seen_at": "2026-10-29T04:14:53.186007Z",
+  "fix_branch": null,
+  "fix_commit": "279131dfb346a030792ad72b4f6ee2de7a6712a9",
+  "fixed_at": "2026-10-29T04:30:02Z",
+  "github_issue_number": 6852,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6852",
+  "last_seen_at": "2026-10-29T04:14:53.186007Z",
+  "module": "advisory.ui",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6853",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "node tmp/handoff/advisory-returns-postrestart-20261029/browser.cjs",
+  "required_verification": [
+    "advisory_mocked_ui",
+    "advisory_workbench_ui",
+    "advisory_historical_range_ui",
+    "frontend_type_lint",
+    "watchlist_backend",
+    "l0"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "frontend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2130",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fe66c16ac1a5584a",
+    "recorded_at": "2026-10-29T04:30:48.758690Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "233ed7a55c087acdfd3c53f521810565f4ae1843",
+    "source_merge_commit": "279131dfb346a030792ad72b4f6ee2de7a6712a9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6853",
+    "validation_evidence": [
+      "validation-receipt: id=532025009ba2aa9a commit=233ed7a55c087acdfd3c53f521810565f4ae1843 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "0865444b56499148aab67078ea482c89c35f5adcbb5e9ee9509f600da64b4148"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory.ui"
+  ],
+  "title": "Advisory visible quote refresh clears rows and loops on layout changes",
+  "trigger_condition": {
+    "fingerprint": "e85f268e29b7a9ca5ab7bfc7",
+    "source_event_id": "FE-20261029-e85f268e29b7"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:advisory.ui",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_type_lint",
+      "watchlist_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/lib/api/advisory.ts",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "backend/routers/advisory.py",
+      "backend/services/advisory_program.py",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "backend/tests/watchlist/test_advisory_program.py",
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/components/advisory/LiveQuotes.tsx",
+    "ui_routes": [
+      "/src/components/advisory/LiveQuotes.tsx",
+      "/paper-v2/advisory"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "validation-receipt: id=532025009ba2aa9a commit=233ed7a55c087acdfd3c53f521810565f4ae1843 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.ui",
+        "advisory_mocked",
+        "advisory_workbench",
+        "advisory_historical_range",
+        "watchlist"
+      ],
+      "plans": [
+        "advisory_mocked_ui",
+        "advisory_workbench_ui",
+        "advisory_historical_range_ui",
+        "watchlist_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "frontend_type_lint",
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.ui",
+          "advisory_mocked",
+          "advisory_workbench",
+          "advisory_historical_range",
+          "watchlist"
+        ],
+        "plans": [
+          "advisory_mocked_ui",
+          "advisory_workbench_ui",
+          "advisory_historical_range_ui",
+          "watchlist_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "frontend_type_lint",
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

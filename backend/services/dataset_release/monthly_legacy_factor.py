@@ -3,10 +3,12 @@
 Historical rows are inherited physical content, not a fresh business audit.
 Inputs are explicitly pinned frozen facts. Only daily_pv may need a uniform
 QFQ basis conversion. This
-writer neither calculates factor formulas nor applies historical restatements.
+writer does not recalculate historical factor formulas. Dated auxiliary static
+columns are projected from the same release's H5 facts during serialization.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import date
 import hashlib
 import json
@@ -243,7 +245,8 @@ def append_legacy_factor_aggregate(
     logical_predecessor = ensure_sha256(logical_predecessor_manifest_sha256 or prefix.manifest_sha256,
                                         field="logical monthly predecessor")
     month_start = target_cutoff.replace(day=1)
-    if prefix.cutoff != month_start - date.resolution:
+    previous_month = month_start - date.resolution
+    if (prefix.cutoff.year, prefix.cutoff.month) != (previous_month.year, previous_month.month):
         raise LegacyMonthlyPrefixError("legacy factor cutoff is not the preceding month")
     _plain_chain(target_root)
     _plain_chain(source_root)
@@ -419,23 +422,46 @@ def append_legacy_factor_aggregate(
                         for frame in month_frames():
                             output.append("data", frame, format="table", data_columns=["datetime", "instrument"], index=False, min_itemsize={"instrument": 16})
         else:
-            inherited = pq.ParquetFile(old_path)
-            bind_storage_template(pa.Table.from_batches([], schema=inherited.schema_arrow).to_pandas())
-            writer = pq.ParquetWriter(temporary, inherited.schema_arrow)
-            try:
+            with ExitStack() as readers:
+                inherited = pq.ParquetFile(old_path)
+                readers.callback(inherited.close)
+                bind_storage_template(pa.Table.from_batches([], schema=inherited.schema_arrow).to_pandas())
+                auxiliary = []
+                for name in ("bak_basic", "cyq_perf", "margin_detail"):
+                    path = old_path.with_name(name + ".h5")
+                    relative_aux = path.relative_to(prefix.root).as_posix()
+                    pinned = [v for v in inventory["files"] if v.get("path") == relative_aux]
+                    _plain_chain(path)
+                    if len(pinned) != 1 or path.stat().st_size != pinned[0]["size"]:
+                        raise LegacyMonthlyPrefixError("static source H5 pin is missing or differs")
+                    source_signatures[path] = _signature(path)
+                    auxiliary.append((name, readers.enter_context(pd.HDFStore(path, "r"))))
+                writer = pq.ParquetWriter(temporary, inherited.schema_arrow)
+                readers.callback(writer.close)
                 for batch in inherited.iter_batches(batch_size=max_rows):
                     pulse()
                     inherited_rows += batch.num_rows
-                    writer.write_table(pa.Table.from_batches([batch]), row_group_size=max_rows)
+                    frame = pa.Table.from_batches([batch]).to_pandas()
+                    stamps = frame.index.get_level_values("datetime")
+                    # Reproject dated auxiliary columns while performing the
+                    # existing prefix serialization. No history DB scan, factor
+                    # formula calculation, or inherited price re-export occurs.
+                    for name, store in auxiliary:
+                        fields = list(FACTOR_H5_SCHEMAS[name])
+                        frame.loc[:, fields] = np.nan
+                        where = [f"datetime >= {stamps.min().isoformat()!r}",
+                                 f"datetime <= {stamps.max().isoformat()!r}"]
+                        for facts in store.select("data", where=where, columns=fields, chunksize=max_rows):
+                            common = frame.index.intersection(facts.index)
+                            frame.loc[common, fields] = facts.loc[common, fields].astype(
+                                {field: storage_dtypes[field] for field in fields}).to_numpy()
+                    writer.write_table(pa.Table.from_pandas(frame, preserve_index=True), row_group_size=max_rows)
                     inherited_rows_serialized += batch.num_rows
                 for frame in month_frames():
                     table = pa.Table.from_pandas(frame, preserve_index=True)
                     if not table.schema.equals(inherited.schema_arrow, check_metadata=False):
                         raise LegacyMonthlyPrefixError("legacy static physical schema differs")
                     writer.write_table(table, row_group_size=max_rows)
-            finally:
-                writer.close()
-                inherited.close()
         # Read back the serialized MONTH only. Existing H5 rows/Parquet groups
         # are skipped by physical row offset, not scanned for business QA.
         if extension == "h5":
@@ -494,6 +520,10 @@ def append_legacy_factor_aggregate(
             "validation_scope": "month_delta", "month_output_values_verified": True,
             "database_read": False, "database_write": False,
             "exact_field_repair_readback": exact_repair_readback,
+            "historical_static_projection": (
+                {"contract": "exact_date_provider_facts_v2", "datasets": ["bak_basic", "cyq_perf", "margin_detail"],
+                 "rows": inherited_rows, "source": "same_release_frozen_h5", "database_read": False}
+                if dataset == "static_factors" else None),
         }
         # Hardlink is an atomic create-exclusive publish, not os.replace.
         os.link(temporary, target)

@@ -1150,6 +1150,28 @@ WITH authoritative_universes AS (
           WHERE x.universe_key = s.universe_key AND x.rule_version <> s.rule_version
       ))
 ),
+historical_members AS (
+    -- The approved version-qualified recovery is also the monthly producer's
+    -- source. Use its actual dated SW2021 facts, never SW2014 backcasts or a
+    -- current classification carried across an uncovered historical gap.
+    SELECT h.ts_code,
+        CASE WHEN COUNT(DISTINCT (h.payload->>'l1_code',h.published_l2_code))=1
+             THEN MIN(h.payload->>'l1_code') END AS l1_code,
+        CASE WHEN COUNT(DISTINCT (h.payload->>'l1_code',h.published_l2_code))=1
+             THEN MIN(h.published_l2_code) END AS l2_code,
+        MIN(h.effective_from) AS in_date, MAX(h.effective_to) AS out_date
+    FROM market.sw_industry_classification_history_v1 h
+    WHERE h.taxonomy_version = 'SW2021'
+      AND h.effective_from <= %(trade_date)s AND h.effective_to >= %(trade_date)s
+    GROUP BY h.ts_code
+),
+dated_members AS (
+    SELECT ts_code,l1_code,l2_code,in_date,out_date FROM historical_members
+    UNION ALL
+    SELECT m.ts_code,m.l1_code,m.l2_code,m.in_date,m.out_date
+    FROM market.sw_index_member m
+    WHERE NOT EXISTS (SELECT 1 FROM historical_members h WHERE h.ts_code = m.ts_code)
+),
 """
 
 
@@ -1168,7 +1190,7 @@ active AS (
         member.l2_code,
         member.in_date,
         MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
-    FROM market.sw_index_member AS member
+    FROM dated_members AS member
     JOIN eligible USING (ts_code)
     WHERE member.in_date <= %(trade_date)s
       AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
@@ -1259,7 +1281,8 @@ SELECT
             OR sd.pct_change IS NULL
             OR sd.vol IS NULL
             OR sd.amount IS NULL
-            OR sd.pe IS NULL
+            -- Provider PE may be NULL even when an official quote exists.
+            -- Preserve that valuation NA; never discard the quote or fill PE.
             OR sd.pb IS NULL
             OR sd.total_mv IS NULL
         )
@@ -1298,7 +1321,6 @@ SELECT
             OR sd.pct_change IS NULL
             OR sd.vol IS NULL
             OR sd.amount IS NULL
-            OR sd.pe IS NULL
             OR sd.pb IS NULL
             OR sd.total_mv IS NULL
         )
@@ -1320,7 +1342,7 @@ active AS (
         member.ts_code,
         member.in_date,
         MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
-    FROM market.sw_index_member AS member
+    FROM dated_members AS member
     JOIN eligible USING (ts_code)
     WHERE member.in_date <= %(trade_date)s
       AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
@@ -1354,7 +1376,7 @@ active AS (
         member.l2_code,
         member.in_date,
         MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
-    FROM market.sw_index_member AS member
+    FROM dated_members AS member
     JOIN eligible USING (ts_code)
     WHERE member.in_date <= %(trade_date)s
       AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
@@ -1480,6 +1502,7 @@ def sector_fact_comparison_sql() -> str:
     Reject an unexpected statement shape rather than certify rows with an
     incomplete duplicated join. Values are trusted source constants, not input.
     """
+    from .data_integrity.stock_scope import stock_scope_sql
     prefix, insert = _BUILD_DAY_SQL.split("INSERT INTO market.sector_data (", 1)
     columns, select = insert.split(")\nSELECT\n", 1)
     projection, _update = select.split("\nON CONFLICT (trade_date, ts_code)", 1)
@@ -1491,7 +1514,7 @@ def sector_fact_comparison_sql() -> str:
     expected = ",".join("e."+name for name in names)
     actual = ",".join("a."+name for name in names)
     return (prefix + ", expected("+selected+") AS (SELECT\n"+projection+") , actual AS ("
-        "SELECT "+selected+" FROM market.sector_data WHERE trade_date=%(trade_date)s) "
+        "SELECT "+selected+" FROM market.sector_data WHERE trade_date=%(trade_date)s"+stock_scope_sql()+") "
         "SELECT COALESCE(e.ts_code,a.ts_code) AS ts_code, "
         "CASE WHEN e.ts_code IS NULL THEN 'UNEXPECTED' WHEN a.ts_code IS NULL THEN 'MISSING' "
         "ELSE 'INVALID' END AS classification FROM expected e FULL JOIN actual a USING(trade_date,ts_code) "

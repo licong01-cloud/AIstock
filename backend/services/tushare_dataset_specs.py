@@ -247,9 +247,8 @@ STOCK_BASIC = DatasetSpec(
         "is_hs": "text",
     },
     single_call_param_sets=[
-        {"exchange": "", "list_status": "L"},
-        {"exchange": "", "list_status": "D"},
-        {"exchange": "", "list_status": "P"},
+        {"exchange": exchange, "list_status": status}
+        for exchange in ("SSE", "SZSE") for status in ("L", "D", "P")
     ],
     supports_incremental=False,
     date_column="list_date",
