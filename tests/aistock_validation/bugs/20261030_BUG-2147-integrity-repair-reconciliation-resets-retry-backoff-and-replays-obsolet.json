@@ -162,6 +162,8 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": ["python -m pytest backend/tests/test_data_sync_targets.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 171 passed, 1 skipped; subsequent delisting/quality/obsolete regression -> 12 passed. Existing DEV native upsert 5 cases passed and rolled back; no production write or service action"],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
