@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2148",
-  "closed_at": null,
+  "closed_at": "2026-10-30T04:52:05.183716Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -125,10 +125,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2148-postrestart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2148",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "754c93fd955af05ba6b5a1ab22cc2426e09e59eb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T04:51:02.864494Z",
+      "mode": "read_only",
+      "observed_identity": "4adfca6dce5a93024e2d7b0c6c50967483dec628",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d4b7a7ad372a040f99aa47da5533cff47a8180e352055c6157ed13faa30eff4b",
+      "receipt_sha256": "3a65a5fa823dac46427ece8a7ecf1b282e3e3d9c011dd6d6425c1e8ea42a9b0a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0cb4f3615becb12a5493e375662f58b2a8e2aefe66e32b88ca799d5b93fb5c5e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -160,7 +182,7 @@
     ],
     "validation_evidence_digest": "9a37191f8c660781315bee914d085c4b1b60d28a64506f0f0b352738441541b8"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -171,7 +193,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=576805ce925f24d6 commit=14054e547dd7995aa037c68fb524a63a2a956e7d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_runtime.py -q` result=`13 passed; Ruff and diff check passed`",
-    "validation-receipt: id=335e5ad851fc00c7 commit=14054e547dd7995aa037c68fb524a63a2a956e7d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    "validation-receipt: id=335e5ad851fc00c7 commit=14054e547dd7995aa037c68fb524a63a2a956e7d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2148 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
