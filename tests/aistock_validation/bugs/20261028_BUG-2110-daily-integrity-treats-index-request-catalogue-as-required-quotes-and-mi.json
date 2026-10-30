@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2110",
-  "closed_at": null,
+  "closed_at": "2026-10-30T06:10:04.072384Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -175,10 +175,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2110-postrestart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2110",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "6812216685f8a2fd14ae789baac8685b14dd64cf7788dc390f62490fb2323bfd",
+      "expected_identity": "aab07802e95d80bb87f446b2da6d84cfdb16f203",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T06:01:58.930284Z",
+      "mode": "read_only",
+      "observed_identity": "4adfca6dce5a93024e2d7b0c6c50967483dec628",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2c5a19bd0fb55fe3f67cc0875df52a182861f919e1f4731c4574b2d22956f579",
+      "receipt_sha256": "359ca60fbfa3d30a8b315088908405384aac1e4237b071465dad231209af32b5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e969871b867bf6f0f91ecbbcb169278db3a4fae0b477fe669f9e34659c1333ce",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -211,7 +233,7 @@
     ],
     "validation_evidence_digest": "5220db1c794aec358371afc36d66034de83039c31e712619841c01d189b6dd02"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
