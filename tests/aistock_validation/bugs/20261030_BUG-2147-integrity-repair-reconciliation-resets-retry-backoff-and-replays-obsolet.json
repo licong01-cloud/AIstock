@@ -1,6 +1,7 @@
 {
   "actual": "历史完整性repair目标被周期性重新唤醒并重复触发FETCH",
   "allowed_write_scope": [
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "backend/services/data_sync_targets.py",
     "backend/services/data_integrity/worker.py",
     "backend/ingestion/tdx_scheduler.py",
@@ -160,7 +161,8 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "fresh_process_evidence": ["python -m pytest backend/tests/test_data_sync_targets.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 171 passed, 1 skipped; subsequent delisting/quality/obsolete regression -> 12 passed. Existing DEV native upsert 5 cases passed and rolled back; no production write or service action"],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

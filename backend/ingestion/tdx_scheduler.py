@@ -1393,6 +1393,28 @@ class TDXScheduler:
         dense_receipt_only = (dataset in {"cyq_perf", "bak_basic"}
             and records[0].get("validation_status") == "UNVERIFIED"
             and verdict.get("reason") in {"complete_source_scan_not_bound_to_revision", "row_count_seed_is_not_a_complete_source_scan"})
+        if dataset in {"bak_basic", "cyq_perf"} and records[0].get("validation_status") == "INCOMPLETE":
+            # Optional selection panels need not be repeatedly fetched during
+            # confirmed delisting consolidation. Do NOT remove these securities
+            # from the fact denominator, change their verdict, or hide quotes.
+            counts = verdict.get("counts") or []
+            missing = {str(code).strip() for gap in gaps for code in gap.get("symbols", [])}
+            closed = (len(counts) == 1 and bool(missing)
+                and all(g.get("classification") == "MISSING" for g in gaps)
+                and counts[0].get("missing") == len(missing)
+                and counts[0].get("invalid") == 0 and counts[0].get("unverified") == 0
+                and all(type(counts[0].get(key)) is int for key in ("expected", "valid", "legal_na"))
+                and counts[0]["expected"] == counts[0]["valid"] + counts[0]["legal_na"] + len(missing))
+            if closed:
+                events = self._fetchall("""SELECT DISTINCT ts_code FROM market.stock_st_events
+                    WHERE ts_code=ANY(%s::text[]) AND st_type='退市整理期'
+                      AND pub_date<=%s AND imp_date<=%s""", (sorted(missing), day, day))
+                if missing <= {str(row["ts_code"]).strip() for row in events}:
+                    DataSyncTargetRepository().mark_retry(str(target["target_id"]),
+                        retry_after=_now() + dt.timedelta(days=1),
+                        reason="delisting_panel_optional_fetch_deferred",
+                        context={"source_gap_preserved": True, "missing_symbols": sorted(missing)})
+                    return True
         if not (unsupported_only or dense_receipt_only):
             return False
         with get_conn(autocommit=False, manage_transaction=True) as conn:
@@ -4185,13 +4207,9 @@ class TDXScheduler:
         target_date: Optional[dt.date],
         failure_category: Optional[str],
     ) -> Tuple[Optional[dt.date], Optional[dt.date]]:
-        """Anchor repairable same-date quality failures to their exact partition."""
+        """A dated failure repairs that date, never a cursor-derived history scan."""
 
-        if target_date is not None and failure_category in {
-            "required_field_low_coverage",
-            "required_field_coverage_unproven",
-            "required_source_field_unpublished",
-        }:
+        if target_date is not None:
             return target_date, target_date
         return self._compute_auto_range(dataset)
 
