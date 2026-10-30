@@ -67,6 +67,7 @@ def provider_scan(spec, facts, *, parameters, complete: bool = True):
             raise ValueError("provider scan has conflicting primary identities")
         identities[key] = entry
     entries = sorted(identities.values(), key=lambda entry: str(entry["key"]))
+    entries = scoped_scan_entries(spec, {"entries": entries})
     body = {"schema_version": "aistock_completed_provider_scan_v1", "dataset": spec.name,
             "query_mode": spec.query_mode.value, "parameters": parameters, "complete": complete,
             "key_columns": list(spec.primary_keys), "entries": entries}
@@ -83,10 +84,22 @@ def merge_scans(spec, scans, *, parameters):
 
 def scoped_scan_entries(spec, scan):
     from .stock_scope import STOCK_APIS, is_excluded_stock_code
-    if spec.tushare_api not in STOCK_APIS or 'ts_code' not in spec.primary_keys:
+    if spec.tushare_api not in STOCK_APIS:
         return scan['entries']
-    index = spec.primary_keys.index('ts_code')
-    return [entry for entry in scan['entries'] if not is_excluded_stock_code(entry['key'][index])]
+    if 'ts_code' in spec.primary_keys:
+        index = spec.primary_keys.index('ts_code')
+        return [entry for entry in scan['entries'] if not is_excluded_stock_code(entry['key'][index])]
+    if spec.name in {'tushare_forecast_raw', 'tushare_express_raw', 'tushare_fina_indicator_raw'}:
+        # Official source_record_key(): dataset:ts_code:ann_date:period[:extras].
+        # Raw ingestion projects keys before scanning, so ts_code need not be a
+        # separate key column. Preserve the signed legacy scan, only project its
+        # supported equity scope. Unknown/foreign key formats remain required.
+        index = spec.primary_keys.index('source_record_key')
+        prefix = spec.name + ':'
+        return [entry for entry in scan['entries']
+                if not (str(entry['key'][index]).startswith(prefix)
+                        and is_excluded_stock_code(str(entry['key'][index])[len(prefix):].split(':', 1)[0]))]
+    return scan['entries']
 
 
 def verify_scan(spec, scan, actual_rows):
