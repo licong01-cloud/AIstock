@@ -176,7 +176,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2110-postrestart.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -223,7 +223,8 @@
   "validation_evidence": [
     "python -m nox -s data_sync_autonomy_backend -> passed: 1049 passed 7 skipped; Validation Center valjob_20261028_030542_d6380430 at bbd9a2ad0f742e286708cb99206737aecfa2b4e7",
     "python -m nox -s validation_module_registry_l0 -> passed: 8 tests",
-    "python -m nox -s l0 -> passed: exact four changed Python files"
+    "python -m nox -s l0 -> passed: exact four changed Python files",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2110 --target backend-main -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
