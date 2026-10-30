@@ -29,15 +29,24 @@
   "evidence_uris": [],
   "expected": "全源状态不变；必要范围内缺口仍阻断；已证明只在必要范围外的缺口和完整静态日历不产生错误发布阻断；无DB写入及新门禁。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2151-monthly-source-applies-global-partition-verdicts-beyond-required-consume.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
-      "backend/services/dataset_release/monthly_source_progress.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_source_authority.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "tests/aistock_validation/bugs/20261030_BUG-2151-monthly-source-applies-global-partition-verdicts-beyond-required-consume.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -159,16 +168,20 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
     "fresh_process_evidence": [
       "python X:/AIstock_temp/DATA_PREPARATION/monthly-october-readiness-20261030/validate_monthly_source_scope.py -> passed; native read-only SOURCE session resolves scope/calendar/index false blockers, preserves global INCOMPLETE and real margin delay; no seal or writes"
     ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
