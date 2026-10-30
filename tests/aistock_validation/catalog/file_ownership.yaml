@@ -306,6 +306,8 @@ rules:
       - scripts/qrun_limit.py
       - scripts/qrun_limit_minute.py
       - scripts/score_weighted_strategy_v2.py
+      - scripts/score_weighted_strategy_v2_deterministic_v1.py
+      - scripts/register_score_weighted_strategy_v2_deterministic_v1.py
       - tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py
       - docs/architecture/qe_sector_risk_overlay_f2_design_*.md
     primary_module: qe.sector_risk_overlay

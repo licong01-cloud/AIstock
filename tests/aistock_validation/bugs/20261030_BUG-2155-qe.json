@@ -5,7 +5,8 @@
     "scripts/register_score_weighted_strategy_v2_deterministic_v1.py",
     "backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py",
     "backend/tests/unified_engine/fixtures/qe_score_weighted_topk_v2_20f1d21b.py",
-    "tests/aistock_validation/bugs/20261030_BUG-2155-qe.json"
+    "tests/aistock_validation/bugs/20261030_BUG-2155-qe.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2155",
@@ -16,19 +17,30 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-30T15:13:45.527251Z",
-  "description": "代码文件存在稳定排序不等于实际消费者生效；原经济结果尚不能严格归因于1355。",
+  "description": "正式Composer从旧目录source_code生成custom_strategy，wrapper真实导入后绕过BUG-1133/1175稳定排序。新增确定性目录版本，仅固定同分排名与持仓顺序，保留旧目录与所有冻结身份。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261030-b67acf76519c",
       "timestamp": "2026-10-30T15:13:45.527223Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "QE",
+      "timestamp": "2026-10-30T15:32:22.378696+00:00",
+      "note": "Add exact ownership/CI routing for the two new executable files; classifier reported them unmapped. No workflow implementation changes."
     }
   ],
   "evidence_uris": [
     "tmp/handoff/qe-top20-sw2-longtask-20261030/p6_replay_analysis_v1/actual_consumer_readback.json",
     "tmp/handoff/qe-top20-sw2-longtask-20261030/p6_replay_analysis_v1/consumer_tie_order_fresh_process.json",
-    "tmp/handoff/qe-deterministic-p6-24h-20261030/task_plan.md"
+    "tmp/handoff/qe-deterministic-p6-24h-20261030/task_plan.md",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-deterministic-p6-24h-20261030\\dev_registration_v1.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-deterministic-p6-24h-20261030\\dev_idempotent_readback_v1.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-deterministic-p6-24h-20261030\\dev_composer\\summary.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-deterministic-p6-24h-20261030\\native_summary_v1.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-deterministic-p6-24h-20261030\\prod_readonly_plan_v1.json"
   ],
   "expected": "新版本经现有正式目录/Composer/wrapper真实执行；同分排名、候选、卖出及权重处理跨进程可重复，非排序业务合同与旧目录一致；DEV先验证，生产登记另报。",
   "file_scope_contract": {
@@ -38,7 +50,9 @@
       "backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py",
       "backend/tests/unified_engine/fixtures/qe_score_weighted_topk_v2_20f1d21b.py"
     ],
-    "changed_files": [],
+    "changed_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
@@ -111,14 +125,16 @@
       "scripts/score_weighted_strategy_v2_deterministic_v1.py",
       "scripts/register_score_weighted_strategy_v2_deterministic_v1.py",
       "backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py",
-      "backend/tests/unified_engine/fixtures/qe_score_weighted_topk_v2_20f1d21b.py"
+      "backend/tests/unified_engine/fixtures/qe_score_weighted_topk_v2_20f1d21b.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/score_weighted_strategy_v2_deterministic_v1.py",
       "scripts/register_score_weighted_strategy_v2_deterministic_v1.py",
       "backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py",
-      "backend/tests/unified_engine/fixtures/qe_score_weighted_topk_v2_20f1d21b.py"
+      "backend/tests/unified_engine/fixtures/qe_score_weighted_topk_v2_20f1d21b.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-10-30T15:13:45.527251Z",
@@ -136,7 +152,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py -q",
   "required_verification": [
     "l0",
     "qe_read_backend"
@@ -144,7 +160,9 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "F:\\Dev\\AIstock\\tmp\\handoff\\qe-deterministic-p6-24h-20261030\\native_summary_v1.json"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
@@ -272,5 +290,40 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "fix_summary": "新增score_weighted_topk_v2_deterministic_v1及单行insert-only登记器，经既有Composer/wrapper生效；无QE基础框架/服务修改。",
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py -q -> 20 passed",
+    "python -m ruff check scripts/score_weighted_strategy_v2_deterministic_v1.py scripts/register_score_weighted_strategy_v2_deterministic_v1.py backend/tests/unified_engine/test_qe_catalog_strategy_determinism.py -> passed",
+    "Existing aistock_dev catalog single-row insert/readback and idempotent readback -> PASS, legacy untouched",
+    "Full BacktestExecutor/Composer previews for eight frozen-prediction loops -> PASS; no worker submission",
+    "Remote + WSL native full Composer: 181 sessions, Sep30 execution/valuation boundary, original prediction panel and immature labels -> PASS",
+    "16 native fresh processes with real Qlib strategy/wrapper and synthetic exchange fixtures -> exact cross-node order equality; market economics not yet evaluated"
+  ],
+  "production_dml_gate": {
+    "state": "pending_specific_authorization",
+    "database": "aistock",
+    "table": "aistock_strategy_catalog",
+    "insert_ids": [
+      "score_weighted_topk_v2_deterministic_v1"
+    ],
+    "updates": [],
+    "deletes": [],
+    "dev": "PASS",
+    "production_applied": false,
+    "migration": "scripts/register_score_weighted_strategy_v2_deterministic_v1.py",
+    "payload_sha256": "c3bc76aace27c0d9cdb07ffe3fad33504215b9cd581fe5ec8f9c88134f6173c2"
+  },
+  "source_acceptance": {
+    "design_compliance_001": "PASS_SCOPE_AND_EXPLICIT_NON_GOALS",
+    "actual_consumer_verified": true,
+    "base_source_sha256": "20f1d21b0f179c5f7f909a73b3f3c4d374affbcca66b754624a8c9c8b47fe0bf",
+    "successor_source_sha256": "1a3d00c2c6ed160ac6a1114f740259505b5cf140281a59c40679f3257d78c1bb",
+    "old_identity_preserved": true,
+    "economic_experiments": "NOT_SUBMITTED",
+    "api_restart_required_for_this_fix": false,
+    "default_strategy_changed": false,
+    "review_rounds": 2,
+    "review_kind": "author_review_not_independent_agents"
   }
 }
