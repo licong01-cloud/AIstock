@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 import json
 from types import SimpleNamespace
@@ -796,3 +797,64 @@ def test_full_fact_component_keeps_pit_membership_separate(tmp_path, dataset_pro
     assert set(daily.pit_span_digest_by_code) == {"000001.SZ"}
     assert set(daily.artifact_partitions[0].instruments) == {"000001.SZ", "000002.SZ"}
     assert daily.adj_writer_targets("000002.SZ") == ("qlib/features/000002.sz/close.day.bin",)
+
+
+def _writer_ledger_row(**changes):
+    row = dict(ledger_kind="data_sync_attempts", ledger_identity="attempt-1", status="started",
+               created_at="2026-10-30T10:00:00+08:00", started_at="2026-10-30T10:00:00+08:00",
+               finished_at=None, opaque_payload='{"missing":1}', owner_status="failed",
+               owner_finished_at="2026-10-30T10:01:00+08:00")
+    row.update(changes)
+    return row
+
+
+def _freeze_writer_rows(*rows):
+    from backend.services.dataset_release.source_authority import MonthlySourceAuthority
+    authority = SimpleNamespace(_database_query_specs=lambda: (PRODUCTION_QUERY_SPECS["adj_factor"],))
+    session = SimpleNamespace(stream=lambda *_a, **_k: iter(rows))
+    return MonthlySourceAuthority._freeze_writer_ledger(
+        authority, session, cutoff=date(2026, 10, 30), checkpoint=lambda: None, read_chunk_rows=2,
+    )
+
+
+@pytest.mark.parametrize("status", ["success", "completed", "failed", "cancelled", "timeout", "delayed"])
+def test_terminal_owner_does_not_turn_stale_attempt_into_active_writer(status):
+    row = _writer_ledger_row(owner_status=status)
+    original = deepcopy(row)
+    digest, receipt = _freeze_writer_rows(row)
+    assert len(digest) == 64 and receipt
+    assert row == original  # Liveness is not a successful attempt or complete data.
+
+
+@pytest.mark.parametrize("changes", [
+    {"owner_status": None}, {"owner_status": "running"}, {"owner_status": "pending"},
+    {"owner_status": "unknown"}, {"owner_finished_at": None},
+    {"ledger_kind": "ingestion_jobs", "status": "running"},
+    {"ledger_kind": "ingestion_jobs", "status": "queued"},
+    {"status": "running"}, {"status": "pending"}, {"status": "queued"},
+])
+def test_unclosed_unknown_or_genuine_writer_still_blocks(changes):
+    from backend.services.dataset_release.source_authority import SourceSnapshotDriftBlocked
+    with pytest.raises(SourceSnapshotDriftBlocked, match="active source writer"):
+        _freeze_writer_rows(_writer_ledger_row(**changes))
+
+
+@pytest.mark.parametrize("finished", ["not-a-date", "2026-10-30T10:01:00"])
+def test_invalid_owner_completion_is_not_a_liveness_exemption(finished):
+    with pytest.raises(SourceAuditIncomplete):
+        _freeze_writer_rows(_writer_ledger_row(owner_finished_at=finished))
+
+
+def test_owner_completion_is_digest_bound_and_does_not_mask_another_writer():
+    from backend.services.dataset_release.source_authority import SourceSnapshotDriftBlocked
+    assert _freeze_writer_rows(_writer_ledger_row(owner_status="failed"))[0] != _freeze_writer_rows(
+        _writer_ledger_row(owner_status="success"))[0]
+    assert _freeze_writer_rows(_writer_ledger_row())[0] != _freeze_writer_rows(
+        _writer_ledger_row(owner_finished_at="2026-10-30T10:02:00+08:00"))[0]
+    with pytest.raises(SourceSnapshotDriftBlocked):
+        _freeze_writer_rows(_writer_ledger_row(), _writer_ledger_row(ledger_identity="another", owner_status="running"))
+
+
+@pytest.mark.parametrize("status", ["failed", "retry", "reconciled", "final_blocked"])
+def test_terminal_attempt_does_not_need_an_owner_completion_exemption(status):
+    assert _freeze_writer_rows(_writer_ledger_row(status=status, owner_status=None, owner_finished_at=None))[1]
