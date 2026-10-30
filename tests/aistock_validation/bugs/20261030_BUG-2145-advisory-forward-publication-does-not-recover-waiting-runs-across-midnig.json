@@ -34,21 +34,38 @@
   "evidence_uris": [],
   "expected": "按包逐日恢复跨日未发布任务；旧包阻断隔离；发布时间真实；迟发不回填历史开盘成交；幂等并保留输入版本核验。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_forward/repository.py",
+      "backend/services/advisory_forward/service.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_date_clock.py",
+      "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_forward_recovery.py",
+      "backend/tests/advisory_model_first/test_forward_recovery_devdb.py",
+      "docs/analysis/advisory_cross_day_recovery_20261030.md",
+      "scripts/advisory_forward_recover.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2145-advisory-forward-publication-does-not-recover-waiting-runs-across-midnig.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "scripts/advisory_forward_recover.py",
       "docs/analysis/advisory_cross_day_recovery_20261030.md",
       "backend/tests/advisory_model_first/test_forward_recovery_devdb.py"
     ],
     "changed_files": [
-      "backend/services/advisory_forward/service.py",
       "backend/services/advisory_forward/repository.py",
-      "backend/tests/advisory_model_first/test_forward_recovery.py",
-      "backend/tests/advisory_model_first/test_forward_date_clock.py",
+      "backend/services/advisory_forward/service.py",
       "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_date_clock.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_forward_recovery.py",
+      "backend/tests/advisory_model_first/test_forward_recovery_devdb.py",
+      "docs/analysis/advisory_cross_day_recovery_20261030.md",
+      "scripts/advisory_forward_recover.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2145-advisory-forward-publication-does-not-recover-waiting-runs-across-midnig.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_forward/service.py",
@@ -169,22 +186,27 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
     "backend_restart_owner": "user",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
     "fresh_process_evidence": [
       "python scripts/advisory_forward_recover.py --env-file F:/Dev/AIstock/.env --through 2026-10-29 --program-id <four authorized programs> -> fresh-process read-only preflight found 8 READY current backlog rows; preserved earlier superseded failed rows; no production writes or process control",
       "AISTOCK_DEV_DB_E2E=1 pytest test_forward_recovery_devdb -> 3 existing DEV database rollback checks passed: real publication clock, idempotence, no episode writes, terminal late publication, unavailable non-prospective observation, cross-session lock"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
@@ -198,6 +220,11 @@
     "fingerprint": "24a640ef836be34d66035b98",
     "source_event_id": "FE-20261030-24a640ef836b"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_model_evaluation.py -q -> 50 passed; failed fixture protocol repaired and exact failed node -> 1 passed",
+    "AISTOCK_DEV_DB_E2E=1 rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -> 3 passed across exact nodes, rolled back",
+    "rtk ruff check changed Python files -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -309,10 +336,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "validation_evidence": [
-    "rtk pytest backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_model_evaluation.py -q -> 50 passed; failed fixture protocol repaired and exact failed node -> 1 passed",
-    "AISTOCK_DEV_DB_E2E=1 rtk pytest backend/tests/advisory_model_first/test_forward_recovery_devdb.py -> 3 passed across exact nodes, rolled back",
-    "rtk ruff check changed Python files -> passed"
-  ]
+  }
 }
