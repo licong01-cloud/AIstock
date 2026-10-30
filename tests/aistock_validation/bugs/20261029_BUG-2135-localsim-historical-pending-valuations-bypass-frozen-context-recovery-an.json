@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2135",
-  "closed_at": null,
+  "closed_at": "2026-10-30T17:26:46.172274Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -161,10 +161,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2135/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2135",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "0df9a49f8367277702c2e293c936413b66089c61",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T17:21:18.948125Z",
+      "mode": "read_only",
+      "observed_identity": "0a45d94c98fcf8704802702e0ce3f8f7540a51eb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4e7ab1a33294f974602846583b596223890d36f31e7b13b532e1e14a85ee4648",
+      "receipt_sha256": "69d2b95fa35c1b964aa125efd96f455350d81d093aa6247e0eeea3adb5134ae4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b86f22af649f685b84c22185c17e8360deecc844fb69ae379294da7fbbd152f8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -199,7 +221,7 @@
     ],
     "validation_evidence_digest": "e104067d213544ecbab2f03b310496945a9ed1ce41ab8b8b4e3b23dbf397eb04"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -212,7 +234,8 @@
     "validation-receipt: id=96259d30aa32395c commit=b12c446455af9ae07815b93ed433f46cd7366ead kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_runtime/test_localsim_historical_valuation_recovery.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py (16 selected nodes, valuation-final.xml)` result=`passed`",
     "validation-receipt: id=0efb1a3b521e3a63 commit=b12c446455af9ae07815b93ed433f46cd7366ead kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_historical_valuation_recovery.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed`",
     "validation-receipt: id=8461b7d01c40c456 commit=b12c446455af9ae07815b93ed433f46cd7366ead kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
-    "validation-receipt: id=84f84ac97f9186bb commit=b12c446455af9ae07815b93ed433f46cd7366ead kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- five scoped files` result=`passed (0 blocking)`"
+    "validation-receipt: id=84f84ac97f9186bb commit=b12c446455af9ae07815b93ed433f46cd7366ead kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- five scoped files` result=`passed (0 blocking)`",
+    "2026-10-31 formal post-restart identity and scoped scheduler business semantic passed. Original 10-08 frozen valuation recovered at original instant, original plan retained, parent_resubmitted=false and durable_minute_loop_advanced=false; funding gap stays UNKNOWN. X:/AIstock_temp/localsim-runtime-activation-20261031/historical-business-acceptance-r1.json. Original source validation receipts retained."
   ],
   "verification_budget": {
     "budget": "standard",
