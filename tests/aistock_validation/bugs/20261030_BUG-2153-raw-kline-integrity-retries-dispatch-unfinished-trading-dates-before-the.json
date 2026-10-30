@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Repair of historical completed dates can proceed intraday; current/future raw trading dates wait until their normal publication clock without creating failed collection jobs. Exact invalid manual ranges remain rejected.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2153-raw-kline-integrity-retries-dispatch-unfinished-trading-dates-before-the.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2153-raw-kline-integrity-retries-dispatch-unfinished-trading-dates-before-the.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -108,19 +114,23 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": [
       "RED: 8 new direct retry tests failed because unclosed current/future dates dispatched normal/integrity jobs; GREEN: existing completed-day clock is now used by both raw source retry paths. Historical repair remains eligible, exact manual date rejection unchanged. No production facts/metadata changed and no process action.",
       "Production read-only evidence: job 93d0e1eb-679f-490e-83c5-466a88dad916 requested 2026-10-30 at 13:57 CN; collector refused unfinished date with explicit TDX date window is invalid. This is a premature retry error, not proof of missing final-day prices."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
