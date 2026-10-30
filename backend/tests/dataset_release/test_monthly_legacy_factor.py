@@ -21,7 +21,8 @@ def _frame(dataset, day):
     return pd.DataFrame({name: pd.Series([1 if name == "l2_code_id" else 10.0], index=index, dtype=types[name]) for name in columns})
 
 
-def test_legacy_rolling_state_uses_real_raw_anchor_and_rebases_price_seed(tmp_path):
+@pytest.mark.parametrize("layout", ["legacy", "path_keyed"])
+def test_legacy_rolling_state_uses_real_raw_anchor_and_rebases_price_seed(tmp_path, layout):
     from backend.data_service.security_source_identity import load_security_source_identity_manifest
     from backend.services.dataset_release.monthly_legacy_factor import restore_legacy_factor_state
     from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH
@@ -43,6 +44,8 @@ def test_legacy_rolling_state_uses_real_raw_anchor_and_rebases_price_seed(tmp_pa
     def raw_anchor(latest):
         seen.extend(latest.index.tolist())
         return pd.DataFrame([{"ts_code": "000001.SZ", "trade_date": date(2026, 8, 31), "adj_factor": 2.0}])
+    if layout == "path_keyed":
+        prefix = _path_keyed_factor_prefix(prefix)
     state, changes, boundaries = restore_legacy_factor_state(
         prefix, instruments=("000001.SZ",), before=date(2026, 9, 1), denominators={"000001.SZ": 8.0},
         security_identity=load_security_source_identity_manifest(DEFAULT_MANIFEST_PATH),
@@ -228,6 +231,40 @@ def _inputs(tmp_path, dataset, *, legacy_layout=False, old_day="2026-08-31", new
     target = tmp_path / "september/factor_bundle"
     target.mkdir(parents=True)
     return prefix, source, sealed, target, old_path, old, new
+
+
+def _path_keyed_factor_prefix(prefix):
+    """Publish the same tiny fixture with individual pins, as unified assembly does."""
+    components = prefix.manifest["components"]
+    meta = components["factor_meta"]
+    inventory = json.loads((prefix.root / components["factor_content_manifest"]["path"]).read_bytes())
+    old_root = (prefix.root / meta["path"]).parent
+    new_root = prefix.root / "components/factor_h5_static_candidate_v2"
+    old_root.rename(new_root)
+    pins = [{**pin, "path": (new_root / (prefix.root / pin["path"]).name).relative_to(prefix.root).as_posix()}
+            for pin in [meta, *inventory["files"]]]
+    body = {key: value for key, value in prefix.manifest.items() if key not in {"components", "dataset_manifest_sha256"}}
+    body["components"] = {pin["path"].replace("/", "__"): pin for pin in pins}
+    body["dataset_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(body)).hexdigest()
+    raw = canonical_json_bytes(body) + b"\n"
+    (prefix.root / "qe_dataset_manifest.json").write_bytes(raw)
+    return load_legacy_prefix(prefix.root, expected_manifest_sha256=body["dataset_manifest_sha256"],
+                              expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+                              expected_cutoff=prefix.cutoff, expected_release_id=prefix.release_id)
+
+
+def test_path_keyed_factor_append_uses_existing_file_pins_and_preserves_nan(tmp_path):
+    from backend.services.dataset_release.monthly_legacy_factor import append_legacy_factor_aggregate
+    prefix, source, sealed, target, _, old, new = _inputs(tmp_path, "daily_basic")
+    prefix = _path_keyed_factor_prefix(prefix)
+    manifest_before = canonical_json_bytes(prefix.manifest)
+    old_path = prefix.root / "components/factor_h5_static_candidate_v2/daily_basic.h5"
+    before = old_path.read_bytes()
+    append_legacy_factor_aggregate(prefix, dataset="daily_basic", source_root=source,
+        chunks=(sealed,), target_root=target, target_cutoff=date(2026, 9, 30),
+        source_receipt_sha256="e" * 64, max_rows=1)
+    pd.testing.assert_frame_equal(pd.read_hdf(target / "daily_basic.h5", "data"), pd.concat([old, new]))
+    assert old_path.read_bytes() == before and canonical_json_bytes(prefix.manifest) == manifest_before
 
 
 def _append(tmp_path, dataset):

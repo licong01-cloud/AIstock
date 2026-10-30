@@ -760,8 +760,8 @@ def _append_sector_month_sidecars(
 
 def _read_prefix_sidecar(prefix, key: str) -> bytes:
     """Read a small declared metadata file, not an inherited data component."""
-    from .monthly_legacy_prefix import _plain_chain, _relative, _signature
-    pin = prefix.manifest["components"].get(key)
+    from .monthly_legacy_prefix import _plain_chain, _relative, _signature, resolve_legacy_component_pin
+    pin = resolve_legacy_component_pin(prefix, key)
     if (not isinstance(pin, Mapping) or type(pin.get("size")) is not int
         or not 0 < pin["size"] <= 16 * 1024 * 1024):
         raise MonthlySharedComponentsError("inherited shared sidecar pin is missing or invalid")
@@ -783,7 +783,7 @@ def _native_sector_summary(
     """Use the same formal sector validator, restricted to the actual new tail."""
     import pandas as pd
     from .monthly_preparation_shared import summarize_sector_context
-    from .monthly_legacy_prefix import _plain_chain, _signature
+    from .monthly_legacy_prefix import _plain_chain, _signature, resolve_legacy_component_pin
 
     old_code_map = validate_release_sw_l2_code_map(json.loads(_read_prefix_sidecar(prefix, "sector_code_map")))
     if old_code_map.id_to_code != code_map.id_to_code:
@@ -825,8 +825,8 @@ def _native_sector_summary(
     )
     return member, market, {**counts, "validation_scope": "month_delta",
         "historical_sector_values_read": 0, "predecessor_manifest_sha256": prefix.manifest_sha256,
-        "inherited_membership_sha256": prefix.manifest["components"]["sector_membership_spans"]["sha256"],
-        "inherited_market_context_sha256": prefix.manifest["components"]["market_context"]["sha256"]}
+        "inherited_membership_sha256": resolve_legacy_component_pin(prefix, "sector_membership_spans")["sha256"],
+        "inherited_market_context_sha256": resolve_legacy_component_pin(prefix, "market_context")["sha256"]}
 
 
 @dataclass(frozen=True, slots=True)

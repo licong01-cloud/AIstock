@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import csv
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -40,6 +41,41 @@ def prefix(tmp_path, *, meta_filename="meta.json"):
         expected_file_sha256=hashlib.sha256(raw).hexdigest(),
         expected_cutoff=date(2026, 8, 31), expected_release_id=body["release_id"],
     )
+
+
+@pytest.mark.parametrize("name,path", [
+    ("day_meta_export", "daily_bin/qlib/meta_export.json"),
+    ("minute_meta_export", "minute_bin/qlib/meta_export.json"),
+    ("sector_code_map", "components/sector_context_candidate_v1/sector_code_map.json"),
+    ("sector_membership_spans", "components/sector_context_candidate_v1/sector_membership_spans.parquet"),
+    ("market_context", "components/sector_context_candidate_v1/market_context.parquet"),
+    ("sector_data", "factor_bundle/sector_data.h5"),
+])
+def test_published_path_pins_resolve_without_mutating_manifest(name, path):
+    pin = {"path": path, "sha256": "a" * 64, "size": 3}
+    components = {path.replace("/", "__"): pin}
+    # Provider receipt stubs are not the Qlib physical provider.
+    if name in {"day_meta_export", "minute_meta_export"}:
+        component = "daily" if name == "day_meta_export" else "minute"
+        components["receipt_stub"] = {**pin, "path": f"components/{component}_bin_candidate/meta_export.json"}
+    source = SimpleNamespace(manifest={"components": components})
+    before = canonical_json_bytes(source.manifest)
+    assert subject.resolve_legacy_component_pin(source, name) == pin
+    assert canonical_json_bytes(source.manifest) == before
+
+
+@pytest.mark.parametrize("kind", ["missing", "conflicting_alias", "duplicate_path"])
+def test_path_pin_errors_do_not_choose_arbitrary_metadata(kind):
+    pin = {"path": "daily_bin/qlib/meta_export.json", "sha256": "a" * 64, "size": 3}
+    components = {"path_key": pin}
+    if kind == "missing":
+        components = {}
+    elif kind == "conflicting_alias":
+        components["day_meta_export"] = {**pin, "path": "other/meta_export.json"}
+    else:
+        components["other_path_key"] = {**pin, "sha256": "b" * 64}
+    with pytest.raises(LegacyMonthlyPrefixError, match="pin"):
+        subject.resolve_legacy_component_pin(SimpleNamespace(manifest={"components": components}), "day_meta_export")
 
 
 def test_prefix_clone_copies_mutable_files_before_any_writer_can_run(tmp_path):

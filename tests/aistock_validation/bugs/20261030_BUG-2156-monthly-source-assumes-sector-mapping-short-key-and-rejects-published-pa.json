@@ -1,6 +1,18 @@
 {
   "actual": "October operation dmr_106d4729334644eb90e2bd01eb97d83f attempt4 reaches SOURCE but load_predecessor_sector_mapping indexes components[sector_code_map]. Active September manifest 590b3b204085373ff4bd101efc50a45c6dd3844200200f987f9bc783e0c6b394 validly pins components/sector_context_candidate_v1/sector_code_map.json under path-generated key components__sector_context_candidate_v1__sector_code_map.json, SHA 82f62ebfe131b2b85edc73bcdc2a4434963b156f0fe84e18cdf401b4c77d1475 size8567. Fix canonical pin resolution without rewriting predecessor, changing IDs or bypassing byte/path checks. Scope monthly_sector_mapping.py and direct tests; no DB writes, dataset activation, service control or whole-history audits.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_legacy_prefix.py",
+    "backend/services/dataset_release/monthly_legacy_factor.py",
+    "backend/services/dataset_release/monthly_sector_mapping.py",
+    "backend/services/dataset_release/monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_construction_facts.py",
+    "backend/services/dataset_release/monthly_minute_coverage.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/qlib_bounded_update.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+    "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+    "backend/tests/dataset_release/test_monthly_construction_facts.py",
     "tests/aistock_validation/bugs/20261030_BUG-2156-monthly-source-assumes-sector-mapping-short-key-and-rejects-published-pa.json"
   ],
   "assigned_agent": null,
@@ -22,7 +34,18 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Monthly SOURCE and native month append resolve the controller-bound predecessor's logical component pins in both direct-v2 and path-keyed unified manifests; existing byte/path/type checks and immutable predecessor remain unchanged.",
+  "design_compliance_review": {
+    "complete_scope": "SOURCE mapping, QFQ anchors, native day/minute append, factor inventory and shared sidecar consumers use the same predecessor pin semantics; no dataset completion is claimed.",
+    "error_visibility": "Missing, conflicting, invalid and changed pins still fail; no defaults, fabricated rows or false READY state.",
+    "business_semantics": "Existing sector IDs, PIT, quote availability, units, time windows and old release bytes remain unchanged.",
+    "no_new_gates": "Reuses existing manifest and file verification. No new approval, provider call, whole-history validation or publication gate."
+  },
+  "fix_review_rounds": [
+    "Round 1: reproduce the real path-keyed predecessor failure; retain exact native provider paths instead of matching arbitrary metadata basenames.",
+    "Round 2: cover the same assumption in SOURCE anchors, native day/minute append, shared sector sidecars and factor inventory. Reuse individual published factor pins when the redundant old inventory file is absent; do not manufacture or rewrite a frozen manifest.",
+    "Round 3: negative pin/byte/link tests and immutable-prefix/NaN regressions pass. Final direct matrix: 180 passed, 3 skipped; Ruff, changed-file compile, diff check and L0 pass. Real predecessor readback is isolated, read-only and does not claim monthly SOURCE/build completion."
+  ],
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -54,7 +77,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_path_keyed_predecessor_mapping_keeps_pinned_identity -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -62,15 +85,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh Python from the isolated worktree reproduces RED KeyError sector_code_map, then passes path-keyed pin and native factor append/rolling tests with unchanged old bytes and legal NaN.",
+      "Fresh AIstock Python reads the actual September predecessor manifest 590b3b204085373ff4bd101efc50a45c6dd3844200200f987f9bc783e0c6b394 and verifies 131 map entries, map SHA 82f62ebfe131b2b85edc73bcdc2a4434963b156f0fe84e18cdf401b4c77d1475, exact native day/minute providers, 8 individual factor pins, and three small sidecars (8567/44448/17655 bytes). No writes, DB access, whole-history scan or service control."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
