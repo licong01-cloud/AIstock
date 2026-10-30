@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2133",
-  "closed_at": null,
+  "closed_at": "2026-10-30T17:24:39.877457Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -155,10 +155,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2133/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2133",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "3cf9daa1526c594e8e803d23a47f50061f0da702",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T17:21:16.180534Z",
+      "mode": "read_only",
+      "observed_identity": "0a45d94c98fcf8704802702e0ce3f8f7540a51eb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4e7ab1a33294f974602846583b596223890d36f31e7b13b532e1e14a85ee4648",
+      "receipt_sha256": "a735ee4a7496f16c66519aec971f81825edf39c3ce1fe3bc21e3b9ab0d90c385",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0fe1e5d64832dd9c4af4fbfa1b4400de4fa6097b3cae5e5551182f5d6003d610",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -190,7 +212,7 @@
     ],
     "validation_evidence_digest": "ed08b70ce5a238dec8808b9bdebbe2762782e336914c030c93290ea88cb28f0b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -202,7 +224,8 @@
   "validation": [],
   "validation_evidence": [
     "validation-receipt: id=10e10b0bf03690ae commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py -q` result=`26 passed`",
-    "validation-receipt: id=62b3057f0b7261c0 commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py docs/analysis/localsim_historical_pit_admission_repair_20261029.md tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json` result=`passed, 0 blocking`"
+    "validation-receipt: id=62b3057f0b7261c0 commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py docs/analysis/localsim_historical_pit_admission_repair_20261029.md tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json` result=`passed, 0 blocking`",
+    "2026-10-31 formal post-restart identity and scoped scheduler business semantic passed; original 10-26 two PIT days FAILED_TERMINAL with MISSED audit, broker false, submitted 0, backfilled false. X:/AIstock_temp/localsim-runtime-activation-20261031/historical-business-acceptance-r1.json. Original source validation receipts retained."
   ],
   "verification_budget": {
     "budget": "standard",
