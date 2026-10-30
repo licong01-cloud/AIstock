@@ -124,6 +124,47 @@ def test_current_runner_derives_diagnostic_path_from_repo_working_directory(tmp_
     assert _Engine.captured["persist_signals"] is True
 
 
+@pytest.mark.parametrize("historical", [False, True])
+def test_bound_daily_runner_retains_pinned_database_capture(tmp_path, monkeypatch, historical):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    binding = {"data_date": "2026-10-28", "binding_sha256": "a" * 64}
+    manifest = {"input_readiness": binding}
+    (workspace / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    constructor = {}
+
+    class BoundEngine(_Engine):
+        def __init__(self, **kwargs):
+            constructor.update(kwargs)
+            super().__init__(**kwargs)
+
+        def run_inference(self, **kwargs):
+            super().run_inference(**kwargs)
+            return pd.DataFrame({"score": [1.0]}, index=pd.MultiIndex.from_tuples(
+                [(pd.Timestamp(kwargs["cutoff_date"]), "SH600001")], names=["datetime", "instrument"]))
+
+    def forbidden_session(*args, **kwargs):
+        pytest.fail("readiness-bound daily input must retain the engine's pinned capture")
+
+    monkeypatch.setattr(runner, "InferenceEngine", BoundEngine)
+    monkeypatch.setattr(runner, "_input_session", forbidden_session)
+    monkeypatch.setattr(runner, "_configure_temporary_root", lambda value: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    argv = ["runner", "--runtime-workspace", str(workspace), "--trade-date", "2026-10-29",
+            "--cutoff-date", "2026-10-28", "--output-path", str(tmp_path / "scores.json")]
+    monkeypatch.setattr(sys, "argv", argv + (["--historical-read-only"] if historical else []))
+    assert runner.main() == 0
+    assert constructor["input_session"] is None
+    assert constructor["fundamental_reader"] is runner._strategy_package_fundamental_reader
+    assert BoundEngine.captured["cutoff_date"].date() == date(2026, 10, 28)
+    assert BoundEngine.captured["persist_signals"] is (not historical)
+    assert BoundEngine.captured["allow_external_market_fallback"] is False
+    assert json.loads((workspace / "manifest.json").read_text(encoding="utf-8")) == manifest
+    monkeypatch.setattr(sys, "argv", argv + ["--historical-read-only", "--dataset-binding", "foreign.json"])
+    with pytest.raises(SystemExit):
+        runner.main()
+
+
 def _batch_args(tmp_path, monkeypatch, plan):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

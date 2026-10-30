@@ -1,6 +1,8 @@
 {
   "actual": "10月28/29日四包publication_status=WAITING_DATA且list_version_id为空，当前publication_due=false。",
   "allowed_write_scope": [
+    "scripts/strategy_package_live_inference.py",
+    "backend/tests/advisory_historical_range/test_strategy_package_live_inference.py",
     "backend/services/advisory_forward/service.py",
     "backend/services/advisory_forward/repository.py",
     "backend/tests/advisory_model_first/test_forward_recovery.py",
