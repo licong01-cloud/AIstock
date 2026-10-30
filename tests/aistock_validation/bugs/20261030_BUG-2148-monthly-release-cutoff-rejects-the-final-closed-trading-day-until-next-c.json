@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "最后交易日收盘后可使用本月cutoff；盘中及月内仍有后续交易日则保持上一完整月；未知日历明确错误",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_runtime.py",
+      "backend/tests/dataset_release/test_monthly_runtime.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2148-monthly-release-cutoff-rejects-the-final-closed-trading-day-until-next-c.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_runtime.py",
-      "backend/tests/dataset_release/test_monthly_runtime.py"
+      "backend/tests/dataset_release/test_monthly_runtime.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2148-monthly-release-cutoff-rejects-the-final-closed-trading-day-until-next-c.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_runtime.py",
@@ -109,12 +115,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_runtime.py -k cutoff_uses -q -> 5 passed; fresh-process calendar-clock boundary tests, no task claim, no production DB/profile writes"
+    ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_runtime.py -k cutoff_uses -q -> 5 passed; fresh-process calendar-clock boundary tests, no task claim, no production DB/profile writes"],
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
