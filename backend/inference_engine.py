@@ -1824,6 +1824,9 @@ class InferenceEngine:
                     raise ValueError("获取历史数据为空")
                 if cache is not None:
                     cache.put(actual_date.date(), universe, df_history, df_fund_raw, source_identity=cache_identity)
+            if input_readiness is not None:
+                from .services.data_integrity.advisory_scope import verify_missing_chip_values
+                verify_missing_chip_values(input_readiness, df_fund_raw)
             self.last_input_capture = input_capture
         timings.mark("market_and_fundamental_read")
         

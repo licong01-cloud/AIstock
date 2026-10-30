@@ -63,6 +63,13 @@ def _facts(binding):
     return rows, members, last
 
 
+def test_path_keyed_predecessor_mapping_keeps_pinned_identity(predecessor):
+    expected = load_predecessor_sector_mapping(predecessor)
+    pin = predecessor.manifest["components"].pop("sector_code_map")
+    predecessor.manifest["components"][pin["path"].replace("/", "__")] = pin
+    assert load_predecessor_sector_mapping(predecessor) == expected
+
+
 def test_134_raw_catalog_keeps_131_pinned_ids_and_receipts(predecessor):
     binding = load_predecessor_sector_mapping(predecessor)
     rows, members, last = _facts(binding)

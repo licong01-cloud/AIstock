@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from contextlib import ExitStack
-from datetime import date
+from copy import deepcopy
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 import json
@@ -15,13 +16,15 @@ from time import perf_counter
 
 from filelock import FileLock, Timeout
 
-from backend.services.position_timing.intraday.contracts import digest, payload
+from backend.services.position_timing.intraday.contracts import CHINA, digest, payload
 from backend.services.position_timing.intraday.replay import FileRef
 from backend.services.position_timing.intraday.research import ARMS, DELAYS, CostContract
 from backend.services.position_timing.intraday.research_inputs import CandidateReader, checked_file
 from backend.services.strategy_package.manifest import compute_manifest_json_sha256
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
+from backend.services.trading_core.ledger import InMemoryLedger
+from backend.services.trading_core.models import PositionLot
 
 from .human_operation import HumanOperationPolicy, operation_snapshot, validate_operation_configuration
 from .economic import local_sim_fact_payload
@@ -31,7 +34,7 @@ from .research_performance import ResearchAccountPool, ResearchMarketWorkspace, 
 from .timing_campaign import build_timing_plan_events, inspect_price_templates, validate_campaign_request
 from .timing_continuation import inspect_successor_sources
 from .timing_portfolio import attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, validate_day_ledger, prepare_portfolio_commit
-from .timing_research import ref, source_identity
+from .timing_research import fee_model, ref, source_identity
 from .timing_store import TimingFileRepository, publish, read_json
 
 
@@ -147,10 +150,17 @@ def freeze_study(*, source_request: FileRef, output_root: Path, producer_commit:
 
 def inspect_study(request_ref: FileRef):
     request = read_json(checked_file(request_ref))
+    if request.get("source_identity") != implementation_identity():
+        raise ValueError("LOCALSIM_DUAL_MODE_REQUEST_IDENTITY_CONFLICT")
+    return _inspect_study_inputs(request_ref)
+
+
+def _inspect_study_inputs(request_ref: FileRef):
+    """Validate frozen inputs; report-only consumers do not execute their producer."""
+    request = read_json(checked_file(request_ref))
     fields = {k: v for k, v in request.items() if k not in {"identity", "release_identity"}}
     if (request.get("schema_version") != REQUEST_SCHEMA or digest(fields) != request.get("identity")
-            or request.get("release_identity") != "localsim_dual_mode_v1_" + request["identity"][:24]
-            or request["source_identity"] != implementation_identity()):
+            or request.get("release_identity") != "localsim_dual_mode_v1_" + request["identity"][:24]):
         raise ValueError("LOCALSIM_DUAL_MODE_REQUEST_IDENTITY_CONFLICT")
     _, inspected, candidate_ref = _source_inspect(FileRef.model_validate(request["source_request"]),
                                                 FileRef.model_validate(request["input_successor"]) if request["input_successor"] else None,
@@ -174,6 +184,141 @@ def inspect_study(request_ref: FileRef):
         if mode["operation_mode"] == "HUMAN_SIM" and profile["delay_seconds"] != mode["human_policy"]["reaction_delay_seconds"]:
             raise ValueError("LOCALSIM_DUAL_MODE_DELAY_CONFLICT")
     return request, inspected, candidate_ref
+
+
+def _completed_report_histories(request_ref, results_ref, request, inspected):
+    """Readback only: existing native generations, fees, opening state and prefix."""
+    root = Path(request_ref.path).resolve().parent
+    if Path(results_ref.path).resolve() != root / "results.json":
+        raise ValueError("LOCALSIM_REPORT_ORIGIN_RESULTS_SCOPE_CONFLICT")
+    inspection_ref, receipt_ref = ref(root / "source_inspection.json"), ref(root / "result_receipt.json")
+    inspection = read_json(checked_file(FileRef.model_validate(inspection_ref)))
+    if (inspection != {"schema_version": "localsim_dual_mode_source_inspection_v1",
+            "request": request_ref.model_dump(), "candidate_manifest": request["candidate_manifest"],
+            "stage": "COMPLETE_SOURCE_BATCH_INSPECTED", "source_identity": request["source_identity"],
+            "trade_dates": request["trade_dates"], "price_policy": inspected["templates"].policy_document.model_dump()}):
+        raise ValueError("LOCALSIM_REPORT_ORIGIN_INSPECTION_CONFLICT")
+    receipt = read_json(checked_file(FileRef.model_validate(receipt_ref)))
+    if receipt != {"schema_version": "localsim_dual_mode_result_receipt_v1",
+                   "request": request_ref.model_dump(), "results": results_ref.model_dump()}:
+        raise ValueError("LOCALSIM_REPORT_ORIGIN_RECEIPT_CONFLICT")
+    # The caller completed the entire source batch before this first outcome read.
+    original = read_json(checked_file(results_ref))
+    expected = {"schema_version": RESULT_SCHEMA, "producer": "LOCALSIM", "request": request_ref.model_dump(),
+                "study_identity": request["identity"], "producer_source_commit": request["producer_source_commit"],
+                "release_identity": request["release_identity"], "source_inspection": inspection_ref,
+                "trade_dates": request["trade_dates"], "manifest_sha256": request["manifest_sha256"],
+                "initial_cash_cny": request["initial_cash_cny"],
+                "max_drawdown_definition": request["max_drawdown_definition"],
+                "cost_policy_file_sha256": inspected["preflight"]["inputs"]["cost_policy"]["sha256"],
+                "execution_contract_sha256": digest(request["execution_contract"])}
+    if any(original.get(k) != v for k, v in expected.items()):
+        raise ValueError("LOCALSIM_REPORT_ORIGIN_RESULTS_IDENTITY_CONFLICT")
+    protected = [request_ref, results_ref, FileRef.model_validate(inspection_ref), FileRef.model_validate(receipt_ref)]
+    cost = CostContract.model_validate_json(checked_file(
+        FileRef.model_validate(inspected["preflight"]["inputs"]["cost_policy"])).read_text(encoding="utf-8"))
+    profiles = {"lsdm_" + digest([request["identity"], p])[:40]: p for p in request["population"]}
+    accounts = original["accounts"]
+    if len(accounts) != len(profiles) or {a["account_id"] for a in accounts} != set(profiles):
+        raise ValueError("LOCALSIM_REPORT_ACCOUNT_POPULATION_CONFLICT")
+    histories, verified = {}, 0
+    for account in accounts:
+        account_id = account["account_id"]
+        if (any(account[k] != v for k, v in profiles[account_id].items())
+                or len(account["days"]) != len(request["trade_dates"])
+                or len(account["daily_nav"]) != len(request["trade_dates"])
+                or account["initial_cash_cny"] != request["initial_cash_cny"]
+                or account["initial_account_sha256"] != digest({"cash_cny": request["initial_cash_cny"], "positions": {}})):
+            raise ValueError("LOCALSIM_REPORT_ACCOUNT_PROFILE_CONFLICT")
+        histories[account_id], previous = [], None
+        ledger = InMemoryLedger(portfolio_id=account_id,
+            initial_cash=Decimal(request["initial_cash_cny"]), fee_model=fee_model(cost))
+        total_fees = Decimal(0)
+        for index, (day, raw_ref) in enumerate(zip(request["trade_dates"], account["days"])):
+            day_ref = FileRef.model_validate(raw_ref)
+            path = checked_file(day_ref)
+            if path.resolve() != root / "days" / account_id / (day + ".json"):
+                raise ValueError("LOCALSIM_REPORT_DAY_SCOPE_CONFLICT")
+            row = read_json(path)
+            terminal = datetime.fromisoformat(row["terminal_as_of"])
+            if (terminal.tzinfo is None or terminal.astimezone(CHINA).date().isoformat() != day
+                    or terminal.astimezone(CHINA).strftime("%H:%M:%S") != "14:57:00"):
+                raise ValueError("LOCALSIM_REPORT_COMMON_TERMINAL_CONFLICT")
+            if (row["study_identity"] != request["identity"] or row["account_id"] != account_id
+                    or row["trade_date"] != day or row["day_index"] != index or row["previous_day"] != previous):
+                raise ValueError("LOCALSIM_REPORT_DAY_PREFIX_CONFLICT")
+            journal_ref = FileRef.model_validate(row["account_receipt"])
+            journal = checked_file(journal_ref).resolve()
+            if (journal.name != "00000001.json" or journal.parent.name != "generations"
+                    or journal.parents[2] != root / "journals"):
+                raise ValueError("LOCALSIM_REPORT_JOURNAL_SCOPE_CONFLICT")
+            record = TimingFileRepository(journal.parents[2], journal.parents[1].name).latest()
+            if (record is None or record["generation"] != 1
+                    or record["checkpoint"]["extra"]["day_index"] != 0
+                    or any(row.get(k) != v for k, v in record["checkpoint"]["account"].items())):
+                raise ValueError("LOCALSIM_REPORT_JOURNAL_DAY_CONFLICT")
+            ledger.settle_trade_date(date.fromisoformat(day))
+            opening = row["initial_account"]
+            if (Decimal(opening["cash_cny"]) != ledger.cash_decimal
+                    or opening["positions"] != {s: p.model_dump(mode="json") for s, p in ledger.positions.items()}):
+                raise ValueError("LOCALSIM_REPORT_OPENING_ACCOUNT_CONFLICT")
+            validate_day_ledger(record, initial={"account_id": account_id,
+                "origin_initial_cash_cny": request["initial_cash_cny"]}, cost=cost)
+            if account["daily_nav"][index] != {"date": day, "nav_cny": row["terminal_nav_cny"],
+                    "opening_nav_cny": row["initial_nav_cny"], "fees_cny": row["fees_cny"]}:
+                raise ValueError("LOCALSIM_REPORT_DAILY_ACCOUNT_SUMMARY_CONFLICT")
+            total_fees += Decimal(row["fees_cny"])
+            ledger.cash = Decimal(row["cash_cny"])
+            ledger.positions = {s: PositionLot.model_validate(p) for s, p in row["positions"].items()}
+            histories[account_id].append({"trade_date": day, "parents": row["parents"]})
+            protected.extend((day_ref, journal_ref))
+            previous, verified = raw_ref, verified + 1
+        if (Decimal(account["fees_cny"]) != total_fees
+                or account["terminal_nav_cny"] != row["terminal_nav_cny"]):
+            raise ValueError("LOCALSIM_REPORT_ACCOUNT_TOTALS_CONFLICT")
+    return original, histories, protected, verified
+
+
+def resummarize_study(*, request_ref: FileRef, results_ref: FileRef, output_root: Path,
+                      producer_commit: str) -> dict:
+    """Publish a separately identified report revision; never resume old computation."""
+    if not re.fullmatch(r"[a-f0-9]{40}", producer_commit):
+        raise ValueError("LOCALSIM_REPORT_PRODUCER_INVALID")
+    origin_root, output_root = Path(request_ref.path).resolve().parent, Path(output_root).resolve()
+    if output_root == origin_root or origin_root in output_root.parents:
+        raise ValueError("LOCALSIM_REPORT_OUTPUT_MUST_BE_INDEPENDENT")
+    request, inspected, _ = _inspect_study_inputs(request_ref)
+    original, histories, protected, verified = _completed_report_histories(
+        request_ref, results_ref, request, inspected)
+    revision = {"schema_version": "localsim_dual_mode_summary_revision_request_v1",
+                "producer": "LOCALSIM", "producer_source_commit": producer_commit,
+                "source_identity": implementation_identity(), "source_request": request_ref.model_dump(),
+                "source_results": results_ref.model_dump(), "mode": "REPORT_ONLY_NO_ACCOUNT_COMPUTATION",
+                "verified_account_days": verified, "outcomes_read_stage": "AFTER_COMPLETE_SOURCE_BATCH_INSPECTION"}
+    revision["identity"] = digest(revision)
+    revision["release_identity"] = "localsim_summary_revision_v1_" + revision["identity"][:24]
+    results = deepcopy(original)
+    results["comparisons"] = summarize_accounts(original["accounts"], histories)
+    results["report_only_revision"] = revision
+    # Reject any input changed during readback before making a revision visible.
+    for source_ref in protected:
+        checked_file(source_ref)
+    destination = output_root / revision["identity"]
+    existed = (destination / "recovery_receipt.json").exists()
+    publish(destination / "request.json", revision)
+    publish(destination / "results.json", payload(results))
+    publish(destination / "result_receipt.json", {"schema_version": "localsim_dual_mode_result_receipt_v1",
+        "request": request_ref.model_dump(), "results": ref(destination / "results.json")})
+    recovery = {"schema_version": "localsim_dual_mode_summary_recovery_receipt_v1",
+                "revision_request": ref(destination / "request.json"),
+                "results": ref(destination / "results.json"), "source_results": results_ref.model_dump(),
+                "computed_account_days": 0, "verified_account_days": verified,
+                "original_exact_retry_accepted": False, "economic_confirmation": False,
+                "outcomes_read_stage": revision["outcomes_read_stage"]}
+    publish(destination / "recovery_receipt.json", recovery)
+    return {"status": "ALREADY_MATERIALIZED" if existed else "MATERIALIZED", **recovery,
+            "result_receipt": ref(destination / "result_receipt.json"),
+            "recovery_receipt": ref(destination / "recovery_receipt.json")}
 
 
 def summarize_accounts(accounts, histories=None):
@@ -535,6 +680,10 @@ def main():
     run.add_argument("--account-workers", type=int, default=1)
     run.add_argument("--optimized", action="store_true")
     run.add_argument("--measure-performance", action="store_true")
+    summary = sub.add_parser("resummarize")
+    for name in ("request", "request-sha256", "results", "results-sha256", "producer-commit"):
+        summary.add_argument("--" + name, required=True)
+    summary.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "freeze":
         if bool(args.input_successor) != bool(args.input_successor_sha256):
@@ -548,6 +697,10 @@ def main():
             input_candidate=FileRef(path=args.candidate, sha256=args.candidate_sha256) if args.candidate else None,
             output_root=args.output_root, producer_commit=args.producer_commit,
             short_window_days=args.short_window_days, matrix=args.matrix)
+    elif args.command == "resummarize":
+        result = resummarize_study(request_ref=FileRef(path=args.request, sha256=args.request_sha256),
+            results_ref=FileRef(path=args.results, sha256=args.results_sha256),
+            output_root=args.output_root, producer_commit=args.producer_commit)
     else:
         result = run_study(FileRef(path=args.request, sha256=args.request_sha256),
                            stop_after_account_days=args.stop_after_account_days,

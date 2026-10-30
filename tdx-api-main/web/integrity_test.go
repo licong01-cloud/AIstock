@@ -116,6 +116,45 @@ func TestImportHasNoNetworkOrDatabaseSideEffects(t *testing.T) {
 	}
 }
 
+func TestRawDailyRequestsProviderSharePrecisionAndKeepsBounds(t *testing.T) {
+	start := time.Date(2026, 10, 8, 0, 0, 0, 0, protocol.ExchangeLocation)
+	shares := int64(675472)
+	fact := &protocol.Kline{Time: start.Add(15 * time.Hour), Open: 55560, High: 56280,
+		Low: 53790, Close: 54130, Volume: 6754, VolumeShares: &shares, Amount: 36938792000}
+	want := &protocol.KlineResp{List: []*protocol.Kline{fact}}
+	stop := func(k *protocol.Kline) bool { return k.Time.Before(start) }
+	got, err := fetchRawDailyKline("sz001306", stop,
+		func(typ uint8, code string, bound func(*protocol.Kline) bool) (*protocol.KlineResp, error) {
+			if typ != protocol.TypeKlineDay2 || code != "sz001306" {
+				t.Fatalf("raw daily requested lossy whole-hand bars: type=%d code=%s", typ, code)
+			}
+			if !bound(&protocol.Kline{Time: start.Add(-time.Second)}) || bound(fact) {
+				t.Fatal("request lost the exact caller pagination boundary")
+			}
+			return want, nil
+		})
+	if err != nil || got != want {
+		t.Fatalf("provider response changed: %v", err)
+	}
+	rows, err := rawRows(got.List, "001306.SZ", start, start.Add(24*time.Hour-time.Nanosecond), false, "tdx_api")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("raw daily transformation failed: %v", err)
+	}
+	r := rows[0]
+	if r[6] != int64(6754) || r[7] != int64(36938792000) || r[10] != shares || r[11] != "tdx_wire_shares" {
+		t.Fatalf("legacy hands/amount or additive share precision changed: %v", r)
+	}
+}
+
+func TestRawDailyProviderFailureIsNotHidden(t *testing.T) {
+	want := fmt.Errorf("provider failed")
+	r, err := fetchRawDailyKline("sz001306", nil,
+		func(uint8, string, func(*protocol.Kline) bool) (*protocol.KlineResp, error) { return nil, want })
+	if r != nil || err != want {
+		t.Fatal("provider failure became a valid empty result")
+	}
+}
+
 func TestExplicitConfigAndIsolatedTarget(t *testing.T) {
 	for _, key := range []string{"TDX_DB_DSN", "TDX_DB_HOST", "TDX_DB_PORT", "TDX_DB_NAME", "TDX_DB_USER", "TDX_DB_PASSWORD"} {
 		t.Setenv(key, "")

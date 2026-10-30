@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2124",
-  "closed_at": null,
+  "closed_at": "2026-10-30T06:10:03.852746Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "The actual production engine publishes a revision-bound completed provider scan after every requested query and commit succeeds; failures remain explicit and partial/empty catalogues cannot certify the partition.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-29T02:40:51.042923Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+  "fixed_at": "2026-10-29T02:49:58Z",
   "github_issue_number": 6835,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6835",
   "last_seen_at": "2026-10-29T02:40:51.042923Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6838",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,9 +130,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2124-postrestart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2124",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T06:02:01.148167Z",
+      "mode": "read_only",
+      "observed_identity": "4adfca6dce5a93024e2d7b0c6c50967483dec628",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0c95a25192dd55c1d436ef2d9b75125d924c3cfef29600b6b468545e5580faac",
+      "receipt_sha256": "84fbfd61b8b1a5e01ac969bfc667cece6b4964d77ffad558d4b4c48815e9ad31",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b836691b31c69bc71cda27cfb63b1721f2808011bce47226d4ec980b23b9dfb5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -141,7 +165,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2124",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "64df286beeb2b34e",
+    "recorded_at": "2026-10-29T02:50:30.375501Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dc6baf31c76c022eeac52f7bce2c333484501734",
+    "source_merge_commit": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6838",
+    "validation_evidence": [
+      "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`"
+    ],
+    "validation_evidence_digest": "5e8e7dec6100a027a0cb526b1138fc30d6ecb84901e6668524dbfe9e970c5fce"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -150,6 +196,11 @@
     "fingerprint": "101028af7a4462bd0873e511",
     "source_event_id": "FE-20261029-101028af7a44"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2124 --target backend-main -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

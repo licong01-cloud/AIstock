@@ -9,6 +9,199 @@ from backend.services.data_integrity.release import pin_payload, release_day
 from backend.services.data_integrity.writes import fact_day
 
 
+def scoped_missing_example(dataset="bak_basic", missing="002731.SZ", members=("000001.SZ",)):
+    from backend.services.data_integrity.advisory_scope import scope_identity
+    from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+    from backend.services.data_integrity.consumers import ConsumerDependencies, project_readiness
+    day = date(2026, 10, 29)
+    validation = {"state": "INCOMPLETE", "checks": {"coverage_basis": "independent_dated_traded_stock_keys"},
+        "counts": [{"unit": "security_date", "expected": 3, "valid": 2, "legal_na": 0,
+                    "missing": 1, "invalid": 0, "unverified": 0}],
+        "gaps": [{"classification": "MISSING", "symbols": [missing]}]}
+    row = {"dataset": dataset, "trade_date": str(day), "data_revision": 3, "validated_revision": 3,
+           "validation_status": "INCOMPLETE", "validation_id": "audited-gap-v3",
+           "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION, "metadata": {"validation": validation}}
+    scope = scope_identity(members, day)
+    deps = ConsumerDependencies((dataset,), ("cp_winner_rate",), 1, "dependency")
+    def project():
+        return project_readiness(deps, [day], {(day, dataset): row}, pit_binding={"universe_key": "canonical"},
+                                 input_scope=scope, members=set(members))
+    return row, scope, project
+
+
+def test_advisory_outside_decision_pit_does_not_green_source_or_other_consumers():
+    from copy import deepcopy
+    from backend.services.data_integrity.consumers import ConsumerDependencies, project_readiness
+    row, scope, project = scoped_missing_example()
+    before = deepcopy(row)
+    result = project()
+    assert result["prediction_ready"] is True and row == before
+    assert result["partition_refs"][0]["consumer_projection"]["outside_scope"] == [
+        {"symbol": "002731.SZ", "classification": "MISSING"}]
+    day = date.fromisoformat(row["trade_date"])
+    ordinary = project_readiness(ConsumerDependencies(("bak_basic",), (), 1, "dep"), [day],
+        {(day, "bak_basic"): row}, pit_binding={"universe_key": "canonical"})
+    assert ordinary["prediction_ready"] is False
+    assert result["input_scope"] == scope
+
+
+def test_restored_decision_member_keeps_its_full_historical_input_obligation():
+    # Eligibility on the fact date must never remove history actually consumed
+    # by a member that is eligible again on the prediction decision date.
+    _, _, project = scoped_missing_example(members=("002731.SZ",))
+    assert project()["prediction_ready"] is False
+
+
+@pytest.mark.parametrize("damage", ["dirty", "old_rule", "unknown", "error", "truncated", "duplicate",
+                                   "unverified", "wrong_basis", "no_metadata", "aggregate"])
+def test_advisory_scope_never_exempts_unproven_or_aggregate_source(damage):
+    row, _, project = scoped_missing_example()
+    validation = row["metadata"]["validation"]
+    if damage == "dirty":
+        row["validated_revision"] = 2
+    if damage == "old_rule":
+        row["rule_version"] = "old"
+    if damage == "unknown":
+        row["validation_status"] = "UNVERIFIED"
+    if damage == "error":
+        row["validation_status"] = "ERROR"
+    if damage == "truncated":
+        validation["gaps"] = []
+    if damage == "duplicate":
+        validation["gaps"] *= 2
+    if damage == "unverified":
+        validation["counts"][0].update(valid=1, unverified=1)
+    if damage == "wrong_basis":
+        validation["checks"] = {}
+    if damage == "no_metadata":
+        row["metadata"] = {}
+    if damage == "aggregate":
+        validation["counts"] *= 2
+    assert project()["prediction_ready"] is False
+
+
+def test_validated_chip_gap_is_visible_missing_input_but_invalid_chip_still_blocks():
+    row, _, project = scoped_missing_example("cyq_perf", "000001.SZ")
+    result = project()
+    proof = result["partition_refs"][0]["consumer_projection"]
+    assert result["prediction_ready"] and proof["missing_as_nan"] == ["000001.SZ"]
+    assert proof["source_state"] == "INCOMPLETE" and not proof["outside_scope"]
+    row["metadata"]["validation"]["gaps"][0]["classification"] = "INVALID"
+    row["metadata"]["validation"]["counts"][0].update(missing=0, invalid=1)
+    assert not project()["prediction_ready"]
+
+
+@pytest.mark.parametrize("damage", [None, "universe", "revision", "validation", "source_gap"])
+def test_projected_capture_binds_scope_and_exact_missing_evidence(damage):
+    from backend.services.data_integrity.inputs import InputReadinessError, ready_binding, verify_capture
+    row, scope, project = scoped_missing_example("cyq_perf", "000001.SZ")
+    ready = project()
+    ready.update(binding_id="pkg", manifest_sha256="a"*64, data_date=row["trade_date"])
+    binding = ready_binding(ready)
+    capture = {"start": row["trade_date"], "end": row["trade_date"], "ledger_available": True,
+               "partition_refs": [row], "snapshot_kind": "REPEATABLE_READ_READ_ONLY",
+               "external_fallback_allowed": False, "pit_identity": ready["global_pit"],
+               "universe_sha256": scope["universe_sha256"]}
+    if damage == "universe":
+        capture["universe_sha256"] = "wrong"
+    if damage == "revision":
+        row.update(data_revision=4, validated_revision=4)
+    if damage == "validation":
+        row["validation_id"] = "new"
+    if damage == "source_gap":
+        row["metadata"]["validation"]["gaps"][0]["symbols"] = ["000002.SZ"]
+    if damage:
+        with pytest.raises(InputReadinessError):
+            verify_capture(binding, capture)
+    else:
+        verify_capture(binding, capture)
+
+
+@pytest.mark.parametrize("value", [float("nan"), 0.0, 12.0])
+def test_missing_chip_raw_input_is_never_filled(value):
+    from backend.services.data_integrity.advisory_scope import verify_missing_chip_values
+    _, _, project = scoped_missing_example("cyq_perf", "000001.SZ")
+    raw = pd.DataFrame({"cp_winner_rate": [value], "cp_weight_avg": [value]},
+        index=pd.MultiIndex.from_tuples([(pd.Timestamp("2026-10-29"), "SZ000001")],
+                                       names=["datetime", "instrument"]))
+    if pd.isna(value):
+        verify_missing_chip_values(project(), raw)
+        assert raw.isna().all().all()
+    else:
+        with pytest.raises(ValueError, match="filled or omitted"):
+            verify_missing_chip_values(project(), raw)
+
+
+def test_scoped_gaps_use_shared_dated_source_aliases(monkeypatch):
+    from types import SimpleNamespace
+    from backend.data_service import security_source_identity as identity
+    row, _, project = scoped_missing_example(missing="000999.SZ")
+    alias = SimpleNamespace(source_dataset="market.bak_basic", source_ts_code="000999.SZ",
+        canonical_ts_code="000001.SZ", effective_start=date(2026, 1, 1), effective_end=date(2026, 12, 31))
+    monkeypatch.setattr(identity, "load_default_security_source_identity_manifest", lambda: SimpleNamespace(rows=[alias]))
+    assert not project()["prediction_ready"]  # alias belongs to an actual member
+    alias.effective_end = date(2026, 10, 28)
+    assert project()["prediction_ready"]  # expired alias cannot rewrite identity
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_publish_recheck_independently_recomputes_scope(monkeypatch, changed):
+    from dataclasses import dataclass
+    from backend.services import canonical_equity_pit as pit_module
+    from backend.services.data_integrity import advisory_scope, inputs
+    row, scope, project = scoped_missing_example()
+    ready = project()
+    ready.update(binding_id="pkg", manifest_sha256="a"*64, data_date=row["trade_date"])
+    binding = inputs.ready_binding(ready)
+
+    @dataclass
+    class Pit:
+        universe_key: str = "canonical"
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def execute(self, *_): pass
+        def fetchone(self): return "a"*64, "ACTIVE"
+
+    class Connection:
+        def cursor(self): return Cursor()
+
+    monkeypatch.setattr(pit_module.CanonicalPitAuthorityResolver, "resolve_live_binding", lambda _: Pit())
+    monkeypatch.setattr(inputs, "partition_pins", lambda *a, **kw: [row])
+    # Even if a supplied hash claims no change, reloaded members must prove the
+    # exemption again; this also covers an erroneously classified source alias.
+    monkeypatch.setattr(advisory_scope, "resolve_scope", lambda *a: (
+        scope, {"000001.SZ", "002731.SZ"} if changed else {"000001.SZ"}))
+    if changed:
+        with pytest.raises(inputs.InputReadinessError, match="缺失投影"):
+            inputs.verify_current(Connection(), {"pkg": binding})
+    else:
+        inputs.verify_current(Connection(), {"pkg": binding})
+
+
+def test_partition_capture_keeps_validation_and_adapts_dataset_sequence(monkeypatch):
+    from backend.services.data_integrity import inputs
+    row, _, _ = scoped_missing_example()
+    row["trade_date"] = date.fromisoformat(row["trade_date"])
+    seen = []
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def execute(self, query, params): seen.append((query, params))
+        def fetchall(self): return [row]
+
+    class Connection:
+        def cursor(self, **_): return Cursor()
+
+    monkeypatch.setattr(inputs, "schema_installed", lambda _: True)
+    actual = inputs.partition_pins(Connection(), row["trade_date"], row["trade_date"], ("bak_basic",))
+    assert "metadata->'validation'" in seen[0][0]
+    assert seen[0][1][-1] == ["bak_basic"]
+    assert actual[0]["metadata"] == row["metadata"]
+
+
 def frame(days):
     return pd.DataFrame({"close": list(range(1, len(days)+1))},
         index=pd.MultiIndex.from_product([pd.to_datetime(days), ["000001.SZ"]], names=["datetime", "instrument"]))

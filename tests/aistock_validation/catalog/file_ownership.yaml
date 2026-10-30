@@ -1,5 +1,16 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: qe_terminal_prediction_replay
+    priority: 125
+    include:
+      - backend/services/quantevolver/terminal_replay_consumer.py
+      - scripts/qe_terminal_replay_preflight.py
+      - backend/tests/quantevolver/test_qe_terminal_replay.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Explicit prediction replay terminal-bar wiring validates frozen physical calendars without changing default execution.
   - rule_id: advisory_workbench_read_contracts
     priority: 141
     include:
@@ -141,6 +152,7 @@ rules:
     include:
       - backend/services/advisory_model_first/**
       - backend/tests/advisory_model_first/**
+      - scripts/advisory_forward_recover.py
       - scripts/advisory_model_prepare_request.py
       - scripts/advisory_model_train_wsl.py
       - scripts/advisory_model_quality_prepare_request.py
@@ -294,6 +306,8 @@ rules:
       - scripts/qrun_limit.py
       - scripts/qrun_limit_minute.py
       - scripts/score_weighted_strategy_v2.py
+      - scripts/score_weighted_strategy_v2_deterministic_v1.py
+      - scripts/register_score_weighted_strategy_v2_deterministic_v1.py
       - tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py
       - docs/architecture/qe_sector_risk_overlay_f2_design_*.md
     primary_module: qe.sector_risk_overlay
@@ -301,6 +315,33 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The risk artifact, strategy wrapper, runtime packaging, Recorder evidence, multi-alpha policy arms, and F-014 aligned metrics form one QE-only research module.
+  - rule_id: qe_l2_loss_relative_consumer
+    priority: 127
+    include:
+      - backend/services/quantevolver/l2_relative_consumer.py
+      - scripts/qe_l2_relative_admission.py
+      - scripts/qe_l2_relative_consumer.py
+      - scripts/qe_l2_relative_strategy.py
+      - backend/tests/quantevolver/test_qe_l2_relative.py
+      - backend/tests/unified_engine/test_qe_l2_relative_strategy.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.archive]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Optional frozen loss relative allocation with shared absolute target orders and strict B-star reference identity uses the existing QE direct validation lane.
+  - rule_id: qe_stock_probability_entry_consumer
+    priority: 126
+    include:
+      - backend/services/quantevolver/stock_probability_consumer.py
+      - scripts/qe_stock_probability_gate.py
+      - scripts/qe_stock_probability_gate_strategy.py
+      - backend/tests/quantevolver/test_stock_probability_consumer.py
+      - backend/tests/unified_engine/test_qe_stock_probability_strategy.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.archive]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Frozen stock probability buy-only consumption, strict asset admission and original AF strategy hooks use the existing QE direct tests; real worker Qlib validation remains separate from runtime activation.
   - rule_id: qe_optional_l2_risk_consumer
     priority: 125
     include:
