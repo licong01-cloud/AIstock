@@ -1158,6 +1158,30 @@ def test_integrity_retry_revalidates_obsolete_scope_before_refetch(monkeypatch, 
     assert scheduler._defer_obsolete_integrity_fetch(target) is False
 
 
+@pytest.mark.parametrize("confirmed,missing_count,expected", [(True, 1, True), (False, 1, False), (True, 2, False)])
+def test_delisting_panel_retry_preserves_gap_without_refetch(monkeypatch, confirmed, missing_count, expected):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    verdict = {"counts": [{"expected": 10, "valid": 10-missing_count, "missing": missing_count,
+                           "invalid": 0, "unverified": 0, "legal_na": 0}],
+               "gaps": [{"classification": "MISSING", "symbols": ["002731.SZ"]}]}
+    def read(query, params):
+        if "stock_st_events" in query:
+            assert "pub_date<=%s" in query and "imp_date<=%s" in query
+            return [{"ts_code": "002731.SZ"}] if confirmed else []
+        return [{"validation_status": "INCOMPLETE", "validation": verdict}]
+    scheduler._fetchall = read
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: SimpleNamespace(
+        mark_retry=lambda *args, **kwargs: calls.append((args, kwargs))))
+    target = {"target_id": "target-retired", "dataset": "bak_basic", "data_source": "integrity_repair",
+              "target_date": dt.date(2026, 10, 28)}
+    assert scheduler._defer_obsolete_integrity_fetch(target) is expected
+    assert bool(calls) is expected
+    if expected:
+        assert calls[0][1]["reason"] == "delisting_panel_optional_fetch_deferred"
+        assert calls[0][1]["context"]["source_gap_preserved"] is True
+
+
 def test_obsolete_integrity_fetch_never_reaches_collector_dispatch(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     target = {"target_id": "old-bse-gap", "dataset": "kline_daily_raw", "data_source": "integrity_repair",
@@ -1708,7 +1732,9 @@ def test_daily_basic_audit_with_required_field_receipt_is_ready():
     assert result.status == "ok"
 
 
-def test_low_coverage_retry_replays_exact_partition_instead_of_advancing_cursor():
+@pytest.mark.parametrize("failure_category", ["required_field_low_coverage", "raw_traded_date_incomplete",
+    "independent_dated_stock_panel_incomplete", "complete_source_scan_not_bound_to_revision", None])
+def test_quality_retry_replays_exact_partition_instead_of_advancing_cursor(failure_category):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     target = dt.date(2026, 9, 4)
     scheduler._compute_auto_range = lambda _dataset: (
@@ -1719,7 +1745,7 @@ def test_low_coverage_retry_replays_exact_partition_instead_of_advancing_cursor(
     assert scheduler._retry_range_for_health_failure(
         "daily_basic",
         target_date=target,
-        failure_category="required_field_low_coverage",
+        failure_category=failure_category,
     ) == (target, target)
 
 
