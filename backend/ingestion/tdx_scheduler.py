@@ -43,7 +43,7 @@ from dotenv import load_dotenv
 
 from ..db.pg_pool import get_conn
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
-from ..services.tushare_sync_engine import TushareSyncEngine
+from ..services.tushare_sync_engine import SyncResult, TushareSyncEngine
 from ..services.trading_calendar_status import TradingCalendarStatusService
 from ..services.audit_backed_data_health import AuditBackedDataHealthChecker
 from ..services.data_completeness import DATASET_TABLE_MAP
@@ -3440,7 +3440,8 @@ class TDXScheduler:
                 _logger.error("unexpected error: %s", exc)
 
         # 子数据集: (name, mode_override)
-        # classify 和 member 始终全量替换，daily 跟随用户选择的 mode
+        # classify/member 全量采集；member 按正式非破坏性合同保留旧历史。
+        # daily 跟随用户选择的 mode，不以成员刷新成功作为采集前提。
         sub_datasets = [
             ("sw_index_classify", "init"),
             ("sw_index_member", "init"),
@@ -3448,6 +3449,7 @@ class TDXScheduler:
         ]
 
         overall_status = "success"
+        failures = []
         try:
             engine = TushareSyncEngine()
             for i, (ds_name, ds_mode) in enumerate(sub_datasets):
@@ -3472,11 +3474,22 @@ class TDXScheduler:
                 if spec is None:
                     raise RuntimeError(f"DatasetSpec '{ds_name}' not found in DATASET_REGISTRY")
                 _logger.info("sw_sector composite: syncing %s (mode=%s)", ds_name, ds_mode)
-                result = engine.sync(
-                    spec=spec, mode=ds_mode,
-                    start_date=start_date, end_date=end_date,
-                    job_id=child_job_id,
-                )
+                try:
+                    result = engine.sync(
+                        spec=spec, mode=ds_mode,
+                        start_date=start_date, end_date=end_date,
+                        job_id=child_job_id,
+                    )
+                except Exception as exc:
+                    _logger.exception("sw_sector child %s failed", ds_name)
+                    result = SyncResult(ds_name, ds_mode, child_job_id or run_id,
+                                        failed_batches=1, error=f"{type(exc).__name__}: {exc}")
+
+                failure = None
+                if not result.ok:
+                    overall_status = "failed"
+                    failure = f"{ds_name}: {getattr(result, 'error', None) or 'source batches failed'}"
+                    failures.append(failure)
 
                 coverage = None
                 retry_reason = None
@@ -3511,6 +3524,8 @@ class TDXScheduler:
                             "dataset": ds_name,
                             "mode": ds_mode,
                         }
+                        if failure:
+                            child_summary["error"] = failure
                         if coverage is not None:
                             child_summary["level_coverage"] = coverage
                             child_summary["coverage_warning"] = retry_reason is not None
@@ -3525,25 +3540,14 @@ class TDXScheduler:
                     except Exception as exc:
                         _logger.error("unexpected error: %s", exc)
 
-                if not result.ok:
-                    overall_status = "failed"
-                    # 标记剩余子 job 为 failed
-                    for j in range(i + 1, len(sub_job_ids)):
-                        try:
-                            remaining_jid = uuid.UUID(sub_job_ids[j])
-                            self._execute(
-                                """UPDATE market.ingestion_jobs
-                                      SET status='failed', finished_at=NOW(),
-                                          summary=COALESCE(summary::jsonb,'{}'::jsonb)||'{"error":"previous sub-dataset failed"}'::jsonb
-                                    WHERE job_id=%s""",
-                                (remaining_jid,),
-                            )
-                        except Exception as exc:
-                            _logger.error("unexpected error: %s", exc)
-                    break
+                # A member refresh failure must not hide independently
+                # published quotes. Keep each child's genuine outcome and the
+                # failed aggregate; existing validated catalog facts remain
+                # available to the quote collector's own normal contract.
 
         except Exception as exc:
             overall_status = "failed"
+            failures.append(f"sw_sector: {type(exc).__name__}: {exc}")
             _logger.exception("sw_sector composite sync error: %s", exc)
 
         # 更新父 job (由 _scheduled_ingestion_run 预创建的 sw_sector job)
@@ -3552,15 +3556,19 @@ class TDXScheduler:
             try:
                 pjid = uuid.UUID(str(parent_job_id))
                 self._execute(
-                    "UPDATE market.ingestion_jobs SET status=%s, started_at=COALESCE(started_at, %s), finished_at=NOW() WHERE job_id=%s",
-                    (overall_status, start_ts, pjid),
+                    """UPDATE market.ingestion_jobs SET status=%s, started_at=COALESCE(started_at, %s),
+                       finished_at=NOW(), summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
+                       WHERE job_id=%s""",
+                    (overall_status, start_ts, json.dumps({"errors": failures,
+                        "error": "; ".join(failures) or None}, ensure_ascii=False), pjid),
                 )
             except Exception as exc:
                 _logger.error("unexpected error: %s", exc)
 
         if schedule_id:
             self._update_ingestion_schedule(
-                schedule_id, last_run=start_ts, last_status=overall_status, last_error=None,
+                schedule_id, last_run=start_ts, last_status=overall_status,
+                last_error="; ".join(failures) or None,
             )
 
     def _sw_daily_level_coverage(
