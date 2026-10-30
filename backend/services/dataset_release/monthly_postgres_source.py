@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "19"
+POSTGRES_SOURCE_ADAPTER_VERSION = "20"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -348,6 +348,7 @@ class PostgresMonthlySourceAdapter:
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
                 "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
                 "refresh_audit_readiness_policy": REFRESH_READINESS_POLICY,
+                "required_fact_readiness_policy": "same_snapshot_monthly_required_fact_projection_v1",
                 "component_preparation_dependency_digest": digest_named_fields(
                     "aistock_monthly_component_dependency_v1",
                     component_dependencies(),

@@ -1683,6 +1683,7 @@ class SourceRefreshAuditLedger:
     trading_dates: tuple[date, ...]
     eligible_sources: Mapping[str, tuple[str, ...]]
     eligible_quality_statuses: Mapping[str, tuple[str, ...]]
+    consumer_partition_projections: Mapping[tuple[str, date], Mapping[str, Any]] | None = None
 
     def as_receipt(self, *, profile: str, cutoff: date) -> dict[str, Any]:
         return {
@@ -1710,6 +1711,9 @@ class SourceRefreshAuditLedger:
                 for (dataset, day), audit_rows in sorted(self.rows.items())
                 for row in audit_rows if row.get("integrity_revision") is not None
             ],
+            **({"consumer_partition_projections": [dict(value) for _, value in
+                sorted(self.consumer_partition_projections.items())]}
+               if self.consumer_partition_projections else {}),
         }
 
     def partition_digest(self, dataset: str, start: date, end: date) -> str:
@@ -1717,7 +1721,28 @@ class SourceRefreshAuditLedger:
         observed = {
             day: audit_rows for (name, day), audit_rows in self.rows.items() if name == dataset and start <= day <= end
         }
-        missing = [value.isoformat() for value in expected_dates if value not in observed]
+        projections = {}
+        for value in expected_dates:
+            proof = (self.consumer_partition_projections or {}).get((dataset, value))
+            if not proof:
+                continue
+            audit_sha = digest_named_fields("monthly_partition_audits_v1", {"rows": list(observed.get(value, ()))})
+            reasons = {"trading_calendar": "official_calendar_same_snapshot_complete",
+                       "index_daily": "fixed_release_indices_same_snapshot_complete",
+                       "bak_basic": "verified_source_gaps_outside_release_consumer_scope",
+                       "cyq_perf": "verified_source_gaps_outside_release_consumer_scope"}
+            if (proof.get("schema_version") != "aistock_monthly_required_fact_projection_v1"
+                    or proof.get("dataset") != dataset or proof.get("trade_date") != value.isoformat()
+                    or proof.get("audit_rows_sha256") != audit_sha
+                    or dataset not in reasons or proof.get("reason") != reasons[dataset]
+                    or proof.get("global_source_state_preserved") is not True
+                    or any(re.fullmatch(r"[0-9a-f]{64}", str(proof.get(key, ""))) is None
+                           for key in ("required_scope_sha256", "evidence_sha256"))
+                    or type(proof.get("unexplained_gap_count")) is not int
+                    or proof["unexplained_gap_count"] != 0):
+                raise SourceAuditIncomplete("monthly required-fact projection differs from its source partition")
+            projections[value] = proof
+        missing = [value.isoformat() for value in expected_dates if value not in observed and value not in projections]
         if not expected_dates or missing:
             raise SourceAuditIncomplete(
                 "dataset/date refresh audit coverage is incomplete",
@@ -1733,6 +1758,8 @@ class SourceRefreshAuditLedger:
         eligible_quality = set(self.eligible_quality_statuses.get(dataset, ()))
         unusable = []
         for value in expected_dates:
+            if value in projections:
+                continue  # Same-snapshot consumer proof; global verdict remains recorded unchanged.
             audit_rows = observed[value]
             canonical = [r for r in audit_rows if r.get("data_source") == "canonical_db"]
             if canonical:
@@ -1781,8 +1808,9 @@ class SourceRefreshAuditLedger:
                                 "quality_status": str(row.get("quality_status", "")).lower(),
                                 "audit_payload_sha256": str(row["audit_payload_sha256"]),
                             }
-                            for row in observed[value]
+                            for row in observed.get(value, ())
                         ],
+                        **({"consumer_projection": projections[value]} if value in projections else {}),
                     }
                     for value in expected_dates
                 ],
@@ -5127,6 +5155,12 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
         **({"integrity_revision": {key: row.get(key) for key in
             ("data_revision", "validated_revision", "validation_status", "validation_id", "scope_version", "rule_version")}}
             if row.get("data_source") == "canonical_db" and row.get("data_revision") is not None else {}),
+        **({"source_validation": {
+            "counts": structured_metadata["validation"].get("counts"),
+            "gaps": structured_metadata["validation"].get("gaps"),
+            "checks": {"coverage_basis": (structured_metadata["validation"].get("checks") or {}).get("coverage_basis")},
+        }} if row.get("data_source") == "canonical_db" and isinstance(structured_metadata, Mapping)
+            and isinstance(structured_metadata.get("validation"), Mapping) else {}),
     }
 
 
