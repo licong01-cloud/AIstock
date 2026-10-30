@@ -174,9 +174,11 @@ class MonthlyObservedSourceAuthority(MonthlySourceAuthority):
             source_cutoff = cutoff - date.resolution
         requests = super()._partition_requests(
             query, source_cutoff, pit_snapshot=pit_snapshot, selected_stock_codes=selected_stock_codes,
-            # Sparse suspension facts must repair inherited PIT-clipped prefixes.
-            # This is materialization, not an historical price/refresh audit.
-            start_override=self._month_start if query.date_expression is not None and query.query_id != "suspend_d" else None,
+            # Shared BUILD already inherits the frozen factual suspend prefix,
+            # including raw events and reviewed historical resolutions. Sparse
+            # events do not justify re-reading/auditing all historical months.
+            # Explicit historical repairs retain their separate bound inputs.
+            start_override=self._month_start if query.date_expression is not None else None,
         )
         identity = load_default_security_source_identity_manifest() if query.query_id == "moneyflow_ts" else None
         for key, params in requests:
