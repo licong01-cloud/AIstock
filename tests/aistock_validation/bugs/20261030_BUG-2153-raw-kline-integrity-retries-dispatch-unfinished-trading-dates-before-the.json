@@ -108,12 +108,19 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "RED: 8 new direct retry tests failed because unclosed current/future dates dispatched normal/integrity jobs; GREEN: existing completed-day clock is now used by both raw source retry paths. Historical repair remains eligible, exact manual date rejection unchanged. No production facts/metadata changed and no process action.",
+      "Production read-only evidence: job 93d0e1eb-679f-490e-83c5-466a88dad916 requested 2026-10-30 at 13:57 CN; collector refused unfinished date with explicit TDX date window is invalid. This is a premature retry error, not proof of missing final-day prices."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

@@ -1393,6 +1393,49 @@ def test_index_daily_target_retry_waits_until_post_close(monkeypatch):
     assert scheduler._target_retry_window_open("index_daily") is True
 
 
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+@pytest.mark.parametrize("target,expected", [(29, True), (30, False), (31, False)])
+def test_raw_retry_uses_completed_day_not_just_calendar_date(dataset, target, expected):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    now = dt.datetime(2026, 10, 30, 13, 57, tzinfo=scheduler_module._CN_TZ)
+    scheduler._latest_completed_trading_day = lambda now=None: dt.date(2026, 10, 29)
+    assert scheduler._target_retry_window_open(dataset, target_date=dt.date(2026, 10, target), now=now) is expected
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+def test_raw_retry_reuses_existing_china_complete_day_clock(dataset):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._latest_trading_day = lambda as_of_date=None: as_of_date
+    day = dt.date(2026, 10, 30)
+    before = dt.datetime(2026, 10, 30, 7, 59, tzinfo=dt.timezone.utc)
+    after = dt.datetime(2026, 10, 30, 8, 0, tzinfo=dt.timezone.utc)
+    assert scheduler._target_retry_window_open(dataset, target_date=day, now=before) is False
+    assert scheduler._target_retry_window_open(dataset, target_date=day, now=after) is True
+    scheduler._latest_completed_trading_day = lambda now=None: None
+    assert scheduler._target_retry_window_open(dataset, target_date=day, now=after) is False
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+@pytest.mark.parametrize("source", ["normal_sync", "integrity_repair"])
+def test_unpublished_raw_target_does_not_create_failed_collector_job(monkeypatch, dataset, source):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = {"target_id": "unpublished", "dataset": dataset, "data_source": source,
+              "target_date": dt.date(2026, 10, 30), "attempt_count": 3}
+    dispatched = []
+    repo = SimpleNamespace(list_fillable_targets=lambda **_kw: [target],
+                           claim_fillable_target=lambda *_a, **_kw: True)
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 10, 30, 5, 57, tzinfo=dt.timezone.utc))
+    scheduler._latest_completed_trading_day = lambda now=None: dt.date(2026, 10, 29)
+    scheduler._defer_obsolete_integrity_fetch = lambda _: False
+    scheduler._check_dataset_recovered = lambda *_a, **_kw: SimpleNamespace(status="stale")
+    scheduler._final_deadline_for_target = lambda *_a: dt.datetime(2026, 10, 31, tzinfo=dt.timezone.utc)
+    scheduler._recent_dataset_submission_exists = lambda *_a, **_kw: False
+    scheduler._enqueue_target_retry = lambda **kw: dispatched.append(kw) or uuid.uuid4()
+    scheduler._reconcile_due_data_sync_targets({dataset: {"mode": "incremental"}})
+    assert dispatched == []
+
+
 def test_expired_due_target_is_final_blocked_without_job(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
