@@ -11,6 +11,8 @@ from typing import Any, Mapping, Sequence
 
 CONTRACT_VERSION = "aistock_daily_integrity_v1"
 CANONICAL_SOURCE = "canonical_db"
+DENSE_TRADED_DATASETS = ("bak_basic", "cyq_perf")
+DENSE_TRADED_BASIS = "independent_dated_traded_stock_keys"
 
 
 class PartitionState(str, Enum):
@@ -98,6 +100,16 @@ def effective_partition(row: Mapping[str, Any] | None, *, scope_version: str, ru
                and row.get("scope_version") == scope_version and row.get("rule_version") == rule_version
                and isinstance(row.get("validation_id"), str) and bool(row["validation_id"].strip()))
     state = row.get("validation_status", "UNVERIFIED") if row else "UNVERIFIED"
+    if current and state == "VALID" and row.get("dataset") in DENSE_TRADED_DATASETS:
+        # The former provider-scan verdict reused these version labels. It
+        # proves returned rows, not completeness of independently traded keys.
+        metadata = row.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        validation = metadata.get("validation")
+        validation = validation if isinstance(validation, Mapping) else {}
+        checks = validation.get("checks")
+        checks = checks if isinstance(checks, Mapping) else {}
+        current = checks.get("coverage_basis") == DENSE_TRADED_BASIS
     if not current:
         state = "UNVERIFIED"
     result.update(state=state, current=bool(current), source_complete=current and state in {"VALID", "NOT_APPLICABLE"})

@@ -10,6 +10,7 @@ import backend.services.event_signal.tushare_event_raw_sync as raw_sync_module
 import backend.services.stock_universe_pit_service as pit_service
 from backend.services.tushare_dataset_specs import (
     CYQ_PERF,
+    BAK_BASIC,
     DATASET_REGISTRY,
     DIVIDEND,
     QueryMode,
@@ -1718,6 +1719,136 @@ class _CapturingAudit:
 
     def record_failure(self, **kwargs):
         self.failure_calls.append(kwargs)
+
+
+@pytest.mark.parametrize("spec", [BAK_BASIC, CYQ_PERF], ids=lambda s: s.name)
+@pytest.mark.parametrize("source_state", ["available", "empty", "error", "wrong_code", "wrong_date", "duplicate"])
+def test_dense_panel_supplements_only_missing_source_keys(monkeypatch, spec, source_state):
+    engine = TushareSyncEngine()
+    day = dt.date(2026, 5, 20)
+    missing = {"000663.SZ"}
+    queries, writes = [], []
+
+    def observe(*_):
+        return {"expected_rows": 2, "valid_rows": 2-len(missing),
+                "missing_symbols": sorted(missing), "invalid_symbols": []}
+
+    monkeypatch.setattr(engine, "_dense_panel_observation", observe, raising=False)
+    def fetch(_spec, params):
+        queries.append(params)
+        if source_state == "error":
+            raise RuntimeError("HTTP 502")
+        if source_state == "empty":
+            return []
+        row = {"ts_code": "000663.SZ", "trade_date": "20260520"}
+        if source_state == "wrong_code":
+            row["ts_code"] = "000001.SZ"
+        if source_state == "wrong_date":
+            row["trade_date"] = "20260519"
+        return [row, row] if source_state == "duplicate" else [row]
+    monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
+    def write(_conn, _spec, rows):
+        writes.extend(rows)
+        missing.clear()
+        return len(rows)
+    monkeypatch.setattr(engine, "_upsert_batch", write)
+    if source_state not in {"available", "empty"}:
+        with pytest.raises((RuntimeError, ValueError)):
+            engine._complete_dense_panel(_FakeConn(), spec, day)
+        assert not writes
+    else:
+        receipt, count = engine._complete_dense_panel(_FakeConn(), spec, day)
+        assert receipt["missing_symbols"] == ([] if source_state == "available" else ["000663.SZ"])
+        assert count == len(writes) == int(source_state == "available")
+        assert receipt["provider_absence_established"] is False
+    assert queries == [{"trade_date": "20260520", "ts_code": "000663.SZ"}]
+
+
+def test_dense_panel_no_extra_fetch_for_complete_existing_facts(monkeypatch):
+    engine = TushareSyncEngine()
+    monkeypatch.setattr(engine, "_dense_panel_observation", lambda *_: {
+        "expected_rows": 2, "valid_rows": 2, "missing_symbols": [], "invalid_symbols": []}, raising=False)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: pytest.fail("unneeded provider query"))
+    receipt, written = engine._complete_dense_panel(_FakeConn(), BAK_BASIC, dt.date(2026,5,20))
+    assert written == 0 and receipt["valid_rows"] == 2
+
+
+@pytest.mark.parametrize("spec", [BAK_BASIC, CYQ_PERF], ids=lambda s: s.name)
+def test_dense_panel_null_retry_preserves_existing_facts(monkeypatch, spec):
+    statements = []
+    def execute(_cursor, statement, values, **_):
+        statements.append(statement)
+        return []
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", execute)
+    TushareSyncEngine()._upsert_plain_batch(_FakeConn(), spec, [{"ts_code":"000663.SZ","trade_date":"20260520"}])
+    field = "eps" if spec.name == "bak_basic" else "cost_50pct"
+    expression = f"COALESCE(EXCLUDED.{field}, {spec.name}.{field})"
+    assert expression in statements[0].split(" WHERE ")[0]
+    assert expression in statements[0].split(" WHERE ")[1]
+
+
+@pytest.mark.parametrize("expected,missing,provider_rows", [(2, 0, 1), (2, 0, 0), (2, 1, 1), (0, 0, 1)])
+def test_dense_panel_native_daily_audit_uses_actual_readback(monkeypatch, expected, missing, provider_rows):
+    engine, conn, day = TushareSyncEngine(), _FakeConn(), dt.date(2026,5,20)
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: [
+        {"trade_date":"20260520", "ts_code":"000001.SZ"}] * provider_rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _c,_s,rows: len(rows))
+    monkeypatch.setattr(engine, "_complete_dense_panel", lambda *_: ({
+        "expected_rows":expected,"valid_rows":expected-missing,
+        "missing_symbols":["000663.SZ"] * missing,"invalid_symbols":[],
+        "provider_absence_established":False},0))
+    monkeypatch.setattr(engine, "_update_progress", lambda *_: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda *_: None)
+    result=engine._sync_by_date(conn,BAK_BASIC,day,day,uuid.uuid4())
+    complete=bool(expected and not missing)
+    assert result.success_batches == int(complete)
+    assert result.failed_batches == int(not complete)
+    assert audit.success_calls[0]["quality_status"] == ("ok" if complete else "low_coverage")
+    assert audit.success_calls[0]["row_count"] == expected-missing
+    assert audit.success_calls[0]["written_rows"] == provider_rows
+    assert audit.success_calls[0]["metadata"]["dense_panel_readback"]["provider_absence_established"] is False
+
+
+def test_dense_panel_transport_failure_is_not_success_or_empty(monkeypatch):
+    engine, day = TushareSyncEngine(), dt.date(2026,5,20)
+    audit=_CapturingAudit()
+    engine._refresh_audit=audit
+    monkeypatch.setattr(engine,"_iter_sync_dates",lambda *_: [day])
+    monkeypatch.setattr(engine,"_fetch_from_tushare",lambda *_: [{"trade_date":"20260520","ts_code":"000001.SZ"}])
+    monkeypatch.setattr(engine,"_upsert_batch",lambda *_: 1)
+    def fail(*_):
+        raise RuntimeError("HTTP 502")
+    monkeypatch.setattr(engine,"_complete_dense_panel",fail)
+    monkeypatch.setattr(engine,"_update_progress",lambda *_: None)
+    monkeypatch.setattr(sync_engine.time,"sleep",lambda *_: None)
+    result=engine._sync_by_date(_FakeConn(),BAK_BASIC,day,day,uuid.uuid4())
+    assert result.failed_batches == 1 and not result.success_batches
+    assert not audit.success_calls and len(audit.failure_calls)==1
+    assert "502" in audit.failure_calls[0]["error_message"]
+    assert "502" in (result.error or "")  # Job summary must retain the native failure too.
+
+
+def test_dense_panel_repair_budget_does_not_hide_remaining_keys(monkeypatch):
+    engine, calls = TushareSyncEngine(), []
+    missing=[f"{n:06d}.SZ" for n in range(1,41)]
+    monkeypatch.setattr(engine,"_dense_panel_observation",lambda *_: {
+        "expected_rows":40,"valid_rows":0,"missing_symbols":missing,"invalid_symbols":[]})
+    monkeypatch.setattr(engine,"_fetch_from_tushare",lambda _s,p: calls.append(p) or [])
+    receipt,written=engine._complete_dense_panel(_FakeConn(),BAK_BASIC,dt.date(2026,5,20))
+    assert len(calls)==sync_engine.DENSE_PANEL_REPAIR_BATCH==32
+    assert receipt["missing_symbols"]==missing and written==0
+
+
+@pytest.mark.parametrize("spec",[BAK_BASIC,CYQ_PERF],ids=lambda s:s.name)
+@pytest.mark.parametrize("value",[float("nan"),float("inf"),False])
+def test_dense_panel_rejects_nonfinite_without_erasing_facts(spec,value):
+    field="eps" if spec.name=="bak_basic" else "cost_50pct"
+    with pytest.raises(ValueError,match="non-finite provider fact"):
+        TushareSyncEngine()._upsert_plain_batch(_FakeConn(),spec,[{
+            "trade_date":"20260520","ts_code":"000663.SZ",field:value}])
 
 
 def _run_by_date_with_rows(monkeypatch, spec, count, *, written_count=None):

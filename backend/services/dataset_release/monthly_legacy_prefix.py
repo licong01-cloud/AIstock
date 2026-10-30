@@ -48,6 +48,40 @@ class LegacyMonthlyPrefix:
     release_id: str
 
 
+def resolve_legacy_component_pin(prefix: LegacyMonthlyPrefix, name: str) -> Mapping[str, Any]:
+    """Resolve logical roles in old or path-keyed inventories, without rewriting them.
+
+    Unified releases pin the native providers as well as component receipt
+    stubs. Match exact producer paths, never an arbitrary meta_export basename.
+    Each caller retains its existing byte, size and plain-file verification.
+    """
+    paths = {
+        "day_meta_export": "daily_bin/qlib/meta_export.json",
+        "minute_meta_export": "minute_bin/qlib/meta_export.json",
+        "sector_code_map": "components/sector_context_candidate_v1/sector_code_map.json",
+        "sector_membership_spans": "components/sector_context_candidate_v1/sector_membership_spans.parquet",
+        "market_context": "components/sector_context_candidate_v1/market_context.parquet",
+        "sector_data": "factor_bundle/sector_data.h5",
+        "factor_meta": "components/factor_h5_static_candidate_v2/meta.json",
+        "suspend_data": "components/suspend_d_daily_candidate_v2/suspend_d.parquet",
+        "suspend_meta": "components/suspend_d_daily_candidate_v2/meta.json",
+    }
+    components = prefix.manifest.get("components")
+    if not isinstance(components, Mapping):
+        raise LegacyMonthlyPrefixError("legacy component pin inventory is invalid")
+    aliases = (name, "daily_meta_export") if name == "day_meta_export" else (name,)
+    candidates = [components[key] for key in aliases if key in components]
+    candidates.extend(pin for pin in components.values()
+                      if isinstance(pin, Mapping) and name in paths and pin.get("path") == paths[name])
+    if not candidates or not isinstance(candidates[0], Mapping):
+        raise LegacyMonthlyPrefixError(f"legacy {name} pin is unavailable")
+    pin = candidates[0]
+    if any(candidate != pin for candidate in candidates):
+        raise LegacyMonthlyPrefixError(f"legacy {name} pin is ambiguous")
+    _relative(pin.get("path"))
+    return pin
+
+
 def _plain_chain(path: Path) -> None:
     for current in (path, *path.parents):
         if not current.exists():
@@ -265,9 +299,7 @@ def prepare_legacy_qlib_append(
     ):
         raise LegacyMonthlyPrefixError("legacy Qlib append writer targets are invalid")
     key, frequency = component
-    pin = prefix.manifest["components"].get(key)
-    if not isinstance(pin, Mapping):
-        raise LegacyMonthlyPrefixError("legacy Qlib append metadata pin is unavailable")
+    pin = resolve_legacy_component_pin(prefix, key)
     relative = _relative(pin.get("path"))
     metadata = prefix.root / relative
     _plain_chain(metadata)
@@ -353,9 +385,7 @@ def read_legacy_qfq_anchors(
     if key is None:
         raise LegacyMonthlyPrefixError("legacy QFQ anchor dataset is invalid")
     frequency = "day" if dataset == "daily_bin" else "1min"
-    pin = prefix.manifest["components"].get(key)
-    if not isinstance(pin, Mapping):
-        raise LegacyMonthlyPrefixError("legacy provider pin is unavailable")
+    pin = resolve_legacy_component_pin(prefix, key)
     metadata = prefix.root / _relative(pin.get("path"))
     _plain_chain(metadata)
     if metadata.stat().st_size != pin.get("size") or metadata.stat().st_size > 8 * 1024 * 1024 or hashlib.sha256(metadata.read_bytes()).hexdigest() != pin.get("sha256"):
@@ -461,9 +491,7 @@ def append_legacy_qlib_month(
         day = date.fromisoformat(stamp[:10])
         if day > prefix.cutoff and (day.year, day.month) != (target_cutoff.year, target_cutoff.month):
             raise LegacyMonthlyPrefixError("monthly Qlib tail contains dates outside the target month")
-    pin = prefix.manifest["components"].get(key)
-    if not isinstance(pin, Mapping):
-        raise LegacyMonthlyPrefixError("monthly Qlib provider pin is unavailable")
+    pin = resolve_legacy_component_pin(prefix, key)
     provider = prefix.root / _relative(pin.get("path")).parent
     component = staging / dataset
     component.mkdir(exist_ok=False)

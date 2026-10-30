@@ -15,6 +15,7 @@ import numpy as np
 
 from .canonical_stock_transformer import _normalize_raw_values, _transform_raw_row
 from .monthly_build_resume import _plain, _signature
+from .monthly_legacy_prefix import resolve_legacy_component_pin
 from .stock_schema import QLIB_STOCK_FIELDS
 
 
@@ -55,7 +56,7 @@ def capture_historical_coverage(*, prefix, pit, cutoff, connection, additional_q
     existing consumer's suspension/exclusion rules. No synthetic bars appear.
     """
     from .monthly_minute_repair import capture_database_minutes
-    provider = prefix.root / Path(prefix.manifest['components']['minute_meta_export']['path']).parent
+    provider = prefix.root / Path(resolve_legacy_component_pin(prefix, 'minute_meta_export')['path']).parent
     sessions = calendar_sessions(provider / 'calendars/1min.txt')
     # Some inherited calendars contain a 13:00 placeholder; it is not a bar.
     sessions = {day: [t for t in rows if t[11:] != '13:00:00'] for day, rows in sessions.items()}

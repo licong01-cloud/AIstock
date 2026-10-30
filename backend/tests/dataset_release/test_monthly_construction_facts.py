@@ -97,7 +97,8 @@ def test_construction_progress_uses_real_durable_source_contract(tmp_path, monke
     ))
     frame.to_hdf(factor_path, key="data", format="table", data_columns=True)
     inventory = root / "inventory.json"
-    inventory.write_text(json.dumps({"files": [{"path": "factor/daily_pv.h5", "size": factor_path.stat().st_size}]}), encoding="utf-8")
+    inventory.write_text(json.dumps({"schema_version": "qe_factor_component_pin_inventory_v1",
+                                    "files": [{"path": "factor/daily_pv.h5", "size": factor_path.stat().st_size}]}), encoding="utf-8")
     prefix = SimpleNamespace(root=root, cutoff=date(2026, 8, 31), manifest={"components": {
         "day_meta_export": {"path": "day/meta.json"}, "factor_meta": {"path": "factor/meta.json"},
         "factor_content_manifest": {"path": "inventory.json", "size": inventory.stat().st_size,

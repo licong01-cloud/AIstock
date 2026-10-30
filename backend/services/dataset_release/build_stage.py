@@ -116,7 +116,7 @@ from .index_context_candidate_manifest import (
     validate_index_context_candidate_manifest,
 )
 from .minute_overlay import canonical_session_times
-from .monthly_legacy_prefix import read_legacy_qfq_anchors
+from .monthly_legacy_prefix import read_legacy_qfq_anchors, resolve_legacy_component_pin
 from .pit import (
     DATASET_CANDIDATE_MANIFEST_SCHEMA,
     FrozenPitSnapshot,
@@ -1900,7 +1900,7 @@ def _patch_legacy_factor_component(
     codes = tuple(source.qfq_authority.by_code)
     # A September IPO cannot have an August rolling seed. Use the physical
     # provider catalog to avoid searching the unindexed historical H5 for it.
-    catalog = prefix.root / Path(prefix.manifest["components"]["day_meta_export"]["path"]).parent / "instruments/all.txt"
+    catalog = prefix.root / Path(resolve_legacy_component_pin(prefix, "day_meta_export")["path"]).parent / "instruments/all.txt"
     _resolve_plain_directory(catalog.parent, label="legacy factor seed provider catalog")
     _assert_plain(catalog)
     catalog_rows = [line.split("\t") for line in catalog.read_text(encoding="utf-8").splitlines()]
@@ -2100,7 +2100,7 @@ def _prepare_legacy_bin_patch(
     )
     frequency = "day" if dataset == "daily_bin" else "1min"
     key = "day_meta_export" if dataset == "daily_bin" else "minute_meta_export"
-    provider = prefix.root / Path(prefix.manifest["components"][key]["path"]).parent
+    provider = prefix.root / Path(resolve_legacy_component_pin(prefix, key)["path"]).parent
     _resolve_plain_directory(provider / "instruments", label="legacy provider catalog directory")
     _assert_plain(provider / "instruments/all.txt")
     old_calendar = read_calendar(provider / "calendars" / f"{frequency}.txt")
@@ -3704,7 +3704,7 @@ def _finalize_legacy_bin_patch(
     unchanged(output / "calendars" / f"{frequency}.txt", native.get("calendar_signature"))
     unchanged(output / "instruments/all.txt", native.get("instruments_signature"))
     key = "day_meta_export" if dataset == "daily_bin" else "minute_meta_export"
-    pin = prefix.manifest["components"][key]
+    pin = resolve_legacy_component_pin(prefix, key)
     metadata_path = output / "meta_export.json"
     if _sha256_path(metadata_path) != pin["sha256"]:
         raise CandidateBuildStageError("native month inherited metadata differs")

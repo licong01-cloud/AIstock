@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2136",
-  "closed_at": null,
+  "closed_at": "2026-10-29T08:12:23.233051Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-29T06:31:53.991355Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "307724403c939d7e640791a3951e2ddc251b20c0",
+  "fixed_at": "2026-10-29T06:50:09Z",
   "github_issue_number": 6875,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6875",
   "last_seen_at": "2026-10-29T06:31:53.991355Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6876",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,9 +130,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2136-close-sync-20261029\\tmp\\issue_workflow\\BUG-2136\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2136",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "307724403c939d7e640791a3951e2ddc251b20c0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T08:10:22.555817Z",
+      "mode": "read_only",
+      "observed_identity": "216e5e8e972f71da49414c8bbd11fd18d65551d3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "fd554f17fe4c2a32181b7185319d53762d8de679b8de3be302b29f53010edf66",
+      "receipt_sha256": "0a05f373cac29000983bff64466da212f2fd8e6bc985798e054ed7e60cfa3f9c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8dee9607e67706c54b56085828e41defaaf8a55ed674894856ff9d8ec867a33c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -141,7 +165,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2136",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a8c0ef4a64792716",
+    "recorded_at": "2026-10-29T06:51:06.462326Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "61f742d486857134c788be4435f5292af07415d5",
+    "source_merge_commit": "307724403c939d7e640791a3951e2ddc251b20c0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6876",
+    "validation_evidence": [
+      "validation-receipt: id=051c3cdbd53cb514 commit=61f742d486857134c788be4435f5292af07415d5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py::test_actual_index_engine_preserves_completed_query_scan -q` result=`9 passed`",
+      "validation-receipt: id=b240d2ae15f00d69 commit=61f742d486857134c788be4435f5292af07415d5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`"
+    ],
+    "validation_evidence_digest": "4b744e75da33bd1528a2d0e9bc72121de3f413a804c614d53feeb7131aabe072"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -150,6 +196,12 @@
     "fingerprint": "fd2d814abb6027bd314d6ee3",
     "source_event_id": "FE-20261029-fd2d814abb60"
   },
+  "validation_evidence": [
+    "validation-receipt: id=051c3cdbd53cb514 commit=61f742d486857134c788be4435f5292af07415d5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py::test_actual_index_engine_preserves_completed_query_scan -q` result=`9 passed`",
+    "validation-receipt: id=b240d2ae15f00d69 commit=61f742d486857134c788be4435f5292af07415d5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "post-restart-verify --bug-id BUG-2136 --target backend-main --expected-identity 216e5e8e972f71da49414c8bbd11fd18d65551d3 -> passed runtime contains source merge and native read-only smoke",
+    "post-restart-verify --bug-id BUG-2136 --target backend-main --expected-identity 307724403c939d7e640791a3951e2ddc251b20c0 -> passed runtime descendant and native read-only smoke"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

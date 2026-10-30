@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time
+from dataclasses import replace
 from contextlib import contextmanager
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 import psycopg2.extras
 
@@ -43,6 +45,21 @@ RETRYABLE_MODEL_OBSERVATION_REASON_CODES = frozenset(
         "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
     }
 )
+LATE_PUBLICATION_REASON = "ADVISORY_FORWARD_LATE_PUBLICATION_NOT_ENTERED"
+
+
+def publication_timing(published_at: datetime, target_date: date) -> dict[str, Any]:
+    if published_at.tzinfo is None:
+        raise ValueError("publication timestamp must be timezone-aware")
+    target_open = datetime.combine(target_date, time(9, 30), ZoneInfo("Asia/Shanghai"))
+    late = published_at >= target_open
+    return {
+        "published_at": published_at.isoformat(),
+        "target_open_at": target_open.isoformat(),
+        "execution_eligible": not late,
+        "reason_code": LATE_PUBLICATION_REASON if late else None,
+        "historical_first_availability_claimed": False,
+    }
 
 
 def is_retryable_model_observation(observation: Mapping[str, Any]) -> bool:
@@ -57,6 +74,43 @@ def is_retryable_model_observation(observation: Mapping[str, Any]) -> bool:
 class AdvisoryForwardPGRepository:
     def __init__(self, *, conn_factory: Any | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
+
+    @contextmanager
+    def cycle_lock(self):
+        """Serialize the scheduler and explicit recovery across processes."""
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(2145, 1)")
+                acquired = bool(cur.fetchone()[0])
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(2145, 1)")
+                        if not cur.fetchone()[0]:
+                            raise RuntimeError("Advisory cycle lock was lost")
+
+    def pending_publications(self, *, before: date, program_ids: Sequence[str] | None = None):
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """SELECT f.*, EXISTS (
+                           SELECT 1 FROM app.advisory_forward_run newer
+                           WHERE newer.program_id=f.program_id
+                             AND newer.target_trade_date>f.target_trade_date
+                             AND newer.publication_status='PUBLISHED'
+                       ) AS newer_published
+                       FROM app.advisory_forward_run f
+                       JOIN app.advisory_program p ON p.program_id=f.program_id
+                       WHERE f.publication_status IN ('PENDING','WAITING_DATA','FAILED')
+                         AND f.decision_as_of_trade_date < %s AND p.status='ENABLED'
+                         AND (%s::text[] IS NULL OR f.program_id=ANY(%s::text[]))
+                       ORDER BY f.decision_as_of_trade_date, f.program_id""",
+                    (before, list(program_ids) if program_ids is not None else None,
+                     list(program_ids) if program_ids is not None else None),
+                )
+                return [dict(row) for row in cur.fetchall()]
 
     @contextmanager
     def _publication_connection(self):
@@ -258,6 +312,23 @@ class AdvisoryForwardPGRepository:
                     if not bindings or summaries(bindings) != publication_payload["input_readiness"]:
                         raise InputReadinessError("publication input binding summary differs")
                     verify_current(conn, bindings, lock=True)
+                # Decide eligibility at the actual publication transaction, not
+                # at inference start: inference may cross the target open.
+                cur.execute("SELECT clock_timestamp() AS published_at")
+                published_at = cur.fetchone()["published_at"]
+                timing = publication_timing(published_at, forward["target_trade_date"])
+                late = not timing["execution_eligible"]
+                stored_payload = {**publication_payload, "publication_timing": timing}
+                list_version = replace(list_version, summary_json={
+                    **list_version.summary_json, "publication_timing": timing,
+                })
+                if late:
+                    review_run = replace(review_run, status="SUCCEEDED", finished_at=published_at)
+                    # A late reconstruction is not a prospective model observation.
+                    model_resolution = {
+                        "status": "UNAVAILABLE", "reason_code": LATE_PUBLICATION_REASON,
+                        "message": "late publication; no retrospective open execution or prospective model credit",
+                    }
                 cur.execute(
                     """
                     INSERT INTO app.advisory_review_run (
@@ -296,23 +367,27 @@ class AdvisoryForwardPGRepository:
                 cur.execute(
                     """
                     UPDATE app.advisory_forward_run
-                    SET publication_status='PUBLISHED', settlement_status='NOT_DUE',
+                    SET publication_status='PUBLISHED', settlement_status=%s,
                         selection_run_id=%s, review_run_id=%s, list_version_id=%s,
                         active_episode_state_hash=%s, publication_payload_sha256=%s, model_resolution_json=%s,
                         run_payload_json=%s, last_stage='AFTER_CLOSE_PUBLISH',
-                        last_reason_code=NULL, last_error_json=NULL,
-                        published_at=NOW(), updated_at=NOW()
+                        last_reason_code=%s, last_error_json=NULL,
+                        published_at=%s, settled_at=%s, updated_at=NOW()
                     WHERE forward_run_id=%s
                     RETURNING *
                     """,
                     (
+                        "NOT_ENTERED" if late else "NOT_DUE",
                         review_run.selection_run_id,
                         review_run.review_run_id,
                         list_version.list_version_id,
                         publication_payload["active_episode_state_hash"],
                         payload_hash,
                         psycopg2.extras.Json(model_resolution),
-                        psycopg2.extras.Json(publication_payload),
+                        psycopg2.extras.Json(stored_payload),
+                        LATE_PUBLICATION_REASON if late else None,
+                        published_at,
+                        published_at if late else None,
                         forward_run_id,
                     ),
                 )
@@ -1049,7 +1124,10 @@ def _clear_observation_failure(cur: Any, forward_run_id: str) -> None:
     cur.execute(
         """
         UPDATE app.advisory_forward_run
-        SET last_stage='MODEL_OBSERVATION', last_reason_code=NULL,
+        SET last_stage='MODEL_OBSERVATION',
+            last_reason_code=CASE
+                WHEN run_payload_json->'publication_timing'->>'execution_eligible'='false'
+                THEN 'ADVISORY_FORWARD_LATE_PUBLICATION_NOT_ENTERED' ELSE NULL END,
             last_error_json=NULL, updated_at=NOW()
         WHERE forward_run_id=%s AND publication_status='PUBLISHED'
         """,

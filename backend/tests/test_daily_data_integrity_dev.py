@@ -42,6 +42,7 @@ def db():
         yield dataset, repo
     finally:
         with connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM market.data_alerts WHERE dataset=%s", (dataset,))
             cur.execute("DELETE FROM market.data_sync_attempts WHERE target_id IN (SELECT target_id FROM market.data_sync_targets WHERE dataset=%s)", (dataset,))
             cur.execute("DELETE FROM market.data_sync_targets WHERE dataset=%s", (dataset,))
             cur.execute("DELETE FROM market.dataset_date_refresh_audit WHERE dataset=%s", (dataset,))
@@ -213,6 +214,89 @@ def test_rule_upgrade_fences_old_claim_even_without_new_facts(db, monkeypatch):
     readback = repo.publish(dataset=ds, day=day, revision=1, scope_version=catalog.SCOPE_VERSION,
         rule_version=catalog.RULE_VERSION, target_id=new["target_id"], token=new["metadata"]["lease_token"], result=result())
     assert readback["rule_version"] == "DEV_rule_upgrade"
+
+
+def test_obsolete_dense_green_requeues_once_without_invalidating_other_datasets(db, monkeypatch):
+    from backend.services.data_integrity import contracts, repository
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    ds, repo = db
+    day = date(2026, 9, 1)
+    # Apply the real dense-panel predicate to an isolated DEV-only ledger key.
+    dense = (*contracts.DENSE_TRADED_DATASETS, ds)
+    monkeypatch.setattr(contracts, "DENSE_TRADED_DATASETS", dense)
+    monkeypatch.setattr(repository, "DENSE_TRADED_DATASETS", dense)
+    changed(repo, ds, day)
+    claim = repo.claim(ds, day)
+    old = repo.publish(dataset=ds, day=day, revision=1, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+        target_id=claim["target_id"], token=claim["metadata"]["lease_token"], result=result())
+    assert not contracts.effective_partition(old, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+    with repo.transaction() as conn:
+        repository.enqueue_validation(conn, ds, day)
+    new = repo.claim(ds, day)
+    assert new and new["target_id"] == claim["target_id"]
+    proof = ValidationResult(PartitionState.VALID, (CheckCounts("security_date", 1, 1, 0, 0, 0, 0),),
+                             {"coverage_basis": contracts.DENSE_TRADED_BASIS})
+    current = repo.publish(dataset=ds, day=day, revision=1, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+        target_id=new["target_id"], token=new["metadata"]["lease_token"], result=proof)
+    assert contracts.effective_partition(current, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+    with repo.transaction() as conn:
+        repository.enqueue_validation(conn, ds, day)
+    assert repo.claim(ds, day) is None  # A current green is not repeatedly revalidated.
+    assert contracts.effective_partition({**old, "dataset": "index_daily"},
+        scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+
+
+@pytest.mark.parametrize("state", ["recovering", "recovered", "incomplete"])
+def test_dated_retry_alert_native_sql_and_recovery_readback_in_existing_dev(db, monkeypatch, state):
+    from datetime import datetime, timedelta, timezone
+    from psycopg2.extras import Json, RealDictCursor
+    from types import SimpleNamespace
+    from backend.ingestion import tdx_scheduler as scheduling
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_sync_targets import DataSyncTargetRecord, DataSyncTargetRepository
+    ds, repo = db
+    day = date(2026, 9, 1)
+    changed(repo, ds, day)
+    claim = repo.claim(ds, day)
+    proof = result() if state == "recovered" else ValidationResult(PartitionState.INCOMPLETE,
+        (CheckCounts("security_date", 2, 1, 0, 1, 0, 0),), {}, reason="real_missing_key")
+    repo.publish(dataset=ds, day=day, revision=1, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+        target_id=claim["target_id"], token=claim["metadata"]["lease_token"], result=proof)
+    targets = DataSyncTargetRepository(repo._connect)
+    expired = targets.upsert_target(DataSyncTargetRecord(dataset=ds, data_source="tushare", target_date=day,
+        target_status="final_blocked", required_before=datetime.now(timezone.utc)-timedelta(days=1)))
+    if state == "recovering":
+        targets.upsert_target(DataSyncTargetRecord(dataset=ds, data_source="integrity_repair", target_date=day,
+            target_status="retry", target_scope={"operation": "FETCH"},
+            next_retry_at=datetime.now(timezone.utc)+timedelta(hours=6)))
+    alert_id = str(uuid4())
+    with repo.transaction() as conn, conn.cursor() as cur:
+        cur.execute("""INSERT INTO market.data_alerts(alert_id,dataset,severity,alert_type,title,message,details)
+            VALUES(%s,%s,'error','retry_exhausted','DEV fixture','DEV fixture',%s)""",
+            (alert_id, ds, Json({"target_id": expired["target_id"], "target_date": str(day),
+                                "alert_gate": "data_sync_targets_final_state"})))
+    scheduler = scheduling.TDXScheduler.__new__(scheduling.TDXScheduler)
+    scheduler._db_cfg = {}
+    def fetch(query, params=()):
+        with repo.transaction(readonly=True) as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, params)
+            return [dict(row) for row in cur.fetchall()]
+    def execute(query, params=()):
+        with repo.transaction() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+    scheduler._fetchall, scheduler._execute = fetch, execute
+    alerts = []
+    monkeypatch.setattr(scheduling, "get_conn", lambda **_: repo.transaction())
+    monkeypatch.setattr(scheduling, "DataHealthAlerter", lambda *_: SimpleNamespace(
+        flush=lambda values: alerts.extend(values) or {"written": len(values)}))
+    scheduler._flush_final_data_sync_alerts([expired])
+    with repo.transaction(readonly=True) as conn, conn.cursor() as cur:
+        cur.execute("SELECT acknowledged FROM market.data_alerts WHERE alert_id=%s", (alert_id,))
+        assert cur.fetchone()[0] is (state != "incomplete")
+        cur.execute("SELECT target_status FROM market.data_sync_targets WHERE target_id=%s", (expired["target_id"],))
+        assert cur.fetchone()[0] == ("reconciled" if state == "recovered" else "final_blocked")
+    assert [a.alert_type for a in alerts] == ([] if state == "recovered" else [
+        "retry_pending" if state == "recovering" else "retry_exhausted"])
 
 
 def test_fetch_retry_cannot_be_postponed_by_repeated_validation(db):

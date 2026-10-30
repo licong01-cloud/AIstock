@@ -124,6 +124,47 @@ def test_current_runner_derives_diagnostic_path_from_repo_working_directory(tmp_
     assert _Engine.captured["persist_signals"] is True
 
 
+@pytest.mark.parametrize("historical", [False, True])
+def test_bound_daily_runner_retains_pinned_database_capture(tmp_path, monkeypatch, historical):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    binding = {"data_date": "2026-10-28", "binding_sha256": "a" * 64}
+    manifest = {"input_readiness": binding}
+    (workspace / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    constructor = {}
+
+    class BoundEngine(_Engine):
+        def __init__(self, **kwargs):
+            constructor.update(kwargs)
+            super().__init__(**kwargs)
+
+        def run_inference(self, **kwargs):
+            super().run_inference(**kwargs)
+            return pd.DataFrame({"score": [1.0]}, index=pd.MultiIndex.from_tuples(
+                [(pd.Timestamp(kwargs["cutoff_date"]), "SH600001")], names=["datetime", "instrument"]))
+
+    def forbidden_session(*args, **kwargs):
+        pytest.fail("readiness-bound daily input must retain the engine's pinned capture")
+
+    monkeypatch.setattr(runner, "InferenceEngine", BoundEngine)
+    monkeypatch.setattr(runner, "_input_session", forbidden_session)
+    monkeypatch.setattr(runner, "_configure_temporary_root", lambda value: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    argv = ["runner", "--runtime-workspace", str(workspace), "--trade-date", "2026-10-29",
+            "--cutoff-date", "2026-10-28", "--output-path", str(tmp_path / "scores.json")]
+    monkeypatch.setattr(sys, "argv", argv + (["--historical-read-only"] if historical else []))
+    assert runner.main() == 0
+    assert constructor["input_session"] is None
+    assert constructor["fundamental_reader"] is runner._strategy_package_fundamental_reader
+    assert BoundEngine.captured["cutoff_date"].date() == date(2026, 10, 28)
+    assert BoundEngine.captured["persist_signals"] is (not historical)
+    assert BoundEngine.captured["allow_external_market_fallback"] is False
+    assert json.loads((workspace / "manifest.json").read_text(encoding="utf-8")) == manifest
+    monkeypatch.setattr(sys, "argv", argv + ["--historical-read-only", "--dataset-binding", "foreign.json"])
+    with pytest.raises(SystemExit):
+        runner.main()
+
+
 def _batch_args(tmp_path, monkeypatch, plan):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -142,6 +183,32 @@ def _batch_args(tmp_path, monkeypatch, plan):
         "--output-path", str(output), "--run-id", "test-owned-run", "--input-revision", "fixture-immutable-v1",
     ])
     return output
+
+
+def test_bound_daily_static_reader_preserves_chip_gaps_and_other_slow_fields(monkeypatch):
+    from backend.data_service import qe_data_service as data
+    from backend.services.data_integrity.advisory_scope import verify_missing_chip_values
+    index = pd.MultiIndex.from_product([pd.to_datetime(["2026-05-19", "2026-05-20"]),
+                                       ["SZ000663"]], names=["datetime", "instrument"])
+    frames = {
+        "load_daily_basic": pd.DataFrame({"db_pe": [1., 2.]}, index=index),
+        "load_bak_basic": pd.DataFrame({"bb_total_share": [100., float("nan")]}, index=index),
+        "load_cyq_perf": pd.DataFrame({"cp_winner_rate": [0.4, float("nan")]}, index=index),
+        "load_daily_pv": pd.DataFrame({"close": [10., 11.]}, index=index),
+    }
+    for name in ("load_daily_basic", "load_moneyflow", "load_bak_basic", "load_cyq_perf",
+                 "load_sector_data", "load_margin_detail", "load_daily_pv"):
+        monkeypatch.setattr(data, name, lambda *a, _name=name, **kw: frames.get(_name, pd.DataFrame()).copy())
+    monkeypatch.setattr(data, "compute_moneyflow_derived_factors", lambda *a: pd.DataFrame())
+    monkeypatch.setattr(data, "compute_daily_basic_precomputed_factors", lambda *a: pd.DataFrame())
+    args = dict(universe=["000663.SZ"], start_date=date(2026, 5, 19), end_date=date(2026, 5, 20))
+    raw = runner._strategy_package_fundamental_reader(**args)
+    assert pd.isna(raw.loc[index[1], "cp_winner_rate"])
+    assert raw.loc[index[1], "bb_total_share"] == 100.
+    verify_missing_chip_values({"partition_refs": [{"fact_date": "2026-05-20",
+        "consumer_projection": {"missing_as_nan": ["000663.SZ"]}}]}, raw)
+    legacy = data.build_static_factors(args["universe"], args["start_date"], args["end_date"], asof_fill_slow_static=True)
+    assert legacy.loc[index[1], "cp_winner_rate"] == 0.4
 
 
 def test_batch_runner_reuses_one_session_and_keeps_full_daily_receipts(tmp_path, monkeypatch):
