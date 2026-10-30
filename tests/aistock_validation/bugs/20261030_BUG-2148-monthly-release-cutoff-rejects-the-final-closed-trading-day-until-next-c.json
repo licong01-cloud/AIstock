@@ -109,7 +109,8 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_runtime.py -k cutoff_uses -q -> 5 passed; fresh-process calendar-clock boundary tests, no task claim, no production DB/profile writes"],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
