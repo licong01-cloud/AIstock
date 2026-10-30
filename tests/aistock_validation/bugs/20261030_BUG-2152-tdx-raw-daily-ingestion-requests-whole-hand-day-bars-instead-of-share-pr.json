@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2152",
-  "closed_at": null,
+  "closed_at": "2026-10-30T07:14:46.459903Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -122,10 +122,32 @@
     "planned_target_ids": [
       "tdx-go-backend"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2152-postrestart-current.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2152",
+      "business_smoke_semantic": {
+        "contract_id": "tdx_raw_kline_facts",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "1cc791db0783e1491129d84606547b18e3ac8e0d991fb9316562f91f7ffbe663",
+      "expected_identity": "8f058a506ec562aa876f56efc08fb96e1043776e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T07:14:05.996355Z",
+      "mode": "read_only",
+      "observed_identity": "68be6390c5ff584497d3549cb1051cc12db7e643",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6ed543fb70214e6283c0d272c955f348621bdde8dfd36ec6bd301ee91605ab30",
+      "receipt_sha256": "5032430f41588b4738542d113e3b3677436fa4c357ad782a7acd44c95a2faff5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0e5edbe3edd89c607a3f8d93c21f49d35ef32a20eb874ee94de0afb02e9498aa",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "tdx-go-backend"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
@@ -156,7 +178,7 @@
     ],
     "validation_evidence_digest": "e7d4e9c9252eb17c305e29103324dea3a7652e53707bcbddb6a1bfad445a4388"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -166,7 +188,8 @@
     "source_event_id": "FE-20261030-c2117f801162"
   },
   "validation_evidence": [
-    "validation-receipt: id=3b2b1bd84c472b2a commit=d3724b97649a3ccf12e3edc82dc539f660d17724 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    "validation-receipt: id=3b2b1bd84c472b2a commit=d3724b97649a3ccf12e3edc82dc539f660d17724 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2152 --target tdx-go-backend -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
