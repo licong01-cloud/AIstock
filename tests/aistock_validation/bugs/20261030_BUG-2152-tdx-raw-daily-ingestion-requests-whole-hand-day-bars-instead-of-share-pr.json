@@ -99,12 +99,21 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sz001306&type=day&start_date=2026-10-08&end_date=2026-10-08",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "RED: go test -mod=readonly -run TestRawDaily -count=1 . failed at actual request type=9; GREEN: 2 direct producer tests pass with type=4, exact boundary forwarding, preserved legacy raw values and share precision, provider failures remain errors.",
+      "Fresh read-only provider probe compared type=9 and type=4 for 001306.SZ/001335.SZ/003028.SZ on 2026-10-08. Share facts 675472/905797/759950 agree with independent captured Tushare daily. No production write, service process control, candidate change or tolerance change. X:/AIstock_temp/DATA_PREPARATION/monthly-october-readiness-20261030/daily-volume-independent-probe.json"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
