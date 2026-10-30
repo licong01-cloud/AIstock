@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "新统一候选旧静态前缀与对应H5同日事实一致，NA保持；官方末交易日非自然月末仍可增量；原文件不变",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_legacy_factor.py",
+      "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2150-monthly-legacy-factor-append-inherits-auxiliary-forward-fill-and-assumes.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_legacy_factor.py",
-      "backend/tests/dataset_release/test_monthly_legacy_factor.py"
+      "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2150-monthly-legacy-factor-append-inherits-auxiliary-forward-fill-and-assumes.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_legacy_factor.py",
@@ -109,12 +115,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_legacy_factor.py -q -> 23 passed; six inherited NULL/absent-row cases, immutable prefix and non-calendar-month-end cutoff. Current three frozen H5 inputs have datetime/instrument indexes; projection uses bounded chunks and no DB reads"
+    ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_legacy_factor.py -q -> 23 passed; six inherited NULL/absent-row cases, immutable prefix and non-calendar-month-end cutoff. Current three frozen H5 inputs have datetime/instrument indexes; projection uses bounded chunks and no DB reads"],
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

@@ -272,6 +272,8 @@ def test_static_inherited_prefix_uses_frozen_auxiliary_facts_not_filled_values(t
         chunks=(chunk,), target_root=target, target_cutoff=date(2026, 9, 30), source_receipt_sha256="e"*64, max_rows=1)
     actual = pd.read_parquet(target / "static_factors.parquet")
     assert pd.isna(actual.loc[old.index[0], column])
+    untouched = [v for v in old.columns if v not in FACTOR_H5_SCHEMAS[dataset]]
+    pd.testing.assert_frame_equal(actual.loc[old.index, untouched], old[untouched])
     pd.testing.assert_frame_equal(actual.loc[new.index], new)
     assert old_path.read_bytes() == before
 
