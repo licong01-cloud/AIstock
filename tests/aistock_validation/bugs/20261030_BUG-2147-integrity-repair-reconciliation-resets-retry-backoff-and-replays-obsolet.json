@@ -30,15 +30,22 @@
   "evidence_uris": [],
   "expected": "无数据修订时不缩短采集退避；源缺失不伪报成功，已成功分区不重复采集；目标日期精确，有界修复不扫描无关历史",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_data_sync_targets.py",
+      "tests/aistock_validation/bugs/20261030_BUG-2147-integrity-repair-reconciliation-resets-retry-backoff-and-replays-obsolet.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/data_sync_targets.py",
-      "backend/services/data_integrity/worker.py",
       "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_data_sync_targets.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "tests/aistock_validation/bugs/20261030_BUG-2147-integrity-repair-reconciliation-resets-retry-backoff-and-replays-obsolet.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_sync_targets.py",
@@ -161,20 +168,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "fresh_process_evidence": ["python -m pytest backend/tests/test_data_sync_targets.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 171 passed, 1 skipped; subsequent delisting/quality/obsolete regression -> 12 passed. Existing DEV native upsert 5 cases passed and rolled back; no production write or service action"],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/test_data_sync_targets.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 171 passed, 1 skipped; subsequent delisting/quality/obsolete regression -> 12 passed. Existing DEV native upsert 5 cases passed and rolled back; no production write or service action"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": [
+    "planned_target_ids": [
       "backend-main",
       "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
