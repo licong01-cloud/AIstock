@@ -109,7 +109,8 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_factor_partition_producer.py -q -> 28 passed in fresh process; subsequent checkpoint identity regression -> 1 passed; no DB/profile/runtime write"],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

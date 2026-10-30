@@ -38,7 +38,8 @@ def _index(day: str) -> pd.MultiIndex:
 
 
 @pytest.mark.parametrize("with_previous_tail", [False, True])
-def test_daily_basic_static_preserves_provider_null_without_forward_fill(with_previous_tail: bool) -> None:
+@pytest.mark.parametrize("dataset", ["daily_basic", "moneyflow", "sector_data", "bak_basic", "cyq_perf", "margin_detail"])
+def test_daily_fact_static_preserves_null_and_absent_rows(dataset: str, with_previous_tail: bool) -> None:
     index = pd.MultiIndex.from_product(
         [pd.to_datetime(["2026-09-01", "2026-09-02"]), ["000001.SZ"]],
         names=["datetime", "instrument"],
@@ -52,8 +53,10 @@ def test_daily_basic_static_preserves_provider_null_without_forward_fill(with_pr
         previous.index = pd.MultiIndex.from_product(
             [[pd.Timestamp("2026-08-31")], ["000001.SZ"]], names=index.names,
         )
-    actual, tail = _static_asof_frame("daily_basic", current, index, previous)
+    target_index = index.union(_index("2026-09-03"))
+    actual, tail = _static_asof_frame(dataset, current, target_index, previous)
     pd.testing.assert_frame_equal(actual.loc[:, current.columns], current)
+    assert actual.reindex(target_index).loc[pd.Timestamp("2026-09-03")].isna().all().all()
     assert tail.empty
 
 
@@ -185,6 +188,24 @@ def test_factor_candidate_chunks_do_not_alias_mutable_source_and_refs_survive_re
     os.rename(staging, published)
     for value in receipt["outputs"].values():
         assert (published / value["artifact_relative_path"]).is_file()
+
+
+def test_factor_checkpoint_binds_exact_date_projection_contract(tmp_path: Path, monkeypatch) -> None:
+    from backend.services.dataset_release import factor_materializer as module
+
+    source, staging = tmp_path / "source", tmp_path / "candidate"
+    source.mkdir()
+    staging.mkdir()
+    spec = _build_spec(source, staging)
+    original_digest = spec.digest
+    module.FactorBundleMaterializer().materialize(spec)
+    output = staging / "factor_bundle" / "static_factors.parquet"
+    original = output.read_bytes()
+    monkeypatch.setattr(module, "STATIC_ASOF_CONTRACT", "legacy_forward_fill")
+    assert spec.digest != original_digest
+    with pytest.raises(FactorCheckpointConflict):
+        module.FactorBundleMaterializer().materialize(spec)
+    assert output.read_bytes() == original
 
 
 def test_factor_resume_never_overwrites_conflicting_output(tmp_path: Path) -> None:
