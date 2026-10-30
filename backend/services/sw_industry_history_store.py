@@ -63,6 +63,13 @@ def prepare_member_refresh(existing, incoming, code):
     Dated membership out_date is inclusive, as in the shared PIT SQL readers.
     No returned/retained interval may overlap, including a same-day handoff.
     """
+    from .data_integrity.stock_scope import filter_stock_rows
+
+    # The collector already applies this supported-market contract to incoming
+    # rows. Compare like with like; retained BSE/B-share history is not a
+    # provider omission and is never deleted or assigned an inferred end date.
+    existing = filter_stock_rows(existing)
+    incoming = filter_stock_rows(incoming)
     selected = {}
     for row in incoming:
         if row.get("l2_code") != code:

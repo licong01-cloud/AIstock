@@ -1318,6 +1318,53 @@ def test_sw_daily_l1_incomplete_is_warning_retry_not_job_failure(monkeypatch):
     assert "present=30" in kwargs["reason"]
 
 
+@pytest.mark.parametrize("failure", ["member_result", "member_exception", "member_and_quote", "classify_result", "none"])
+def test_sw_composite_member_failure_does_not_skip_independent_quotes(monkeypatch, failure):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls, writes, updates = [], [], []
+    scheduler._execute = lambda query, params=(): writes.append((query, params))
+    scheduler._update_ingestion_schedule = lambda sid, **kw: updates.append(kw)
+    scheduler._sw_daily_level_coverage = lambda _end: {
+        "status": "ok", "levels": {"L1": {"expected": 31, "present": 31},
+                                   "L2": {"expected": 124, "present": 124}},
+    }
+    scheduler._schedule_delayed_retry = lambda *_a, **_kw: pytest.fail("complete quotes need no retry")
+
+    class Engine:
+        def sync(self, *, spec, **_kwargs):
+            calls.append(spec.name)
+            bad = ((failure.startswith("member") and spec.name == "sw_index_member")
+                   or (failure == "member_and_quote" and spec.name == "sw_daily")
+                   or (failure == "classify_result" and spec.name == "sw_index_classify"))
+            if spec.name == "sw_index_member" and failure == "member_exception":
+                raise RuntimeError("member transport failed")
+            return SimpleNamespace(ok=not bad, inserted_rows=0 if bad else 155,
+                                   error="source failed: " + spec.name if bad else None)
+
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", Engine)
+    children = [str(uuid.uuid4()) for _ in range(3)]
+    parent = str(uuid.uuid4())
+    scheduler._run_sw_sector_composite_sync(uuid.uuid4(), "schedule", "incremental", "unit",
+                                           {"sub_job_ids": children, "job_id": parent})
+    assert calls == ["sw_index_classify", "sw_index_member", "sw_daily"]
+    assert updates[-1]["last_status"] == ("success" if failure == "none" else "failed")
+    parent_result = [params for query, params in writes if "finished_at=NOW()" in query
+                     and len(params) == 4 and str(params[-1]) == parent][-1]
+    parent_summary = json.loads(parent_result[2])
+    if failure == "none":
+        assert updates[-1]["last_error"] is None
+        assert parent_summary == {"errors": [], "error": None}
+    else:
+        failing = "sw_index_classify" if failure == "classify_result" else "sw_index_member"
+        assert failing in updates[-1]["last_error"]
+        assert failing in parent_summary["error"]
+    quote = [params for query, params in writes if "finished_at=NOW()" in query
+             and len(params) == 3 and str(params[-1]) == children[2]]
+    assert quote[-1][0] == ("failed" if failure == "member_and_quote" else "success")
+    if failure == "member_and_quote":
+        assert "sw_daily" in updates[-1]["last_error"]
+
+
 @pytest.mark.parametrize(
     ("inserted_rows", "coverage", "expected_reason"),
     [
