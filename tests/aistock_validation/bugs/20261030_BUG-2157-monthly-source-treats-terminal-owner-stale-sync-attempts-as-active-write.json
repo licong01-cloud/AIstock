@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2157",
-  "closed_at": null,
+  "closed_at": "2026-10-30T18:24:57.950124Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -99,10 +99,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2157-postrestart-canonical.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2157",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "0d85c2629eb5a99cf22b163675237e2004e1a439",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T18:24:14.130966Z",
+      "mode": "read_only",
+      "observed_identity": "0d85c2629eb5a99cf22b163675237e2004e1a439",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d259e6b41293164aee0cdd8e67d91a9a64ae93675192206f76e5871c7feda71b",
+      "receipt_sha256": "44449ff8691a1d4fe215d16dae37e9ad7191b7b88e9377a58795dee50335e052",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b70cc7c05d5d27dfc0d855d839aceba2d51eb2cdf0e3b18cd29410b3d91b70df",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -133,7 +155,7 @@
     ],
     "validation_evidence_digest": "ad571381b2c8622d8de86b06340bb1deb5b4e7493b284becf06e9c6c64653763"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -143,7 +165,8 @@
     "source_event_id": "FE-20261030-32a3f9ce0cf5"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -> passed; source PR6955 CI all green; DEV SQL PASS; four review rounds complete"
+    "python -m nox -s l0 -> passed; source PR6955 CI all green; DEV SQL PASS; four review rounds complete",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2157 --target worker-scheduler --expected-identity 0d85c2629eb5a99cf22b163675237e2004e1a439 -> passed runtime identity and supervised monthly worker smoke"
   ],
   "verification_budget": {
     "budget": "standard",
