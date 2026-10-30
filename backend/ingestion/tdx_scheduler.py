@@ -1550,7 +1550,8 @@ class TDXScheduler:
                 )
                 continue
 
-            if not continued_upstream_retry and not self._target_retry_window_open(schedule_dataset, target_date=target_date, now=now):
+            needs_publication_clock = not continued_upstream_retry or schedule_dataset in _GO_INCREMENTAL_DATASETS
+            if needs_publication_clock and not self._target_retry_window_open(schedule_dataset, target_date=target_date, now=now):
                 continue
             if self._recent_dataset_submission_exists(schedule_dataset, retry_mode):
                 continue
@@ -1622,6 +1623,12 @@ class TDXScheduler:
         current = now or _now()
         if current.tzinfo is None:
             current = current.replace(tzinfo=dt.timezone.utc)
+        if dataset_key in _GO_INCREMENTAL_DATASETS and target_date is not None:
+            # Share the collector's existing complete-day clock. An integrity
+            # repair may bypass retry deadlines, never the publication boundary;
+            # completed historical targets remain eligible during the daytime.
+            completed = self._latest_completed_trading_day(now=current)
+            return completed is not None and target_date <= completed
         if target_date is not None and dataset_key in _AVAILABILITY_LAG_TRADING_DAYS:
             try:
                 availability_date = self._availability_date_for_target(dataset_key, target_date)
