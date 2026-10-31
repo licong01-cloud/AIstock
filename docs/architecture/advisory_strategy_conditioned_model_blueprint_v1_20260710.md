@@ -2492,7 +2492,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-303 | §6.3.38/§16.0、`docs/architecture/advisory_lstm_complementarity_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_complementarity_v1.py; artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/research_audit_receipt.json | COMPLETE_COMPLEMENTARITY_REVIEW_LSTM_STRESS_NOT_SUPPORTED_CURRENT_PAIR | none |
 | F-304 | §6.3.39/§16.0、`docs/architecture/advisory_lstm_specialist_spo_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_specialist_spo_v1.py; artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/research_audit_receipt.json | COMPLETE_INNER_AND_DESCRIPTIVE_SPECIALIZATION_SUPPORTED_NOT_CONFIRMED | none |
 | F-305 | §6.3.40/§16.0、`docs/architecture/advisory_lstm_spo_shadow_v1_f2_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py; tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json; artifact: F:/Dev/AIstock/tmp/issue_workflow/BUG-2159/aftercare-final-20261031.json | VERIFIED_RUNTIME_FIRST_CAPTURE_NOT_ECONOMIC_CONFIRMATION | none |
-| F-306 | §16.0、`docs/architecture/advisory_lstm_rank_value_review_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/research_audit_receipt.json | VERIFIED_DIAGNOSTICS_KEEP_FROZEN_MODEL_ZERO_FIT | none |
+| F-306 | §16.0、`docs/architecture/advisory_lstm_rank_value_review_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/research_audit_receipt.json | VERIFIED_DIAGNOSTICS_KEEP_FROZEN_MODEL_ZERO_FIT | none |
 
 
 ## 12. Verification Plan

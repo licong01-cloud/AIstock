@@ -8,7 +8,9 @@
 
 离线operator `scripts/advisory_lstm_rank_value_review.py`提供freeze/run，绑定已消费P19 archive和当前不可变预测，复用原预测器及文件发布器。输出可直接回答每只股票的分数由什么组成、哪些股票换入换出、Top10边界如何变化及历史增量依赖哪些样本。它不提供新的收益率预测、买卖价格或实时交易指令。
 
-固定producer `bd933a78389102463ea315e939b2a2271ce5762b`；协议SHA `7d7a8dcc2981ef3f59bdd1a7ba8cdfdcc1b6b6de92491a9a6d46b17c9b0d132e`。真实一次分析约8.692秒，输出evaluated stage SHA `556ab3125aab66a89ac641d3efcd85a0022475c71c4d790ab852e6aa0c141862`。新进程再次调用返回DIAGNOSTICS_REUSED，stage不变。
+固定producer `d1f330322833ab3d459acfff6dd5b6df17326f76`；协议SHA `aacdc0f35fe2f4a6d0694b7972d5a67b12c41bf7670eafc8d69a2a9daed0399a`。最终一次分析约8.464秒，输出evaluated stage SHA `8b84e161418e1dea41374b2417c167ac0347e59ce0c972054f333fbc0c2b8aaa`。新进程再次调用返回DIAGNOSTICS_REUSED，stage不变。
+
+首份成功工件保留在根目录study。交付前发现物理源码hash不能跨Windows换行转换复用，已修正为Git规范化LF身份并绑定operator与4个核心接口文件，冻结时校验对应提交源码；实质代码变化仍拒绝。修正后的诊断另存在portable-v2，七份数值/决策工件与首份字节完全相同，两个attempt均0fit，未覆写旧工件。
 
 三折实际训练人口分别8,300/9,750/11,850行，原始截止前人口8,950/10,950/13,100行，排除13/24/25个未完整成熟训练组；全部training_keys_sha256精确匹配原模型。没有用截止前全部行冒充监督人口，也没有重新训练。
 
@@ -73,10 +75,10 @@
 
 工件根`X:/AIstock_temp/ADVISORY/lstm-value-20261101`。`study/prepared/input_profile.json`与`study/evaluated/`包含全部真实输出；`research_audit_receipt.json`为新进程第二算术路径，复核6,350行/101,600贡献单元、50,800边界对、6,300股票增量及152影响投影、不可变复用和源hash。
 
-14项直接合同测试通过，Ruff/compile/ownership/CI路由覆盖预检及L0通过。首轮1失败是测试错误预期ValueError，实际发布器正确抛AdvisoryModelFirstError拒绝覆盖；修正测试后失败节点通过，最终14项全通过。没有因此改公共发布器或重新运行研究。
+15项直接合同测试通过（原14项及新增源码身份1项），Ruff/compile/ownership/CI路由覆盖预检及L0通过。首轮1失败是测试错误预期ValueError，实际发布器正确抛AdvisoryModelFirstError拒绝覆盖；修正测试后失败节点及原14项通过，新增源码身份覆盖后最终15项通过。没有因此改公共发布器；交付前源码身份修正的另次零拟合诊断及等价性已单列。
 
 R1验证原编码/解析公式及第二路径对账；R2修订不同折模型不能直接做纯时间归因、派生字段不独立、单日分布及开发影响诊断措辞；R3核对scope/原人口/真实产物/无副作用及所有F1条目。均为本窗口自审，不是独立外审或经济确认。源码CI/PR/合入另见delivery_receipt.json；不提前声称已合入。
 
 DESIGN-COMPLIANCE-001逐项：完整交付批准的诊断及单一决策，不把它说成更优模型；失败/未知/负面结果保留；原模型、榜单、费用、时钟和人口不改变；不私增审批、观察天数或准入门。
 
-当前无生产DDL/DML、数据库读取、数据集/依赖/客户端变更、QE或服务操作；无需后端重启。较广Advisory模块回归由现有PR CI/Nightly执行，本地不重复整套。
+研究工具不访问数据库；本窗口仅以只读GET核对后台状态，0数据库写入。生产DDL/DML、数据集/依赖/客户端变更、QE和服务控制均noop，无需后端重启。较广Advisory模块回归由现有PR CI/Nightly执行，本地不重复整套。

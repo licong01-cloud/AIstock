@@ -14,6 +14,8 @@
 
 输入角色由预注册protocol绑定绝对路径、字节SHA256及size；解码前/运行后复核，拒绝角色错配、hash漂移、重复身份、错包或错预测日期。只接受规划inventory列明的P19 recovery-v2 archive和当前固定模型/release/prediction；不由目录里最新文件替代。
 
+源码另按Git规范化LF身份绑定operator及4个核心接口文件；freeze要求与producer提交一致，run拒绝实质源码变化，允许Windows checkout仅CRLF差异。输入数据仍按原始物理字节校验，不把源码换行规则应用到模型或数据工件。
+
 - 历史特征：原305D/15,250行；三折模型与原持出预测126D/6,300行。
 - 训练资格：每折原train_finance。先投影D/H，再解码H≤该折截止的已消费标签；用原training资格复原KEY并核对training_keys_sha256，禁止调用fit。不能把截止前全部行都叫实际训练样本。
 - 经济诊断：仅P19 evaluated/panel、daily、finance和report的已消费开发结果；三臂共同完整主分母102D，原126D及未知/未成熟行全保留。
@@ -57,11 +59,11 @@ R1审算术与真实输入；R2审开发复用/分母/重叠/因果/搜索边界
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-581 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/evaluated/receipt.json | VERIFIED_EXACT_SOURCE_ROLES_AND_THREE_TRAINING_KEYS | none |
-| F-582 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/research_audit_receipt.json | VERIFIED_6350_ROWS_101600_CONTRIBUTIONS | none |
-| F-583 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/prepared/input_profile.json | VERIFIED_50800_PAIRS_AND_ROLE_LIMITATIONS | none |
-| F-584 | scripts/advisory_lstm_rank_value_review.py | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/evaluated/historical_dependence.json; research_audit_receipt.json | VERIFIED_ORIGINAL_126D_102_COMMON_DEVELOPMENT_ONLY | none |
-| F-585 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/research_audit_receipt.json | VERIFIED_IMMUTABLE_REUSE_NO_FIT_OR_LIVE_SOURCE | none |
+| F-581 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/study/evaluated/receipt.json | VERIFIED_EXACT_SOURCE_ROLES_AND_THREE_TRAINING_KEYS | none |
+| F-582 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/research_audit_receipt.json | VERIFIED_6350_ROWS_101600_CONTRIBUTIONS | none |
+| F-583 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/study/prepared/input_profile.json | VERIFIED_50800_PAIRS_AND_ROLE_LIMITATIONS | none |
+| F-584 | scripts/advisory_lstm_rank_value_review.py | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/study/evaluated/historical_dependence.json; research_audit_receipt.json | VERIFIED_ORIGINAL_126D_102_COMMON_DEVELOPMENT_ONLY | none |
+| F-585 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/research_audit_receipt.json | VERIFIED_IMMUTABLE_REUSE_NO_FIT_OR_LIVE_SOURCE | none |
 | F-586 | docs/analysis/advisory_lstm_rank_value_review_20261101.md | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/review_receipt.md; study/evaluated/decision.json | VERIFIED_KEEP_FROZEN_OBSERVATION_NOT_ECONOMIC_CONFIRMATION | none |
 
 ## Non-goals / Risks / Production Gates / Rollback
