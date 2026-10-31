@@ -150,6 +150,13 @@ class BacktestExecutor(BaseExecutor):
         require_terminal_replay_mode(
             custom_params.get("qe_terminal_replay"), mode=mode.value, source=ctx.prediction_replay_source
         )
+        natural_entry_study = custom_params.get("qe_l2_natural_entry_manifest")
+        if natural_entry_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_L2_NATURAL_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(natural_entry_study, dict)
+                    or natural_entry_study.get("assets", {}).get("prediction", {}).get("sha256") != source.sha256):
+                raise ValueError("QE_L2_NATURAL_SOURCE_PREDICTION_MISMATCH")
         relative_study = custom_params.get("qe_l2_relative_manifest")
         if relative_study is not None:
             if mode != BacktestMode.PREDICTION_REPLAY:
