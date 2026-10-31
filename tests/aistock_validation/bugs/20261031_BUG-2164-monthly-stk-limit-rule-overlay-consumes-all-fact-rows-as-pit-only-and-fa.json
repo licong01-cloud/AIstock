@@ -29,15 +29,15 @@
   "expected": "Retain every frozen source fact and only derive rule overlays for the unchanged PIT population; no false non-PIT ordering failure.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261031_BUG-2164-monthly-stk-limit-rule-overlay-consumes-all-fact-rows-as-pit-only-and-fa.json",
       "backend/services/dataset_release/artifact_ready_source.py",
-      "backend/tests/dataset_release/test_artifact_ready_source.py"
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2164-monthly-stk-limit-rule-overlay-consumes-all-fact-rows-as-pit-only-and-fa.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261031_BUG-2164-monthly-stk-limit-rule-overlay-consumes-all-fact-rows-as-pit-only-and-fa.json",
       "backend/services/dataset_release/artifact_ready_source.py",
-      "backend/tests/dataset_release/test_artifact_ready_source.py"
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2164-monthly-stk-limit-rule-overlay-consumes-all-fact-rows-as-pit-only-and-fa.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -123,7 +123,8 @@
       "Two isolated Python processes replayed captured attempt12 CAS source manifest d8c002244384ea46fc233ff2411d0c23c69720ddb6a2808ea42834ed24b87bd1 and already-captured PIT file 2613a581f962a861354a99e05c5a45d6fad993fa722552238952d847eda424a6. Original code reproduced stk_limit source code ordering differs; persistent worktree fix passed 83565 expected PIT keys, 87266 database rows, zero derivation, override or unresolved keys. Fix-point only; not complete release acceptance. Receipts X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2164-frozen-rule-red/receipt.json and BUG-2164-frozen-rule-green/receipt.json. No production DML, provider calls, candidate/profile writes or process control.",
       "Review round 1: all-fact inputs before/between/after PIT codes, raw and provider-overlay paths; raw facts remain unchanged and streams exhaust. Round 2: preserve duplicate/order, malformed identity/date, required invalid/missing factor and partial-price conflicts; projection happens after provider/database merge. Round 3: exact frozen production inputs and adjacent daily/adj/minute/index scope review; monthly minute quote population already unions real quote days, index path is separately bounded. No business-source changes outside the optional rule adapter.",
       "DESIGN-COMPLIANCE-001 four checks PASS: actual fix-point and related tests, not a subset release claim; true errors remain explicit with no fabricated success/facts; PIT eligibility, fact exports, prices and windows unchanged; no additional approval, source scan or publication gate. Monthly candidate remains unready pending restarted worker SOURCE/BUILD and existing downstream release validation.",
-      "Two fresh Python processes loaded canonical old and worktree fixed source against the same captured CAS inputs. Frozen replay green receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2164-frozen-rule-green/receipt.json; not a production worker restart or full candidate acceptance."
+      "Two fresh Python processes loaded canonical old and worktree fixed source against the same captured CAS inputs. Frozen replay green receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2164-frozen-rule-green/receipt.json; not a production worker restart or full candidate acceptance.",
+      "Fresh Python canonical RED and worktree GREEN against identical frozen source CAS/PIT; green receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2164-frozen-rule-green/receipt.json; no production process restart or complete candidate acceptance."
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
