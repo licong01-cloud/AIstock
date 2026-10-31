@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2160",
-  "closed_at": null,
+  "closed_at": "2026-10-31T06:36:33Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -111,8 +111,8 @@
   },
   "first_seen_at": "2026-10-31T06:11:33.182531Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "abc1b10bef14a580b37f3a0fc152e4dc4ef3a8be",
+  "fixed_at": "2026-10-31T06:36:33Z",
   "github_issue_number": 6963,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6963",
   "last_seen_at": "2026-10-31T06:11:33.182531Z",
@@ -120,6 +120,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6966",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -160,6 +161,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -169,7 +171,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2160",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "07edcb6c20b98b44",
+    "recorded_at": "2026-10-31T06:37:39.371488Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3e520d71e50a89523d8798a27ae0aaa68f6be87f",
+    "source_merge_commit": "abc1b10bef14a580b37f3a0fc152e4dc4ef3a8be",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6966",
+    "validation_evidence": [
+      "python -m nox -s l0 -- frontend/src/app/simulation/localsim/components/dual-mode-comparison.tsx frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts tests/aistock_validation/bugs/20261031_BUG-2160-localsim-comparison-reselecting-the-current-account-clears-loaded-detail.json -> passed (0 blocking; output physically X:/AIstock_temp/localsim-runtime-activation-20261031/post-restart-r1/nox-validation)",
+      "git diff --check -> passed (three-file scope; three self-review rounds; no source change since directed browser pass)"
+    ],
+    "validation_evidence_digest": "5228ff198544c5061cf67d0e2d108274a86a73555a5c9c9af273b111a5414ec5"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -207,6 +231,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- frontend/src/app/simulation/localsim/components/dual-mode-comparison.tsx frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts tests/aistock_validation/bugs/20261031_BUG-2160-localsim-comparison-reselecting-the-current-account-clears-loaded-detail.json -> passed (0 blocking; output physically X:/AIstock_temp/localsim-runtime-activation-20261031/post-restart-r1/nox-validation)",
+    "git diff --check -> passed (three-file scope; three self-review rounds; no source change since directed browser pass)"
+  ],
   "verification_budget": {
     "budget": "light_ui",
     "ci_premerge_plans": [],
