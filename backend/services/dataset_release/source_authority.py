@@ -52,6 +52,7 @@ from .source_manifest import (
     SourceManifest,
 )
 from .monthly_snapshot import SNAPSHOT_ID_RE
+from .monthly_repair_journal import TERMINAL_JOB_STATUSES
 from .source_pool import ReadOnlySourcePool
 from .source_rows_codec import (
     SOURCE_ROWS_CODEC,
@@ -1052,7 +1053,7 @@ WITH normalized_ingestion_job AS (
            attempt.attempt_id,attempt.target_id,attempt.attempt_no,
            attempt.status,attempt.created_at,attempt.started_at,
            attempt.finished_at,attempt.error_message,attempt.context_json,
-           target.dataset,target.data_source
+           target.dataset,target.data_source,attempt.job_id
     FROM market.data_sync_attempts AS attempt
     JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
     WHERE target.dataset = ANY(%(datasets)s)
@@ -1061,11 +1062,12 @@ WITH normalized_ingestion_job AS (
              attempt.created_at DESC,attempt.attempt_id DESC
 )
 SELECT ledger_kind,ledger_identity,status,created_at,started_at,finished_at,
-       opaque_payload
+       opaque_payload,owner_status,owner_finished_at
 FROM (
     SELECT 'ingestion_jobs'::text AS ledger_kind,
            job_id::text AS ledger_identity,status::text,
-           created_at,started_at,finished_at,summary::text AS opaque_payload
+           created_at,started_at,finished_at,summary::text AS opaque_payload,
+           NULL::text AS owner_status,NULL::timestamptz AS owner_finished_at
     FROM relevant_ingestion_job
     UNION ALL
     SELECT 'data_sync_attempts'::text AS ledger_kind,
@@ -1077,8 +1079,9 @@ FROM (
                'data_source',attempt.data_source,
                'error_message',attempt.error_message,
                'context_json',attempt.context_json
-           )::text AS opaque_payload
+           )::text AS opaque_payload,owner.status AS owner_status,owner.finished_at AS owner_finished_at
     FROM latest_data_sync_attempt AS attempt
+    LEFT JOIN market.ingestion_jobs AS owner ON owner.job_id::text=attempt.job_id
     WHERE (attempt.created_at >= %(start)s OR attempt.status='started')
 ) AS writer_ledger
 ORDER BY ledger_kind,ledger_identity
@@ -1127,6 +1130,8 @@ _WRITER_LEDGER_REQUIRED = (
     "started_at",
     "finished_at",
     "opaque_payload",
+    "owner_status",
+    "owner_finished_at",
 )
 
 
@@ -1238,6 +1243,7 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
                         "finished_at",
                         "error_message",
                         "context_json",
+                        "job_id",
                     ),
                 ),
                 self._describe_table(
@@ -1683,6 +1689,7 @@ class SourceRefreshAuditLedger:
     trading_dates: tuple[date, ...]
     eligible_sources: Mapping[str, tuple[str, ...]]
     eligible_quality_statuses: Mapping[str, tuple[str, ...]]
+    consumer_partition_projections: Mapping[tuple[str, date], Mapping[str, Any]] | None = None
 
     def as_receipt(self, *, profile: str, cutoff: date) -> dict[str, Any]:
         return {
@@ -1710,6 +1717,9 @@ class SourceRefreshAuditLedger:
                 for (dataset, day), audit_rows in sorted(self.rows.items())
                 for row in audit_rows if row.get("integrity_revision") is not None
             ],
+            **({"consumer_partition_projections": [dict(value) for _, value in
+                sorted(self.consumer_partition_projections.items())]}
+               if self.consumer_partition_projections else {}),
         }
 
     def partition_digest(self, dataset: str, start: date, end: date) -> str:
@@ -1717,7 +1727,28 @@ class SourceRefreshAuditLedger:
         observed = {
             day: audit_rows for (name, day), audit_rows in self.rows.items() if name == dataset and start <= day <= end
         }
-        missing = [value.isoformat() for value in expected_dates if value not in observed]
+        projections = {}
+        for value in expected_dates:
+            proof = (self.consumer_partition_projections or {}).get((dataset, value))
+            if not proof:
+                continue
+            audit_sha = digest_named_fields("monthly_partition_audits_v1", {"rows": list(observed.get(value, ()))})
+            reasons = {"trading_calendar": "official_calendar_same_snapshot_complete",
+                       "index_daily": "fixed_release_indices_same_snapshot_complete",
+                       "bak_basic": "verified_source_gaps_outside_release_consumer_scope",
+                       "cyq_perf": "verified_source_gaps_outside_release_consumer_scope"}
+            if (proof.get("schema_version") != "aistock_monthly_required_fact_projection_v1"
+                    or proof.get("dataset") != dataset or proof.get("trade_date") != value.isoformat()
+                    or proof.get("audit_rows_sha256") != audit_sha
+                    or dataset not in reasons or proof.get("reason") != reasons[dataset]
+                    or proof.get("global_source_state_preserved") is not True
+                    or any(re.fullmatch(r"[0-9a-f]{64}", str(proof.get(key, ""))) is None
+                           for key in ("required_scope_sha256", "evidence_sha256"))
+                    or type(proof.get("unexplained_gap_count")) is not int
+                    or proof["unexplained_gap_count"] != 0):
+                raise SourceAuditIncomplete("monthly required-fact projection differs from its source partition")
+            projections[value] = proof
+        missing = [value.isoformat() for value in expected_dates if value not in observed and value not in projections]
         if not expected_dates or missing:
             raise SourceAuditIncomplete(
                 "dataset/date refresh audit coverage is incomplete",
@@ -1733,6 +1764,8 @@ class SourceRefreshAuditLedger:
         eligible_quality = set(self.eligible_quality_statuses.get(dataset, ()))
         unusable = []
         for value in expected_dates:
+            if value in projections:
+                continue  # Same-snapshot consumer proof; global verdict remains recorded unchanged.
             audit_rows = observed[value]
             canonical = [r for r in audit_rows if r.get("data_source") == "canonical_db"]
             if canonical:
@@ -1781,8 +1814,9 @@ class SourceRefreshAuditLedger:
                                 "quality_status": str(row.get("quality_status", "")).lower(),
                                 "audit_payload_sha256": str(row["audit_payload_sha256"]),
                             }
-                            for row in observed[value]
+                            for row in observed.get(value, ())
                         ],
+                        **({"consumer_projection": projections[value]} if value in projections else {}),
                     }
                     for value in expected_dates
                 ],
@@ -2609,7 +2643,18 @@ class MonthlySourceAuthority:
                 "opaque_payload_sha256": _opaque_audit_digest(row.get("opaque_payload")),
             }
             rows.append(safe)
-            if status in {"queued", "pending", "running", "started"}:
+            # A late/unclosed callback is not a live writer once its exact
+            # owning execution is terminal. This proves liveness only: preserve
+            # the original attempt status and all negative completeness facts.
+            owner_terminal = False
+            if kind == "data_sync_attempts" and status == "started":
+                safe["owner_status"] = row.get("owner_status")
+                safe["owner_finished_at"] = _audit_timestamp_text(
+                    row.get("owner_finished_at"), field="writer.owner_finished_at", optional=True,
+                )
+                owner_terminal = (safe["owner_status"] in TERMINAL_JOB_STATUSES
+                                  and safe["owner_finished_at"] is not None)
+            if status in {"queued", "pending", "running", "started"} and not owner_terminal:
                 active.append(safe)
             if row_number % read_chunk_rows == 0:
                 checkpoint()
@@ -5127,6 +5172,12 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
         **({"integrity_revision": {key: row.get(key) for key in
             ("data_revision", "validated_revision", "validation_status", "validation_id", "scope_version", "rule_version")}}
             if row.get("data_source") == "canonical_db" and row.get("data_revision") is not None else {}),
+        **({"source_validation": {
+            "counts": structured_metadata["validation"].get("counts"),
+            "gaps": structured_metadata["validation"].get("gaps"),
+            "checks": {"coverage_basis": (structured_metadata["validation"].get("checks") or {}).get("coverage_basis")},
+        }} if row.get("data_source") == "canonical_db" and isinstance(structured_metadata, Mapping)
+            and isinstance(structured_metadata.get("validation"), Mapping) else {}),
     }
 
 

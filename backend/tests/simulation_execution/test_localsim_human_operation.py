@@ -105,7 +105,7 @@ def full_markets():
     return [plan, plan2], {market.symbol: market, other.symbol: other}
 
 
-@pytest.mark.parametrize("delay,count", [(0, 2), (60, 1)])
+@pytest.mark.parametrize("delay,count", [(0, 2), (60, 2)])
 def test_two_stocks_share_one_operator_and_no_double_delay(delay, count):
     plans, markets = full_markets()
     from backend.services.simulation_execution.localsim.timing_research import backend_for
@@ -130,8 +130,7 @@ def test_two_stocks_share_one_operator_and_no_double_delay(delay, count):
     assert all(p.available_quantity == 0 for p in backend._ledger.positions.values())
     assert result["account"]["human_operation_metrics"]["action_count"] == count
     assert len(result["account"]["parents"]) == 2  # Queued expiry stays in the population.
-    if delay:
-        assert result["account"]["human_operation_metrics"]["expired_actions"] == 1
+    assert result["account"]["human_operation_metrics"]["expired_actions"] == 0
     assert digest(result["account"]["human_operation_state"])
 
 

@@ -1,0 +1,377 @@
+{
+  "actual": "Full frozen readback verified 2353 account-days and 4712 original files unchanged. Long-delay SUBMIT windows are 90 seconds (one C1 50-second hard-deadline clamp), so all six 180/300 accounts have zero dispatches. The adapter ignored fresh contiguous native OPPORTUNITY valid_until updates. Three rules x two long delays fail before the fix and pass with real LocalSIM fills after it. Full related matrix: 60 passed; post-review boundary matrix: 18 passed. No old account or result recomputed.",
+  "allowed_write_scope": [
+    "backend/services/simulation_execution/localsim/human_operation.py",
+    "backend/services/simulation_execution/localsim/human_portfolio.py",
+    "backend/tests/simulation_execution/test_localsim_human_operation.py",
+    "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2140-localsim-human-queue-expires-continuously-revalidated-native-opportuniti.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2140",
+  "closed_at": "2026-10-30T17:27:18.977730Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T09:23:57.939065Z",
+  "description": "Frozen 181-day HUMAN_SIM study records zero dispatches in all six 180/300-second accounts. HumanOperationQueue.enqueue retains the original valid_until while the unique timing core continues returning current OPPORTUNITY decisions with renewed valid_until. Shared phase-1 contract section on D0/1/3/5 explicitly requires continuous same-opportunity revalidation for renewal, preserving the first delay origin; LocalSIM own dual-mode design requires current opportunity validity and no duplicate enqueue or reaction-clock reset. The adapter currently discards those native renewals, making a live opportunity unreachable solely because reaction delay exceeds first decision TTL. Fix only LocalSIM to consume causally verified contiguous renewals without changing core rules, 90-second TTL, human capacity, old research pins, original outcomes or the 288 cases. Renewals must never revive expired/withdrawn/revised/previously dispatched actions or cross a plan hard deadline.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-7d740f56b1cd",
+      "timestamp": "2026-10-29T09:23:57.939065Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md",
+    "docs/architecture/position_timing_intraday_phase1_f2_detailed_design_20261023.md",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/TASK_STATE.md",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/attribution-v1.json",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/attribution-examples-v1.json",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/existing-retry-verification-r1.json",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/regression-before.xml",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/regression-after.xml",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/directed-final.xml",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/review-regression.xml",
+    "X:/AIstock_temp/localsim-continuous-retry-attribution-20261029/fresh-wsl-source-check-r1.json"
+  ],
+  "expected": "Contiguous current core OPPORTUNITY revalidation may update only a queued action deadline, preserving action identity, first visible/ready clocks and FIFO. Missed deadline, withdrawal, no fresh core decision, revision, cancellation and hard expiry remain fail closed. Old frozen outcomes and FAILED evidence remain immutable; corrected economics require a new independent study identity.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/human_operation.py",
+      "backend/services/simulation_execution/localsim/human_portfolio.py",
+      "backend/tests/simulation_execution/test_localsim_human_operation.py",
+      "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2140-localsim-human-queue-expires-continuously-revalidated-native-opportuniti.json"
+    ],
+    "added_files": [
+      "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py"
+    ],
+    "changed_files": [
+      "backend/services/simulation_execution/localsim/human_operation.py",
+      "backend/services/simulation_execution/localsim/human_portfolio.py",
+      "backend/tests/simulation_execution/test_localsim_human_operation.py",
+      "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2140-localsim-human-queue-expires-continuously-revalidated-native-opportuniti.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_execution/localsim/human_operation.py",
+        "backend/services/simulation_execution/localsim/human_portfolio.py",
+        "backend/tests/simulation_execution/test_localsim_human_operation.py",
+        "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "simulation.layer_foundation",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "selection_center",
+        "strategy_package"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_execution/localsim/human_operation.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/human_portfolio.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_human_operation.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_execution/localsim/human_operation.py",
+        "backend/services/simulation_execution/localsim/human_portfolio.py",
+        "backend/tests/simulation_execution/test_localsim_human_operation.py",
+        "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_execution/localsim/human_operation.py",
+      "backend/services/simulation_execution/localsim/human_portfolio.py",
+      "backend/tests/simulation_execution/test_localsim_human_operation.py",
+      "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_execution/localsim/human_operation.py",
+      "backend/services/simulation_execution/localsim/human_portfolio.py",
+      "backend/tests/simulation_execution/test_localsim_human_operation.py",
+      "backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py"
+    ]
+  },
+  "first_seen_at": "2026-10-29T09:23:57.939065Z",
+  "fix_branch": null,
+  "fix_commit": "673a9c486d5e447c295ab056eee2146f95550559",
+  "fixed_at": "2026-10-29T09:59:22Z",
+  "github_issue_number": 6892,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6892",
+  "last_seen_at": "2026-10-29T09:23:57.939065Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6893",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "pytest -q backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py -k \"continuously and (180 or 300)\"",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "simulation_core_l2"
+  ],
+  "resolution": "Only consume current same-opportunity SDK revalidation while the previous window remains unbroken. Preserve action identity, first visible/ready clocks, FIFO, 90-second native TTL, capacity and plan hard deadline. No resurrection or reexecution; stale expiry heap entries respect the current verified deadline. Original FAILED and all immutable outputs remain intact. A corrected historical economic comparison requires a separate study identity.",
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "fresh_process_evidence": [
+      "Fresh Windows native-account process: six original long-delay fix-point failures now pass with real confirmed fills; full 60-node related matrix plus 18-node boundary review pass. Future prefixes, state restore, hard limits and original immutable/source guards remain tested.",
+      "Independent WSL process at source commit 360f2d2fffdc4eb2b813fe2944793b34c8d7b548: unique SDK and LocalSIM queue validate all 12 rule-delay pairs. Queue claims explicitly are not economic fills. Source pins in fresh-wsl-source-check-r1.json SHA256 e381a412c434798c78521ff0c1fa47d3bb53dc21b523de36f741a189477c6a66. No DB/network/service access.",
+      "Independent WSL load of persistent source 360f2d2: unique SDK verifies 12 rule-delay queue pairs; Windows fresh native-account tests confirm real fills. fresh-wsl-source-check-r1.json SHA256 e381a412c434798c78521ff0c1fa47d3bb53dc21b523de36f741a189477c6a66",
+      "Independent WSL source360f2d2 verified12 SDK queue pairs; Windows native account fix-point tests verify actual fills; fresh-wsl-source-check-r1.json SHA256 e381a412c434798c78521ff0c1fa47d3bb53dc21b523de36f741a189477c6a66"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2140/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2140",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "673a9c486d5e447c295ab056eee2146f95550559",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T17:21:24.183043Z",
+      "mode": "read_only",
+      "observed_identity": "0a45d94c98fcf8704802702e0ce3f8f7540a51eb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4e7ab1a33294f974602846583b596223890d36f31e7b13b532e1e14a85ee4648",
+      "receipt_sha256": "3f2ce0f56fc65bac67e9791debd39b1f951e75154d873d2a397e95fff469faa6",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7b29f91312f65f8d4044b09eab700bc8f4fe55aadb0590904b9f644077b5083a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2140",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2588adddac13c034",
+    "recorded_at": "2026-10-29T10:00:07.055060Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c5543a7aa833659d66544a23ce523e24310e64b4",
+    "source_merge_commit": "673a9c486d5e447c295ab056eee2146f95550559",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6893",
+    "validation_evidence": [
+      "validation-receipt: id=7049154a85997a57 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py -k 'not continuously or 300' backend/tests/simulation_execution/test_localsim_human_operation.py::test_two_stocks_share_one_operator_and_no_double_delay` result=`passed (18 selected nodes, review-regression.xml)`",
+      "validation-receipt: id=4ab9055189f0af3b commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_execution/localsim/human_operation.py backend/services/simulation_execution/localsim/human_portfolio.py backend/tests/simulation_execution/test_localsim_human_operation.py backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py` result=`passed`",
+      "validation-receipt: id=102c7477154fb55a commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+      "validation-receipt: id=28583de8b22b3776 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- five scoped files` result=`passed (0 blocking)`"
+    ],
+    "validation_evidence_digest": "4181c7a68169b2e5662714f4ab991858bf45f1779aeb8be60cc388e4d83393cc"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM human queue expires continuously revalidated native opportunities at the first decision deadline",
+  "trigger_condition": {
+    "fingerprint": "7d740f56b1cde2d2351aee13",
+    "source_event_id": "FE-20261029-7d740f56b1cd"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=7049154a85997a57 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py -k 'not continuously or 300' backend/tests/simulation_execution/test_localsim_human_operation.py::test_two_stocks_share_one_operator_and_no_double_delay` result=`passed (18 selected nodes, review-regression.xml)`",
+    "validation-receipt: id=4ab9055189f0af3b commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_execution/localsim/human_operation.py backend/services/simulation_execution/localsim/human_portfolio.py backend/tests/simulation_execution/test_localsim_human_operation.py backend/tests/simulation_execution/test_localsim_human_opportunity_renewal.py` result=`passed`",
+    "validation-receipt: id=102c7477154fb55a commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "validation-receipt: id=28583de8b22b3776 commit=c5543a7aa833659d66544a23ce523e24310e64b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- five scoped files` result=`passed (0 blocking)`",
+    "2026-10-31 formal post-restart identity and scoped scheduler business semantic passed. New independent full study 181 days/13 accounts/2353 account-days completed; six long-delay accounts have actual fills; full retry zero recomputation; original negative artifacts preserved. PR6952 report. Online human mode not activated. X:/AIstock_temp/localsim-runtime-activation-20261031/historical-business-acceptance-r1.json. Original source validation receipts retained."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "platform_api",
+        "simulation_core"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "platform_api",
+          "simulation_core"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -13,6 +13,29 @@ from backend.services.data_integrity.provider import provider_scan, verify_scan
 from backend.services.tushare_dataset_specs import DAILY_BASIC, DIVIDEND
 
 
+@pytest.mark.parametrize("dataset", ["tushare_forecast_raw", "tushare_express_raw", "tushare_fina_indicator_raw"])
+def test_raw_financial_scans_share_supported_stock_scope_without_rewriting_legacy_hash(dataset):
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    from backend.services.data_integrity.contracts import digest
+    from backend.services.data_integrity.provider import scoped_scan_entries
+    spec = DATASET_REGISTRY[dataset]
+    supported = {"source_record_key": f"{dataset}:000001.SZ:20261028:20260930", "source_row_hash": "a"*64}
+    excluded = {"source_record_key": f"{dataset}:920306.BJ:20261028:20260930", "source_row_hash": "b"*64}
+    scan = provider_scan(spec, [supported, excluded], parameters={"period": "20260930"})
+    assert len(scan["entries"]) == 1
+    scan["entries"].append({"key": [excluded[k] for k in spec.primary_keys]})
+    scan["scan_sha256"] = digest({k: v for k, v in scan.items() if k != "scan_sha256"})
+    original = digest(scan)
+    assert len(scoped_scan_entries(spec, scan)) == 1
+    assert verify_scan(spec, scan, [supported]) == ([], [])
+    missing, invalid = verify_scan(spec, scan, [])
+    assert missing == [[supported[k] for k in spec.primary_keys]] and invalid == []
+    assert digest(scan) == original
+    unknown = {**excluded, "source_record_key": "opaque:" + excluded["source_record_key"]}
+    unknown_scan = provider_scan(spec, [unknown], parameters={})
+    assert verify_scan(spec, unknown_scan, [])[0] == [[unknown[k] for k in spec.primary_keys]]
+
+
 @pytest.mark.parametrize("value,expected", [(0, True), (Decimal("0"), True), (None, False),
     (float("nan"), False), (Decimal("NaN"), False), (float("inf"), False), (True, False), ("1", False)])
 def test_field_finite_contract_distinguishes_real_zero(value, expected):
@@ -51,6 +74,31 @@ def test_dirty_revision_or_rule_never_reuses_old_green():
                     {"data_revision": -1, "validated_revision": -1}, {"validation_id": ""}):
         result = effective_partition({**row, **changed}, scope_version="s1", rule_version="r1")
         assert result["state"] == "UNVERIFIED" and not result["source_complete"]
+
+
+@pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf"])
+def test_dense_panel_legacy_scan_green_is_not_current_traded_scope(dataset):
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    row = {"dataset": dataset, "data_revision": 1, "validated_revision": 1,
+           "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION,
+           "validation_status": "VALID", "validation_id": "old-provider-scan",
+           "metadata": {"validation": {"checks": {"provider": "tushare"}}}}
+    old = effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+    assert old["state"] == "UNVERIFIED" and not old["source_complete"]
+    row["metadata"]["validation"]["checks"]["coverage_basis"] = "independent_dated_traded_stock_keys"
+    assert effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+    row["validation_status"] = "INCOMPLETE"
+    assert not effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+    row.update(dataset="index_daily", validation_status="VALID", metadata={})
+    assert effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)["source_complete"]
+
+
+@pytest.mark.parametrize("metadata", [None, "invalid", {"validation": []}, {"validation": {"checks": "invalid"}}])
+def test_malformed_dense_validation_metadata_is_unknown_not_green_or_api_error(metadata):
+    row = {"dataset": "bak_basic", "data_revision": 1, "validated_revision": 1,
+           "scope_version": "s1", "rule_version": "r1", "validation_status": "VALID",
+           "validation_id": "old", "metadata": metadata}
+    assert effective_partition(row, scope_version="s1", rule_version="r1")["state"] == "UNVERIFIED"
 
 
 @pytest.mark.parametrize("parts,expected", [([], "UNVERIFIED"),
@@ -244,6 +292,9 @@ def test_index_request_catalogue_is_not_a_required_quote_universe(monkeypatch, s
 
 
 @pytest.mark.parametrize("mutation,expected", [("valid", PartitionState.VALID),
+    ("close_only", PartitionState.VALID), ("nullable_volume", PartitionState.VALID),
+    ("nan_open", PartitionState.INCOMPLETE), ("zero_open", PartitionState.INCOMPLETE),
+    ("negative_volume", PartitionState.INCOMPLETE), ("null_close", PartitionState.INCOMPLETE),
     ("missing", PartitionState.INCOMPLETE), ("nan", PartitionState.INCOMPLETE),
     ("partial_query", PartitionState.UNVERIFIED), ("old_revision", PartitionState.UNVERIFIED)])
 def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypatch, mutation, expected):
@@ -262,6 +313,18 @@ def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypat
         actual.pop()
     if mutation == "nan":
         actual[0]["close"] = float("nan")
+    if mutation == "close_only":
+        actual[0].update(open=None, high=None, low=None, vol=None, amount=None)
+    if mutation == "nullable_volume":
+        actual[0].update(vol=None, amount=None)
+    if mutation == "nan_open":
+        actual[0]["open"] = float("nan")
+    if mutation == "zero_open":
+        actual[0]["open"] = 0
+    if mutation == "negative_volume":
+        actual[0]["vol"] = -1
+    if mutation == "null_close":
+        actual[0]["close"] = None
     if mutation == "old_revision":
         source["metadata"]["integrity_observed_revision"] = 0
     monkeypatch.setattr(validation, "rows", lambda _c, query, _p=(): [source]
@@ -270,6 +333,9 @@ def test_index_complete_query_keys_and_finite_quotes_are_both_required(monkeypat
     assert result.state == expected
     if mutation == "valid":
         assert result.checks["coverage_basis"] == "complete_query_returned_keys_not_catalogue_availability"
+    if mutation in {"close_only", "nullable_volume"}:
+        assert result.checks["quote_field_contract"]["required_fields"] == ["close"]
+        assert result.counts[-1].legal_na == (5 if mutation == "close_only" else 2)
 def test_stock_fact_scope_is_shsz_not_pit_buy_eligibility():
     from backend.services.data_integrity.stock_scope import (
         filter_stock_rows, is_supported_stock_code, stock_exchange_selection, stock_scope_sql,

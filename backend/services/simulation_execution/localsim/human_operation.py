@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from backend.services.position_timing.intraday.contracts import digest, payload, utc
+from backend.services.position_timing.intraday.contracts import Decision, digest, payload, utc
 
 
 class HumanOperationPolicy(BaseModel):
@@ -137,6 +137,38 @@ class HumanOperationQueue:
         self.maximum_queue = max(self.maximum_queue, self.pending_count)
         return action
 
+    def revalidate_opportunity(self, action_id: str, *, decision: Decision, as_of: datetime,
+                               plan_valid_until: datetime) -> HumanAction:
+        """Consume a current native renewal without resetting reaction or FIFO.
+
+        Enqueue alone cannot renew an opportunity. The caller must first obtain
+        the same live opportunity from the unique causal core. A missed validity
+        interval, withdrawal or prior dispatch cannot be undone by a later poll.
+        """
+        action = self.actions[action_id]
+        now, hard_deadline = utc(as_of), utc(plan_valid_until)
+        if (action.kind != "SUBMIT" or decision.status != "OPPORTUNITY" or decision.as_of != now
+                or (decision.plan_id, decision.revision, decision.opportunity_id) != (
+                    action.plan_id, action.revision, action.opportunity_id)
+                or decision.advice_available_at != action.visible_at
+                or decision.data_as_of is not None and decision.data_as_of > now
+                or now < action.visible_at or self.last_clock is not None and now < self.last_clock):
+            raise ValueError("LOCALSIM_HUMAN_REVALIDATION_IDENTITY_OR_CLOCK_CONFLICT")
+        until = min(utc(decision.valid_until), hard_deadline)
+        if action.status == "QUEUED" and now < action.valid_until and until <= now:
+            raise ValueError("LOCALSIM_HUMAN_REVALIDATION_WINDOW_INVALID")
+        self.last_clock = now
+        if action.status != "QUEUED":
+            return action
+        if now >= action.valid_until:
+            self.invalidate(action_id, "OPPORTUNITY_EXPIRED_IN_QUEUE")
+            return self.actions[action_id]
+        if until != action.valid_until:
+            action = action.model_copy(update={"valid_until": until})
+            self.actions[action_id] = action
+            heapq.heappush(self._expiry, (until, action_id))
+        return action
+
     @property
     def pending_count(self) -> int:
         return sum(a.status in {"QUEUED", "DISPATCHING"} for a in self.actions.values())
@@ -163,7 +195,8 @@ class HumanOperationQueue:
             return self.actions[self.inflight]  # Native readback, never a new attempt.
         while self._expiry and self._expiry[0][0] <= now:
             _, key = heapq.heappop(self._expiry)
-            self.invalidate(key, "OPPORTUNITY_EXPIRED_IN_QUEUE")
+            if self.actions[key].valid_until <= now:
+                self.invalidate(key, "OPPORTUNITY_EXPIRED_IN_QUEUE")
         if not in_trading_session:
             return None
         if self.last_action_at is not None and now < self.last_action_at + timedelta(

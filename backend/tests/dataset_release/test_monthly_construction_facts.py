@@ -97,7 +97,8 @@ def test_construction_progress_uses_real_durable_source_contract(tmp_path, monke
     ))
     frame.to_hdf(factor_path, key="data", format="table", data_columns=True)
     inventory = root / "inventory.json"
-    inventory.write_text(json.dumps({"files": [{"path": "factor/daily_pv.h5", "size": factor_path.stat().st_size}]}), encoding="utf-8")
+    inventory.write_text(json.dumps({"schema_version": "qe_factor_component_pin_inventory_v1",
+                                    "files": [{"path": "factor/daily_pv.h5", "size": factor_path.stat().st_size}]}), encoding="utf-8")
     prefix = SimpleNamespace(root=root, cutoff=date(2026, 8, 31), manifest={"components": {
         "day_meta_export": {"path": "day/meta.json"}, "factor_meta": {"path": "factor/meta.json"},
         "factor_content_manifest": {"path": "inventory.json", "size": inventory.stat().st_size,
@@ -164,13 +165,19 @@ def test_month_source_requests_never_iterate_old_quote_partitions():
     assert params["start"] == date(2018, 8, 1)
 
 
-def test_month_source_keeps_sparse_suspension_history_without_historical_price_audit():
+def test_month_source_uses_sparse_suspension_delta_and_inherits_history_in_build():
     authority = _authority(monthly=True)
     requests = list(authority._partition_requests(PRODUCTION_QUERY_SPECS["suspend_d"], date(2026, 9, 30),
                     pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code="000001.SZ")])))
-    assert requests[0][1]["start"] == date(2018, 8, 1)
+    assert requests[0][1]["start"] == date(2026, 9, 1)
     assert requests[-1][1]["end"] == date(2026, 9, 30)
     assert authority._refresh_audit_start(date(2026, 9, 30)) == date(2026, 9, 1)
+    # Legacy/full-source callers still retain their explicit history contract;
+    # monthly BUILD inherits the pinned factual prefix instead of querying it.
+    legacy = _authority(monthly=False)
+    old = list(legacy._partition_requests(PRODUCTION_QUERY_SPECS["suspend_d"], date(2026, 9, 30),
+               pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code="000001.SZ")])))
+    assert old[0][1]["start"] == date(2018, 8, 1)
 
 
 def test_construction_query_is_bounded_real_maximum_and_exact_anchors_not_default_full_export():

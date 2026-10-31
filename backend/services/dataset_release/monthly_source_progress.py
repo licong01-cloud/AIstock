@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
+import json
+import math
 from typing import Any, Callable, Mapping
 
 from .canonical import canonical_json_bytes, digest_named_fields
@@ -45,6 +48,102 @@ class MonthlyObservedSourceAuthority(MonthlySourceAuthority):
             raise SourceProviderContractError("refresh-audit cutoff differs from target month")
         return self._month_start
 
+    def _freeze_refresh_audit(self, session, *, cutoff, checkpoint, read_chunk_rows=None):
+        ledger = super()._freeze_refresh_audit(session, cutoff=cutoff, checkpoint=checkpoint,
+                                             read_chunk_rows=read_chunk_rows)
+        if self._month_start is None:
+            return ledger
+        # A source-wide verdict is never rewritten as consumer completeness.
+        # These bounded reads share the SOURCE snapshot; later frozen fact gates
+        # still check every required key and export still includes all facts.
+        start = self._month_start
+        fetch = read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows
+        params = {"start": start, "end": cutoff, "cutoff": cutoff}
+        days = tuple(d for d in ledger.trading_dates if start <= d <= cutoff)
+        projections = {}
+
+        def rows(query, extra=None):
+            for row in session.stream(query, {**params, **(extra or {})}, fetch_rows=fetch):
+                checkpoint()
+                value = row.get("row_payload", row)
+                yield json.loads(value) if isinstance(value, str) else value
+
+        def stamp(value):
+            return value if type(value) is date else date.fromisoformat(str(value))
+
+        def proof(dataset, day, scope, evidence, reason):
+            projections[(dataset, day)] = {
+                "schema_version": "aistock_monthly_required_fact_projection_v1",
+                "dataset": dataset, "trade_date": day.isoformat(), "reason": reason,
+                "required_scope_sha256": digest_named_fields("monthly_required_fact_scope_v1", {"scope": scope}),
+                "evidence_sha256": digest_named_fields("monthly_required_fact_evidence_v1", {"evidence": evidence}),
+                "audit_rows_sha256": digest_named_fields("monthly_partition_audits_v1", {"rows": list(ledger.rows.get((dataset, day), ()))}),
+                "unexplained_gap_count": 0, "global_source_state_preserved": True,
+            }
+
+        calendar = list(rows("trading_calendar"))
+        calendar_days = {stamp(row["cal_date"]): row["is_trading"] for row in calendar}
+        # The registered calendar SOURCE exports trading sessions only, not a
+        # natural-day panel. Compare that native result with its independent
+        # trading-date query; do not demand invented holiday audit jobs.
+        if (days and len(calendar_days) == len(calendar) and set(calendar_days) == set(days)
+                and all(value is True for value in calendar_days.values())):
+            for day in days:
+                proof("trading_calendar", day, list(days), calendar,
+                      "official_calendar_same_snapshot_complete")
+
+        index = {}
+        required_from = {item.daily_code: item.required_from.isoformat() for item in self.profile.indices}
+        for row in rows("index_daily", {"codes": list(self.profile.index_codes),
+                    "index_required_from_json": canonical_json_bytes(required_from).decode("utf-8")}):
+            index.setdefault((str(row["ts_code"]), stamp(row["trade_date"])), []).append(row)
+        fields = PRODUCTION_QUERY_SPECS["index_daily"].non_null_value_columns
+        for day in days:
+            codes = [item.daily_code for item in self.profile.indices if item.required_from <= day]
+            facts = [index.get((code, day), []) for code in codes]
+            if facts and all(len(values) == 1 and all(
+                    isinstance(values[0].get(name), (int, float)) and not isinstance(values[0][name], bool)
+                    and math.isfinite(values[0][name]) for name in fields)
+                    and min(values[0][name] for name in ("open", "high", "low", "close", "pre_close")) > 0
+                    and values[0]["high"] >= max(values[0][name] for name in ("open", "low", "close"))
+                    and values[0]["low"] <= min(values[0][name] for name in ("open", "high", "close"))
+                    and min(values[0]["vol"], values[0]["amount"]) >= 0 for values in facts):
+                proof("index_daily", day, codes, facts,
+                      "fixed_release_indices_same_snapshot_complete")
+
+        from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+        from backend.services.data_integrity.contracts import effective_partition
+        spans = list(rows("pit_spans", {"universe_key": self.profile.universe_key, "codes": None}))
+        for day in days:
+            members = {str(row["ts_code"]) for row in spans
+                       if stamp(row["eligible_start"]) <= day <= stamp(row["eligible_end"])}
+            if not members:
+                continue
+            for dataset in ("bak_basic", "cyq_perf"):
+                for row in ledger.rows.get((dataset, day), ()):
+                    if row.get("data_source") != "canonical_db":
+                        continue
+                    validation = row.get("source_validation") or {}
+                    revision = {**dict(row.get("integrity_revision") or {}), "dataset": dataset,
+                                "metadata": {"validation": validation}}
+                    effective = effective_partition(revision, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                    counts, gaps = validation.get("counts") or [], validation.get("gaps") or []
+                    missing = {str(code) for gap in gaps for code in gap.get("symbols", ())}
+                    if (effective["current"] and effective["state"] == "INCOMPLETE" and len(counts) == 1
+                            and (validation.get("checks") or {}).get("coverage_basis") == "independent_dated_traded_stock_keys"
+                            and missing and not missing & members and gaps
+                            and all(gap.get("classification") == "MISSING" and gap.get("symbols")
+                                    and gap.get("fact_date", day.isoformat()) == day.isoformat() for gap in gaps)
+                            and all(type(counts[0].get(name)) is int and counts[0][name] >= 0
+                                    for name in ("expected", "valid", "legal_na", "missing", "invalid", "unverified"))
+                            and counts[0]["missing"] == len(missing)
+                            and counts[0]["invalid"] == counts[0]["unverified"] == 0
+                            and counts[0]["expected"] == counts[0]["valid"] + counts[0]["legal_na"] + len(missing)):
+                        proof(dataset, day, {"universe_key": self.profile.universe_key,
+                              "semantic_profile_digest": self.profile.semantic_profile_digest, "members": sorted(members)},
+                              row, "verified_source_gaps_outside_release_consumer_scope")
+        return replace(ledger, consumer_partition_projections=projections)
+
     def _partition_requests(self, query, cutoff, *, pit_snapshot, selected_stock_codes=()):
         if self._month_start is not None and cutoff.replace(day=1) != self._month_start:
             raise SourceProviderContractError("monthly SOURCE cutoff differs from natural month")
@@ -75,9 +174,11 @@ class MonthlyObservedSourceAuthority(MonthlySourceAuthority):
             source_cutoff = cutoff - date.resolution
         requests = super()._partition_requests(
             query, source_cutoff, pit_snapshot=pit_snapshot, selected_stock_codes=selected_stock_codes,
-            # Sparse suspension facts must repair inherited PIT-clipped prefixes.
-            # This is materialization, not an historical price/refresh audit.
-            start_override=self._month_start if query.date_expression is not None and query.query_id != "suspend_d" else None,
+            # Shared BUILD already inherits the frozen factual suspend prefix,
+            # including raw events and reviewed historical resolutions. Sparse
+            # events do not justify re-reading/auditing all historical months.
+            # Explicit historical repairs retain their separate bound inputs.
+            start_override=self._month_start if query.date_expression is not None else None,
         )
         identity = load_default_security_source_identity_manifest() if query.query_id == "moneyflow_ts" else None
         for key, params in requests:

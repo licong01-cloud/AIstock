@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2137",
-  "closed_at": null,
+  "closed_at": "2026-10-30T17:27:01.103579Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,20 +31,20 @@
   "expected": "Present durable residual/failure evidence is described accurately; true missing/unknown persistence still fails closed, genuine market residual success remains unchanged, and current orders/accounts/fees are untouched.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
-      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
+      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json"
     ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
       "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py",
-      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md"
+      "docs/analysis/localsim_post_close_persistence_diagnostics_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2137-localsim-post-close-residual-persistence-is-misreported-as-missing-durab.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -113,8 +113,8 @@
   },
   "first_seen_at": "2026-10-29T07:20:55.031632Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "498a982ffafb94504f13976435e90887542b28f2",
+  "fixed_at": "2026-10-29T07:45:34Z",
   "github_issue_number": 6880,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6880",
   "last_seen_at": "2026-10-29T07:20:55.031632Z",
@@ -122,6 +122,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6882",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -147,9 +148,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2137/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2137",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "498a982ffafb94504f13976435e90887542b28f2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T17:21:21.494298Z",
+      "mode": "read_only",
+      "observed_identity": "0a45d94c98fcf8704802702e0ce3f8f7540a51eb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4e7ab1a33294f974602846583b596223890d36f31e7b13b532e1e14a85ee4648",
+      "receipt_sha256": "2ef34efbca32b5a7d1e00dfe4c183d6bf7fb8672e43cecb64e424cb026f9ec37",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "eabb772c3abb128b25d244ad6f5e87e049af56600f0ff3762128c4600a31ed09",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -159,7 +183,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2137",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "81d0b7e6a62c8171",
+    "recorded_at": "2026-10-29T07:46:15.074591Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "851c0140d23b0ef650a455597599ad6dd899fd5c",
+    "source_merge_commit": "498a982ffafb94504f13976435e90887542b28f2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6882",
+    "validation_evidence": [
+      "validation-receipt: id=51bb0f8f3a05624e commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py (18 selected nodes)` result=`passed`",
+      "validation-receipt: id=ac109446c4fbe601 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py` result=`passed`",
+      "validation-receipt: id=a849eda8af7e8517 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+      "validation-receipt: id=7a3f347c32b4f904 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- four scoped files` result=`passed (0 blocking)`"
+    ],
+    "validation_evidence_digest": "06c7882f310c325ec4a61b3d1e89a309db4e771af0e6802aefb5a409f178be09"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -168,6 +216,13 @@
     "fingerprint": "0c79b4598781da5b68e095a4",
     "source_event_id": "FE-20261029-0c79b4598781"
   },
+  "validation_evidence": [
+    "validation-receipt: id=51bb0f8f3a05624e commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=pytest plan=direct status=passed command=`pytest -q backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py (18 selected nodes)` result=`passed`",
+    "validation-receipt: id=ac109446c4fbe601 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_post_close_persistence_status.py` result=`passed`",
+    "validation-receipt: id=a849eda8af7e8517 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "validation-receipt: id=7a3f347c32b4f904 commit=851c0140d23b0ef650a455597599ad6dd899fd5c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- four scoped files` result=`passed (0 blocking)`",
+    "2026-10-31 formal post-restart identity and scoped scheduler business semantic passed. Original 10-29 50-parent execution residual retained FAILED_TERMINAL/PERSISTED_WITH_RESIDUAL; historical errors not rewritten; deployed identity and original direct diagnostic receipts verified. X:/AIstock_temp/localsim-runtime-activation-20261031/historical-business-acceptance-r1.json. Original source validation receipts retained."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

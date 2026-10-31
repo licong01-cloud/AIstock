@@ -204,7 +204,16 @@ class DailyIntegrityService:
             if len(dates) != dependencies.window_trading_days or dates[-1] != day:
                 return {**base, **project_readiness(None, [], {}, pit_binding=asdict(pit), reason="official_input_window_unresolved")}
             rows = self.repository.partitions(conn, dates[0], dates[-1])
-            result = project_readiness(dependencies, dates, {(r["trade_date"], r["dataset"]): r for r in rows}, pit_binding=asdict(pit))
+            scope_options = {}
+            if consumer.upper() == "ADVISORY":
+                from .advisory_scope import resolve_scope
+                try:
+                    scope, members = resolve_scope(conn, asdict(pit), day)
+                except ValueError as exc:
+                    return {**base, **project_readiness(None, [], {}, pit_binding=asdict(pit), reason=str(exc))}
+                scope_options = {"input_scope": scope, "members": members}
+            result = project_readiness(dependencies, dates, {(r["trade_date"], r["dataset"]): r for r in rows},
+                                       pit_binding=asdict(pit), **scope_options)
             daily = self._day(day, *self._read(conn, day, day), now)
             return {**base, **result, "all_sync_complete": daily["all_sync_complete"],
                     "manifest_sha256": manifest.manifest_sha256,

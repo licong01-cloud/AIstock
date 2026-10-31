@@ -22,7 +22,7 @@ import tempfile
 import time
 from typing import Callable, Iterable, Mapping, Sequence
 
-from .monthly_legacy_prefix import LegacyMonthlyPrefix, load_legacy_prefix
+from .monthly_legacy_prefix import LegacyMonthlyPrefix, load_legacy_prefix, resolve_legacy_component_pin
 from .stock_schema import QLIB_STOCK_FIELDS
 
 
@@ -371,7 +371,7 @@ def extend_qlib_dataset(
             expected_cutoff=inherited_prefix.cutoff, expected_release_id=inherited_prefix.release_id,
         )
         pin_key = "day_meta_export" if frequency == "day" else "minute_meta_export"
-        pin = inherited_prefix.manifest["components"].get(pin_key)
+        pin = resolve_legacy_component_pin(inherited_prefix, pin_key)
         if not isinstance(pin, Mapping) or not isinstance(pin.get("path"), str):
             raise QlibBoundedUpdateError("manifest-bound Qlib provider metadata is missing")
         relative = PurePosixPath(pin["path"])

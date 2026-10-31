@@ -5,17 +5,19 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 try:
     from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
+    from qlib.backtest.utils import TradeCalendarManager
 except ModuleNotFoundError as exc:
     if exc.name != "qlib":
         raise
     raise unittest.SkipTest("Requires the existing QE worker Qlib environment") from exc
-from qe_stock_probability_gate import StockProbabilityInputs, validate_risk_frame
+from qe_stock_probability_gate import StockProbabilityContractError, StockProbabilityInputs, validate_risk_frame
 from qe_stock_probability_gate_strategy import StockProbabilityGateMixin, StockProbabilityScoreWeightedTopkStrategyV2
 
 
@@ -46,10 +48,10 @@ def enable(gate, path):
     return gate
 
 
-def real_strategy(path, enabled):
+def real_strategy(path, enabled, signal_date="2026-01-06"):
     scores = pd.Series([.9, .8, .7, .6, .5, .4], index=[f"SZ00000{i}" for i in range(1, 7)])
     signal = pd.Series(scores.to_numpy(), index=pd.MultiIndex.from_product(
-        [[pd.Timestamp("2026-01-06")], scores.index], names=["datetime", "instrument"]))
+        [[pd.Timestamp(signal_date)], scores.index], names=["datetime", "instrument"]))
     obj = StockProbabilityScoreWeightedTopkStrategyV2(signal=signal, topk=3, n_drop=1,
         max_n_drop=1, weight_method="equal", max_weight=1., min_weight=0., max_position_ratio=1., hold_thresh=0)
     pos = SimpleNamespace(get_stock_list=lambda: ["SZ000001"], get_cash=lambda: 1_000_000.,
@@ -76,6 +78,47 @@ class OrderGuard(StockProbabilityGateMixin, DummyAF):
 
 
 class StockProbabilityStrategyTests(unittest.TestCase):
+    def test_real_qlib_intervals_preserve_previous_session_across_holiday_and_weekend(self):
+        dates = pd.DatetimeIndex(pd.to_datetime([
+            "2025-12-29", "2025-12-30", "2025-12-31", "2026-01-05", "2026-01-06",
+            "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12", "2026-01-13",
+        ]))
+        for decision_day, signal_day in [("2026-01-05", "2025-12-31"),
+                                          ("2026-01-07", "2026-01-06"),
+                                          ("2026-01-12", "2026-01-09")]:
+            with self.subTest(decision_day=decision_day), tempfile.TemporaryDirectory() as folder:
+                index = dates.get_loc(pd.Timestamp(decision_day))
+                # Only the calendar data source is fixed; Qlib computes actual
+                # closed interval endpoints and shifts through its real class.
+                source = SimpleNamespace(calendar=lambda **kwargs: dates.to_numpy(),
+                                         locate_index=lambda *args, **kwargs: (None, None, index, index))
+                with mock.patch("qlib.backtest.utils.Cal", source):
+                    trade_calendar = TradeCalendarManager(freq="day", start_time=decision_day, end_time=decision_day)
+                path = Path(folder) / "actions.jsonl"
+                strategy = real_strategy(path, True, "2026-01-09" if decision_day == "2026-01-12" else "2026-01-06")
+                strategy.level_infra = {"trade_calendar": trade_calendar}
+                inputs = strategy._stock_probability_inputs
+                inputs.calendar = dates
+                inputs.decision_dates = dates[dates >= "2026-01-05"]
+                if decision_day == "2026-01-12":
+                    # Both the AF signal and risk values exist only on Friday;
+                    # Sunday is the interval end, not another signal or lag.
+                    frame = inputs.frame.reset_index()
+                    frame["signal_date"], frame["input_as_of"] = signal_day, "2026-01-08"
+                    inputs.frame = validate_risk_frame(frame, dates)
+                orders = strategy.generate_trade_decision().get_decision()
+                record = json.loads(path.read_text())
+                self.assertEqual(record["signal_date"], signal_day)
+                self.assertEqual(record["trade_date"], decision_day)
+                if decision_day == "2026-01-05":
+                    self.assertEqual(orders, [])  # frozen AF starts January 5
+                    self.assertEqual(record["scanned_candidates"], [])
+                else:
+                    self.assertEqual([o.stock_id for o in orders], ["SZ000004", "SZ000005"])
+                # A truly incorrect signal date must still fail closed.
+                with self.assertRaises(StockProbabilityContractError):
+                    inputs.validate_time(decision_day, decision_day)
+
     def test_real_base_gate_replenishes_without_forcing_high_risk_hold_sale(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "actions.jsonl"
