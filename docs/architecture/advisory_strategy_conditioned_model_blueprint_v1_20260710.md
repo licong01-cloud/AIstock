@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.53
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.54
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-27
 
-> 2026-10-27最新断点：用户批准P20[LSTM零拟合每日并行观察F2](advisory_lstm_spo_shadow_v1_f2_design_20261027.md)，按训练截止最晚固定P19第3折（2025-07-31），无需追加最终fit。原生同次完整分数Top50→独立Top10，原生Top20持仓不变；新D自2026-10-27、T开盘前不可变预测、H=T+4后原5TD评价，UNKNOWN/MISS明确保留。当前源码/真实输入预览/新进程复算已完成，合入与持久绑定见交付收据；运行待用户重启后核验，0新前向经济确认。累计248fit＋1旧index不变。P19内层正支持和P18共享组合负结果保留，研报/现金流/价格/Exit继续暂停。
+> 2026-11-01最新断点：P20固定P19第3折的日常影子观察已完成用户重启后的运行验收，BUG-2159/#6961修复与#6964关闭同步完成；首个D=10月30日/T=11月2日开盘前预测已保存，1D捕获/0D成熟，最早H=11月6日收盘且数据就绪后评价。新增[LSTM-VALUE-1 F1](advisory_lstm_rank_value_review_v1_f1_design_20261101.md)离线长任务已真实完成：原15,250特征/6,300历史预测/50当前行、50,800边界对及三折训练KEY匹配，第二算术路径通过；决定KEEP_FROZEN_OBSERVATION、候选0/fit0。开发增量非单点支撑但71.29%净增量集中第三折，不据此改权重或新增拟合。累计248fit＋1旧index，0独立经济确认/榜单替换；原Top50→双Top10/5TD及生产Top20不变。结果见[诊断报告](../analysis/advisory_lstm_rank_value_review_20261101.md)，PR/CI/合入见X根delivery_receipt.json；下方旧日期的运行pending条目是当时检查点，不再作为当前队列。研报/现金流/价格/Exit继续暂停。
 
 > 2026-10-23 P9历史断点：用户另行授权的P9[分钟级留一同群同步F1](advisory_intraday_peer_synchrony_top10_5td_v1_f1_design_20261023.md)完成一次六fit内层研究。305D/30,500原行保留，30,417可算；100共同D相对原生+15.682701bps、描述性95%[-22.066937,51.997402]、两折正，按事前产品门INNER_SUPPORTED；相对matched−2.223706bps，不证明同步特征本身增值。累计225实际研究fit＋1旧index，0经济确认/激活/outer。当时report_rc全方向DEFERRED_BY_USER，数据窗口完成不自动恢复；本次用户批准的有限恢复见§6.3.29，P9结果及停止边界不改。
 
@@ -2304,6 +2304,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-303 | P18父包互补与精确LSTM压力检验：条件秩相关、原人口/模型/消费窗固定、0fit、预测先于目标收益、完整经济分支和包专属方向不冒称架构因果 |
 | F-304 | P19仅LSTM训练人口SPO+：同三折/特征/损失、原生主端点和共享机制分态，初始失败保留及明确恢复授权，完整原人口/UNKNOWN、模型证书与算术审核 |
 | F-305 | P20精确LSTM第3折零fit每日观察：原生分数Top50、开盘前不可变预测/漏采、5TD成熟评价、原生动作隔离及源码/绑定/运行/经济分态 |
+| F-306 | LSTM-VALUE-1冻结模型价值诊断：精确文件角色与训练KEY、16维贡献/数学边界、原126D/102共同D增量依赖性、0fit及唯一处理决定，不冒称独立经济确认 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2490,7 +2491,8 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-302 | §6.3.37/§16.0、`docs/architecture/advisory_spo_all_packages_validation_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_spo_all_packages_validation_v1.py; artifact: X:/AIstock_temp/ADVISORY/p17-spo-all-packages-20261027/research_audit_receipt.json | COMPLETE_FIVE_INPUT_REVIEWS_FOUR_EVALUATED_NO_UNIVERSAL_PROMOTION | none |
 | F-303 | §6.3.38/§16.0、`docs/architecture/advisory_lstm_complementarity_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_complementarity_v1.py; artifact: X:/AIstock_temp/ADVISORY/p18-lstm-complementarity-20261027/research_audit_receipt.json | COMPLETE_COMPLEMENTARITY_REVIEW_LSTM_STRESS_NOT_SUPPORTED_CURRENT_PAIR | none |
 | F-304 | §6.3.39/§16.0、`docs/architecture/advisory_lstm_specialist_spo_v1_f1_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_specialist_spo_v1.py; artifact: X:/AIstock_temp/ADVISORY/p19-lstm-specialist-20261027/research_audit_receipt.json | COMPLETE_INNER_AND_DESCRIPTIVE_SPECIALIZATION_SUPPORTED_NOT_CONFIRMED | none |
-| F-305 | §6.3.40/§16.0、`docs/architecture/advisory_lstm_spo_shadow_v1_f2_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py; artifact: X:/AIstock_temp/ADVISORY/p20-lstm-shadow-20261027/live_receipt.json | VERIFIED_ZERO_FIT_DAILY_SHADOW_SOURCE_RUNTIME_PENDING_USER_RESTART | approved_by_user：用户原话“后端重启我来执行”；运行加载与源码交付分态 |
+| F-305 | §6.3.40/§16.0、`docs/architecture/advisory_lstm_spo_shadow_v1_f2_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py; tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json; artifact: F:/Dev/AIstock/tmp/issue_workflow/BUG-2159/aftercare-final-20261031.json | VERIFIED_RUNTIME_FIRST_CAPTURE_NOT_ECONOMIC_CONFIRMATION | none |
+| F-306 | §16.0、`docs/architecture/advisory_lstm_rank_value_review_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/research_audit_receipt.json | VERIFIED_DIAGNOSTICS_KEEP_FROZEN_MODEL_ZERO_FIT | none |
 
 
 ## 12. Verification Plan
@@ -2791,7 +2793,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 2026-10-28 产品界面并行交付：用户已确认卡片总览、策略详情及当日推荐效果图，授权[荐股工作台详细设计](advisory_recommendation_workbench_f2_design_20261028.md)先审核合入，再开发审核合入。该任务统一已保存推荐事实的只读业务视图，复用每日数据完整性共享合同，不更改下述研究队列、原生推荐/持仓、模型或运行调度；不自动恢复研报/现金流/价格研究。源码与运行激活分别验收，后端重启仍由用户执行。
 
-本节是2026-10-27唯一队列。P19三折已完成且内层正支持，失败1次及恢复3次保留、累计248实际fit＋1旧index。按用户最新批准进入P20零拟合每日并行观察：固定训练截止最晚的第3折原模型，不再要求额外final fit；仅精确LSTM原分数Top50，native原始Top10为主对照，未追加共享模型或其它包。实现、10项直接测试、真实50输入及独立新进程复算已完成，合入/安装见交付收据。下一工作为用户重启后只读核验release/调度及首个开盘前预测，再读取自然成熟5TD评价；不是新一轮候选或开发窗搜索。原生Top20持仓不变，尚无新前向经济支持或榜单替换。P18负结果、P16/P17分类及旧包NOT_EVALUABLE保留；研报/现金流/价格/Exit暂停，无sealed读取、QE或服务控制。
+本节是2026-11-01唯一队列。P19及其失败1次/恢复3次已完成，累计248实际fit＋1旧index；P20固定第3折、用户重启后加载、首份开盘前预测和BUG-2159关闭同步已验，不再排重启/首次捕获任务。用户批准的不等新交易日长任务LSTM-VALUE-1已完成文件型工具、真实分析及多轮审核：三折训练KEY匹配；6,350行分数贡献、50,800边界对和原126D/102共同D逐股对账通过。当前50只无缺失/无逐字段训练范围越界，但价格特征偏训练尾部；当前数学边界未比相同第3折历史更窄。历史正增量不依赖单日/单5D块，71.29%净增量集中第三折，时间泛化仍未知。终态KEEP_FROZEN_OBSERVATION，新增候选0/fit0，原P20模型/预测/Top50→Top10/5TD及原生Top20不变；本轮离线任务结束，不挂起等行情。后续仅沿原自然调度保存新预测、成熟后评价；具体新事实支持不同机制时再设计唯一候选和预算，禁止从单日输赢调参。P18负结果、旧分类与UNKNOWN/MISS保留；研报/现金流/价格/Exit暂停，无新收益窗口、sealed、QE、DB或服务控制。详细结果与证据见新F1及报告，源码CI/合入分态见delivery_receipt。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |
 |---|---|---|

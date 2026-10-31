@@ -57,12 +57,12 @@ R1审算术与真实输入；R2审开发复用/分母/重叠/因果/搜索边界
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-581 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py | PLANNED | 实施中 |
-| F-582 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py | PLANNED | 实施中 |
-| F-583 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py | PLANNED | 实施中 |
-| F-584 | scripts/advisory_lstm_rank_value_review.py | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/evaluated/historical_dependence.json | PLANNED | 尚未运行 |
-| F-585 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py | PLANNED | 实施中 |
-| F-586 | docs/analysis/advisory_lstm_rank_value_review_20261101.md | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/review_receipt.md | PLANNED | 尚未交付 |
+| F-581 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/evaluated/receipt.json | VERIFIED_EXACT_SOURCE_ROLES_AND_THREE_TRAINING_KEYS | none |
+| F-582 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/research_audit_receipt.json | VERIFIED_6350_ROWS_101600_CONTRIBUTIONS | none |
+| F-583 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/prepared/input_profile.json | VERIFIED_50800_PAIRS_AND_ROLE_LIMITATIONS | none |
+| F-584 | scripts/advisory_lstm_rank_value_review.py | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/study/evaluated/historical_dependence.json; research_audit_receipt.json | VERIFIED_ORIGINAL_126D_102_COMMON_DEVELOPMENT_ONLY | none |
+| F-585 | scripts/advisory_lstm_rank_value_review.py | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/research_audit_receipt.json | VERIFIED_IMMUTABLE_REUSE_NO_FIT_OR_LIVE_SOURCE | none |
+| F-586 | docs/analysis/advisory_lstm_rank_value_review_20261101.md | artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/review_receipt.md; study/evaluated/decision.json | VERIFIED_KEEP_FROZEN_OBSERVATION_NOT_ECONOMIC_CONFIRMATION | none |
 
 ## Non-goals / Risks / Production Gates / Rollback
 
