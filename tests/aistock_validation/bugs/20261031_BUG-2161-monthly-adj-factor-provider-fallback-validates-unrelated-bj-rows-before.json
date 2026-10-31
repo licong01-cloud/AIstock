@@ -64,8 +64,8 @@
   },
   "first_seen_at": "2026-10-31T07:39:28.468929Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e9ba4a1f4f51264125466b948c0af4d5d932c8c0",
+  "fixed_at": "2026-10-31T08:11:47Z",
   "github_issue_number": 6968,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6968",
   "last_seen_at": "2026-10-31T07:39:28.468929Z",
@@ -73,6 +73,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6969",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -96,6 +97,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -107,7 +109,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2161",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0c6c5cc00b226a4a",
+    "recorded_at": "2026-10-31T08:12:32.691508Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "be13e9be20dd389ba699548aeab70d0c07923050",
+    "source_merge_commit": "e9ba4a1f4f51264125466b948c0af4d5d932c8c0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6969",
+    "validation_evidence": [
+      "validation-receipt: id=6ff8048a76da0562 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_source_authority.py -q` result=`152 passed, 1 skipped; relocated 18 cases unchanged and passed`",
+      "validation-receipt: id=97b8b9395f340951 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_monthly_construction_facts.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "1e9a019fbba5b0007e30c9547d479f7518b9b7d5f3d8b98fadc8f6c7f67ba722"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -116,6 +140,10 @@
     "fingerprint": "08a724f3f53eb9068cb949af",
     "source_event_id": "FE-20261031-08a724f3f53e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6ff8048a76da0562 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_source_authority.py -q` result=`152 passed, 1 skipped; relocated 18 cases unchanged and passed`",
+    "validation-receipt: id=97b8b9395f340951 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_monthly_construction_facts.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
