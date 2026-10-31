@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-10-31T06:11:33.182531Z",
   "description": "生产浏览器复现 SELECTED_ACCOUNT_RECLICK_CLEARS_LOADED_DETAILS_WITHOUT_REFETCH；16项前置页面检查通过且无JS或API错误。",
+  "design_compliance": {
+    "no_business_logic_change": "仅前端相同账户选择为无操作；不改变选股、择时、订单、费用、持仓、资金、账本或原冻结产物。",
+    "no_new_approval_or_gate": "无新增参数、门禁或审批。",
+    "no_silent_error": "保留原读取错误、请求中止、身份和游标拒绝；不把明细清空当作成功。",
+    "no_unapproved_simplification": "重复选择保持真实明细和分页，跨账户仍清空并重新读取；原五类视图和日期筛选继续验证。"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,7 +31,13 @@
   ],
   "evidence_uris": [
     "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\browser-failure-r1.json",
-    "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\selected-account-cleared-r1.png"
+    "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\selected-account-cleared-r1.png",
+    "X:/AIstock_temp/localsim-runtime-activation-20261031/post-restart-r1/component-before.xml",
+    "X:/AIstock_temp/localsim-runtime-activation-20261031/post-restart-r1/api-acceptance-r2.json",
+    "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\component-after-r2.xml",
+    "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\component-after-r2-source-pins.json",
+    "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\l0-quality-r1.json",
+    "X:\\AIstock_temp\\localsim-runtime-activation-20261031\\post-restart-r1\\l0-standard-r1.json"
   ],
   "expected": "重复选择当前账户保留已加载行、日期条件和分页，且不重复请求；切换不同账户仍取消旧请求并正确读取新账户。",
   "file_scope_contract": {
@@ -111,10 +123,35 @@
     "l0",
     "frontend_type_lint"
   ],
+  "review_rounds": [
+    {
+      "evidence": "同账户提前返回；跨账户原 setAccount/setData、请求取消和错误路径逐字保留。无新状态和缓存。",
+      "focus": "状态根因和最小差异",
+      "result": "passed",
+      "reviewer": "Codex same-window self review",
+      "round": 1
+    },
+    {
+      "evidence": "原浏览器真实研究复现；新增原生重复选择与人工成交分页/日期保持回归修复前失败、修复后1 passed。GET计数不增长，原跨账户及五类明细仍验证。",
+      "focus": "真实React浏览器及分页边界",
+      "result": "passed",
+      "reviewer": "Codex same-window self review",
+      "round": 2
+    },
+    {
+      "evidence": "仅1个UI回调、直接测试、BUG JSON；ESLint和两个L0扫描通过，diff check通过。RAW_JSON_UI MEDIUM是测试route.fulfill(JSON.stringify(response))，不渲染到UI；实际浏览器无原始ID/JSON。",
+      "focus": "写入范围、设计符合性和静态审核",
+      "result": "passed",
+      "reviewer": "Codex same-window self review",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Chromium loaded TypeScript-transpiled persistent worktree component under real React18, existing directed Playwright spec: before fail at selected-account repeat, after-r2 1 passed. Actual production browser previously verified 13 account selections and all5 views and reproduced the same fix-point. No services started; actual post-merge served UI verification remains separate. component-after-r2-source-pins.json and component-after-r2.xml."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
@@ -158,9 +195,9 @@
       "frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts"
     ],
     "ui_issue": true,
-    "ui_route": "/50",
+    "ui_route": "/simulation/localsim/comparisons/[studyId]",
     "ui_routes": [
-      "/50"
+      "/simulation/localsim/comparisons/[studyId]"
     ],
     "visual_acceptance_required": true
   },
