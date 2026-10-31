@@ -29,19 +29,19 @@
   "expected": "Latest daily obligations across datasets can progress despite historical repair backlog; older targets remain durable and eligible; no false success or skipped completeness checks.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/data_sync_targets.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_data_sync_targets.py"
+      "backend/tests/test_data_sync_targets.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/data_sync_targets.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_data_sync_targets.py"
+      "backend/tests/test_data_sync_targets.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -129,8 +129,8 @@
   },
   "first_seen_at": "2026-10-29T02:10:50.242109Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0caff2410d292e0427722ed82fa3d12e136d375c",
+  "fixed_at": "2026-10-29T02:22:59Z",
   "github_issue_number": 6825,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6825",
   "last_seen_at": "2026-10-29T02:10:50.242109Z",
@@ -138,6 +138,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6828",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -162,6 +163,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -173,7 +175,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2121",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4dd3ac5a26e245be",
+    "recorded_at": "2026-10-29T02:23:32.755791Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fb6adca2f484a63b2c00cde755dd3f2b4e017819",
+    "source_merge_commit": "0caff2410d292e0427722ed82fa3d12e136d375c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6828",
+    "validation_evidence": [
+      "validation-receipt: id=b9d462411584a9c0 commit=fb6adca2f484a63b2c00cde755dd3f2b4e017819 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=a891665d20a17426 commit=fb6adca2f484a63b2c00cde755dd3f2b4e017819 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_data_sync_targets.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q` result=`139 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "d5ddd2abeb5d3851b33cb8c40763d2e8712db555c43cda16a3c771e3020b1899"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -182,6 +206,10 @@
     "fingerprint": "622ecac31e973fcf875f6457",
     "source_event_id": "FE-20261029-622ecac31e97"
   },
+  "validation_evidence": [
+    "validation-receipt: id=b9d462411584a9c0 commit=fb6adca2f484a63b2c00cde755dd3f2b4e017819 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=a891665d20a17426 commit=fb6adca2f484a63b2c00cde755dd3f2b4e017819 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_data_sync_targets.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q` result=`139 passed, 1 skipped`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
