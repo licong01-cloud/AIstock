@@ -1,0 +1,283 @@
+{
+  "actual": "Native ManagedRepairImpactJournal.overlapping_repairs after current snapshot returns 132 records, mostly 2018 historical validation-only events, which will discard completed October reads despite no invalidation of the MVCC view.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_worker.py",
+    "backend/tests/dataset_release/test_monthly_worker.py",
+    "backend/services/dataset_release/monthly_source_producer.py",
+    "backend/services/dataset_release/monthly_repair_journal.py",
+    "backend/tests/dataset_release/test_monthly_source_producer.py",
+    "backend/tests/dataset_release/test_monthly_repair_journal.py",
+    "tests/aistock_validation/bugs/20261031_BUG-2163-monthly-source-invalidates-coherent-mvcc-inputs-on-unrelated-validation.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2163",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-31T15:39:03.471338Z",
+  "description": "Native read-only reproduction returned 132 global ledger overlaps after the October capture, largely historical VALIDATE_ONLY bookkeeping. Fix the SOURCE caller, not market facts: retain initial managed-writer safety, one imported repeatable-read/read-only MVCC snapshot and all nine physical data gates. Remove the post-snapshot global drift wait; emit explicit as-of consistency evidence with post_snapshot_writer_check_performed=false, preserving legacy frozen receipts. Native completed validation attempts are already terminal at the initial check, so the journal itself needs no behavior change. Current SOURCE was cancelled normally to avoid a known futile read; completed assets were not deleted.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261031-0cf62de4f23f",
+      "timestamp": "2026-10-31T15:39:03.471338Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Coherent as-of source input can seal despite later operational bookkeeping. Required source data errors and lost/mixed snapshots still fail. Pure VALIDATE_ONLY attempts never impersonate fact writes. Explicit audit semantics, no fake PASS.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_source_producer.py",
+        "backend/services/dataset_release/monthly_repair_journal.py",
+        "backend/tests/dataset_release/test_monthly_source_producer.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_source_producer.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_repair_journal.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_source_producer.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_repair_journal.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_source_producer.py",
+        "backend/services/dataset_release/monthly_repair_journal.py",
+        "backend/tests/dataset_release/test_monthly_source_producer.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ]
+  },
+  "first_seen_at": "2026-10-31T15:39:03.471338Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6975,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6975",
+  "last_seen_at": "2026-10-31T15:39:03.471338Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh worktree Python RED 2 failed/1 passed for post-snapshot drift; GREEN direct 4 passed plus 8 exact new-proof/legacy compatibility cases. Final related matrix: 320 passed, 71 skipped (skipped integration cases are not counted as passed). Ruff, compile, diff check and L0 passed.",
+      "Existing DEV real concurrent connections using native MonthlySnapshotCoordinator: initial value 1, separate committed update to 2, imported snapshot still reads 1, live reader reads 2. DEV probe table removed. Receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2163-dev-mvcc.json; no production database access or write in this probe.",
+      "Multi-round review and DESIGN-COMPLIANCE-001: no subset delivery or fake zero-overlap PASS; unknown proof fields, incorrect time/snapshot/isolation and numeric false fail; genuine missing values, mixed/lost snapshots and accepted-warning boundaries remain strict; no PIT, cutoff, model or stock-scope changes and no new gate/approval. Source merge is not monthly readiness."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "monthly SOURCE invalidates coherent MVCC inputs on unrelated validation metadata",
+  "trigger_condition": {
+    "fingerprint": "0cf62de4f23ffdf4cc5e75da",
+    "source_event_id": "FE-20261031-0cf62de4f23f"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
