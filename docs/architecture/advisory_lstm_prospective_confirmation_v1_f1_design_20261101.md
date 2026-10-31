@@ -57,12 +57,12 @@ protocol同时绑定唯一study_root；finalize只能在该目录发布，移动
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-591 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | PLANNED | 实施后验收 |
-| F-592 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | PLANNED | 实施后验收 |
-| F-593 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | PLANNED | 实施后验收 |
-| F-594 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | PLANNED | 实施后验收 |
-| F-595 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | PLANNED | 实施后验收 |
-| F-596 | 本文Verification Plan | artifact: X:/AIstock_temp/ADVISORY/lstm-confirmation-20261101/validation_receipt.json | PLANNED | 实施后验收 |
+| F-591 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | VERIFIED_CONTRACT_AND_REAL_PREREGISTERED_PREFLIGHT | none |
+| F-592 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | VERIFIED_CONTRACT_AND_REAL_PREREGISTERED_PREFLIGHT | none |
+| F-593 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | VERIFIED_CONTRACT_AND_REAL_PREREGISTERED_PREFLIGHT | none |
+| F-594 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | VERIFIED_CONTRACT_AND_REAL_PREREGISTERED_PREFLIGHT | none |
+| F-595 | scripts/advisory_lstm_prospective_confirmation.py | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py | VERIFIED_CONTRACT_AND_REAL_PREREGISTERED_PREFLIGHT | none |
+| F-596 | 本文Verification Plan | artifact: X:/AIstock_temp/ADVISORY/lstm-confirmation-20261101/validation_receipt.json | VERIFIED_CONTRACT_AND_REAL_PREREGISTERED_PREFLIGHT | none |
 
 ## Risks / Production Gates / Rollback
 
