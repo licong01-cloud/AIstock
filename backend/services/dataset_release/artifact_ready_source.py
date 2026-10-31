@@ -1747,6 +1747,22 @@ class ArtifactReadySourceBuilder:
         derived_refs: list[CASRef] = []
         state: Mapping[str, LimitReferencePoint] = {}
         reference_cache: dict[tuple[str, date], LimitReferencePoint] = {}
+        rule_codes = frozenset(span.ts_code for span in snapshot.pit_snapshot.spans)
+
+        def rule_rows(rows: Iterable[Mapping[str, Any]], *, source: str):
+            # SOURCE retains all factual securities. Only this optional rule
+            # overlay has a PIT-only contract; never trim the frozen sources or
+            # the ordinary fact exporters to satisfy that narrower contract.
+            previous: tuple[str, date] | None = None
+            for row in rows:
+                key = _rule_row_key(row, source=source)
+                if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", key[0]) is None:
+                    raise ArtifactReadyCoverageIncomplete(f"{source} row has an invalid stock code")
+                if previous is not None and key <= previous:
+                    raise ArtifactReadyCoverageIncomplete(f"{source} rows must be ordered and unique")
+                previous = key
+                if key[0] in rule_codes:
+                    yield row
 
         def resolve_reference(code: str, required_day: date) -> LimitReferencePoint | None:
             key = (code, required_day)
@@ -1845,15 +1861,13 @@ class ArtifactReadySourceBuilder:
                     trading_dates=trading_dates,
                     partition_start=start,
                     partition_end=end,
-                    database_limit_rows=database_limits,
-                    daily_rows=_merge_rule_overlay_rows(
-                        database_daily,
-                        daily_overlay,
+                    database_limit_rows=rule_rows(database_limits, source="stk_limit"),
+                    daily_rows=rule_rows(
+                        _merge_rule_overlay_rows(database_daily, daily_overlay, source="kline_daily_raw"),
                         source="kline_daily_raw",
                     ),
-                    adj_factor_rows=_merge_rule_overlay_rows(
-                        database_adj,
-                        adj_overlay,
+                    adj_factor_rows=rule_rows(
+                        _merge_rule_overlay_rows(database_adj, adj_overlay, source="adj_factor"),
                         source="adj_factor",
                     ),
                     reference_state=state,
