@@ -8,6 +8,9 @@
     "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json"
   ],
   "assigned_agent": null,
+  "authorization_notes": [
+    "User explicitly approved additional native/feature qualification contract with answer: agree to additional contract repair (recommended). Original list, asset and bindings retained; actual 20TD features bound separately to current revisions."
+  ],
   "backend_restart_owner": "user",
   "backend_restart_required": true,
   "bug_id": "BUG-2159",
@@ -35,22 +38,22 @@
   "expected": "沪深30020TD完整有效时可捕获；自身缺行、非有限值、重复或revision变化必须阻断，全局其它指数负面保留。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json",
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
-      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
-      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+      "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json"
     ],
     "added_files": [
       "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
       "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json",
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
-      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
-      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+      "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -122,8 +125,8 @@
   },
   "first_seen_at": "2026-10-31T05:42:57.565400Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+  "fixed_at": "2026-10-31T06:15:26Z",
   "github_issue_number": 6960,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6960",
   "last_seen_at": "2026-10-31T05:42:57.565400Z",
@@ -131,6 +134,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6961",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -155,6 +159,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -166,7 +171,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2159",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0a24cd113f3fce52",
+    "recorded_at": "2026-10-31T06:16:39.529363Z",
+    "runtime_contract_digest": "6a7cf6956e31d38ba719883189d2f435b54b0b1847f02c0f62133e41d69491e3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "70cb3531caf57021cdd9010e02e5fa1ccb5b4003",
+    "source_merge_commit": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6961",
+    "validation_evidence": [
+      "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
+      "python -m nox -s l0 -- four explicit changed paths -> passed"
+    ],
+    "validation_evidence_digest": "cded9b0ac2147afce847406551ce6fa214b3c1438b181c0a168671ad580f37da"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -180,6 +207,10 @@
     "rtk ruff check changed Python files -> passed",
     "python -m nox -s l0 -- four explicit changed paths -> passed",
     "fresh process original native archive and current consumed features -> passed; real 4918/40/50 and20TD; 0fit/outcomes/DB writes"
+  ],
+  "validation_evidence": [
+    "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
+    "python -m nox -s l0 -- four explicit changed paths -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
@@ -288,8 +319,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "authorization_notes": [
-    "User explicitly approved additional native/feature qualification contract with answer: agree to additional contract repair (recommended). Original list, asset and bindings retained; actual 20TD features bound separately to current revisions."
-  ]
+  }
 }
