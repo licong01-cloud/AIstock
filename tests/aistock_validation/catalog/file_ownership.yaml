@@ -319,7 +319,14 @@ rules:
     priority: 127
     include:
       - backend/services/quantevolver/l2_relative_consumer.py
+      - backend/services/quantevolver/l2_natural_entry_consumer.py
+      - docs/architecture/qe_l2_natural_entry_f1_20261031.md
       - scripts/qe_l2_relative_admission.py
+      - scripts/qe_l2_natural_entry_admission.py
+      - scripts/qe_l2_natural_entry_consumer.py
+      - scripts/qe_l2_natural_entry_strategy.py
+      - backend/tests/quantevolver/test_qe_l2_natural_entry.py
+      - backend/tests/unified_engine/test_qe_l2_natural_entry_strategy.py
       - scripts/qe_l2_relative_consumer.py
       - scripts/qe_l2_relative_strategy.py
       - backend/tests/quantevolver/test_qe_l2_relative.py
