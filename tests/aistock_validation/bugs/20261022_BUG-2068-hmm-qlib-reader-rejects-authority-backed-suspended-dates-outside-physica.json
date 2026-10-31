@@ -30,14 +30,22 @@
   ],
   "expected": "Full-day suspension with validated release authority is typed NA, not a fatal physical Bin range omission; unknown/unproven boundary gaps remain fatal and all real quote bytes remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2068-hmm-qlib-reader-rejects-authority-backed-suspended-dates-outside-physica.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
       "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
       "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_formal_state_input.py"
+      "tests/aistock_validation/bugs/20261022_BUG-2068-hmm-qlib-reader-rejects-authority-backed-suspended-dates-outside-physica.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -105,8 +113,8 @@
   },
   "first_seen_at": "2026-10-22T18:26:30.982894Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a5db36604401c172e46d467294e8d1c6c7a35787",
+  "fixed_at": "2026-10-23T03:14:13Z",
   "github_issue_number": 6607,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6607",
   "last_seen_at": "2026-10-22T18:26:30.982894Z",
@@ -114,6 +122,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6608",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,7 +145,9 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -146,7 +157,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2068",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5efa7c81f0a61468",
+    "recorded_at": "2026-10-23T03:14:52.401861Z",
+    "runtime_contract_digest": "51084985982911a4051d381c15be5c641b53541271f1dad703657717eb0d4ba2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fbb68729ef3789026320c234aad0fdd559030e61",
+    "source_merge_commit": "a5db36604401c172e46d467294e8d1c6c7a35787",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6608",
+    "validation_evidence": [
+      "rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py -q --no-cov -k 'authority_backed_edge_suspension or quote_edge_gap_without or bounded_l2_constructor_passes_verified_suspension or qlib_stock_reader or prior_quote_context or qlib_row_accepts or suspend_sidecar' -> 18 passed on final HEAD fbb68729ef3789026320c234aad0fdd559030e61",
+      "python -m nox -s l0 -> passed; blocking=0"
+    ],
+    "validation_evidence_digest": "a5c3d1f541140479b52a11ec759c198b5e928358befa0d9292ecee2183b84ee8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -155,6 +188,10 @@
     "fingerprint": "d77fc27b581ecb5cc4d86b6c",
     "source_event_id": "FE-20261022-d77fc27b581e"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_formal_state_input.py -q --no-cov -k 'authority_backed_edge_suspension or quote_edge_gap_without or bounded_l2_constructor_passes_verified_suspension or qlib_stock_reader or prior_quote_context or qlib_row_accepts or suspend_sidecar' -> 18 passed on final HEAD fbb68729ef3789026320c234aad0fdd559030e61",
+    "python -m nox -s l0 -> passed; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
