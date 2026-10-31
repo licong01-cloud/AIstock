@@ -33,6 +33,30 @@ MARKET = tuple(core.spo.FEATURES[:6])
 TERMINAL_SHA = "7edc47478d6c20dfe9ad1d0cf0010e6b3fd4d5da5dd1c88f7dd6761dab6c21ee"
 CURRENT_SHA = "224d0203a0bb5c09db908f65b3e5fcc00845fbaff050f0865bf4bdce32ad8e14"
 QUANTILES = (0., .05, .25, .5, .75, .95, 1.)
+SOURCE_FILES = (
+    "scripts/advisory_lstm_rank_value_review.py",
+    "backend/services/advisory_model_first/lstm_spo_shadow_v1.py",
+    "backend/services/advisory_model_first/lstm_specialist_spo_v1.py",
+    "backend/services/advisory_model_first/spo_top10_5td_v1.py",
+    "backend/services/advisory_model_first/economic_entry_pipeline.py",
+)
+
+
+def code_sha(raw):
+    """Git canonical text identity survives checkout CRLF; other edits do not."""
+    return hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def source_closure(*, require_committed=False):
+    result = {}
+    for relative in SOURCE_FILES:
+        actual = code_sha((ROOT / relative).read_bytes())
+        if require_committed:
+            committed = subprocess.check_output(["git", "show", f"HEAD:{relative}"], cwd=ROOT)
+            if actual != code_sha(committed):
+                raise ValueError(f"diagnostic source has uncommitted changes: {relative}")
+        result[relative] = actual
+    return result
 
 
 def source_spec():
@@ -112,7 +136,8 @@ def verify_sources(protocol):
             or set(protocol.get("sources", {})) != set(source_spec())
             or protocol.get("max_new_fits") != 0
             or protocol.get("current_decision_date") != "2026-10-30"
-            or protocol.get("script_sha256") != file_sha(__file__)):
+            or protocol.get("script_sha256") != code_sha(Path(__file__).read_bytes())
+            or protocol.get("source_closure") != source_closure()):
         raise ValueError("diagnostic protocol identity differs")
     for name in source_spec():
         checked_ref(protocol, name)
@@ -150,7 +175,8 @@ def freeze(inventory_path, destination):
                     current_decision_date="2026-10-30", expected_input_rows=15250,
                     expected_prediction_rows=6300, expected_days=126, expected_common_days=102,
                     diagnostic_only=True, independent_confirmation=False,
-                    script_sha256=file_sha(__file__), inventory_sha256=file_sha(inventory_path),
+                    script_sha256=code_sha(Path(__file__).read_bytes()), source_closure=source_closure(require_committed=True),
+                    inventory_sha256=file_sha(inventory_path),
                     producer_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip())
     verify_sources(protocol)
     publish_stage(study_root=destination / "study", stage="preregistered", plan_sha256=core.spo.sha(protocol),

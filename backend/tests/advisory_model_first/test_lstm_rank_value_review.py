@@ -142,6 +142,21 @@ def test_output_rejects_live_assets_and_code():
             review.output_root(path)
 
 
+def test_source_identity_normalizes_only_crlf_and_binds_dependencies(tmp_path, monkeypatch):
+    assert review.code_sha(b"x=1\r\n") == review.code_sha(b"x=1\n")
+    assert review.code_sha(b"x=1\n") != review.code_sha(b"x=2\n")
+    monkeypatch.setattr(review, "ROOT", tmp_path)
+    monkeypatch.setattr(review, "SOURCE_FILES", ("operator.py", "predictor.py"))
+    (tmp_path / "operator.py").write_bytes(b"a=1\n")
+    (tmp_path / "predictor.py").write_bytes(b"b=2\r\n")
+    initial = review.source_closure()
+    (tmp_path / "predictor.py").write_bytes(b"b=3\r\n")
+    assert initial != review.source_closure()
+    monkeypatch.setattr(review.subprocess, "check_output", lambda *a, **k: b"different\n")
+    with pytest.raises(ValueError, match="uncommitted"):
+        review.source_closure(require_committed=True)
+
+
 def historical_fixture():
     frame, _ = example()
     predictions, finance, panels, days = [], [], [], []
