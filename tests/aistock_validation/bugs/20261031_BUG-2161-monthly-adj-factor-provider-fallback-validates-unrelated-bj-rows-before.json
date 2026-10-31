@@ -28,9 +28,22 @@
   "evidence_uris": [],
   "expected": "Frozen full SHSZ A-share facts retain historical and PIT-excluded observations. Proven flat zero-turnover pre-listing references without earlier observed quote/factor history are not trading bars and do not demand invented factors. Whole-market provider responses are projected to frozen fact codes before strict validation; missing, invalid, duplicate and conflicting in-scope factors remain errors. No production fact writes or PIT changes.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2161-monthly-adj-factor-provider-fallback-validates-unrelated-bj-rows-before.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2161-monthly-adj-factor-provider-fallback-validates-unrelated-bj-rows-before.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -39,7 +52,13 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2161-monthly-adj-factor-provider-fallback-validates-unrelated-bj-rows-before.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -69,17 +88,22 @@
     "backend_restart_required": true,
     "fresh_process_evidence": [
       "Fresh worktree Python: RED 6 failed/12 passed -> GREEN targeted 19 passed; final related matrix 152 passed/1 skipped. Provider scope projection retains strict required values, duplicates, missing keys, overlap and IPO facts outside buy PIT.",
-      "Fresh worktree Python on existing DEV temporary tables: native SQL matches production READ ONLY, exact reference exclusion 301718.SZ/2026-10-09 only; repeated read identical; prior quote/factor protects alias history; NULL/zero malformed source records remain visible. X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2161-dev-readback-r2.json"
+      "Fresh worktree Python on existing DEV temporary tables: native SQL matches production READ ONLY, exact reference exclusion 301718.SZ/2026-10-09 only; repeated read identical; prior quote/factor protects alias history; NULL/zero malformed source records remain visible. X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2161-dev-readback-r2.json",
+      "Fresh worktree interpreter loads persisted artifact_ready_source.py and source_authority.py; real existing DEV temporary tables execute same SQL as production read-only; 301718.SZ/2026-10-09 reference excluded, genuine trading and prior identity history retained; receipt BUG-2161-dev-readback-r2.json -> PASS",
+      "Isolated worktree Python and existing DEV temporary tables native SQL readback, production readonly parity, reference-only exclusion, alias preservation, NULL and zero negative cases PASS; X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2161-dev-readback-r2.json"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
