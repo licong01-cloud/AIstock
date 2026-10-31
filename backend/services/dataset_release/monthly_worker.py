@@ -358,13 +358,29 @@ def _validate_semantics(
         ):
             raise MonthlyProducerError("source snapshot identity is incomplete")
         repair_evidence = require_json_list(scope.get("repair_overlap_check_refs"), field="repair_overlap_check_refs")
-        if len(repair_evidence) != 1 or repair_evidence[0] != {
+        legacy_overlap_evidence = {
             "schema_version": "aistock_monthly_repair_overlap_check_v1",
             "snapshot_group_id": scope["snapshot_group_id"],
             "initial_repair_watermark": snapshot_evidence[0]["repair_watermark"],
             "overlapping_repair_ids": [],
             "status": "PASS",
-        }:
+        }
+        asof_evidence = {
+            "schema_version": "aistock_monthly_source_asof_consistency_v1",
+            "snapshot_group_id": scope["snapshot_group_id"],
+            "source_as_of": scope["source_as_of"],
+            "isolation_level": "REPEATABLE READ READ ONLY",
+            "post_snapshot_writer_check_performed": False,
+            "status": "PASS",
+        }
+        # Keep the legacy ref slot/readback for existing frozen operations, but
+        # new captures explicitly attest as-of consistency, not absence of later
+        # jobs. Never label an unperformed global drift check as a passing one.
+        if len(repair_evidence) != 1 or not (
+            repair_evidence[0] == legacy_overlap_evidence
+            or (repair_evidence[0] == asof_evidence
+                and repair_evidence[0].get("post_snapshot_writer_check_performed") is False)
+        ):
             raise MonthlyProducerError("source repair overlap artifact differs")
         change_evidence = require_json_list(scope.get("change_scope_refs"), field="change_scope_refs")
         if len(change_evidence) != 1 or change_evidence[0] != {

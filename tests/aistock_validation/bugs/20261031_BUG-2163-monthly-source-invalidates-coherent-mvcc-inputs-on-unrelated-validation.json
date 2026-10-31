@@ -1,6 +1,8 @@
 {
   "actual": "Native ManagedRepairImpactJournal.overlapping_repairs after current snapshot returns 132 records, mostly 2018 historical validation-only events, which will discard completed October reads despite no invalidation of the MVCC view.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_worker.py",
+    "backend/tests/dataset_release/test_monthly_worker.py",
     "backend/services/dataset_release/monthly_source_producer.py",
     "backend/services/dataset_release/monthly_repair_journal.py",
     "backend/tests/dataset_release/test_monthly_source_producer.py",
@@ -16,7 +18,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-31T15:39:03.471338Z",
-  "description": "Native ManagedRepairImpactJournal.overlapping_repairs after current snapshot returns 132 records, mostly 2018 historical validation-only events, which will discard completed October reads despite no invalidation of the MVCC view.",
+  "description": "Native read-only reproduction returned 132 global ledger overlaps after the October capture, largely historical VALIDATE_ONLY bookkeeping. Fix the SOURCE caller, not market facts: retain initial managed-writer safety, one imported repeatable-read/read-only MVCC snapshot and all nine physical data gates. Remove the post-snapshot global drift wait; emit explicit as-of consistency evidence with post_snapshot_writer_check_performed=false, preserving legacy frozen receipts. Native completed validation attempts are already terminal at the initial check, so the journal itself needs no behavior change. Current SOURCE was cancelled normally to avoid a known futile read; completed assets were not deleted.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -143,11 +145,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh worktree Python RED 2 failed/1 passed for post-snapshot drift; GREEN direct 4 passed plus 8 exact new-proof/legacy compatibility cases. Final related matrix: 320 passed, 71 skipped (skipped integration cases are not counted as passed). Ruff, compile, diff check and L0 passed.",
+      "Existing DEV real concurrent connections using native MonthlySnapshotCoordinator: initial value 1, separate committed update to 2, imported snapshot still reads 1, live reader reads 2. DEV probe table removed. Receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2163-dev-mvcc.json; no production database access or write in this probe.",
+      "Multi-round review and DESIGN-COMPLIANCE-001: no subset delivery or fake zero-overlap PASS; unknown proof fields, incorrect time/snapshot/isolation and numeric false fail; genuine missing values, mixed/lost snapshots and accepted-warning boundaries remain strict; no PIT, cutoff, model or stock-scope changes and no new gate/approval. Source merge is not monthly readiness."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
