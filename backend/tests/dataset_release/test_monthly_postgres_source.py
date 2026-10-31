@@ -215,6 +215,9 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
     def capture_history(**kwargs):
         assert kwargs["pit"] is frozen.pit_snapshot
         assert kwargs["connection"] is connection
+        assert kwargs['suspension_authority'] == {
+            'schema_version': 'aistock_suspension_day_authority_v1',
+            'policy': 'provider_events_with_disclosure_resolution_v1', 'entries': []}
         assert kwargs['additional_quote_days'] == ((('000585.SZ','2018-08-01'),) if repair_kind == 'daily_history' else ())
         return captured_history if repair_kind == "history" else None
     monkeypatch.setattr(monthly_minute_coverage, "capture_historical_coverage", capture_history)
@@ -366,7 +369,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "20"
+    assert adapter.adapter_version == "21"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",

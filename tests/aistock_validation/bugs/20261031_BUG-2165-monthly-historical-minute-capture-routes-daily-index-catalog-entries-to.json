@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_minute_coverage.py",
     "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261031_BUG-2165-monthly-historical-minute-capture-routes-daily-index-catalog-entries-to.json"
   ],
   "assigned_agent": null,
@@ -14,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-31T19:26:53.413140Z",
-  "description": "Mixed daily provider index identities enter stock-only minute historical repair and fail SOURCE after materialization.",
+  "description": "Mixed daily provider index identities enter stock-only minute historical repair and fail SOURCE after materialization. Exact predecessor replay found 897 index-date candidates and 12 stock-date candidates. All 12 stock dates have unambiguous S/null full-day suspension; three also retain flat-price zero-volume placeholder minutes with a missing 11:30 and extraneous 13:00. Scope expanded to pass the already-frozen shared suspension authority into the bounded historical gap capture, exclude only its FULL_DAY_SUSPENDED keys and keep genuine partial/unresolved sessions strict. No raw facts, PIT eligibility or shared suspension semantics change.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,13 +25,19 @@
       "timestamp": "2026-10-31T19:26:53.413140Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-route-red.json",
+    "X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-route-green.json",
+    "X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-native-suspension-green.json"
+  ],
   "expected": "Historical minute capture receives only shared A-share quote identities, including non-PIT holdings/IPO/ST facts, while independent index path remains unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_minute_coverage.py",
-      "backend/tests/dataset_release/test_monthly_minute_coverage.py"
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -78,12 +86,16 @@
     },
     "planned_files": [
       "backend/services/dataset_release/monthly_minute_coverage.py",
-      "backend/tests/dataset_release/test_monthly_minute_coverage.py"
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/monthly_minute_coverage.py",
-      "backend/tests/dataset_release/test_monthly_minute_coverage.py"
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ]
   },
   "first_seen_at": "2026-10-31T19:26:53.413140Z",
@@ -109,11 +121,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "fresh_process_evidence": [
+      "Initial RED: four mixed stock/index catalogue routes failed on old source; GREEN: all four passed after A-share fact projection. Second RED: eight suspension-state cases failed before the shared contract was passed; GREEN: eighteen minute coverage cases passed including full day, resume, intraday, mixed S/R, duplicates and inverted timing. Genuine incomplete/duplicate/invalid quote validation is unchanged.",
+      "Pre-expansion related matrix: 296 passed. Final changed-source test_monthly_minute_coverage.py and test_monthly_postgres_source.py: 145 passed. Ruff, compileall, diff check and four-file L0 passed. No dependency, DDL, production fact DML or new acceptance threshold.",
+      "Isolated canonical RED and task-worktree GREEN replayed the exact operation predecessor catalog. Original 909 keys comprised 897 index-date keys and twelve A-share dates; the A-share date digest remained identical after type projection. No PIT-eligibility projection was applied.",
+      "Fresh process loaded persistent worktree source and attempt14 frozen suspension authority SHA256 f9c3fc22d44d0ed41375d02dd65448579546bec7900dabded03c82fe534d8c7c. A production read-only repeatable-read transaction checked only twelve exact dates: twelve unambiguous full-day S/null states, zero minute repair dates. Existing flat-price zero-volume placeholders were not repaired or copied. Receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-native-suspension-green.json. This is a fix-point check, not full SOURCE/candidate acceptance.",
+      "Review round 1: shared SH/SZ A-share fact identity, stock/index symbol collision, historical alias 302132, IPO/ST/exited identities and duplicate additional-catalog paths. No PIT membership narrowing. Review round 2: exact-key suspension join in the existing SOURCE snapshot; only shared FULL_DAY_SUSPENDED resolutions excluded, mixed/duplicate/invalid/intraday/resume remain with the strict minute reader. Review round 3: exact production catalogs, bounded database readback, frozen authority propagation and SOURCE adapter identity version21; no raw fact or consumer business changes.",
+      "DESIGN-COMPLIANCE-001 PASS: tested real fix point, not a partial release completion claim; no defaults, synthetic bars or fabricated READY; PIT, quote facts, windows, prices and shared suspension semantics unchanged; no new approval, historical payload QA or publication gate. Actual monthly operation remains FAILED pending user restart and native same-operation resume. No process control or profile write."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
