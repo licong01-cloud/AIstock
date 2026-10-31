@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2164",
-  "closed_at": null,
+  "closed_at": "2026-10-31T17:49:54.109861Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -130,10 +130,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2164-postrestart-canonical-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2164",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "65d9afcdcaa1252550ecc8866ef219f06d0ba1ac",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-31T17:49:21.501014Z",
+      "mode": "read_only",
+      "observed_identity": "65d9afcdcaa1252550ecc8866ef219f06d0ba1ac",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "087631b490ad5b9e59066b058c86ee3837edf03f554f0d9c92b50d834c46bffa",
+      "receipt_sha256": "ff0e71718e5052aedd58201fefdf9f8faeafb2364ad8d7cc77fcac527b55f58d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a34f9e60e33f87c9a5023c71254c3684061e351ce32aa75a664670d61fe50301",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -165,7 +187,7 @@
     ],
     "validation_evidence_digest": "38b7687f561ff1a24739cd9c0358a8a6be6dc423e2f5ed4b8924d6ba62ad8bf1"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -176,7 +198,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=42a907262ed68d21 commit=87d98c2d67164d5d4c733328597805c1e70f6277 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_stk_limit_overlay.py backend/tests/dataset_release/test_artifact_ready_build_source.py -q` result=`passed`",
-    "validation-receipt: id=5ddb0315a76981fd commit=87d98c2d67164d5d4c733328597805c1e70f6277 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_source.py` result=`passed`"
+    "validation-receipt: id=5ddb0315a76981fd commit=87d98c2d67164d5d4c733328597805c1e70f6277 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_source.py` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2164 --target worker-scheduler --expected-identity 65d9afcdcaa1252550ecc8866ef219f06d0ba1ac -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
