@@ -19,6 +19,139 @@ from backend.services.dataset_release.errors import DatasetReleaseError
 from backend.services.dataset_release.minute_overlay import canonical_session_times
 
 
+def _limit_fact_case(tmp_path, *, extra_source="stk_limit", extra_code="000001.SZ",
+                     extra_overlay=False, defect=None):
+    from copy import deepcopy
+    from backend.services.dataset_release.artifact_ready_source import (
+        ARTIFACT_READY_ADJ_COVERAGE_SCHEMA, ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
+    )
+
+    days = (date(2026, 10, 9), date(2026, 10, 12))
+    codes = ("000002.SZ", "000004.SZ")
+    partition = "2026-10-01_2026-10-30"
+    def row(dataset, code, day):
+        base = {"ts_code": code, "trade_date": day.isoformat()}
+        if dataset == "stk_limit":
+            return {**base, "pre_close": "10.00", "up_limit": "11.00", "down_limit": "9.00"}
+        if dataset == "kline_daily_raw":
+            return {**base, "close_li": 10_000}
+        return {**base, "adj_factor": "1"}
+
+    values = {name: [row(name, code, day) for code in codes for day in days]
+              for name in ("stk_limit", "kline_daily_raw", "adj_factor")}
+    extras = [row(extra_source, extra_code, day) for day in days]
+    overlays = {name: [] for name in ("kline_daily_raw", "adj_factor")}
+    if extra_overlay:
+        overlays[extra_source] = extras
+    else:
+        values[extra_source].extend(extras)
+        values[extra_source].sort(key=lambda r: (r["ts_code"], r["trade_date"]))
+    if defect in {"duplicate", "unordered"}:
+        target = values[extra_source]
+        if defect == "duplicate":
+            target.insert(1, dict(target[0]))
+        else:
+            target.reverse()
+    elif defect == "missing_factor":
+        values["adj_factor"] = [r for r in values["adj_factor"] if r["ts_code"] != codes[0]]
+    elif defect == "required_nan":
+        next(r for r in values["stk_limit"] if r["ts_code"] == codes[0])["pre_close"] = "NaN"
+    elif defect == "invalid_identity":
+        values[extra_source][0]["ts_code"] = "broken"
+    elif defect == "invalid_date":
+        values[extra_source][0]["trade_date"] = None
+    elif defect == "overlay_conflict":
+        values[extra_source].extend(extras)
+        values[extra_source].sort(key=lambda r: (r["ts_code"], r["trade_date"]))
+    elif defect in {"derive", "conflict"}:
+        target = next(r for r in values["stk_limit"]
+                      if r["ts_code"] == codes[0] and r["trade_date"] == days[1].isoformat())
+        target["pre_close"] = None
+        if defect == "conflict":
+            target["up_limit"] = "12.00"
+    original = deepcopy(values)
+    consumed = {name: [] for name in values}
+
+    class View:
+        def descriptors(self, dataset):
+            return [{"dataset": dataset, "partition_key": partition,
+                     "content_digest": "a" * 64, "schema_digest": "b" * 64}]
+
+        def iter_partition_rows(self, descriptor):
+            name = descriptor["dataset"]
+            for value in values[name]:
+                consumed[name].append(value)
+                yield value
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    entries = {}
+    for name, dataset, schema in (
+        ("kline_daily_raw", "daily_coverage", ARTIFACT_READY_DAILY_COVERAGE_SCHEMA),
+        ("adj_factor", "adj_factor_coverage", ARTIFACT_READY_ADJ_COVERAGE_SCHEMA),
+    ):
+        ref = cas.put_json({"schema_version": schema, "overlay_rows": overlays[name]})
+        entries[name] = [{"dataset": dataset, "partition_key": partition, "rows_ref": ref.as_dict()}]
+    pit = SimpleNamespace(cutoff=date(2026, 10, 30), scope_start=days[0], spans=[
+        SimpleNamespace(ts_code=c, eligible_start=days[0], eligible_end=days[-1]) for c in codes])
+    snapshot = SimpleNamespace(official_cutoff=pit.cutoff, pit_snapshot=pit, pit_snapshot_digest="c" * 64)
+    builder = ArtifactReadySourceBuilder(SimpleNamespace(pit_authority_status="ACTIVE_CANONICAL"), cas)
+    result = builder._limit_entries(View(), snapshot=snapshot, trading_dates=days,
+        daily_entries=entries["kline_daily_raw"], adj_entries=entries["adj_factor"], checkpoint=lambda: None)
+    assert values == original, "Rule projection must not mutate or trim the frozen facts"
+    assert consumed == values, "All raw input streams must be consumed and closed"
+    return builder, result
+
+
+@pytest.mark.parametrize("source", ["stk_limit", "kline_daily_raw", "adj_factor"])
+@pytest.mark.parametrize("code", ["000001.SZ", "000003.SZ", "000005.SZ"])
+def test_limit_rule_projects_full_fact_stream_without_changing_facts(tmp_path, source, code):
+    _, result = _limit_fact_case(tmp_path, extra_source=source, extra_code=code)
+    assert result[3]["expected_pit_keys"] == result[3]["database_rows"] == 4
+    assert result[3]["rule_derived_rows"] == result[3]["unresolved_keys"] == 0
+
+
+@pytest.mark.parametrize("source", ["kline_daily_raw", "adj_factor"])
+@pytest.mark.parametrize("code", ["000001.SZ", "000003.SZ", "000005.SZ"])
+def test_limit_rule_projects_fact_provider_overlays(tmp_path, source, code):
+    _, result = _limit_fact_case(tmp_path, extra_source=source, extra_code=code, extra_overlay=True)
+    assert result[3]["expected_pit_keys"] == result[3]["database_rows"] == 4
+
+
+@pytest.mark.parametrize("source", ["stk_limit", "kline_daily_raw", "adj_factor"])
+@pytest.mark.parametrize("defect", ["duplicate", "unordered"])
+def test_limit_rule_projection_keeps_stream_integrity_checks(tmp_path, source, defect):
+    with pytest.raises(DatasetReleaseError, match="ordered|unique"):
+        _limit_fact_case(tmp_path, extra_source=source, defect=defect)
+
+
+@pytest.mark.parametrize("defect", ["missing_factor", "required_nan", "conflict"])
+def test_limit_rule_projection_keeps_required_price_checks(tmp_path, defect):
+    with pytest.raises(DatasetReleaseError):
+        _limit_fact_case(tmp_path, defect=defect)
+
+
+@pytest.mark.parametrize("source", ["stk_limit", "kline_daily_raw", "adj_factor"])
+@pytest.mark.parametrize("defect", ["invalid_identity", "invalid_date"])
+def test_limit_rule_projection_does_not_hide_malformed_fact_keys(tmp_path, source, defect):
+    with pytest.raises(DatasetReleaseError):
+        _limit_fact_case(tmp_path, extra_source=source, defect=defect)
+
+
+@pytest.mark.parametrize("source", ["kline_daily_raw", "adj_factor"])
+def test_limit_rule_projection_does_not_hide_non_pit_provider_overrides(tmp_path, source):
+    with pytest.raises(DatasetReleaseError, match="override"):
+        _limit_fact_case(tmp_path, extra_source=source, extra_overlay=True, defect="overlay_conflict")
+
+
+def test_limit_rule_still_derives_only_missing_pit_values(tmp_path):
+    builder, result = _limit_fact_case(tmp_path, defect="derive")
+    assert result[3]["expected_pit_keys"] == 4
+    assert result[3]["database_completion_rows"] == result[3]["rule_derived_rows"] == 1
+    receipt = builder.cas.get_json(result[2][0])
+    assert receipt["overlay_rows"] == [{"ts_code": "000002.SZ", "trade_date": "2026-10-12",
+                                       "pre_close": "10.00", "up_limit": "11.00", "down_limit": "9.00"}]
+
+
 def _adj_factor_provider_case(tmp_path, *, extras=(), required=1.0, duplicate=False, missing=False, overlap=False, outside_pit=False, native_adapter=False, provider_override=None):
     day = date(2026, 10, 22)
     code = "301718.SZ"
