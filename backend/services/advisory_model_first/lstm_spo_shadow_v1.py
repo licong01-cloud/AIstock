@@ -266,6 +266,7 @@ class LstmSpoShadowService:
         return dict(status="FAILED", stage=stage, error_type=type(error).__name__, message=str(error), **context)
 
     def status(self, *, program_id, target_date=None):
+        from .lstm_top10_business_review_v1 import CONTRACT, review_day, summarize
         if program_id != PROGRAM:
             return dict(status="NOT_APPLICABLE", program_id=program_id)
         release = self._release()
@@ -288,7 +289,8 @@ class LstmSpoShadowService:
                        evaluation_versions=len(evaluations))
             days.append(day)
             if target_date is None or str(target_date) == day["target_date"]:
-                details = dict(**day, predictions=p["predictions"], source_receipt=p["source_receipt"])
+                details = dict(**day, predictions=p["predictions"], source_receipt=p["source_receipt"],
+                               business_review=review_day(p, latest))
         complete = [d["evaluation"] for d in days if d["evaluation"]["status"] == "COMPLETE"]
         failures = sorted((self.root / "failures").glob("*/*.json"), key=lambda p: p.stat().st_mtime)
         waits = sorted((self.root / "waiting").glob("*/*.json"), key=lambda p: p.stat().st_mtime)
@@ -298,6 +300,7 @@ class LstmSpoShadowService:
             if all(r.get("decision_date") in finished for r in last_waiting["results"] if r["status"] == "WAITING_DATA"):
                 last_waiting = None
         return dict(status="SHADOW_ONLY" if enabled() else "PAUSED", program_id=PROGRAM, release=release, days=days, selected=details,
+                    business_contract=CONTRACT, business_summary=summarize(days),
                     captured_days=len(days), complete_days=len(complete),
                     mean_delta_bps=sum(v["delta_bps"] for v in complete)/len(complete) if complete else None,
                     missed=[read_packet(p) for p in sorted((self.root / "days").glob("*/missed.json"))],

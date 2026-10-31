@@ -18,7 +18,17 @@ function episode(index: number, p = "lstm") {
   return { episode_id: `episode-${index}`, symbol: index < 2 ? "600001.SH" : `600${String(index).padStart(3, "0")}.SH`, stock_name: index < 2 ? "重复入选股票" : `历史股票 ${index + 1}`, status: "EXITED", signal_date: "2026-10-12", effective_entry_date: "2026-10-13", effective_exit_date: "2026-10-20", exit_signal_date: "2026-10-19", entry_price: 18.5, exit_price: 17.8, current_rank: null, entry_rank: 1, exit_reason: index % 2 ? "STOP_LOSS" : "TAKE_PROFIT", holding_trading_days: 5, performance_state: "SETTLED", performance_reason_code: null, return_bps: index % 2 ? -410 : 620, return_kind: "REALIZED", progress: "ENDED", mark_date: "2026-10-27", mark_price: 17.8, source: index === 40 ? "UNKNOWN" : "FORWARD", binding_version_id: `${p}-binding`, metric_as_of_trade_date: "2026-10-27" };
 }
 const stocks = Array.from({ length: 8 }, (_, i) => ({ symbol: `60010${i}.SH`, stock_name: `当日股票 ${String.fromCharCode(65 + i)}`, episode_id: [0, 2, 6].includes(i) ? null : `episode-${i}`, rank: i + 1, membership: "IN_SCOPE", change: [0, 2, 6].includes(i) ? "NEW" : "CONTINUING", progress: [0, 2, 6].includes(i) ? "PENDING_ENTRY" : "TRACKING", consecutive_days: [0, 2, 6].includes(i) ? 1 : i + 1, reference_price: 42.18, reference_date: "2026-10-27", episode: [0, 2, 6].includes(i) ? undefined : { ...episode(i), status: "ACTIVE", progress: "TRACKING", return_kind: "UNREALIZED" } }));
-type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean };
+type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean; business?: "complete" | "unknown" | "immature" };
+function businessShadow(mode: NonNullable<State["business"]>) {
+  const complete = mode === "complete", unknown = mode === "unknown";
+  const evaluation = { status: complete ? "COMPLETE" : unknown ? "UNKNOWN" : "IMMATURE_OR_PENDING", native_net_bps: complete || unknown ? 200 : null, specialist_net_bps: complete ? 400 : null, delta_bps: complete ? 200 : null, native_unknown_slots: unknown ? 0 : complete ? 0 : null, specialist_unknown_slots: unknown ? 1 : complete ? 0 : null, native_cash_slots: complete ? 0 : null, specialist_cash_slots: complete ? 0 : null };
+  const rows = Array.from({ length: 50 }, (_, i) => ({ instrument: `600${String(i + 1).padStart(3, "0")}.SH`, selection_effective_rank: i + 1, advisory_rank: i === 0 ? 11 : i === 10 ? 1 : i + 1, change: i === 0 ? "EXITED" : i === 10 ? "ENTERED" : i < 10 ? "RETAINED" : "OUTSIDE", net_bps: complete ? i === 0 ? 2000 : i === 10 ? 4000 : 0 : null, delta_contribution_bps: complete ? i === 0 ? -200 : i === 10 ? 400 : 0 : null }));
+  return { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: complete ? 1 : 0, mean_delta_bps: evaluation.delta_bps,
+    business_contract: { role: "TOP10_AUXILIARY_OBSERVATION", target_increment_bps: 100 },
+    business_summary: { native_mean_net_bps: complete ? 200 : null, specialist_mean_net_bps: complete ? 400 : null, mean_delta_bps: evaluation.delta_bps, captured_days: 1, complete_pairs: complete ? 1 : 0, unknown_days: unknown ? 1 : 0, unevaluated_days: !complete && !unknown ? 1 : 0, target_status: complete ? "POINT_ESTIMATE_AT_OR_ABOVE_TARGET" : "NOT_EVALUATED" },
+    selected: { target_date: target, observed_at: stamp, predictions: rows, business_review: { ...evaluation, rows, changes: { ENTERED: 1, EXITED: 1, RETAINED: 9, OUTSIDE: 39 }, components: { added_profit_bps: complete ? 400 : null, missed_profit_bps: complete ? 200 : null, avoided_loss_bps: complete ? 0 : null, added_loss_bps: complete ? 0 : null }, target_status: complete ? "POINT_ESTIMATE_AT_OR_ABOVE_TARGET" : "NOT_EVALUATED", target_increment_bps: 100 } },
+    days: [{ target_date: target, observed_at: stamp, evaluation }] };
+}
 async function json(route: Route, body: unknown, status = 200) { await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }); }
 async function setup(page: Page, state: State) {
   await page.route("**/api/**", async route => {
@@ -31,7 +41,7 @@ async function setup(page: Page, state: State) {
       return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null }])) });
     }
     if (resource.includes("/integrity/days/")) return json(route, { fact_date: target, all_sync_complete: false });
-    if (resource.endsWith("/reranking-shadow")) return json(route, { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, last_waiting: state.waiting ? { results: [{ status: "WAITING_DATA", decision_date: "2026-10-27", message: "输入分区未验证或已修订", context: { dataset: "index_daily", fact_date: "2026-10-27" } }] } : null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
+    if (resource.endsWith("/reranking-shadow")) return json(route, state.business ? businessShadow(state.business) : { ok: true, program_id: "lstm", status: "SHADOW_ONLY", captured_days: 1, complete_days: 0, mean_delta_bps: null, last_waiting: state.waiting ? { results: [{ status: "WAITING_DATA", decision_date: "2026-10-27", message: "输入分区未验证或已修订", context: { dataset: "index_daily", fact_date: "2026-10-27" } }] } : null, selected: { target_date: target, observed_at: stamp, predictions: [{ instrument: "600001.SH", selection_effective_rank: 12, advisory_rank: 3, selected: true }] } });
     if (!resource.startsWith(api)) return json(route, { count: 0, items: [] });
     if (resource === api + "/overview") {
       if (state.fail) return json(route, { detail: { message: "读取失败，请重试" } }, 503);
@@ -149,6 +159,55 @@ test("model waiting shows precise source reason without a task action", async ({
   expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
 });
 
+test("LSTM auxiliary business review shows both arms, user target and exact membership filters", async ({ page }) => {
+  const state: State = { seen: [], business: "complete" }; await setup(page, state);
+  await page.setViewportSize({ width: 1700, height: 1000 });
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
+  await expect(main(page).getByText(/100bps（1个百分点）/)).toBeVisible();
+  const selected = page.getByTestId("reranking-selected-review");
+  await expect(selected).toContainText("+2.00%");
+  await expect(selected).toContainText("+4.00%");
+  await expect(selected).toContainText("当前点估计达到参考目标");
+  await selected.getByText("查看增量来源与损益分解", { exact: true }).click();
+  await expect(selected.getByText("新增盈利贡献", { exact: true })).toBeVisible();
+  await selected.getByText("查看增量来源与损益分解", { exact: true }).click();
+  const rows = page.getByTestId("reranking-business-rows");
+  await expect(rows.locator("tbody tr")).toHaveCount(10);
+  await expect(rows).toContainText("换入辅助Top10");
+  await expect(rows).toContainText("两榜均入选");
+  await rows.locator("tbody tr").first().scrollIntoViewIfNeeded();
+  await expect(rows).toContainText("最近收盘");
+  if (process.env.ADVISORY_BUSINESS_SCREENSHOT) {
+    await page.evaluate(() => { const note = document.createElement("p"); note.textContent = "合成合同测试数据 · 非真实收益成果"; document.querySelector("main")?.prepend(note); });
+    await page.screenshot({ path: process.env.ADVISORY_BUSINESS_SCREENSHOT, fullPage: true });
+  }
+  await main(page).getByRole("button", { name: "原生Top10", exact: true }).click();
+  await expect(rows.locator("tbody tr")).toHaveCount(10);
+  await expect(rows).toContainText("移出辅助Top10");
+  await main(page).getByRole("button", { name: "全部原始候选", exact: true }).click();
+  await expect(rows.locator("tbody tr")).toHaveCount(50);
+  await expect(rows).toContainText("两榜范围外");
+  await expect(page.getByTestId("reranking-history")).toContainText("+4.00%");
+  expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
+});
+
+for (const mode of ["immature", "unknown"] as const) {
+  test(`LSTM auxiliary ${mode} keeps unavailable valuations blank and current quotes separate`, async ({ page }) => {
+    const state: State = { seen: [], business: mode }; await setup(page, state);
+    await page.goto("/paper-v2/advisory?program_id=lstm");
+    await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
+    const selected = page.getByTestId("reranking-selected-review");
+    await expect(selected).toContainText("尚无完整配对评价");
+    await expect(selected).not.toContainText("+0.00%");
+    const rows = page.getByTestId("reranking-business-rows");
+    await rows.locator("tbody tr").first().scrollIntoViewIfNeeded();
+    await expect(rows).toContainText("最近收盘");
+    await expect(page.getByTestId("reranking-business-summary")).toContainText(mode === "unknown" ? "未知评价批次" : "未评价批次");
+    expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
+  });
+}
+
 test("overview exposes the five tasks, true old date and null samples; sidebar links to overview", async ({ page }) => {
   const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
   await expect(main(page).getByRole("heading", { name: "荐股总览" })).toBeVisible();
@@ -218,6 +277,8 @@ test("refresh error retains labelled old cards and model observation is loaded o
   expect(state.seen.some(x => x.includes("reranking-shadow"))).toBe(false);
   await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
   await expect(main(page).getByRole("heading", { name: "重排序模型观察" })).toBeVisible();
+  await expect(main(page).getByText("业务收益视图尚未加载，保留原观察结果。", { exact: true })).toBeVisible();
+  await expect(main(page).getByText("已捕获交易日", { exact: true })).toBeVisible();
   await expect(main(page).getByRole("cell", { name: "12", exact: true })).toBeVisible();
   await expect(main(page).getByRole("cell", { name: "3", exact: true })).toBeVisible();
 });

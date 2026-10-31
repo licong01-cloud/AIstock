@@ -155,6 +155,7 @@ rules:
       - scripts/advisory_forward_recover.py
       - scripts/advisory_lstm_rank_value_review.py
       - scripts/advisory_lstm_prospective_confirmation.py
+      - scripts/advisory_lstm_top10_business_review.py
       - scripts/advisory_model_prepare_request.py
       - scripts/advisory_model_train_wsl.py
       - scripts/advisory_model_quality_prepare_request.py
