@@ -206,7 +206,8 @@
     "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
     "rtk ruff check changed Python files -> passed",
     "python -m nox -s l0 -- four explicit changed paths -> passed",
-    "fresh process original native archive and current consumed features -> passed; real 4918/40/50 and20TD; 0fit/outcomes/DB writes"
+    "fresh process original native archive and current consumed features -> passed; real 4918/40/50 and20TD; 0fit/outcomes/DB writes",
+    "clean merged producer native shadow capture and immutable retry; independent NumPy and four original lists/episodes readback -> passed; API captured_days=1 complete_days=0; runtime main still pending user restart"
   ],
   "validation_evidence": [
     "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
@@ -319,5 +320,38 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "post_merge_business_acceptance": {
+    "status": "PASS",
+    "observed_at": "2026-10-31T06:19:55.329964+00:00",
+    "producer_commit": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+    "source_git_blob_sha256": "f453d4b349481abce8ba410544615b31eea9e38ae5ea4fa7ba8b8f4e3f07d439",
+    "prediction_sha256": "224d0203a0bb5c09db908f65b3e5fcc00845fbaff050f0865bf4bdce32ad8e14",
+    "prediction_observed_at": "2026-10-31T06:19:54.870079+00:00",
+    "decision_date": "2026-10-30",
+    "target_date": "2026-11-02",
+    "original_candidates": 50,
+    "original_score_count": 4918,
+    "native_consumed_count": 40,
+    "replacements": 9,
+    "independent_numpy_pass": true,
+    "original_lists_unchanged": true,
+    "original_episodes_unchanged": true,
+    "retry_prediction_unchanged": true,
+    "api_captured_days": 1,
+    "api_complete_days": 0,
+    "physical_fit_count": 0,
+    "database_writes": 0,
+    "native_publications": 0,
+    "outcomes_read": false,
+    "backend_process_control": false,
+    "runtime_gate": "pending_user_restart",
+    "receipt_path": "F:\\Dev\\AIstock_worktrees\\BUG-2159-lstm-300-20261031\\tmp\\issue_workflow\\BUG-2159\\capture-acceptance-20261031.json",
+    "receipt_sha256": "b3200ee9b2c826228abe1e2b43e168857f01df11e97d10d98a0683c972b23eba",
+    "global_index_negative_days": [
+      "2026-10-19",
+      "2026-10-28"
+    ],
+    "whole_index_partition_certified": false
   }
 }
