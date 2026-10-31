@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2163",
-  "closed_at": null,
+  "closed_at": "2026-10-31T16:22:27.299590Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,14 +30,22 @@
   "evidence_uris": [],
   "expected": "Coherent as-of source input can seal despite later operational bookkeeping. Required source data errors and lost/mixed snapshots still fail. Pure VALIDATE_ONLY attempts never impersonate fact writes. Explicit audit semantics, no fake PASS.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2163-monthly-source-invalidates-coherent-mvcc-inputs-on-unrelated-validation.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_source_producer.py",
-      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/services/dataset_release/monthly_worker.py",
       "backend/tests/dataset_release/test_monthly_source_producer.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2163-monthly-source-invalidates-coherent-mvcc-inputs-on-unrelated-validation.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_source_producer.py",
@@ -124,8 +132,8 @@
   },
   "first_seen_at": "2026-10-31T15:39:03.471338Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8808488076ba9834fd21987fbe1af2be0528c883",
+  "fixed_at": "2026-10-31T15:56:38Z",
   "github_issue_number": 6975,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6975",
   "last_seen_at": "2026-10-31T15:39:03.471338Z",
@@ -133,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6976",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -154,8 +163,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2163-postrestart-canonical.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2163",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "8808488076ba9834fd21987fbe1af2be0528c883",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-31T16:21:50.580001Z",
+      "mode": "read_only",
+      "observed_identity": "8808488076ba9834fd21987fbe1af2be0528c883",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "52016f9d8b02cc48ed15dbcea55ad2d64206e7d7fb25d51229b0bd6fec502490",
+      "receipt_sha256": "349b22e7ff675e24a9a161c02f7b55294f37db108b1f14914d36566d998582fc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "265f9a426058db10f86a568a6bd649213d8a579e1fec767f45879ebc60f3c056",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -165,7 +198,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2163",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "952363a49a6e4920",
+    "recorded_at": "2026-10-31T15:57:27.368460Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4f6a6368bf4dc872cc0c2ef361a6530d2f1a3350",
+    "source_merge_commit": "8808488076ba9834fd21987fbe1af2be0528c883",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6976",
+    "validation_evidence": [
+      "validation-receipt: id=5bb4da2cca883b69 commit=4f6a6368bf4dc872cc0c2ef361a6530d2f1a3350 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_monthly_worker.py backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`320 passed, 71 skipped`",
+      "validation-receipt: id=15bafd98083e99f7 commit=4f6a6368bf4dc872cc0c2ef361a6530d2f1a3350 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_source_producer.py backend/services/dataset_release/monthly_worker.py backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_worker.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "1c66b8712809ab14a425ee92a204cd99a7d96c811c7a96884ad855b30aeced64"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -174,6 +229,11 @@
     "fingerprint": "0cf62de4f23ffdf4cc5e75da",
     "source_event_id": "FE-20261031-0cf62de4f23f"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5bb4da2cca883b69 commit=4f6a6368bf4dc872cc0c2ef361a6530d2f1a3350 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_monthly_worker.py backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`320 passed, 71 skipped`",
+    "validation-receipt: id=15bafd98083e99f7 commit=4f6a6368bf4dc872cc0c2ef361a6530d2f1a3350 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_source_producer.py backend/services/dataset_release/monthly_worker.py backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_worker.py` result=`passed`",
+    "Canonical runtime post-restart BUG-2163 worker-scheduler passed; runtime identity matches merge 8808488076ba9834fd21987fbe1af2be0528c883; fresh monthly worker preflight PASS SOURCE adapter v20"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
