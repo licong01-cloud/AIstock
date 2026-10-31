@@ -1,5 +1,5 @@
 """Readonly native score and raw-market adapters for the exact LSTM observation."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timezone
 
 import numpy as np
@@ -12,7 +12,7 @@ from .lstm_spo_shadow_v1 import BINDING, PROGRAM, RELEASE, TARGET, TZ, clock, fr
 from .multiperiod_top10_5td_inputs_v1 import IDENTITY, INPUT_FEATURES, STOCK_FEATURES, make_finance
 from .spo_top10_5td_v1 import sha
 from backend.services.data_integrity.inputs import (
-    InputReadinessError, check_binding, partition_pins, verify_capture, verify_current, verify_partition_refs,
+    InputReadinessError, check_binding, partition_pins, verify_capture, verify_partition_refs,
 )
 
 
@@ -130,7 +130,8 @@ class LstmSpoShadowSource:
                 target_date=context["target_trade_date"], created_at=created.isoformat()))
         return result
 
-    def inputs(self, publication):
+    def _original_inputs(self, publication, connection=None):
+        """Revalidate the immutable original source, not its unconsumed live history."""
         from backend.services.advisory_program import AdvisoryProgramPGRepository
         from backend.services.selection_center.repository import SelectionCenterRepository
         from backend.services.strategy_package.selection_artifact import (
@@ -138,7 +139,7 @@ class LstmSpoShadowSource:
         )
         started = self.now()
         published = datetime.fromisoformat(publication["created_at"])
-        with self.connection() as connection:
+        with (self.connection() if connection is None else nullcontext(connection)) as connection:
             @contextmanager
             def pinned():
                 yield connection
@@ -176,10 +177,31 @@ class LstmSpoShadowSource:
             verify_capture(baseline_binding, captured)
             if captured.get("readiness_binding_sha256") != baseline_binding["binding_sha256"]:
                 raise InputReadinessError("原始分数资产输入绑定不符")
-            verify_current(connection, bindings)
+            verify_native_liveness(connection, repo, bindings)
             roster = top50(run, artifact, publication)
+        return run, version, artifact, digest, bindings, roster
+
+    @staticmethod
+    def _native_reference(publication, original):
+        run, _version, artifact, digest, bindings, roster = original
+        return dict(contract="FROZEN_NATIVE_SCORE_AND_CURRENT_FEATURES_V1", publication=publication,
+            score_artifact_id=artifact.artifact_id, score_artifact_sha256=artifact.artifact_sha256,
+            score_artifact_payload_sha256=artifact.artifact_payload_sha256, artifact_runtime_config_sha256=digest,
+            original_score_count=artifact.score_count, native_consumed_count=len(run.package_results[TARGET["package_id"]]),
+            original_top50_sha256=sha(_records(roster)), baseline_bindings_sha256=sha(bindings))
+
+    def _verify_original(self, connection, publication, expected):
+        current = self._native_reference(publication, self._original_inputs(publication, connection))
+        if sha(current) != sha(expected):
+            raise InputReadinessError("原生名单、分数资产或冻结绑定在计算期间变化")
+
+    def inputs(self, publication):
+        started = self.now()
+        original = self._original_inputs(publication)
+        run, version, artifact, digest, bindings, roster = original
+        native_reference = self._native_reference(publication, original)
         def check_extra(connection, dates):
-            verify_current(connection, bindings)
+            self._verify_original(connection, publication, native_reference)
             return extra_input_capture(connection, dates)
         features, price_receipt = GenericDailyReadonlyDBInputV1(session_factory=self.session_factory, now=self.now,
             integrity_check=check_extra).load_day(
@@ -195,12 +217,15 @@ class LstmSpoShadowSource:
             missing_by_field={name: int(inputs[name].isna().sum()) for name in INPUT_FEATURES},
             original_top50_sha256=sha(_records(roster)), native_list_changed=False, outcomes_read=False,
             historical_vintage_proven=False, eod_ingestion_completeness_attested=True,
-            baseline_input_bindings=bindings)
+            baseline_input_bindings=bindings, native_source_reference=native_reference)
         return inputs, receipt
 
     def verify_capture(self, receipt):
         with self.connection() as connection:
-            verify_current(connection, receipt["baseline_input_bindings"])
+            native = receipt["native_source_reference"]
+            if sha(receipt["baseline_input_bindings"]) != native["baseline_bindings_sha256"]:
+                raise InputReadinessError("原生冻结绑定与来源证明不符")
+            self._verify_original(connection, native["publication"], native)
             extra = receipt["price"]["input_readiness"]
             current = extra_input_capture(connection, extra["session_dates"])
             if sha(extra) != sha(current):
@@ -261,6 +286,34 @@ class LstmSpoShadowSource:
 EXTRA_DATASETS = ["kline_daily_raw", "adj_factor", "index_daily"]
 BENCHMARK = "000300.SH"
 BENCHMARK_SCOPE = "advisory_lstm_benchmark_close_20td_v1"
+
+
+def verify_native_liveness(connection, repo, bindings):
+    """Keep active package, exact binding and PIT guards without rereading old facts."""
+    import json
+    from dataclasses import asdict
+    from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver, CanonicalPitContractError
+
+    program, binding = repo.get_program(PROGRAM), repo.get_active_binding_version(PROGRAM)
+    if (program.status != "ENABLED" or program.package_ids != [TARGET["package_id"]]
+            or binding is None or binding.binding_version_id != BINDING or set(bindings) != {TARGET["package_id"]}):
+        raise InputReadinessError("原生任务或策略包绑定已变化")
+    @contextmanager
+    def pinned():
+        yield connection
+    try:
+        pit = json.loads(json.dumps(asdict(CanonicalPitAuthorityResolver(pinned).resolve_live_binding()), default=str))
+    except CanonicalPitContractError as exc:
+        raise InputReadinessError("当前PIT身份不可用") from exc
+    for package_id, original in bindings.items():
+        check_binding(original)
+        if package_id != original["binding_id"] or original["global_pit"] != pit:
+            raise InputReadinessError("原生策略包或PIT身份已变化")
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT manifest_sha256,package_status FROM strategy_pkg.package WHERE package_id=%s", (package_id,))
+            row = cursor.fetchone()
+        if not row or row[0] != original["manifest_sha256"] or row[1] in {"DRAFT", "RETIRED"}:
+            raise InputReadinessError("原生策略包冻结版本或准入状态已变化")
 
 
 def extra_input_capture(connection, dates):
