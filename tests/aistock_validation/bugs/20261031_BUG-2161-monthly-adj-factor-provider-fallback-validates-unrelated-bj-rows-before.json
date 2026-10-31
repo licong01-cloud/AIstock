@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2161",
-  "closed_at": null,
+  "closed_at": "2026-10-31T15:10:55.119044Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -96,10 +96,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2161-postrestart-canonical.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2161",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e9ba4a1f4f51264125466b948c0af4d5d932c8c0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-31T15:09:46.269941Z",
+      "mode": "read_only",
+      "observed_identity": "75802cbed159ce643ca17311c849096089b3576d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "eee93f2fdab24601edc3284cb43a21fe133ac7569ae3b0a30bca93af8d0cc74c",
+      "receipt_sha256": "e77b3d52a349dbb11ede3ba8b75d94858df3e289b4f1e87a18d379e583771026",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ae1de063bb0af411b745eb084bac0a5e78704f4d92e6f645e61c62353a1bd63d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -131,7 +153,7 @@
     ],
     "validation_evidence_digest": "1e9a019fbba5b0007e30c9547d479f7518b9b7d5f3d8b98fadc8f6c7f67ba722"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -142,7 +164,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=6ff8048a76da0562 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_source_authority.py -q` result=`152 passed, 1 skipped; relocated 18 cases unchanged and passed`",
-    "validation-receipt: id=97b8b9395f340951 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_monthly_construction_facts.py` result=`passed`"
+    "validation-receipt: id=97b8b9395f340951 commit=be13e9be20dd389ba699548aeab70d0c07923050 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_monthly_construction_facts.py` result=`passed`",
+    "post-restart-verify BUG-2161 worker-scheduler -> passed; backend identity and supervised child verified on 2026-10-31"
   ],
   "verification_budget": {
     "budget": "standard",
