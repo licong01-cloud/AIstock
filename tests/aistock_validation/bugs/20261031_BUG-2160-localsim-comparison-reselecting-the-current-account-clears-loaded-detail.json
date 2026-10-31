@@ -41,12 +41,18 @@
   ],
   "expected": "重复选择当前账户保留已加载行、日期条件和分页，且不重复请求；切换不同账户仍取消旧请求并正确读取新账户。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/app/simulation/localsim/components/dual-mode-comparison.tsx",
+      "frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts",
+      "tests/aistock_validation/bugs/20261031_BUG-2160-localsim-comparison-reselecting-the-current-account-clears-loaded-detail.json"
+    ],
     "added_files": [],
     "changed_files": [
       "frontend/src/app/simulation/localsim/components/dual-mode-comparison.tsx",
-      "frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts"
+      "frontend/tests/paper-v2/localsim-dual-mode-comparison.spec.ts",
+      "tests/aistock_validation/bugs/20261031_BUG-2160-localsim-comparison-reselecting-the-current-account-clears-loaded-detail.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/simulation/localsim/components/dual-mode-comparison.tsx",
@@ -149,13 +155,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "Fresh Chromium loaded TypeScript-transpiled persistent worktree component under real React18, existing directed Playwright spec: before fail at selected-account repeat, after-r2 1 passed. Actual production browser previously verified 13 account selections and all5 views and reproduced the same fix-point. No services started; actual post-merge served UI verification remains separate. component-after-r2-source-pins.json and component-after-r2.xml."
-    ],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
