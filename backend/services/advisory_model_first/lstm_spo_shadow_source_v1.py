@@ -1,5 +1,5 @@
 """Readonly native score and raw-market adapters for the exact LSTM observation."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timezone
 
 import numpy as np
@@ -12,7 +12,7 @@ from .lstm_spo_shadow_v1 import BINDING, PROGRAM, RELEASE, TARGET, TZ, clock, fr
 from .multiperiod_top10_5td_inputs_v1 import IDENTITY, INPUT_FEATURES, STOCK_FEATURES, make_finance
 from .spo_top10_5td_v1 import sha
 from backend.services.data_integrity.inputs import (
-    InputReadinessError, check_binding, partition_pins, verify_capture, verify_current, verify_partition_refs,
+    InputReadinessError, check_binding, partition_pins, verify_capture, verify_partition_refs,
 )
 
 
@@ -130,7 +130,8 @@ class LstmSpoShadowSource:
                 target_date=context["target_trade_date"], created_at=created.isoformat()))
         return result
 
-    def inputs(self, publication):
+    def _original_inputs(self, publication, connection=None):
+        """Revalidate the immutable original source, not its unconsumed live history."""
         from backend.services.advisory_program import AdvisoryProgramPGRepository
         from backend.services.selection_center.repository import SelectionCenterRepository
         from backend.services.strategy_package.selection_artifact import (
@@ -138,7 +139,7 @@ class LstmSpoShadowSource:
         )
         started = self.now()
         published = datetime.fromisoformat(publication["created_at"])
-        with self.connection() as connection:
+        with (self.connection() if connection is None else nullcontext(connection)) as connection:
             @contextmanager
             def pinned():
                 yield connection
@@ -176,10 +177,31 @@ class LstmSpoShadowSource:
             verify_capture(baseline_binding, captured)
             if captured.get("readiness_binding_sha256") != baseline_binding["binding_sha256"]:
                 raise InputReadinessError("原始分数资产输入绑定不符")
-            verify_current(connection, bindings)
+            verify_native_liveness(connection, repo, bindings)
             roster = top50(run, artifact, publication)
+        return run, version, artifact, digest, bindings, roster
+
+    @staticmethod
+    def _native_reference(publication, original):
+        run, _version, artifact, digest, bindings, roster = original
+        return dict(contract="FROZEN_NATIVE_SCORE_AND_CURRENT_FEATURES_V1", publication=publication,
+            score_artifact_id=artifact.artifact_id, score_artifact_sha256=artifact.artifact_sha256,
+            score_artifact_payload_sha256=artifact.artifact_payload_sha256, artifact_runtime_config_sha256=digest,
+            original_score_count=artifact.score_count, native_consumed_count=len(run.package_results[TARGET["package_id"]]),
+            original_top50_sha256=sha(_records(roster)), baseline_bindings_sha256=sha(bindings))
+
+    def _verify_original(self, connection, publication, expected):
+        current = self._native_reference(publication, self._original_inputs(publication, connection))
+        if sha(current) != sha(expected):
+            raise InputReadinessError("原生名单、分数资产或冻结绑定在计算期间变化")
+
+    def inputs(self, publication):
+        started = self.now()
+        original = self._original_inputs(publication)
+        run, version, artifact, digest, bindings, roster = original
+        native_reference = self._native_reference(publication, original)
         def check_extra(connection, dates):
-            verify_current(connection, bindings)
+            self._verify_original(connection, publication, native_reference)
             return extra_input_capture(connection, dates)
         features, price_receipt = GenericDailyReadonlyDBInputV1(session_factory=self.session_factory, now=self.now,
             integrity_check=check_extra).load_day(
@@ -195,15 +217,19 @@ class LstmSpoShadowSource:
             missing_by_field={name: int(inputs[name].isna().sum()) for name in INPUT_FEATURES},
             original_top50_sha256=sha(_records(roster)), native_list_changed=False, outcomes_read=False,
             historical_vintage_proven=False, eod_ingestion_completeness_attested=True,
-            baseline_input_bindings=bindings)
+            baseline_input_bindings=bindings, native_source_reference=native_reference)
         return inputs, receipt
 
     def verify_capture(self, receipt):
         with self.connection() as connection:
-            verify_current(connection, receipt["baseline_input_bindings"])
+            native = receipt["native_source_reference"]
+            if sha(receipt["baseline_input_bindings"]) != native["baseline_bindings_sha256"]:
+                raise InputReadinessError("原生冻结绑定与来源证明不符")
+            self._verify_original(connection, native["publication"], native)
             extra = receipt["price"]["input_readiness"]
-            verify_partition_refs(extra["partition_refs"], partition_pins(connection,
-                date.fromisoformat(extra["start"]), date.fromisoformat(extra["end"]), EXTRA_DATASETS))
+            current = extra_input_capture(connection, extra["session_dates"])
+            if sha(extra) != sha(current):
+                raise InputReadinessError("重排序实际输入或分区版本在计算后变化")
 
     def finance(self, prediction):
         """Calendar-only maturity check precedes all D..H price/limit/suspension reads."""
@@ -258,21 +284,83 @@ class LstmSpoShadowSource:
 
 
 EXTRA_DATASETS = ["kline_daily_raw", "adj_factor", "index_daily"]
+BENCHMARK = "000300.SH"
+BENCHMARK_SCOPE = "advisory_lstm_benchmark_close_20td_v1"
+
+
+def verify_native_liveness(connection, repo, bindings):
+    """Keep active package, exact binding and PIT guards without rereading old facts."""
+    import json
+    from dataclasses import asdict
+    from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver, CanonicalPitContractError
+
+    program, binding = repo.get_program(PROGRAM), repo.get_active_binding_version(PROGRAM)
+    if (program.status != "ENABLED" or program.package_ids != [TARGET["package_id"]]
+            or binding is None or binding.binding_version_id != BINDING or set(bindings) != {TARGET["package_id"]}):
+        raise InputReadinessError("原生任务或策略包绑定已变化")
+    @contextmanager
+    def pinned():
+        yield connection
+    try:
+        pit = json.loads(json.dumps(asdict(CanonicalPitAuthorityResolver(pinned).resolve_live_binding()), default=str))
+    except CanonicalPitContractError as exc:
+        raise InputReadinessError("当前PIT身份不可用") from exc
+    for package_id, original in bindings.items():
+        check_binding(original)
+        if package_id != original["binding_id"] or original["global_pit"] != pit:
+            raise InputReadinessError("原生策略包或PIT身份已变化")
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT manifest_sha256,package_status FROM strategy_pkg.package WHERE package_id=%s", (package_id,))
+            row = cursor.fetchone()
+        if not row or row[0] != original["manifest_sha256"] or row[1] in {"DRAFT", "RETIRED"}:
+            raise InputReadinessError("原生策略包冻结版本或准入状态已变化")
 
 
 def extra_input_capture(connection, dates):
-    """The unchanged nine features need twenty sessions, including the benchmark."""
+    """Certify the consumed benchmark close slice, without certifying other indices."""
     from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.contracts import finite_number
+
     dates = [str(d) for d in dates]
     if len(dates) != 20 or dates != sorted(set(dates)):
         raise InputReadinessError("重排序输入需精确二十个交易日")
+    with connection.cursor() as cursor:
+        cursor.execute("""SELECT cal_date FROM market.trading_calendar WHERE is_trading=TRUE
+            AND cal_date<=%s ORDER BY cal_date DESC LIMIT 20""", (dates[-1],))
+        if sorted(str(row[0]) for row in cursor.fetchall()) != dates:
+            raise InputReadinessError("重排序窗口不符D对应的二十个交易日")
     rows = partition_pins(connection, date.fromisoformat(dates[0]), date.fromisoformat(dates[-1]), EXTRA_DATASETS)
     by_key = {(r["dataset"], r["trade_date"]): r for r in (rows or [])}
+    if len(by_key) != len(rows or []):
+        raise InputReadinessError("重排序输入分区证明重复")
     refs = [{"dataset": dataset, "fact_date": day,
         "data_revision": by_key.get((dataset, day), {}).get("data_revision"),
         "validation_id": by_key.get((dataset, day), {}).get("validation_id"),
         "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION}
-        for day in dates for dataset in EXTRA_DATASETS]
-    verify_partition_refs(refs, rows)
-    return dict(start=dates[0], end=dates[-1], partition_refs=refs,
+        for day in dates for dataset in EXTRA_DATASETS if dataset != "index_daily"]
+    verify_partition_refs(refs, [r for r in (rows or []) if r["dataset"] != "index_daily"])
+    index_refs = []
+    for day in dates:
+        row = by_key.get(("index_daily", day), {})
+        revision = row.get("data_revision")
+        if (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0
+                or row.get("scope_version") != SCOPE_VERSION or row.get("rule_version") != RULE_VERSION):
+            raise InputReadinessError("沪深300输入缺少当前分区版本", context={"dataset": "index_daily", "fact_date": day})
+        index_refs.append(dict(dataset="index_daily", fact_date=day, data_revision=revision,
+            validation_id=row.get("validation_id"), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+            global_validation_status=row.get("validation_status"), validated_revision=row.get("validated_revision")))
+    with connection.cursor() as cursor:
+        cursor.execute("""SELECT trade_date,ts_code,close FROM market.index_daily
+            WHERE ts_code=%s AND trade_date=ANY(%s::date[]) ORDER BY trade_date LIMIT 21""", (BENCHMARK, dates))
+        quotes = cursor.fetchall()
+    if (len(quotes) != 20 or [str(r[0]) for r in quotes] != dates
+            or any(r[1] != BENCHMARK or not finite_number(r[2], positive=True) for r in quotes)):
+        raise InputReadinessError("沪深300二十日收盘价缺行、重复或无效", context={"dataset": "index_daily", "instrument": BENCHMARK})
+    benchmark = dict(schema_version=BENCHMARK_SCOPE, instrument=BENCHMARK, fields=["close"],
+        decision_date=dates[-1], session_dates=dates, partition_refs=index_refs,
+        values_sha256=sha([[str(day), code, float(close)] for day, code, close in quotes]),
+        expected=20, valid=20, missing=0, invalid=0, duplicate=0,
+        whole_index_partition_certified=False)
+    return dict(start=dates[0], end=dates[-1], session_dates=dates, partition_refs=refs,
+        benchmark=benchmark,
         snapshot_kind="REPEATABLE_READ_READ_ONLY", historical_first_availability_claimed=False)
