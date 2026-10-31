@@ -252,8 +252,8 @@
   },
   "first_seen_at": "2026-10-26T07:41:59.710383Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "722582127e68938c1e54bb17c61c4bb985702f98",
+  "fixed_at": "2026-10-26T10:59:06Z",
   "github_issue_number": 6724,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6724",
   "implementation_notes": [
@@ -266,6 +266,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6725",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -290,6 +291,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -302,7 +304,29 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_update_reason": "???QE???????????????????????????/HTTP???????????????",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2095",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e27ab785170ca5d9",
+    "recorded_at": "2026-10-26T10:59:56.285450Z",
+    "runtime_contract_digest": "871cf48733f170d661c0e4a1ff63882c135296af190f42b77ede1b462a7f1f4d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eebbacc0c109228551b4e1263a7cb51d4298afaf",
+    "source_merge_commit": "722582127e68938c1e54bb17c61c4bb985702f98",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6725",
+    "validation_evidence": [
+      "validation-receipt: id=853f7e12422240de commit=eebbacc0c109228551b4e1263a7cb51d4298afaf kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=5ab543298a50fd0d commit=eebbacc0c109228551b4e1263a7cb51d4298afaf kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q --disable-warnings --maxfail=1` result=`22 passed`"
+    ],
+    "validation_evidence_digest": "6ffdf3715a24c92cab6541d2b6759f0b76264af39f23de044ae91cf40342f640"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -311,6 +335,10 @@
     "fingerprint": "3a9ab16e1588350ce1c486e7",
     "source_event_id": "FE-20261026-3a9ab16e1588"
   },
+  "validation_evidence": [
+    "validation-receipt: id=853f7e12422240de commit=eebbacc0c109228551b4e1263a7cb51d4298afaf kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=5ab543298a50fd0d commit=eebbacc0c109228551b4e1263a7cb51d4298afaf kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q --disable-warnings --maxfail=1` result=`22 passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
