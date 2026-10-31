@@ -8,6 +8,17 @@ from backend.services.dataset_release.source_authority import MonthlySourceAutho
 from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
 
 
+def test_daily_source_excludes_only_proven_prelisting_flat_reference_rows():
+    query = PRODUCTION_QUERY_SPECS["kline_daily_raw"]
+    assert "prelisting_reference_v1" in query.query_version
+    sql = query.sql
+    assert "stock.list_date > source_row.trade_date" in sql
+    assert "source_row.volume_hand=0 AND source_row.amount_li=0" in sql
+    assert "prior_quote.volume_hand>0 OR prior_quote.amount_li>0" in sql
+    assert "prior_factor.trade_date <= source_row.trade_date" in sql
+    assert "eligible_start" not in sql and "365 days" not in sql
+
+
 @pytest.mark.parametrize('layout', ['direct', 'unified'])
 def test_catalog_delta_captures_only_absent_equity_history_in_same_snapshot(tmp_path, layout):
     from unittest.mock import MagicMock
