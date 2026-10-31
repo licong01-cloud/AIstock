@@ -9,6 +9,7 @@ import pytest
 from backend.services.dataset_release.artifact_ready_source import (
     ArtifactReadyProviderTerminal,
     ArtifactReadySourceBuilder,
+    _FrozenProviderReplay,
     _bounded_tushare_records,
     _normalize_tushare_daily_row,
 )
@@ -18,7 +19,7 @@ from backend.services.dataset_release.errors import DatasetReleaseError
 from backend.services.dataset_release.minute_overlay import canonical_session_times
 
 
-def _adj_factor_provider_case(tmp_path, *, extras=(), required=1.0, duplicate=False, missing=False, overlap=False, outside_pit=False):
+def _adj_factor_provider_case(tmp_path, *, extras=(), required=1.0, duplicate=False, missing=False, overlap=False, outside_pit=False, native_adapter=False, provider_override=None):
     day = date(2026, 10, 22)
     code = "301718.SZ"
     codes = [code, "000001.SZ"] if overlap or outside_pit else [code]
@@ -50,7 +51,15 @@ def _adj_factor_provider_case(tmp_path, *, extras=(), required=1.0, duplicate=Fa
         return rows
 
     builder = ArtifactReadySourceBuilder(SimpleNamespace(start_date=date(2018, 8, 1)), cas,
-        fetch_tushare_adj_factor_rows=provider, month_start=date(2026, 10, 1) if outside_pit else None)
+        fetch_tushare_adj_factor_rows=None if native_adapter else provider_override or provider,
+        month_start=date(2026, 10, 1) if outside_pit else None)
+    if native_adapter:
+        def dated_response(**kwargs):
+            assert kwargs == {"trade_date": "20261022", "fields": "ts_code,trade_date,adj_factor"}
+            calls.append(day)
+            return pd.DataFrame(rows, columns=["ts_code", "trade_date", "adj_factor"])
+
+        builder._tushare = SimpleNamespace(provider=lambda: SimpleNamespace(adj_factor=dated_response))
     pit_codes = ["000001.SZ"] if outside_pit else codes
     snapshot = SimpleNamespace(official_cutoff=date(2026, 10, 30), pit_snapshot_digest="c" * 64,
                                pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code=c) for c in pit_codes]))
@@ -92,6 +101,82 @@ def test_required_factual_ipo_outside_buy_pit_keeps_its_factor(tmp_path):
     _, _, _, summary, ref = result
     assert summary["provider_fill_rows"] == 1
     assert {item["ts_code"] for item in builder.cas.get_json(ref)["values"]} == {"000001.SZ", "301718.SZ"}
+
+
+@pytest.mark.parametrize("code", ["920072.BJ", "200001.SZ", "900901.SH", "510300.SH", "000002.SZ"])
+@pytest.mark.parametrize("defect", ["null_date", "nan_factor", "infinite_factor", "null_both"])
+def test_native_factor_adapter_projects_unrelated_rows_before_value_checks(tmp_path, code, defect):
+    extra = {"ts_code": code, "trade_date": date(2026, 10, 22), "adj_factor": 1.0}
+    if defect in {"null_date", "null_both"}:
+        extra["trade_date"] = None
+    if defect in {"nan_factor", "null_both"}:
+        extra["adj_factor"] = None
+    if defect == "infinite_factor":
+        extra["adj_factor"] = float("inf")
+    builder, result, calls = _adj_factor_provider_case(tmp_path, extras=[extra], native_adapter=True)
+    _, refs, _, summary, _ = result
+    assert calls == [date(2026, 10, 22)]
+    assert summary["provider_fill_rows"] == 1
+    assert builder.cas.get_json(refs[0])["rows"] == [
+        {"ts_code": "301718.SZ", "trade_date": "2026-10-22", "adj_factor": 1.0}]
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, float("nan"), float("inf")])
+def test_native_factor_adapter_keeps_required_values_strict(tmp_path, value):
+    with pytest.raises(DatasetReleaseError):
+        _adj_factor_provider_case(tmp_path, required=value, native_adapter=True)
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "missing", "overlap"])
+def test_native_factor_adapter_keeps_required_keys_strict(tmp_path, defect):
+    with pytest.raises(DatasetReleaseError):
+        _adj_factor_provider_case(tmp_path, native_adapter=True, **{defect: True})
+
+
+@pytest.mark.parametrize("code", [None, "broken", "000001.HK"])
+def test_native_factor_adapter_rejects_malformed_identity(tmp_path, code):
+    with pytest.raises(DatasetReleaseError):
+        _adj_factor_provider_case(tmp_path, native_adapter=True, extras=[
+            {"ts_code": code, "trade_date": date(2026, 10, 22), "adj_factor": 1.0}])
+
+
+def test_native_factor_adapter_keeps_ipo_fact_outside_buy_pit(tmp_path):
+    builder, result, _ = _adj_factor_provider_case(tmp_path, native_adapter=True, outside_pit=True,
+        extras=[{"ts_code": "920072.BJ", "trade_date": None, "adj_factor": None},
+                {"ts_code": "000001.SZ", "trade_date": date(2026, 10, 22), "adj_factor": 1.0}])
+    _, refs, _, summary, ref = result
+    assert summary["provider_fill_rows"] == 1
+    assert summary["overlap_rows_verified"] == 1
+    assert {item["ts_code"] for item in builder.cas.get_json(ref)["values"]} == {"000001.SZ", "301718.SZ"}
+    assert {item["ts_code"] for item in builder.cas.get_json(refs[0])["rows"]} == {"000001.SZ", "301718.SZ"}
+
+
+def test_native_factor_adapter_seals_projected_rows_for_offline_replay(tmp_path):
+    builder, result, _ = _adj_factor_provider_case(tmp_path, native_adapter=True, extras=[
+        {"ts_code": "920072.BJ", "trade_date": None, "adj_factor": None}])
+    replay = _FrozenProviderReplay(builder.cas, result[1])
+    replay_builder, replay_result, calls = _adj_factor_provider_case(
+        tmp_path, provider_override=replay.fetch_tushare_adj_factor_rows)
+    assert calls == []
+    assert result == replay_result
+    assert builder.cas.get_json(result[4]) == replay_builder.cas.get_json(replay_result[4])
+
+
+@pytest.mark.parametrize("defect", ["row_count", "columns", "required_date"])
+def test_factor_frame_projection_does_not_bypass_response_contract(defect):
+    frame = pd.DataFrame([
+        {"ts_code": "301718.SZ", "trade_date": "20261022", "adj_factor": 1.0},
+        {"ts_code": "920072.BJ", "trade_date": None, "adj_factor": None},
+    ])
+    if defect == "columns":
+        frame["unexpected"] = 1
+    if defect == "required_date":
+        frame.loc[0, "trade_date"] = "20261021"
+    with pytest.raises(ArtifactReadyProviderTerminal):
+        _bounded_tushare_records(
+            frame, dataset="adj_factor", expected_columns=("ts_code", "trade_date", "adj_factor"),
+            date_column="trade_date", start=date(2026, 10, 22), end=date(2026, 10, 22),
+            max_rows=1 if defect == "row_count" else 2, stock_codes=frozenset({"301718.SZ"}))
 
 
 def _suspended_source(tmp_path, *, daily_present=True):
