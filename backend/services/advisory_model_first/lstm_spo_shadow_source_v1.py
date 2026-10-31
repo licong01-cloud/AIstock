@@ -202,8 +202,9 @@ class LstmSpoShadowSource:
         with self.connection() as connection:
             verify_current(connection, receipt["baseline_input_bindings"])
             extra = receipt["price"]["input_readiness"]
-            verify_partition_refs(extra["partition_refs"], partition_pins(connection,
-                date.fromisoformat(extra["start"]), date.fromisoformat(extra["end"]), EXTRA_DATASETS))
+            current = extra_input_capture(connection, extra["session_dates"])
+            if sha(extra) != sha(current):
+                raise InputReadinessError("重排序实际输入或分区版本在计算后变化")
 
     def finance(self, prediction):
         """Calendar-only maturity check precedes all D..H price/limit/suspension reads."""
@@ -258,21 +259,55 @@ class LstmSpoShadowSource:
 
 
 EXTRA_DATASETS = ["kline_daily_raw", "adj_factor", "index_daily"]
+BENCHMARK = "000300.SH"
+BENCHMARK_SCOPE = "advisory_lstm_benchmark_close_20td_v1"
 
 
 def extra_input_capture(connection, dates):
-    """The unchanged nine features need twenty sessions, including the benchmark."""
+    """Certify the consumed benchmark close slice, without certifying other indices."""
     from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.contracts import finite_number
+
     dates = [str(d) for d in dates]
     if len(dates) != 20 or dates != sorted(set(dates)):
         raise InputReadinessError("重排序输入需精确二十个交易日")
+    with connection.cursor() as cursor:
+        cursor.execute("""SELECT cal_date FROM market.trading_calendar WHERE is_trading=TRUE
+            AND cal_date<=%s ORDER BY cal_date DESC LIMIT 20""", (dates[-1],))
+        if sorted(str(row[0]) for row in cursor.fetchall()) != dates:
+            raise InputReadinessError("重排序窗口不符D对应的二十个交易日")
     rows = partition_pins(connection, date.fromisoformat(dates[0]), date.fromisoformat(dates[-1]), EXTRA_DATASETS)
     by_key = {(r["dataset"], r["trade_date"]): r for r in (rows or [])}
+    if len(by_key) != len(rows or []):
+        raise InputReadinessError("重排序输入分区证明重复")
     refs = [{"dataset": dataset, "fact_date": day,
         "data_revision": by_key.get((dataset, day), {}).get("data_revision"),
         "validation_id": by_key.get((dataset, day), {}).get("validation_id"),
         "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION}
-        for day in dates for dataset in EXTRA_DATASETS]
-    verify_partition_refs(refs, rows)
-    return dict(start=dates[0], end=dates[-1], partition_refs=refs,
+        for day in dates for dataset in EXTRA_DATASETS if dataset != "index_daily"]
+    verify_partition_refs(refs, [r for r in (rows or []) if r["dataset"] != "index_daily"])
+    index_refs = []
+    for day in dates:
+        row = by_key.get(("index_daily", day), {})
+        revision = row.get("data_revision")
+        if (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0
+                or row.get("scope_version") != SCOPE_VERSION or row.get("rule_version") != RULE_VERSION):
+            raise InputReadinessError("沪深300输入缺少当前分区版本", context={"dataset": "index_daily", "fact_date": day})
+        index_refs.append(dict(dataset="index_daily", fact_date=day, data_revision=revision,
+            validation_id=row.get("validation_id"), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+            global_validation_status=row.get("validation_status"), validated_revision=row.get("validated_revision")))
+    with connection.cursor() as cursor:
+        cursor.execute("""SELECT trade_date,ts_code,close FROM market.index_daily
+            WHERE ts_code=%s AND trade_date=ANY(%s::date[]) ORDER BY trade_date LIMIT 21""", (BENCHMARK, dates))
+        quotes = cursor.fetchall()
+    if (len(quotes) != 20 or [str(r[0]) for r in quotes] != dates
+            or any(r[1] != BENCHMARK or not finite_number(r[2], positive=True) for r in quotes)):
+        raise InputReadinessError("沪深300二十日收盘价缺行、重复或无效", context={"dataset": "index_daily", "instrument": BENCHMARK})
+    benchmark = dict(schema_version=BENCHMARK_SCOPE, instrument=BENCHMARK, fields=["close"],
+        decision_date=dates[-1], session_dates=dates, partition_refs=index_refs,
+        values_sha256=sha([[str(day), code, float(close)] for day, code, close in quotes]),
+        expected=20, valid=20, missing=0, invalid=0, duplicate=0,
+        whole_index_partition_certified=False)
+    return dict(start=dates[0], end=dates[-1], session_dates=dates, partition_refs=refs,
+        benchmark=benchmark,
         snapshot_kind="REPEATABLE_READ_READ_ONLY", historical_first_availability_claimed=False)

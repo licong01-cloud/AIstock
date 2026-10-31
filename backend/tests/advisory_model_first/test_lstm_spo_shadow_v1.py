@@ -111,10 +111,24 @@ def test_extra_twenty_sessions_require_benchmark_and_adjustments(monkeypatch):
              "validation_status": "VALID", "validation_id": "v", "scope_version": SCOPE_VERSION,
              "rule_version": RULE_VERSION} for d in days for ds in source.EXTRA_DATASETS]
     monkeypatch.setattr(source, "partition_pins", lambda *_: rows)
-    assert len(source.extra_input_capture(object(), days)["partition_refs"]) == 60
-    rows[-1]["validated_revision"] = 0
+    class Connection:
+        @contextmanager
+        def cursor(self):
+            yield self
+
+        def execute(self, sql, params):
+            self.result = ([(d,) for d in reversed(days)] if "trading_calendar" in sql
+                           else [(d, "000300.SH", 4000.) for d in days])
+
+        def fetchall(self):
+            return self.result
+
+    captured = source.extra_input_capture(Connection(), days)
+    assert len(captured["partition_refs"]) == 40
+    assert len(captured["benchmark"]["partition_refs"]) == 20
+    rows[-2]["validated_revision"] = 0
     with pytest.raises(InputReadinessError):
-        source.extra_input_capture(object(), days)
+        source.extra_input_capture(Connection(), days)
 
 
 def test_crossing_open_never_publishes_as_prospective(trial):
