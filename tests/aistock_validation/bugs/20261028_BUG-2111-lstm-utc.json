@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2111",
-  "closed_at": null,
+  "closed_at": "2026-10-31T06:20:46.536942Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,27 +34,27 @@
   "expected": "同一绝对时刻的不同有效时区表示可通过；无时区、无效、未来或真实不同的发布时间及其他身份错配均拒绝。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json",
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/operations/advisory_workbench_delivery_20261028.md",
       "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
       "scripts/aistock_issue_workflow.py",
-      "scripts/aistock_runtime_semantics.py"
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json"
     ],
     "added_files": [
       "docs/operations/evidence/advisory_workbench_20261028/postrestart.json"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json",
       "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/operations/advisory_workbench_delivery_20261028.md",
       "docs/operations/evidence/advisory_workbench_20261028/postrestart.json",
       "scripts/aistock_issue_workflow.py",
-      "scripts/aistock_runtime_semantics.py"
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2111-lstm-utc.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -132,8 +132,8 @@
   },
   "first_seen_at": "2026-10-28T02:48:53.739673Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "68f76d98ec63d390706ac7d967e03d6c18557148",
+  "fixed_at": "2026-10-28T03:30:02Z",
   "github_issue_number": 6790,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6790",
   "last_seen_at": "2026-10-28T02:48:53.739673Z",
@@ -141,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6792",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -165,9 +166,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2111/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2111",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_lstm_shadow_capture",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "6a7cf6956e31d38ba719883189d2f435b54b0b1847f02c0f62133e41d69491e3",
+      "expected_identity": "68f76d98ec63d390706ac7d967e03d6c18557148",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-31T06:20:17.059595Z",
+      "mode": "read_only",
+      "observed_identity": "67cd0443366d57fa14095b8296401fa9da766b76",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "eba7e5f94a5df4f8349ed00c1ca0af4bb1eedc2feef495090270661b3836f051",
+      "receipt_sha256": "887148a1020d6f2c92a1f405d7d0420dbc581b04cf03659cab1c5d1b0aaa1629",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "43103e06cd82c24a8255f11c7b4257d21b8052d4cb51c1bffaa0b2470cb58c51",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -178,7 +202,7 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "Finish found no registered reranking-shadow runtime semantic contract. Register exact read-only status validator and direct tests so source merge is allowed while zero captures/failures cannot falsely close runtime verification.",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -187,6 +211,9 @@
     "fingerprint": "392f4161099ec05fda12e945",
     "source_event_id": "FE-20261028-392f4161099e"
   },
+  "validation_evidence": [
+    "post-restart-verify BUG-2111 backend-main plus real captured D2026-10-30 API and idempotence -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
