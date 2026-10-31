@@ -18,6 +18,82 @@ from backend.services.dataset_release.errors import DatasetReleaseError
 from backend.services.dataset_release.minute_overlay import canonical_session_times
 
 
+def _adj_factor_provider_case(tmp_path, *, extras=(), required=1.0, duplicate=False, missing=False, overlap=False, outside_pit=False):
+    day = date(2026, 10, 22)
+    code = "301718.SZ"
+    codes = [code, "000001.SZ"] if overlap or outside_pit else [code]
+    values = {"adj_factor": ([{"ts_code": "000001.SZ", "trade_date": day, "adj_factor": 1.0}] if overlap or outside_pit else []),
+              "adj_factor_construction": [],
+              "kline_daily_raw": [{"ts_code": item, "trade_date": day,
+                  "open_li": 1000, "high_li": 1000, "low_li": 1000, "close_li": 1000,
+                  "volume_hand": 1, "amount_li": 100000} for item in codes]}
+
+    class View:
+        def descriptors(self, dataset):
+            return [{"dataset": dataset, "partition_key": "2026-10-01_2026-10-30",
+                     "content_digest": "a" * 64, "schema_digest": "b" * 64}]
+
+        def iter_partition_rows(self, descriptor):
+            return iter(values[descriptor["dataset"]])
+
+    rows = [] if missing else [{"ts_code": code, "trade_date": day, "adj_factor": required}]
+    if duplicate:
+        rows += [dict(rows[0])]
+    if overlap:
+        rows += [{"ts_code": "000001.SZ", "trade_date": day, "adj_factor": 2.0}]
+    rows += list(extras)
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    calls = []
+
+    def provider(stamp):
+        calls.append(stamp)
+        return rows
+
+    builder = ArtifactReadySourceBuilder(SimpleNamespace(start_date=date(2018, 8, 1)), cas,
+        fetch_tushare_adj_factor_rows=provider, month_start=date(2026, 10, 1) if outside_pit else None)
+    pit_codes = ["000001.SZ"] if outside_pit else codes
+    snapshot = SimpleNamespace(official_cutoff=date(2026, 10, 30), pit_snapshot_digest="c" * 64,
+                               pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code=c) for c in pit_codes]))
+    result = builder._adj_factor_entries(View(), snapshot=snapshot, checkpoint=lambda: None)
+    return builder, result, calls
+
+
+@pytest.mark.parametrize("code", ["920072.BJ", "200001.SZ", "900901.SH", "510300.SH", "000002.SZ"])
+def test_provider_projects_valid_unrelated_identity_before_economic_validation(tmp_path, code):
+    builder, result, calls = _adj_factor_provider_case(tmp_path, extras=[{"ts_code": code, "trade_date": None, "adj_factor": None}])
+    _, refs, _, summary, _ = result
+    assert calls == [date(2026, 10, 22)]
+    assert summary["provider_fill_rows"] == 1
+    assert builder.cas.get_json(refs[0])["rows"] == [
+        {"ts_code": "301718.SZ", "trade_date": "2026-10-22", "adj_factor": 1.0}]
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, float("nan"), float("inf")])
+def test_provider_still_rejects_invalid_required_values(tmp_path, value):
+    with pytest.raises(DatasetReleaseError):
+        _adj_factor_provider_case(tmp_path, required=value)
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "missing", "overlap"])
+def test_provider_still_rejects_required_missing_duplicate_or_conflict(tmp_path, defect):
+    with pytest.raises(DatasetReleaseError):
+        _adj_factor_provider_case(tmp_path, **{defect: True}, extras=[{"ts_code": "920072.BJ", "adj_factor": None}])
+
+
+@pytest.mark.parametrize("row", [{}, {"ts_code": "broken"}, {"ts_code": "000001.HK"}, None])
+def test_provider_malformed_identity_is_not_silently_ignored(tmp_path, row):
+    with pytest.raises(DatasetReleaseError):
+        _adj_factor_provider_case(tmp_path, extras=[row])
+
+
+def test_required_factual_ipo_outside_buy_pit_keeps_its_factor(tmp_path):
+    builder, result, _ = _adj_factor_provider_case(tmp_path, outside_pit=True,
+                              extras=[{"ts_code": "920072.BJ", "adj_factor": None}])
+    _, _, _, summary, ref = result
+    assert summary["provider_fill_rows"] == 1
+    assert {item["ts_code"] for item in builder.cas.get_json(ref)["values"]} == {"000001.SZ", "301718.SZ"}
+
+
 def _suspended_source(tmp_path, *, daily_present=True):
     day = date(2026, 9, 1)
     code = "002870.SZ"

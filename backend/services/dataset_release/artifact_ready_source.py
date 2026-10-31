@@ -2096,6 +2096,13 @@ class ArtifactReadySourceBuilder:
                     )
                 provider: dict[tuple[str, date], Decimal] = {}
                 for raw in raw_provider:
+                    # A dated provider response is market-wide, not a release
+                    # population. Recognizable unrelated instruments (including
+                    # BJ, B shares and funds) cannot impose factor requirements.
+                    # Malformed identities and every in-scope value stay strict.
+                    raw_code = str(raw.get("ts_code", "")).strip().upper() if isinstance(raw, Mapping) else ""
+                    if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", raw_code) and raw_code not in series_hashers:
+                        continue
                     row = _normalize_adj_factor_row(raw, source="tushare")
                     key = (row["ts_code"], row["trade_date"])
                     if key[1] != day or key[0] not in series_hashers:

@@ -327,6 +327,29 @@ class SourceQuerySpec:
                 )
         if self.code_column is not None:
             clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
+        if self.query_id == "kline_daily_raw":
+            # An issuance/reference quote is not an exchange trading bar. Keep
+            # raw storage intact and exclude only a flat, zero-turnover record
+            # proven earlier than the issuer's listing. Prior observed quotes
+            # or factor facts protect historical/relisting/alias lifecycles.
+            # This is not an IPO-age or PIT buy-eligibility filter.
+            clauses.append("""NOT COALESCE((
+                source_row.volume_hand=0 AND source_row.amount_li=0
+                AND source_row.open_li>0
+                AND source_row.open_li=source_row.high_li
+                AND source_row.high_li=source_row.low_li
+                AND source_row.low_li=source_row.close_li
+                AND EXISTS (SELECT 1 FROM market.stock_basic AS stock
+                    WHERE stock.ts_code=source_row.ts_code
+                      AND stock.list_date > source_row.trade_date)
+                AND NOT EXISTS (SELECT 1 FROM market.kline_daily_raw AS prior_quote
+                    WHERE prior_quote.ts_code=source_row.ts_code
+                      AND prior_quote.trade_date < source_row.trade_date
+                      AND (prior_quote.volume_hand>0 OR prior_quote.amount_li>0))
+                AND NOT EXISTS (SELECT 1 FROM market.adj_factor AS prior_factor
+                    WHERE prior_factor.ts_code=source_row.ts_code
+                      AND prior_factor.trade_date <= source_row.trade_date)
+            ), FALSE)""")
         if self.code_policy == "profile_index_codes":
             clauses.append(
                 f"{self.date_expression} >= (%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
@@ -500,6 +523,7 @@ def _query(
         query_version=(
             f"{query_id}_canonical_row_code_major_v3"
             + (":share_precision_v1" if query_id in {"kline_daily_raw", "kline_minute_raw"} else "")
+            + (":prelisting_reference_v1" if query_id == "kline_daily_raw" else "")
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
             + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
