@@ -528,6 +528,15 @@ class PackageAssetBackfillService:
         reason_code: str,
         context: dict[str, Any],
     ) -> PackageAssetBackfillItem:
+        legs = (record.manifest.source_evidence.get("multi_alpha") or {}).get("legs", [])
+        if legs and any(len(leg.get("seed_run_ids", [])) > 1 and not leg.get("seed_assets") for leg in legs):
+            context = {**context, "asset_recovery": {
+                "mode": "new_version_original_seed_assets_only",
+                "command": "scripts/recover_multi_alpha_seed_assets.py",
+                "documentation": "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+                "in_place_backfill_allowed": False,
+                "execution_retirement_checks_unchanged": True,
+            }}
         return PackageAssetBackfillItem(
             package_id=record.package_id,
             package_name=record.package_name,
