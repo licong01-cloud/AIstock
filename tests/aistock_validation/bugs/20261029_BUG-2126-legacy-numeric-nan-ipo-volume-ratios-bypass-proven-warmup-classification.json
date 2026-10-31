@@ -27,15 +27,15 @@
   "expected": "NULL and numeric NaN representations of the same independently proven IPO volume-ratio warmup have identical legal NA semantics, with all real invalid data still rejected.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2126-legacy-numeric-nan-ipo-volume-ratios-bypass-proven-warmup-classification.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2126-legacy-numeric-nan-ipo-volume-ratios-bypass-proven-warmup-classification.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2126-legacy-numeric-nan-ipo-volume-ratios-bypass-proven-warmup-classification.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2126-legacy-numeric-nan-ipo-volume-ratios-bypass-proven-warmup-classification.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-29T02:48:08.234567Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c597a09d82b8dfc6c0912430cebcf2478d073cef",
+  "fixed_at": "2026-10-29T03:00:17Z",
   "github_issue_number": 6839,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6839",
   "last_seen_at": "2026-10-29T02:48:08.234567Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6841",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +128,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -138,7 +140,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2126",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "71fac0f3abe41dd8",
+    "recorded_at": "2026-10-29T03:00:47.358616Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3aa06e0e9bba918640f54eea645bad412ccc0b78",
+    "source_merge_commit": "c597a09d82b8dfc6c0912430cebcf2478d073cef",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6841",
+    "validation_evidence": [
+      "validation-receipt: id=6b37bc87777f9c04 commit=3aa06e0e9bba918640f54eea645bad412ccc0b78 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=2c0434cc27f118c1 commit=3aa06e0e9bba918640f54eea645bad412ccc0b78 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`47 passed`"
+    ],
+    "validation_evidence_digest": "f2d6c3292cf79a6a75ec79a1240518cc2881adad25a8ccd4f2aa9de1b78aa6ca"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -147,6 +171,10 @@
     "fingerprint": "a862f89cb4ecd8b07de24c56",
     "source_event_id": "FE-20261029-a862f89cb4ec"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6b37bc87777f9c04 commit=3aa06e0e9bba918640f54eea645bad412ccc0b78 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=2c0434cc27f118c1 commit=3aa06e0e9bba918640f54eea645bad412ccc0b78 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`47 passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
