@@ -1,9 +1,10 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.55
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.56
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-27
 
-> 2026-11-01最新断点：新增[LSTM-CONFIRM-1 F1](advisory_lstm_prospective_confirmation_v1_f1_design_20261101.md)固定前向确认与预算能力已真实冻结、零收益预检完成。未来2026-11-02起首150个预定D，单一原生Top10对照、一次正式判断、固定宽限及绝对最晚2027-08-31结束；不能漏日换日或无限扩样。旧噪声条件下识别旧57.28bps情景约需144D；150D的MDE约55.96bps，噪声1.5倍则83.94bps，不保证未来功效。真实日历只到2026年底，预检WAITING_CALENDAR，0评价文件读取；这不阻断原荐股。唯一study_root、固定模型/5TD/成本/UNKNOWN不变，0fit/0经济确认/0生产替换。原P20的1D捕获/0成熟和先行10月30日预测保持，本次确认从未来D另起，详见[结果报告](../analysis/advisory_lstm_prospective_confirmation_20261101.md)。本轮长任务完成，不挂起等待未来数据，不自动恢复研报/现金流/价格/Exit。
+> 2026-11-01最新断点：[LSTM-BUSINESS-1 F2](advisory_lstm_top10_business_review_v1_f2_design_20261101.md)明确精确LSTM的Top10辅助观察，用户选择100bps/5TD批次净增量目标；旧开发57.28bps低于目标，不宣称达标。新增两臂/UNKNOWN/CASH/换股/逐股与损益贡献纯投影及现有页，原生产Top20保持；新版V2协议已事前冻结，沿原150D/唯一经济判断/有限截止，收益无关地提前识别不可恢复漏捕获，UNKNOWN修复宽限不删。V1物理工件及Git producer原样归档，不再作第二次确认。真实50行换入9/移出9/共同1、0成熟/0评价文件打开，新进程源hash不变；53后端相关项和浏览器合同通过，0新fit/经济确认/生产替换。源码合入/CI和用户重启后的运行加载分态，详见[结果报告](../analysis/advisory_lstm_top10_business_review_20261101.md)。研报/现金流/价格/Exit继续暂停。
+> 2026-11-01上一轮确认断点：新增[LSTM-CONFIRM-1 F1](advisory_lstm_prospective_confirmation_v1_f1_design_20261101.md)固定前向确认与预算能力已真实冻结、零收益预检完成。未来2026-11-02起首150个预定D，单一原生Top10对照、一次正式判断、固定宽限及绝对最晚2027-08-31结束；不能漏日换日或无限扩样。旧噪声条件下识别旧57.28bps情景约需144D；150D的MDE约55.96bps，噪声1.5倍则83.94bps，不保证未来功效。真实日历只到2026年底，预检WAITING_CALENDAR，0评价文件读取；这不阻断原荐股。唯一study_root、固定模型/5TD/成本/UNKNOWN不变，0fit/0经济确认/0生产替换。原P20的1D捕获/0成熟和先行10月30日预测保持，本次确认从未来D另起，详见[结果报告](../analysis/advisory_lstm_prospective_confirmation_20261101.md)。本轮长任务完成，不挂起等待未来数据，不自动恢复研报/现金流/价格/Exit。
 > 2026-11-01上一轮诊断断点：P20固定P19第3折的日常影子观察已完成用户重启后的运行验收，BUG-2159/#6961修复与#6964关闭同步完成；首个D=10月30日/T=11月2日开盘前预测已保存，1D捕获/0D成熟，最早H=11月6日收盘且数据就绪后评价。新增[LSTM-VALUE-1 F1](advisory_lstm_rank_value_review_v1_f1_design_20261101.md)离线长任务已真实完成：原15,250特征/6,300历史预测/50当前行、50,800边界对及三折训练KEY匹配，第二算术路径通过；决定KEEP_FROZEN_OBSERVATION、候选0/fit0。开发增量非单点支撑但71.29%净增量集中第三折，不据此改权重或新增拟合。累计248fit＋1旧index，0独立经济确认/榜单替换；原Top50→双Top10/5TD及生产Top20不变。结果见[诊断报告](../analysis/advisory_lstm_rank_value_review_20261101.md)，PR/CI/合入见X根delivery_receipt.json；下方旧日期的运行pending条目是当时检查点，不再作为当前队列。研报/现金流/价格/Exit继续暂停。
 
 > 2026-10-23 P9历史断点：用户另行授权的P9[分钟级留一同群同步F1](advisory_intraday_peer_synchrony_top10_5td_v1_f1_design_20261023.md)完成一次六fit内层研究。305D/30,500原行保留，30,417可算；100共同D相对原生+15.682701bps、描述性95%[-22.066937,51.997402]、两折正，按事前产品门INNER_SUPPORTED；相对matched−2.223706bps，不证明同步特征本身增值。累计225实际研究fit＋1旧index，0经济确认/激活/outer。当时report_rc全方向DEFERRED_BY_USER，数据窗口完成不自动恢复；本次用户批准的有限恢复见§6.3.29，P9结果及停止边界不改。
@@ -2307,6 +2308,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-305 | P20精确LSTM第3折零fit每日观察：原生分数Top50、开盘前不可变预测/漏采、5TD成熟评价、原生动作隔离及源码/绑定/运行/经济分态 |
 | F-306 | LSTM-VALUE-1冻结模型价值诊断：精确文件角色与训练KEY、16维贡献/数学边界、原126D/102共同D增量依赖性、0fit及唯一处理决定，不冒称独立经济确认 |
 | F-307 | LSTM-CONFIRM-1固定前向150预定D与有限期限、单一原生Top10对照/一次统计判断、原模型和估值复核、条件预算及零收益真实预检，不改变生产门禁 |
+| F-308 | LSTM-BUSINESS-1精确Top10辅助对象/用户100bps目标、两臂和换股损益只读业务视图、V2归档来源与漏捕获提前失效、原模型/统计/生产Top20不变 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2496,6 +2498,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-305 | §6.3.40/§16.0、`docs/architecture/advisory_lstm_spo_shadow_v1_f2_design_20261027.md` | backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py; tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json; artifact: F:/Dev/AIstock/tmp/issue_workflow/BUG-2159/aftercare-final-20261031.json | VERIFIED_RUNTIME_FIRST_CAPTURE_NOT_ECONOMIC_CONFIRMATION | none |
 | F-306 | §16.0、`docs/architecture/advisory_lstm_rank_value_review_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/research_audit_receipt.json | VERIFIED_DIAGNOSTICS_KEEP_FROZEN_MODEL_ZERO_FIT | none |
 | F-307 | §16.0、`docs/architecture/advisory_lstm_prospective_confirmation_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py; artifact: X:/AIstock_temp/ADVISORY/lstm-confirmation-20261101/independent_audit_receipt.json | VERIFIED_FROZEN_PROTOCOL_AND_ZERO_OUTCOME_PREFLIGHT | none |
+| F-308 | §16.0、`docs/architecture/advisory_lstm_top10_business_review_v1_f2_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_top10_business_review.py; backend/tests/advisory_model_first/test_lstm_business_protocol.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/independent_audit_receipt.json | VERIFIED_BUSINESS_VIEW_V2_SOURCE_AND_BROWSER | approved_by_user：用户拥有后端重启；运行加载在重启后只读验证，当前不宣称已激活 |
 
 
 ## 12. Verification Plan
@@ -2796,7 +2799,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 2026-10-28 产品界面并行交付：用户已确认卡片总览、策略详情及当日推荐效果图，授权[荐股工作台详细设计](advisory_recommendation_workbench_f2_design_20261028.md)先审核合入，再开发审核合入。该任务统一已保存推荐事实的只读业务视图，复用每日数据完整性共享合同，不更改下述研究队列、原生推荐/持仓、模型或运行调度；不自动恢复研报/现金流/价格研究。源码与运行激活分别验收，后端重启仍由用户执行。
 
-本节是2026-11-01唯一后续队列：LSTM-CONFIRM-1的设计/工具/真实冻结/预检已交付；未来150个预定D只沿原P20日常保存和成熟评价，原生Top20不变。确认协议从2026-11-02起，不能重用先行10月30日为本次确认；模型第3折、Top50→Top10、5TD/费用固定，0新候选/fit。已有日历快照仅至2026-12-31，保留WAITING_CALENDAR，真实新日历到位后另存快照，不猜未来交易日。最后H后5会话才做唯一正式判断，绝对最晚2027-08-31结束；全人口不齐NOT_EVALUABLE，不删UNKNOWN/MISS、不以第151D替换、不因未显著扩样。正式研究约需数月，不承诺几天证实小增量，也不把150D当荐股发布门。当前窗口的长任务已完成，后续仅在具体新机制证据出现时规划唯一候选，不进行填充式多线研究。
+本节是2026-11-01唯一后续队列：LSTM-BUSINESS-1明确Top10辅助对象和用户100bps目标，业务视图/V2事前冻结/真实零收益预检已交付；原LSTM模型与P20、原Top50→双Top10/5TD/费用/UNKNOWN/CASH及生产Top20不变。正式后续仅V2，V1完整归档；2026-11-02起首150预定D、固定一次经济判断和有限截止保持，候选漏捕获日期在既有页可见，health只用官方日历/预测/MISS识别不可恢复缺口并可提前结束正式研究，不停止P20，不解读为无alpha。UNKNOWN沿原宽限，到期不全不可评价，不换日/补零/扩样；100bps点目标与μ>0统计支持分别报告。真实1D先行捕获/0成熟，本次正式确认0D；当前日历仅至年底，WAITING_CALENDAR不阻断荐股。下一步是用户重启后只读核对新增API/页面和原调度，然后沿自然数据检查两臂/干预解释；无新fit或恢复其它研究。所有运行、统计、业务上线状态分开，不把工具完成当目标已达成。
+2026-11-01上一轮确认完成事实：LSTM-CONFIRM-1的设计/工具/真实冻结/预检已交付；未来150个预定D只沿原P20日常保存和成熟评价，原生Top20不变。确认协议从2026-11-02起，不能重用先行10月30日为本次确认；模型第3折、Top50→Top10、5TD/费用固定，0新候选/fit。已有日历快照仅至2026-12-31，保留WAITING_CALENDAR，真实新日历到位后另存快照，不猜未来交易日。最后H后5会话才做唯一正式判断，绝对最晚2027-08-31结束；全人口不齐NOT_EVALUABLE，不删UNKNOWN/MISS、不以第151D替换、不因未显著扩样。正式研究约需数月，不承诺几天证实小增量，也不把150D当荐股发布门。当前窗口的长任务已完成，后续仅在具体新机制证据出现时规划唯一候选，不进行填充式多线研究。
 2026-11-01上一轮完成事实：P19及其失败1次/恢复3次已完成，累计248实际fit＋1旧index；P20固定第3折、用户重启后加载、首份开盘前预测和BUG-2159关闭同步已验，不再排重启/首次捕获任务。用户批准的不等新交易日长任务LSTM-VALUE-1已完成文件型工具、真实分析及多轮审核：三折训练KEY匹配；6,350行分数贡献、50,800边界对和原126D/102共同D逐股对账通过。当前50只无缺失/无逐字段训练范围越界，但价格特征偏训练尾部；当前数学边界未比相同第3折历史更窄。历史正增量不依赖单日/单5D块，71.29%净增量集中第三折，时间泛化仍未知。终态KEEP_FROZEN_OBSERVATION，新增候选0/fit0，原P20模型/预测/Top50→Top10/5TD及原生Top20不变；本轮离线任务结束，不挂起等行情。后续仅沿原自然调度保存新预测、成熟后评价；具体新事实支持不同机制时再设计唯一候选和预算，禁止从单日输赢调参。P18负结果、旧分类与UNKNOWN/MISS保留；研报/现金流/价格/Exit暂停，无新收益窗口、sealed、QE、DB或服务控制。详细结果与证据见新F1及报告，源码CI/合入分态见delivery_receipt。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |

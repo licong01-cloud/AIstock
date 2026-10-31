@@ -10,6 +10,10 @@
 
 精确13文件见X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/scope.json。原V1脚本和协议不编辑；原资产和数据根只读，无DB/数据集/依赖/服务控制。新增能力复用现有API、页面、估值器和确认函数。
 
+## Non-goals / 非目标
+
+本轮不训练或更换模型，不查询新原始收益，不替换生产Top20、不自动交易或激活，不恢复其他研究方向或启动脚本任务。成熟合成样本只验证合同，真实经济确认须等待原自然时钟与事前研究条件。
+
 ## Architecture / Contracts / API与UI
 
 新增纯展示叶模块，由既有LstmSpoShadowService.status读取已保存文件后调用。叶模块不访问DB、TDX、文件或训练器；对50行原排名和模型排名/唯一KEY、评价父hash/原paired_result逐项核对，拒绝错误身份和篡改结果。status只增加business_contract、business_summary和selected.business_review；原字段和调度逻辑不改。
@@ -56,16 +60,16 @@ V2的protocol、budget、supersession、health/preflight和单次终态放在独
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-601 | 本文Contracts；业务叶模块 | backend/tests/advisory_model_first/test_lstm_top10_business_review.py | PLANNED | 实施后验收 |
-| F-602 | backend/services/advisory_model_first/lstm_top10_business_review_v1.py | backend/tests/advisory_model_first/test_lstm_top10_business_review.py | PLANNED | 实施后验收 |
-| F-603 | scripts/advisory_lstm_top10_business_review.py | backend/tests/advisory_model_first/test_lstm_business_protocol.py | PLANNED | 实施后验收 |
-| F-604 | scripts/advisory_lstm_top10_business_review.py | backend/tests/advisory_model_first/test_lstm_business_protocol.py | PLANNED | 实施后验收 |
-| F-605 | frontend/src/components/advisory/workbench/ModelObservation.tsx；API类型；status | frontend/tests/paper-v2/advisory-workbench.spec.ts | PLANNED | 实施后验收 |
-| F-606 | 本文Verification Plan | artifact: X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/validation_receipt.json | PLANNED | 实施后验收 |
-| F-607 | 本文Rollout；结果报告 | frontend/tests/paper-v2/advisory-workbench.spec.ts | PLANNED | 实施后验收 |
+| F-601 | 本文Contracts；业务叶模块 | backend/tests/advisory_model_first/test_lstm_top10_business_review.py | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
+| F-602 | backend/services/advisory_model_first/lstm_top10_business_review_v1.py | backend/tests/advisory_model_first/test_lstm_top10_business_review.py | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
+| F-603 | scripts/advisory_lstm_top10_business_review.py | backend/tests/advisory_model_first/test_lstm_business_protocol.py | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
+| F-604 | scripts/advisory_lstm_top10_business_review.py | backend/tests/advisory_model_first/test_lstm_business_protocol.py | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
+| F-605 | frontend/src/components/advisory/workbench/ModelObservation.tsx；API类型；status | frontend/tests/paper-v2/advisory-workbench.spec.ts | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
+| F-606 | 本文Verification Plan | artifact: X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/validation_receipt.json | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
+| F-607 | 本文Rollout；结果报告 | frontend/tests/paper-v2/advisory-workbench.spec.ts | VERIFIED_SOURCE_BROWSER_USER_OWNED_ACTIVATION | approved_by_user：既有用户指令“后端重启我来执行”；源码/新进程/浏览器验收已完成，运行进程加载由用户重启后另验 |
 
 ## Risks / Production Gates / Rollout / Rollback
 
-短期样本、市场非平稳、旧训练NON_VINTAGE、未来日历不齐和严格全人口仍可能使正式研究无法评价；不放宽缺失换取好看结论。150D只保证资源边界，不保证检测100bps的未来功效。输入单批50/finance50，投影O(50)，汇总O(捕获D)，不引入数据库查询或新调度。
+短期样本、市场非平稳、旧训练NON_VINTAGE、未来日历不齐和严格全人口仍可能使正式研究无法评价；不放宽缺失换取好看结论。150D只保证资源边界，不保证检测100bps的未来功效。单批预测/finance各固定50行，排名校验最多排序50元素、金融连接为50键1:1，新增汇总只遍历已有捕获D；不引入业务数据库查询或新调度。日历operator仅显式执行既有只读日历查询。
 
 后端status变更需要用户重启后做只读API/业务验收；本轮完成源码、CI及独立新进程业务证明，不把用户重启等待伪报完成。0DDL/DML，DEV/生产迁移、依赖/客户端/数据集/QE均noop。frontend按既有运行方式加载，禁止操作生产服务。回退源码即可移除展示/新operator，原模型、预测和P20逻辑保持；不删工件。工作树/分支保留。

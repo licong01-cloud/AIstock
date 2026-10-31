@@ -15,6 +15,7 @@ export default function ModelObservation({ programId, target, refresh }: { progr
   const { data, error, loading } = useRead<Shadow>(`/advisory/programs/${encodeURIComponent(programId)}/reranking-shadow?target_trade_date=${target}`, refresh, programId);
   const [view, setView] = useState("model");
   const review = data?.selected?.business_review, summary = data?.business_summary;
+  const missed = data?.missed?.filter(row => row.publication.decision_date >= "2026-11-02" && row.publication.decision_date <= "2027-07-31") ?? [];
   const rows = (review?.rows ?? data?.selected?.predictions ?? []).filter(row => view === "all" || (view === "model" ? row.advisory_rank : row.selection_effective_rank)! <= 10)
     .slice().sort((a, b) => Number(view === "model" ? a.advisory_rank : a.selection_effective_rank) - Number(view === "model" ? b.advisory_rank : b.selection_effective_rank));
   return <section className={styles.panel}><header className={styles.panelHeader}><h2>重排序模型观察</h2>{data && <Badge value={data.status} />}</header><ErrorNotice error={error} stale={!!data} />
@@ -22,6 +23,7 @@ export default function ModelObservation({ programId, target, refresh }: { progr
     <p className={styles.explanation}>本轮实用价值参考目标：每个5交易日批次净增量100bps（1个百分点）。以下已扣既定费用，不是账户收益或真实成交；达到点估计目标不等于统计确认或自动上线。当前最新价单独展示，不参与固定5TD结果。</p>
     {loading && !data && <Empty>正在读取持久化观察结果…</Empty>}
     {data && <>
+      {!!missed.length && <div className={styles.notice} data-testid="reranking-capture-gaps">已发现确认候选窗口内的影子漏捕获：{missed.map(row => row.publication.decision_date).join("、")}。无法补作开盘前预测，可能影响正式研究可评价性，请核对固定研究日期；原生推荐继续运行。</div>}
       {summary ? <div data-testid="reranking-business-summary"><div className={styles.metrics}><Metric label="已成熟 / 已捕获交易日" value={`${number(data.complete_days)} / ${number(data.captured_days)}`} /><Metric label="原生Top10批次均值" value={bps(summary.native_mean_net_bps)} /><Metric label="辅助Top10批次均值" value={bps(summary.specialist_mean_net_bps)} /><Metric label="配对平均差值" value={bps(summary.mean_delta_bps)} note="不等于独立经济确认" /></div><p className={styles.explanation}>仅同一组完整配对批次 {number(summary.complete_pairs)} / 捕获 {number(summary.captured_days)}；未知评价批次 {number(summary.unknown_days)}，未评价批次 {number(summary.unevaluated_days)}。{targetText(summary.target_status)}；缺失批次保留，不用于正式确认。</p></div>
         : data.status === "SHADOW_ONLY" && <><div className={styles.metrics}><Metric label="已捕获交易日" value={number(data.captured_days)} /><Metric label="已成熟评价日" value={number(data.complete_days)} /><Metric label="配对平均差值" value={bps(data.mean_delta_bps)} note="不等于独立经济确认" /></div><div className={styles.notice}>业务收益视图尚未加载，保留原观察结果。</div></>}
       {!data.selected ? <Empty>{["NOT_APPLICABLE", "NOT_CONFIGURED"].includes(data.status) ? text(data.status) : "所选日期没有已保存的重排序预测。"}</Empty> : <>
