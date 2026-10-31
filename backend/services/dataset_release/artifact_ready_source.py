@@ -801,7 +801,10 @@ class ArtifactReadySourceBuilder:
         self.fetch_tdx_rows = fetch_tdx_rows or self._fetch_tdx_rows
         self.fetch_tushare_minute_rows = fetch_tushare_minute_rows or self._fetch_tushare_minute_rows
         self.fetch_tushare_index_rows = fetch_tushare_index_rows or self._fetch_tushare_index_rows
-        self.fetch_tushare_adj_factor_rows = fetch_tushare_adj_factor_rows or self._fetch_tushare_adj_factor_rows
+        # A live, dated response is market-wide. Bind the release fact population
+        # at the call site, before its frame adapter validates row semantics.
+        # Injected/frozen providers retain their one-date callback contract.
+        self.fetch_tushare_adj_factor_rows = fetch_tushare_adj_factor_rows
         self.fetch_tushare_daily_rows = fetch_tushare_daily_rows or self._fetch_tushare_daily_rows
         self.fetch_tushare_limit_reference = (
             fetch_tushare_limit_reference or self._fetch_tushare_limit_reference
@@ -2082,7 +2085,12 @@ class ArtifactReadySourceBuilder:
                 if not missing:
                     continue
                 try:
-                    raw_provider = self._provider_call(self.fetch_tushare_adj_factor_rows, day)
+                    if self.fetch_tushare_adj_factor_rows is None:
+                        raw_provider = self._provider_call(
+                            self._fetch_tushare_adj_factor_rows, day, frozenset(codes)
+                        )
+                    else:
+                        raw_provider = self._provider_call(self.fetch_tushare_adj_factor_rows, day)
                 except Exception as exc:
                     self._raise_provider_failure(
                         exc,
@@ -3190,7 +3198,9 @@ class ArtifactReadySourceBuilder:
                 raise
             raise IndexProviderUnavailable("Tushare index request failed") from exc
 
-    def _fetch_tushare_adj_factor_rows(self, day: date) -> Sequence[Mapping[str, Any]]:
+    def _fetch_tushare_adj_factor_rows(
+        self, day: date, stock_codes: frozenset[str]
+    ) -> Sequence[Mapping[str, Any]]:
         provider = self._tushare.provider()
         try:
             frame = provider.adj_factor(
@@ -3205,6 +3215,7 @@ class ArtifactReadySourceBuilder:
                 start=day,
                 end=day,
                 max_rows=MAX_TUSHARE_ADJ_FACTOR_ROWS_PER_DAY,
+                stock_codes=stock_codes,
             )
         except Exception as exc:
             if _is_40203(exc):
@@ -3324,6 +3335,7 @@ def _bounded_tushare_records(
     start: date,
     end: date,
     max_rows: int,
+    stock_codes: frozenset[str] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     """Validate a bounded provider frame before allocating record dictionaries."""
 
@@ -3345,6 +3357,19 @@ def _bounded_tushare_records(
         raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response memory size is unavailable") from exc
     if not 0 <= frame_bytes <= MAX_TUSHARE_PROVIDER_FRAME_BYTES:
         raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response memory size exceeds bound")
+    if stock_codes is not None:
+        # Bound the full response envelope first, but do not impose economic,
+        # timestamp or JSON-value requirements on recognizable unrelated stocks.
+        # Unknown/malformed identities are retained so they still fail strictly.
+        try:
+            keep = []
+            for value in frame["ts_code"].tolist():
+                code = str(value).strip().upper()
+                keep.append(not (re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", code) and code not in stock_codes))
+            frame = frame.loc[keep]
+            row_count = len(frame)
+        except Exception as exc:
+            raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response instrument projection failed") from exc
     try:
         date_values = tuple(frame[date_column].tolist())
     except Exception as exc:
