@@ -21,27 +21,27 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-02T06:41:21.842904Z",
-  "description": "Monthly PIT readiness checks state coverage but not live pointer; v17 BLOCKED only reports a legal000792 warmup key, comprehensive consumer coverage not established.",
   "data_preparation_readback": {
-    "current_receipt": "X:/AIstock_temp/business-data-audit-20261002/business-data-delivery.json",
-    "source_root_cause": "Historical repair audited source from 2021-07-30, omitting the approved 2020-07-30 first year, and readiness inspected only one window. Monthly required-field gate omitted current/strict-prior market caps. Live canonical component readiness did not establish pointer activation or native Selection lease agreement.",
-    "complete_stock_date_keys": 6429998,
-    "qlib_required_field_count": 12,
-    "qlib_non_suspended_invalid_count": 0,
-    "source_unit_value_drift_count": 0,
-    "applicable_source_boundary_null_count": 6,
-    "typed_evidence_is_feature_acceptance": false,
-    "advisory_live_authority": "DEPLOYED_LEGACY_PENDING_MIGRATION",
-    "advisory_generation": 0,
-    "native_canonical_selection_lease_count": 0,
-    "candidate_ready": false,
-    "database_write": false,
-    "candidate_write": false,
     "active_profile_write": false,
-    "runtime_action": false,
+    "advisory_generation": 0,
+    "advisory_live_authority": "DEPLOYED_LEGACY_PENDING_MIGRATION",
+    "applicable_source_boundary_null_count": 6,
+    "candidate_ready": false,
+    "candidate_write": false,
+    "complete_stock_date_keys": 6429998,
+    "current_receipt": "X:/AIstock_temp/business-data-audit-20261002/business-data-delivery.json",
+    "database_write": false,
+    "fit_count": 0,
+    "native_canonical_selection_lease_count": 0,
     "outcomes_read": false,
-    "fit_count": 0
+    "qlib_non_suspended_invalid_count": 0,
+    "qlib_required_field_count": 12,
+    "runtime_action": false,
+    "source_root_cause": "Historical repair audited source from 2021-07-30, omitting the approved 2020-07-30 first year, and readiness inspected only one window. Monthly required-field gate omitted current/strict-prior market caps. Live canonical component readiness did not establish pointer activation or native Selection lease agreement.",
+    "source_unit_value_drift_count": 0,
+    "typed_evidence_is_feature_acceptance": false
   },
+  "description": "Monthly PIT readiness checks state coverage but not live pointer; v17 BLOCKED only reports a legal000792 warmup key, comprehensive consumer coverage not established.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -188,8 +188,8 @@
   },
   "first_seen_at": "2026-10-02T06:41:21.842904Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f031502f9dc2ba35092ea13af95fcadc8887ec62",
+  "fixed_at": "2026-10-02T09:30:56Z",
   "github_issue_number": 5271,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5271",
   "last_seen_at": "2026-10-02T06:41:21.842904Z",
@@ -197,6 +197,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5273",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -224,6 +225,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -235,7 +237,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1683",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1e3ae961d0919dd8",
+    "recorded_at": "2026-10-02T09:32:25.538383Z",
+    "runtime_contract_digest": "45c7c6f3a06bdb4eed5a9b7b84c47eb9d5ae546939f1917e25bf971b11eadd61",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9e0b07a64ce5035318bbc845488edee1907bf745",
+    "source_merge_commit": "f031502f9dc2ba35092ea13af95fcadc8887ec62",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5273",
+    "validation_evidence": [
+      "validation-receipt: id=3cccef8c7979c6a7 commit=9e0b07a64ce5035318bbc845488edee1907bf745 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_daily_basic_history_repair.py backend/tests/dataset_release/test_shared_consumer_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`70 passed`",
+      "validation-receipt: id=797e091eecb933ca commit=9e0b07a64ce5035318bbc845488edee1907bf745 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-install` result=`passed`",
+      "validation-receipt: id=f9c9d73a9d9dce90 commit=9e0b07a64ce5035318bbc845488edee1907bf745 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-install` result=`passed`"
+    ],
+    "validation_evidence_digest": "df1bffaaeb3b7c6ea212e870b165cf83abb818a3ce789bbd6ebc35925c579db5"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -244,6 +269,11 @@
     "fingerprint": "c39538960423c9ebc80736c5",
     "source_event_id": "FE-20261002-c39538960423"
   },
+  "validation_evidence": [
+    "validation-receipt: id=3cccef8c7979c6a7 commit=9e0b07a64ce5035318bbc845488edee1907bf745 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_daily_basic_history_repair.py backend/tests/dataset_release/test_shared_consumer_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`70 passed`",
+    "validation-receipt: id=797e091eecb933ca commit=9e0b07a64ce5035318bbc845488edee1907bf745 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-install` result=`passed`",
+    "validation-receipt: id=f9c9d73a9d9dce90 commit=9e0b07a64ce5035318bbc845488edee1907bf745 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-install` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
