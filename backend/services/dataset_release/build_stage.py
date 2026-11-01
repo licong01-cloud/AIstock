@@ -2028,10 +2028,13 @@ def _prepare_legacy_bin_patch(
     month_start = pit.cutoff.replace(day=1)
     if prefix.cutoff >= month_start:
         raise CandidateBuildStageError("legacy month tail cutoff does not advance")
-    from .monthly_quote_population import observed_quote_days
+    from .monthly_quote_population import observed_daily_fact_days, observed_quote_days
 
     known_codes = frozenset(source.qfq_authority.by_code)
-    quote_days = observed_quote_days(
+    # Daily joins retain real zero-turnover facts; those same rows must not
+    # create required minute bars. Neither population changes PIT eligibility.
+    population = observed_daily_fact_days if dataset == "daily_bin" else observed_quote_days
+    quote_days = population(
         _merged_rows(source, component, "kline_daily_raw", staging=invocation.staging_root,
                      key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
                      checkpoint=checkpoint, date_ranges=((month_start, pit.cutoff),),

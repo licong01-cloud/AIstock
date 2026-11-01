@@ -148,6 +148,53 @@ def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
     assert pit.spans[0].eligible_end == date(2026, 8, 31)
 
 
+@pytest.mark.parametrize("missing_limit", [False, True])
+def test_daily_halted_fact_survives_buy_exit_without_minute_bar_or_limit_fallback(tmp_path, missing_limit):
+    invocation, source, pit, toolchain, provider, data, _ = _setup(tmp_path)
+    first, last = date(2026, 9, 1), date(2026, 9, 2)
+    pit = replace(pit, cutoff=last, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    original = (provider / "features/000001.sz/close.day.bin").read_bytes()
+    daily = data["kline_daily_raw"][0]
+    data["kline_daily_raw"] = [{**daily, "volume_hand": 0, "amount_li": 0}, {**daily, "trade_date": last}]
+    limit = data["stk_limit"][0]
+    data["stk_limit"] = ([] if missing_limit else [limit]) + [{**limit, "trade_date": last}]
+    data["adj_factor"].append({**data["adj_factor"][-1], "trade_date": last})
+    data["suspend_d"] = [{"ts_code": "000001.SZ", "trade_date": first, "suspend_type": "S", "suspend_timing": None}]
+    source.trading_days = lambda: (date(2026, 8, 31), first, last)
+    source.qfq_authority = build_qfq_denominator_authority(data["adj_factor"], pit_snapshot=pit, cutoff=last)
+    base = source.ordered_partitions
+
+    def partitions(component, dataset, **kwargs):
+        result = base(component, dataset, **kwargs)
+        if dataset == "stk_limit":
+            return tuple(OrderedMappingPartition(p.identity, _filter_stk_limit_rows_to_pit(
+                p.rows, pit, quote_days=kwargs.get("quote_days", ()))) for p in result)
+        assert dataset != "kline_minute_raw"
+        return result
+
+    source.ordered_partitions = partitions
+    index_csv = invocation.staging_root / "index_context/index_csv/000300.SH.csv"
+    with index_csv.open("a", encoding="utf-8") as stream:
+        stream.write(index_csv.read_text(encoding="utf-8").splitlines()[1].replace(str(first), str(last)) + "\n")
+    if missing_limit:
+        with pytest.raises(CanonicalStockTransformError, match="stk_limit"):
+            stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset="daily_bin",
+                                      toolchain=toolchain, checkpoint=lambda: None)
+    else:
+        prepared = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset="daily_bin",
+                                             toolchain=toolchain, checkpoint=lambda: None)
+        payload = invocation.cas.get_json(prepared["qlib_dump_operations"][0]["preparation_ref"])
+        stock = next(item for item in payload["csv_refs"] if Path(item["id"]).stem == "000001.SZ")
+        with (invocation.staging_root / stock["id"]).open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        assert [row["date"] for row in rows] == [str(first), str(last)]
+        assert float(rows[0]["volume"]) == float(rows[0]["amount"]) == 0
+        assert float(rows[0]["close"]) == float(rows[0]["prev_close"]) == 6
+    assert (provider / "features/000001.sz/close.day.bin").read_bytes() == original
+    assert pit.spans[0].eligible_end < first
+    assert observed_quote_days(data["kline_daily_raw"], trading_days=(first, last)) == (("000001.SZ", last),)
+
+
 def test_month_prepare_appends_all_declared_index_csv_not_only_csi300(tmp_path):
     invocation, source, pit, toolchain, _, _, _ = _setup(tmp_path)
     invocation.profile.index_codes = ("000300.SH", "000905.SH")
@@ -508,6 +555,10 @@ def test_quote_population_is_exact_observed_trading_days_not_catalog_extension()
             {**fact, "ts_code": "000002.SZ"}, {**fact, "trade_date": date(2026, 10, 1)}]
     assert observed_quote_days(rows, known_codes=frozenset({"000001.SZ"}),
                                trading_days=(day, date(2026, 9, 2))) == (("000001.SZ", day),)
+    from backend.services.dataset_release.monthly_quote_population import observed_daily_fact_days
+    assert observed_daily_fact_days(rows, known_codes=frozenset({"000001.SZ"}),
+                                    trading_days=(day, date(2026, 9, 2))) == (
+        ("000001.SZ", day), ("000001.SZ", date(2026, 9, 2)))
 
 
 def test_quote_keys_keep_limit_fact_without_changing_buy_spans(tmp_path):

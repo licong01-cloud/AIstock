@@ -126,8 +126,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "RED regression reproduced one failure and one strict missing-limit pass. GREEN fixed both. Final related matrix: 91 passed across native monthly preparation, canonical transforms and artifact-ready readers. Changed-file Ruff, compileall, diff check and three-file L0 passed. Nox has no RTK wrapper and was executed directly in the existing environment.",
+      "Fresh processes replayed only sealed October SOURCE datasets, with no DB/provider fallback or candidate writes. Both raw daily and stk_limit inputs have 88812 matching keys. Canonical source reproduced the actual failure at 002667.SZ/2026-10-08 after its turnover-positive population removed 59 daily limit facts; fixed daily population produced 88812 daily rows, zero missing joins and zero synthesized stock-days. The minute quote population remains 88655. Receipts: X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2167-sealed-daily-red.json and BUG-2167-sealed-daily-green.json. This is fix-point validation, not full candidate readiness.",
+      "Review round 1: exact source-key root cause, raw-fact versus PIT/turnover semantics, native daily preparation RED/GREEN and true missing-limit rejection. Review round 2: daily zero-turnover facts remain original rows; minute quote population, no-minute synthesis, existing provider files, units, dates, stock eligibility and strict invalid-data behavior are unchanged. Review round 3: real frozen October replay, no runtime DB/network access, and fresh worker preflight PASS. SOURCE adapter version21 contract bed7197accc74556a147bbe9d826ff183e7db51f9666846954e892bf4924c113 remains unchanged, so retain SOURCE checkpoint and completed output receipts.",
+      "DESIGN-COMPLIANCE-001 PASS: real bounded fix-point tested, not a full-release completion claim; no silent fallback, fabricated prices/bars or READY; PIT, source facts, minute sessions, units and consumer contracts unchanged; no new approval, source audit or publication gate. Production DDL/DML, activation, training, experiments and process control remain false. Resume the same dmr_106d4729334644eb90e2bd01eb97d83f BUILD only after user-owned runtime restart."
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,

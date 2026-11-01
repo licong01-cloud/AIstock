@@ -1,4 +1,4 @@
-"""Observed monthly quote days are not PIT buy-eligibility intervals."""
+"""Observed daily facts and minute quote days are not PIT buy intervals."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -17,6 +17,25 @@ def observed_quote_days(
     additional quote population, leaving price/session validation to the shared
     transformer. Zero-turnover halt placeholders do not create quote days.
     """
+    return _observed_days(rows, known_codes=known_codes, trading_days=trading_days, require_turnover=True)
+
+
+def observed_daily_fact_days(
+    rows: Iterable[Mapping[str, Any]], *, known_codes: frozenset[str] | None = None,
+    trading_days: tuple[date, ...],
+) -> tuple[tuple[str, date], ...]:
+    """Keep real daily source keys, including existing zero-turnover rows.
+
+    This only joins auxiliary facts for daily export; it neither asserts a
+    suspension nor creates minute quotes, synthetic prices or buy eligibility.
+    """
+    return _observed_days(rows, known_codes=known_codes, trading_days=trading_days, require_turnover=False)
+
+
+def _observed_days(
+    rows: Iterable[Mapping[str, Any]], *, known_codes: frozenset[str] | None,
+    trading_days: tuple[date, ...], require_turnover: bool,
+) -> tuple[tuple[str, date], ...]:
     calendar = frozenset(trading_days)
     keys = set()
     for row in rows:
@@ -27,7 +46,7 @@ def observed_quote_days(
                 or (known_codes is not None and code not in known_codes) or day not in calendar):
             continue
         prices = [float(row[field]) for field in ("open_li", "high_li", "low_li", "close_li")]
-        if all(math.isfinite(value) and value > 0 for value in prices) and (
+        if all(math.isfinite(value) and value > 0 for value in prices) and (not require_turnover or
             float(row.get("volume_hand") or 0) > 0 or float(row.get("amount_li") or 0) > 0
         ):
             keys.add((code, day))
