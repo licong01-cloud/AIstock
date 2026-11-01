@@ -12,7 +12,7 @@ from backend.services.dataset_release.monthly_legacy_prefix import load_legacy_p
 from backend.services.dataset_release.monthly_legacy_index import append_legacy_index_context
 
 
-def _inputs(tmp_path):
+def _inputs(tmp_path, *, manifest_key="index_daily"):
     root = tmp_path / "august"
     (root / "index_context").mkdir(parents=True)
     old = pd.DataFrame([{"trade_date": pd.Timestamp("2026-08-31"), "ts_code": definition.daily_code,
@@ -22,7 +22,7 @@ def _inputs(tmp_path):
     old.to_hdf(path, "data", format="fixed")
     raw_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest = {"release_id": "august", "cutoff_trade_date": "2026-08-31", "components": {
-        "index_daily": {"path": "index_context/index_daily.h5", "size": path.stat().st_size, "sha256": raw_hash}}}
+        manifest_key: {"path": "index_context/index_daily.h5", "size": path.stat().st_size, "sha256": raw_hash}}}
     manifest["dataset_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
     raw = canonical_json_bytes(manifest) + b"\n"
     (root / "qe_dataset_manifest.json").write_bytes(raw)
@@ -45,10 +45,11 @@ def _inputs(tmp_path):
     return prefix, Source(), path, old
 
 
-def test_native_index_appends_month_and_preserves_legacy_raw_unit_contract(tmp_path):
+@pytest.mark.parametrize('manifest_key', ['index_daily', 'index_context__index_daily.h5'])
+def test_native_index_appends_month_and_preserves_legacy_raw_unit_contract(tmp_path, manifest_key):
     from backend.services.dataset_release.build_stage import _patch_index_component, _index_receipt_payload
     from backend.services.dataset_release.contracts import Component, ComponentAction
-    prefix, source, old_path, old = _inputs(tmp_path)
+    prefix, source, old_path, old = _inputs(tmp_path, manifest_key=manifest_key)
     before = old_path.read_bytes()
     staging = tmp_path / "september"
     staging.mkdir()

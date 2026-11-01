@@ -58,6 +58,9 @@ def resolve_legacy_component_pin(prefix: LegacyMonthlyPrefix, name: str) -> Mapp
     paths = {
         "day_meta_export": "daily_bin/qlib/meta_export.json",
         "minute_meta_export": "minute_bin/qlib/meta_export.json",
+        "index_daily": "index_context/index_daily.h5",
+        "day_provider_catalog": "daily_bin/qlib/instruments/all.txt",
+        "minute_provider_catalog": "minute_bin/qlib/instruments/all.txt",
         "sector_code_map": "components/sector_context_candidate_v1/sector_code_map.json",
         "sector_membership_spans": "components/sector_context_candidate_v1/sector_membership_spans.parquet",
         "market_context": "components/sector_context_candidate_v1/market_context.parquet",

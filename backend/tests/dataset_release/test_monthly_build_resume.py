@@ -962,7 +962,7 @@ def test_materialization_lease_never_weakens_current_execution_fence(tmp_path, f
             candidate_name="release", release_digest="d" * 64)
 
 
-def _legacy(tmp_path):
+def _legacy(tmp_path, *, layout="logical"):
     context = ProducerContext(stage="BUILD", operation_id="dmr_" + "a" * 32, attempt=3,
         request={}, prior_receipts={}, plan={"candidate_root": str(tmp_path / "release"),
         "release_id": "september", "target_cutoff": "2026-09-30",
@@ -989,7 +989,8 @@ def _legacy(tmp_path):
         instruments = file(f"{dataset}/qlib/instruments/all.txt")
         feature = file(f"{dataset}/qlib/features/000001.sz/close.{frequency}.bin")
         native = {"target_root": str(root / dataset / "qlib"), "frequency": frequency,
-            "baseline_root": str(tmp_path / "baseline/components" / dataset),
+            "baseline_root": str(tmp_path / "baseline" / (
+                f"components/{dataset}" if layout == "logical" else f"{dataset}/qlib")),
             "calendar_signature": cal["target_signature"], "instruments_signature": instruments["target_signature"],
             "calendar_sha256": cal["sha256"], "instruments_sha256": instruments["sha256"],
             "feature_file_count": 1, "feature_receipts": [{"instrument": "000001.sz", "feature": "close",
@@ -1076,20 +1077,26 @@ def test_wrong_receipt_or_changed_export_cannot_be_adopted(tmp_path, fault):
 
 
 @pytest.mark.parametrize("hardlinked", [True, False])
-def test_inherited_feature_requires_pinned_baseline_and_exact_unchanged_file_identity(tmp_path, hardlinked):
-    context, compiled, root, cas, prepare, finalize = _legacy(tmp_path)
+@pytest.mark.parametrize("layout", ["logical", "path_keyed"])
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_inherited_feature_requires_pinned_baseline_and_exact_unchanged_file_identity(tmp_path, hardlinked, layout, dataset):
+    context, compiled, root, cas, prepare, finalize = _legacy(tmp_path, layout=layout)
     baseline = tmp_path / "baseline"
-    old = baseline / "components/daily_bin/features/000004.sz/close.day.bin"
+    provider_relative = f"components/{dataset}" if layout == "logical" else f"{dataset}/qlib"
+    frequency = "day" if dataset == "daily_bin" else "1min"
+    old = baseline / provider_relative / f"features/000004.sz/close.{frequency}.bin"
     old.parent.mkdir(parents=True)
     old.write_bytes(b"old-delisted-stock-kept")
-    target = root / "daily_bin/qlib/features/000004.sz/close.day.bin"
+    target = root / dataset / f"qlib/features/000004.sz/close.{frequency}.bin"
     target.parent.mkdir()
     if hardlinked:
         os.link(old, target)
     else:
         target.write_bytes(old.read_bytes())
+    catalog = f"{provider_relative}/instruments/all.txt"
+    role = "day_provider_catalog" if dataset == "daily_bin" else "minute_provider_catalog"
     manifest = {"release_id": "old", "cutoff_trade_date": "2026-08-31",
-        "components": {"day_provider_catalog": {"path": "components/daily_bin/instruments/all.txt"}}}
+        "components": {role if layout == "logical" else catalog.replace('/', '__'): {"path": catalog}}}
     manifest_hash = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
     manifest["dataset_manifest_sha256"] = manifest_hash
     raw = canonical_json_bytes(manifest) + b"\n"
