@@ -1,0 +1,275 @@
+{
+  "actual": "Mixed daily provider index identities enter stock-only minute historical repair and fail SOURCE after materialization.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_minute_coverage.py",
+    "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "tests/aistock_validation/bugs/20261031_BUG-2165-monthly-historical-minute-capture-routes-daily-index-catalog-entries-to.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2165",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-31T19:26:53.413140Z",
+  "description": "Mixed daily provider index identities enter stock-only minute historical repair and fail SOURCE after materialization. Exact predecessor replay found 897 index-date candidates and 12 stock-date candidates. All 12 stock dates have unambiguous S/null full-day suspension; three also retain flat-price zero-volume placeholder minutes with a missing 11:30 and extraneous 13:00. Scope expanded to pass the already-frozen shared suspension authority into the bounded historical gap capture, exclude only its FULL_DAY_SUSPENDED keys and keep genuine partial/unresolved sessions strict. No raw facts, PIT eligibility or shared suspension semantics change.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261031-5a4d154cf1a3",
+      "timestamp": "2026-10-31T19:26:53.413140Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-route-red.json",
+    "X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-route-green.json",
+    "X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-native-suspension-green.json"
+  ],
+  "expected": "Historical minute capture receives only shared A-share quote identities, including non-PIT holdings/IPO/ST facts, while independent index path remains unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2165-monthly-historical-minute-capture-routes-daily-index-catalog-entries-to.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2165-monthly-historical-minute-capture-routes-daily-index-catalog-entries-to.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_minute_coverage.py",
+        "backend/tests/dataset_release/test_monthly_minute_coverage.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_minute_coverage.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_minute_coverage.py",
+        "backend/tests/dataset_release/test_monthly_minute_coverage.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+    ]
+  },
+  "first_seen_at": "2026-10-31T19:26:53.413140Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6985,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6985",
+  "last_seen_at": "2026-10-31T19:26:53.413140Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Initial RED: four mixed stock/index catalogue routes failed on old source; GREEN: all four passed after A-share fact projection. Second RED: eight suspension-state cases failed before the shared contract was passed; GREEN: eighteen minute coverage cases passed including full day, resume, intraday, mixed S/R, duplicates and inverted timing. Genuine incomplete/duplicate/invalid quote validation is unchanged.",
+      "Pre-expansion related matrix: 296 passed. Final changed-source test_monthly_minute_coverage.py and test_monthly_postgres_source.py: 145 passed. Ruff, compileall, diff check and four-file L0 passed. No dependency, DDL, production fact DML or new acceptance threshold.",
+      "Isolated canonical RED and task-worktree GREEN replayed the exact operation predecessor catalog. Original 909 keys comprised 897 index-date keys and twelve A-share dates; the A-share date digest remained identical after type projection. No PIT-eligibility projection was applied.",
+      "Fresh process loaded persistent worktree source and attempt14 frozen suspension authority SHA256 f9c3fc22d44d0ed41375d02dd65448579546bec7900dabded03c82fe534d8c7c. A production read-only repeatable-read transaction checked only twelve exact dates: twelve unambiguous full-day S/null states, zero minute repair dates. Existing flat-price zero-volume placeholders were not repaired or copied. Receipt X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-native-suspension-green.json. This is a fix-point check, not full SOURCE/candidate acceptance.",
+      "Review round 1: shared SH/SZ A-share fact identity, stock/index symbol collision, historical alias 302132, IPO/ST/exited identities and duplicate additional-catalog paths. No PIT membership narrowing. Review round 2: exact-key suspension join in the existing SOURCE snapshot; only shared FULL_DAY_SUSPENDED resolutions excluded, mixed/duplicate/invalid/intraday/resume remain with the strict minute reader. Review round 3: exact production catalogs, bounded database readback, frozen authority propagation and SOURCE adapter identity version21; no raw fact or consumer business changes.",
+      "DESIGN-COMPLIANCE-001 PASS: tested real fix point, not a partial release completion claim; no defaults, synthetic bars or fabricated READY; PIT, quote facts, windows, prices and shared suspension semantics unchanged; no new approval, historical payload QA or publication gate. Actual monthly operation remains FAILED pending user restart and native same-operation resume. No process control or profile write.",
+      "Fresh worktree Python replayed exact predecessor catalogs and attempt14 frozen suspension authority; twelve bounded production read-only keys resolved as existing full-day suspension, zero required minute repairs. X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2165-native-suspension-green.json. Not a production restart or complete release acceptance."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly historical minute capture routes daily index catalog entries to stock-only repair",
+  "trigger_condition": {
+    "fingerprint": "5a4d154cf1a3f925cb8ddcfb",
+    "source_event_id": "FE-20261031-5a4d154cf1a3"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -1,5 +1,6 @@
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -99,7 +100,8 @@ def test_history_capture_uses_daily_fact_catalog_not_pit_and_same_snapshot(tmp_p
         'daily_meta_export': {'path': 'components/daily/meta.json'}}})
     # ST/exited securities may have no buy-eligible interval at all.
     pit = SimpleNamespace(spans=())
-    connection = object()
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchall.return_value = []
     def capture(inputs, **kwargs):
         assert inputs == {'stock_dates': [{'ts_code': '600811.SH', 'trade_date': '2024-12-16'}]}
         assert kwargs['connection'] is connection
@@ -132,3 +134,110 @@ def test_auto_binding_uses_frozen_bytes_and_rejects_conflicting_explicit_fact(tm
     explicit = {**plan, BINDING: {'authority_ref': cas.put_json(other).as_dict()}}
     with pytest.raises(ValueError, match='conflict'):
         automatic_repair_plan(explicit, build_inputs={'historical_minute_coverage_ref': reference}, cas=cas, operation_id='dmr_test')
+
+
+@pytest.mark.parametrize('origin', ['daily_catalog', 'additional_quote_days', 'both'])
+def test_history_capture_routes_only_a_share_facts_not_indexes_or_pit(tmp_path, monkeypatch, origin):
+    from backend.services.dataset_release import monthly_minute_repair
+
+    minute = tmp_path / 'minute'
+    (minute / 'instruments').mkdir(parents=True)
+    (minute / 'calendars').mkdir()
+    (minute / 'instruments/all.txt').write_text('')
+    (minute / 'calendars/1min.txt').write_text('2026-09-01 09:31:00\n')
+    daily = tmp_path / 'daily/instruments'
+    daily.mkdir(parents=True)
+    stocks = ['600811.SH', '301718.SZ', '302132.SZ', '000001.SZ']
+    others = ['000985.CSI', '932000.CSI', '000300.SH', '399001.SZ',
+              '900901.SH', '200002.SZ', '920001.BJ', '510300.SH']
+    codes = stocks + others
+    (daily / 'all.txt').write_text(''.join(
+        f'{code}\t2026-09-01\t2026-09-01\n' for code in codes
+    ) if origin != 'additional_quote_days' else '')
+    prefix = SimpleNamespace(root=tmp_path, manifest={'components': {
+        'minute_meta_export': {'path': 'minute/meta.json'},
+        'daily_meta_export': {'path': 'daily/meta.json'}}})
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchall.return_value = []
+    captured = []
+
+    def capture(inputs, **kwargs):
+        captured.append(inputs)
+        assert inputs == {'stock_dates': [
+            {'ts_code': code, 'trade_date': '2026-09-01'} for code in sorted(stocks)]}
+        assert kwargs['connection'] is connection
+        assert kwargs['allow_absent'] is True
+        return {'facts': ['frozen_stock_facts']}
+
+    monkeypatch.setattr(monthly_minute_repair, 'capture_database_minutes', capture)
+    result = capture_historical_coverage(
+        prefix=prefix, pit=SimpleNamespace(spans=()), cutoff=date(2026, 10, 30),
+        connection=connection, additional_quote_days=(
+            tuple((code, '2026-09-01') for code in codes) if origin != 'daily_catalog' else ()),
+    )
+    assert result == {'facts': ['frozen_stock_facts']}
+    assert len(captured) == 1
+
+
+def test_index_only_daily_catalog_does_not_open_stock_minute_query(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_minute_repair
+
+    minute = tmp_path / 'minute'
+    (minute / 'instruments').mkdir(parents=True)
+    (minute / 'calendars').mkdir()
+    (minute / 'instruments/all.txt').write_text('')
+    (minute / 'calendars/1min.txt').write_text('2026-09-01 09:31:00\n')
+    daily = tmp_path / 'daily/instruments'
+    daily.mkdir(parents=True)
+    (daily / 'all.txt').write_text('000985.CSI\t2026-09-01\t2026-09-01\n')
+    prefix = SimpleNamespace(root=tmp_path, manifest={'components': {
+        'minute_meta_export': {'path': 'minute/meta.json'},
+        'daily_meta_export': {'path': 'daily/meta.json'}}})
+    monkeypatch.setattr(monthly_minute_repair, 'capture_database_minutes',
+                        lambda *args, **kwargs: pytest.fail('index routed to stock minute query'))
+    assert capture_historical_coverage(
+        prefix=prefix, pit=SimpleNamespace(spans=()), cutoff=date(2026, 10, 30),
+        connection=object(), additional_quote_days=(('000300.SH', '2026-09-01'),),
+    ) is None
+
+
+@pytest.mark.parametrize(('events', 'should_capture'), [
+    ([], True), ([('S', None)], False), ([('S', '')], False),
+    ([('R', None)], True), ([('S', '09:30-10:00')], True),
+    ([('S', None), ('R', None)], True), ([('S', None), ('S', None)], True),
+    ([('S', '13:00-09:30')], True),
+])
+def test_historical_capture_reuses_full_day_contract_not_placeholder_bars(
+    tmp_path, monkeypatch, events, should_capture,
+):
+    from backend.services.dataset_release import monthly_minute_repair
+
+    minute = tmp_path / 'minute'
+    (minute / 'instruments').mkdir(parents=True)
+    (minute / 'calendars').mkdir()
+    (minute / 'instruments/all.txt').write_text('')
+    (minute / 'calendars/1min.txt').write_text('2026-06-23 09:31:00\n')
+    daily = tmp_path / 'daily/instruments'
+    daily.mkdir(parents=True)
+    (daily / 'all.txt').write_text('600599.SH\t2026-06-23\t2026-06-23\n')
+    prefix = SimpleNamespace(root=tmp_path, manifest={'components': {
+        'minute_meta_export': {'path': 'minute/meta.json'},
+        'daily_meta_export': {'path': 'daily/meta.json'}}})
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = [
+        ('600599.SH', date(2026, 6, 23), kind, timing) for kind, timing in events]
+    capture = MagicMock(return_value={'facts': ['unmodified_stock_reader']})
+    monkeypatch.setattr(monthly_minute_repair, 'capture_database_minutes', capture)
+    result = capture_historical_coverage(
+        prefix=prefix, pit=SimpleNamespace(spans=()), cutoff=date(2026, 10, 30),
+        connection=connection, suspension_authority={
+            'schema_version': 'aistock_suspension_day_authority_v1',
+            'policy': 'provider_events_with_disclosure_resolution_v1', 'entries': []},
+    )
+    assert bool(capture.call_count) is should_capture
+    assert result == ({'facts': ['unmodified_stock_reader']} if should_capture else None)
+    sql, params = cursor.execute.call_args.args
+    assert sql.startswith('SELECT ') and 'market.suspend_d' in sql
+    assert params == (['600599.SH'], [date(2026, 6, 23)])
+    connection.commit.assert_not_called()
