@@ -865,6 +865,27 @@ targets:
   - Review replay and live-transition state
   - Validate LocalSIM account, ledger, and lifecycle contracts
   coverage_status: partial
+- route_id: paper_v2.advisory
+  href: /paper-v2/advisory
+  label: 荐股工作台
+  nav_group: Strategy Package and Simulation Trading
+  primary_module: advisory.workbench
+  impact_modules:
+  - advisory.ui
+  risk_level: medium
+  required_test_plans:
+  - l0
+  - advisory_workbench_backend
+  - advisory_workbench_ui
+  recommended_test_plans:
+  - advisory_mocked_ui
+  - advisory_historical_range_ui
+  business_operations:
+  - 查看荐股任务及最近发布情况
+  - 查看已发布名单、成员变化与荐股过程
+  - 核对推荐来源及费用前参考绩效
+  - 进入荐股任务管理
+  coverage_status: partial
 - route_id: paper_v2.packages
   href: /paper-v2/packages
   label: Strategy Package Center
