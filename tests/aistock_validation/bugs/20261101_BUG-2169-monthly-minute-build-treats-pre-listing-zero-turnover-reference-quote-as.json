@@ -126,13 +126,22 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "The sealed raw minute partition contains a zero-turnover issue/reference quote for 301718.SZ at 2026-10-09 09:31, while the same sealed stock_basic establishes list_date=2026-10-22. The effective BUILD reader treated this pre-listing placeholder as an exchange-traded bar, requesting an adj_factor that must not exist before listing. The real listed-day factor series is complete; this is not an upstream listed-day factor delay or PIT eligibility defect.",
+  "fix_summary": "Normalize only zero-turnover pre-listing reference quotes using the same sealed stock_basic lifecycle, retain them unchanged in raw SOURCE, preserve real post-listing quotes irrespective of PIT, reject contradictory/invalid pre-listing turnover, close source iterators, and publish the exact exclusions in existing transform metrics. No financial data writes, SOURCE re-collection, activation or process actions.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "RED: seven newly added fix-point regressions failed on the original reader; the raw SOURCE branch passed. GREEN: the eight direct boundary/turnover/iterator regressions passed. The final related matrix (artifact-ready source, legacy build, canonical transformer) passed 102 tests. Timezone and repeat-read metric regression is a separate targeted follow-up, not another broad matrix.",
+      "Native sealed October fresh-process RED reproduced 301718.SZ/2026-10-09. Native GREEN produced exactly 22080 real minute rows for six neighboring stocks with synthesized_stock_days=0, excluding exactly one pre-listing zero-turnover reference quote. Receipts: X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2169-sealed-native-red.json and BUG-2169-sealed-native-green.json. SOURCE bundle SHA256 stays 9834867ae964e20128c1b52f35ca69b6b75dc321d6dbd99be04c432bef8db711. These prove the bounded fix point, not whole candidate readiness.",
+      "Review round 1: exact sealed lifecycle/date/turnover root cause and RED/GREEN. Round 2: unknown lifecycle is not excluded, post-listing real facts outside PIT remain, positive/invalid turnover contradictions fail, raw SOURCE is unchanged. Round 3: Shanghai timestamp boundary corrected to avoid host timezone conversion; source iterator closure and reread metric deduplication verified. No canonical price/factor units, buy population, thresholds or consumer contracts changed.",
+      "DESIGN-COMPLIANCE-001: implemented native fix point rather than placeholder/whole-release claim; no fabricated factor or bar, fallback or fake READY; no unapproved PIT/business migration; no new approval or source audit gate. Production DDL/DML=false, profile activation=false, training/experiment=false, process_control=false. Existing 2903 completed minute CSV files remain untouched; their incomplete-prepare recovery is not represented as completed bin materialization. Resume only the same durable October operation after user runtime restart and safe retained-output handling."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
