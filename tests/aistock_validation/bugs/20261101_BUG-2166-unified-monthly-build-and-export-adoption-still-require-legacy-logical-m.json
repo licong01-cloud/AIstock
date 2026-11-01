@@ -177,8 +177,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "RED: original source failed eight new path-keyed index/adoption cases; GREEN: all twenty-two focused cases passed. Final related matrix: 210 passed, 1 skipped. Twelve adversarial missing/conflicting/duplicate pin tests passed. Changed-file Ruff, compileall, diff check and six-file L0 passed.",
+      "Fresh independent processes replayed the exact sealed attempt16 index delta and predecessor. Canonical source reproduced KeyError index_daily; worktree source appended 204 rows across 12 indices and 17 October trading days. Native month readback passed and predecessor index H5 SHA256 remained 59306af2207af5b057a339b314739eb8cdcdfc577c37618dfe53d7881d820fe8. Receipts: X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2166-sealed-index-red.json and BUG-2166-sealed-index-green.json. Only new small X scratch outputs were written; no candidate, database, profile, runtime or network access.",
+      "Fresh worktree worker preflight PASS: SOURCE adapter version21 and contract bed7197accc74556a147bbe9d826ff183e7db51f9666846954e892bf4924c113 are unchanged; registry SHA256 122e5b545217ee1bdca271015665c9ec42b4403935ee93aa40cada0454b59db1 is unchanged. Operation dmr_106d4729334644eb90e2bd01eb97d83f SOURCE checkpoint remains reusable; do not redo SOURCE or completed exports. This is not live-runtime activation or full dataset readiness.",
+      "Review 1: root cause and scoped sibling lookup audit; reuse existing resolver for exact native producer paths, including compatibility-copy decoys. Review 2: both logical/path-keyed manifests, daily/minute catalogs, conflicting pins, old units and unchanged hardlink identity. Review 3: real sealed October fix-point replay, preserved predecessor, unchanged SOURCE contract and restart/resume boundary. No additional defect remained in this bounded patch.",
+      "DESIGN-COMPLIANCE-001: real fix-point and focused regression verified, not a complete release claim; no silent fallback, fabricated facts or READY; stock pools, PIT, units, windows, old files and SOURCE semantics unchanged; no new approval, historical audit or publication gate. BUILD must resume through the same official operation after user-owned restart. DDL/DML, training, experiments, activation and process control remain false."
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
