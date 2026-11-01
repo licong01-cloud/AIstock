@@ -126,6 +126,54 @@ def test_real_month_prepare_generates_native_operation_without_old_csv_lineage(t
 
 
 @pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_completed_month_csvs_are_reused_without_transforming_again(tmp_path, monkeypatch, dataset):
+    invocation, source, pit, toolchain, _, _, calls = _setup(tmp_path, dataset=dataset)
+    first = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
+                                     toolchain=toolchain, checkpoint=lambda: None)
+    path = invocation.staging_root / '.month-inputs' / dataset / 'csv/000001.SZ.csv'
+    before = path.stat()
+    old_daily = stages.CanonicalStockTransformer.transform_daily
+    def no_retransform(*args, **kwargs):
+        raise AssertionError('completed canonical CSV must not be transformed again')
+    monkeypatch.setattr(stages.CanonicalStockTransformer, 'transform_daily' if dataset == 'daily_bin' else 'transform_minute', no_retransform)
+    calls.clear()
+    second = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
+                                      toolchain=toolchain, checkpoint=lambda: None)
+    assert second['patch_preparation']['csv'] == first['patch_preparation']['csv']
+    assert second['patch_preparation']['actual_work']['stock_rows_transformed'] == 0
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert not any(name == 'kline_minute_raw' for name, _, _ in calls)
+    assert callable(old_daily)
+
+
+def test_partial_minute_preparation_reads_only_unfinished_stock_on_retry(tmp_path,monkeypatch):
+    invocation,source,pit,toolchain,_,data,calls=_setup(tmp_path,dataset='minute_bin')
+    for name in ('adj_factor','kline_daily_raw','stk_limit','kline_minute_raw'):
+        data[name].extend({**row,'ts_code':'600000.SH'} for row in tuple(data[name]))
+    source.qfq_authority=build_qfq_denominator_authority(data['adj_factor'],pit_snapshot=pit,cutoff=pit.cutoff)
+    transform=stages.CanonicalStockTransformer.transform_minute
+    def fault(self,*args,**kwargs):
+        for n,row in enumerate(transform(self,*args,**kwargs)):
+            if n==241:
+                raise OSError('interruption in second instrument')
+            yield row
+    monkeypatch.setattr(stages.CanonicalStockTransformer,'transform_minute',fault)
+    with pytest.raises(OSError,match='second instrument'):
+        stages._prepare_bin_patch(invocation,source=source,pit=pit,dataset='minute_bin',toolchain=toolchain,checkpoint=lambda:None)
+    first=invocation.staging_root/'.month-inputs/minute_bin/csv/000001.SZ.csv'
+    before=first.stat()
+    assert not (first.parent/'600000.SH.csv').exists()
+    monkeypatch.setattr(stages.CanonicalStockTransformer,'transform_minute',transform)
+    calls.clear()
+    receipt=stages._prepare_bin_patch(invocation,source=source,pit=pit,dataset='minute_bin',toolchain=toolchain,checkpoint=lambda:None)
+    assert receipt['patch_preparation']['csv']['rows']==480
+    assert receipt['patch_preparation']['actual_work']['stock_rows_reused']==240
+    assert receipt['patch_preparation']['actual_work']['stock_rows_transformed']==240
+    assert [codes for name,_,codes in calls if name=='kline_minute_raw']==[('600000.SH',)]
+    assert first.stat().st_mtime_ns==before.st_mtime_ns
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
 def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
     invocation, source, pit, toolchain, _, data, _ = _setup(tmp_path, dataset=dataset)
     # Real September quotes must remain readable for an August holding. This

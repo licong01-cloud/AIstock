@@ -620,6 +620,60 @@ def _fixture(tmp_path):
     return context, compiled, root, cas, journal
 
 
+def test_incomplete_prepare_is_journaled_and_retains_same_source_root(tmp_path):
+    context, compiled, root, cas, journal = _fixture(tmp_path)
+    journal.record['steps'].clear()
+    journal.record['files'].clear()
+    _atomic(journal.path,journal.record)
+    closed=root/'.month-inputs/minute_bin/csv/000001.SZ.csv'
+    closed.parent.mkdir(parents=True)
+    closed.write_bytes(b'closed native CSV')
+    before=closed.stat()
+    retry=replace(context,attempt=3)
+    selected=retained_staging_root(retry,compiled,tmp_path,tmp_path/'not-used')
+    assert selected==root
+    restored=MonthlyBuildResume(context=retry,compiled=compiled,release_root=tmp_path,
+        staging_root=selected,cas=cas)
+    assert restored.record['partial_prepare'] is True
+    assert restored.record['materialization_attempt']==2
+    assert restored.get('prepare') is None
+    assert closed.stat().st_mtime_ns==before.st_mtime_ns
+
+
+def test_prepare_stage_accepts_only_its_exact_partial_source_journal(tmp_path):
+    from backend.services.dataset_release.monthly_build_resume import validate_partial_preparation
+    context,compiled,root,_,_=_fixture(tmp_path)
+    invocation=SimpleNamespace(candidate_root=tmp_path,run_id=context.operation_id,
+        build_inputs={'source_bundle_sha256':compiled.source_bundle_sha256},
+        plan=compiled.physical_plan,release_id=context.plan['release_id'],
+        staging_relative_path=root.relative_to(tmp_path).as_posix(),staging_root=root)
+    validate_partial_preparation(invocation)
+    invocation.build_inputs={'source_bundle_sha256':'e'*64}
+    with pytest.raises(MonthlyBuildResumeError,match='no matching partial SOURCE journal'):
+        validate_partial_preparation(invocation)
+
+
+def test_legacy_partial_csv_root_requires_same_native_source_receipt(tmp_path):
+    context,compiled,root,cas,journal=_fixture(tmp_path)
+    journal.path.unlink()
+    (root/'daily_bin/close.bin').unlink()
+    index=root/'index_context/index_materialization_receipt.json'
+    index.parent.mkdir()
+    (root/'.month-inputs/minute_bin/csv').mkdir(parents=True)
+    native={'schema_version':'aistock_monthly_native_index_materialization_v1','status':'PASS',
+            'source_bundle_sha256':compiled.source_bundle_sha256,'cutoff':'2026-09-30',
+            'predecessor_manifest_sha256':None}
+    index.write_text(json.dumps(native),encoding='utf-8')
+    retry=replace(context,attempt=3)
+    assert retained_staging_root(retry,compiled,tmp_path,tmp_path/'not-used')==root
+    restored=MonthlyBuildResume(context=retry,compiled=compiled,release_root=tmp_path,staging_root=root,cas=cas)
+    assert restored.record['materialization_attempt']==2
+    restored.path.unlink()
+    index.write_text(json.dumps({**native,'source_bundle_sha256':'e'*64}),encoding='utf-8')
+    with pytest.raises(MonthlyBuildResumeError,match='SOURCE identity differs'):
+        retained_staging_root(retry,compiled,tmp_path,tmp_path/'not-used')
+
+
 def test_sealed_build_receipt_is_bounded_by_complete_reference_not_control_json_cap(tmp_path):
     from backend.services.dataset_release.monthly_build_resume import load_sealed_build_json
     from backend.services.dataset_release.cas_store import CASStoreError, CASCorruptionError
