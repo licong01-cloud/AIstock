@@ -483,6 +483,8 @@ def _prepare(
         raise CandidateBuildStageError("action plan contains an unsupported non-bounded component action")
     staging = invocation.staging_root
     if staging.exists():
+        if private_source is not None or not isinstance(invocation.build_inputs.get('monthly_legacy_predecessor'), Mapping):
+            raise CandidateBuildStageError("new fenced prepare staging already exists")
         from .monthly_build_resume import validate_partial_preparation
         validate_partial_preparation(invocation)
     else:
