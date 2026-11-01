@@ -29,13 +29,20 @@
   ],
   "expected": "Only listed-lifecycle minute facts reach QFQ conversion. Post-listing facts outside PIT remain exported. Positive-turnover pre-listing contradictions stay errors. SOURCE and completed CSVs are preserved.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_build_source.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2169-monthly-minute-build-treats-pre-listing-zero-turnover-reference-quote-as.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/artifact_ready_build_source.py",
       "backend/services/dataset_release/build_stage.py",
-      "backend/tests/dataset_release/test_artifact_ready_build_source.py"
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2169-monthly-minute-build-treats-pre-listing-zero-turnover-reference-quote-as.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/artifact_ready_build_source.py",
@@ -107,8 +114,9 @@
   },
   "first_seen_at": "2026-11-01T17:46:02.810491Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "99f960122bc7d48093b322254017e2ad999e933a",
+  "fix_summary": "Normalize only zero-turnover pre-listing reference quotes using the same sealed stock_basic lifecycle, retain them unchanged in raw SOURCE, preserve real post-listing quotes irrespective of PIT, reject contradictory/invalid pre-listing turnover, close source iterators, and publish the exact exclusions in existing transform metrics. No financial data writes, SOURCE re-collection, activation or process actions.",
+  "fixed_at": "2026-11-01T18:00:08Z",
   "github_issue_number": 7001,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7001",
   "last_seen_at": "2026-11-01T17:46:02.810491Z",
@@ -116,6 +124,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7002",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,7 +136,6 @@
   ],
   "risk_area": "bug",
   "root_cause": "The sealed raw minute partition contains a zero-turnover issue/reference quote for 301718.SZ at 2026-10-09 09:31, while the same sealed stock_basic establishes list_date=2026-10-22. The effective BUILD reader treated this pre-listing placeholder as an exchange-traded bar, requesting an adj_factor that must not exist before listing. The real listed-day factor series is complete; this is not an upstream listed-day factor delay or PIT eligibility defect.",
-  "fix_summary": "Normalize only zero-turnover pre-listing reference quotes using the same sealed stock_basic lifecycle, retain them unchanged in raw SOURCE, preserve real post-listing quotes irrespective of PIT, reject contradictory/invalid pre-listing turnover, close source iterators, and publish the exact exclusions in existing transform metrics. No financial data writes, SOURCE re-collection, activation or process actions.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -141,7 +149,9 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -151,7 +161,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2169",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "97d6716870e05e0a",
+    "recorded_at": "2026-11-01T18:00:49.060638Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f7185f9e68949f01787569764f5157f154a593d3",
+    "source_merge_commit": "99f960122bc7d48093b322254017e2ad999e933a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7002",
+    "validation_evidence": [
+      "nox -s l0 -> passed; related pytest 102 passed plus timezone1; native sealed fix-point22080 real minute bars PASS; CI41334152980 success; three review rounds and DESIGN-COMPLIANCE-001 passed; runtime restart pending user"
+    ],
+    "validation_evidence_digest": "55a3fc779352e2b961dc40bd808a3de884dc9e519ff7840ce1299fd9f3ee8b56"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -160,6 +191,9 @@
     "fingerprint": "f97c8b0469c25b0bfb28c1ba",
     "source_event_id": "FE-20261101-f97c8b0469c2"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed; related pytest 102 passed plus timezone1; native sealed fix-point22080 real minute bars PASS; CI41334152980 success; three review rounds and DESIGN-COMPLIANCE-001 passed; runtime restart pending user"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
