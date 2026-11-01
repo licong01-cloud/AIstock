@@ -1,0 +1,383 @@
+{
+  "actual": "SOURCE succeeds but BUILD fails before export on a missing legacy key; adoption has the same downstream omission.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_legacy_prefix.py",
+    "backend/services/dataset_release/monthly_legacy_index.py",
+    "backend/services/dataset_release/monthly_legacy_adoption.py",
+    "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+    "backend/tests/dataset_release/test_monthly_legacy_index.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "tests/aistock_validation/bugs/20261101_BUG-2166-unified-monthly-build-and-export-adoption-still-require-legacy-logical-m.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2166",
+  "closed_at": "2026-11-01T14:05:43.755317Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-01T13:09:58.004231Z",
+  "description": "SOURCE succeeds but BUILD fails before export on a missing legacy key; adoption has the same downstream omission.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261101-f3edd4d11323",
+      "timestamp": "2026-11-01T13:09:58.004231Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Native index append and completed-export adoption accept both registered legacy logical-role pins and exact unified physical-role pins without ambiguity, history re-audit, provider/DB fallback or full re-export.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_legacy_adoption.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_legacy_prefix.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2166-unified-monthly-build-and-export-adoption-still-require-legacy-logical-m.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_legacy_adoption.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_legacy_prefix.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2166-unified-monthly-build-and-export-adoption-still-require-legacy-logical-m.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_legacy_prefix.py",
+        "backend/services/dataset_release/monthly_legacy_index.py",
+        "backend/services/dataset_release/monthly_legacy_adoption.py",
+        "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+        "backend/tests/dataset_release/test_monthly_legacy_index.py",
+        "backend/tests/dataset_release/test_monthly_build_resume.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_legacy_prefix.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_legacy_index.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_legacy_adoption.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_legacy_index.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_build_resume.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_legacy_prefix.py",
+        "backend/services/dataset_release/monthly_legacy_index.py",
+        "backend/services/dataset_release/monthly_legacy_adoption.py",
+        "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+        "backend/tests/dataset_release/test_monthly_legacy_index.py",
+        "backend/tests/dataset_release/test_monthly_build_resume.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_legacy_prefix.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_legacy_adoption.py",
+      "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_legacy_prefix.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_legacy_adoption.py",
+      "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py"
+    ]
+  },
+  "first_seen_at": "2026-11-01T13:09:58.004231Z",
+  "fix_branch": null,
+  "fix_commit": "bc6ea95c183ac55fb709cc0cf2051c7a0a59f1f0",
+  "fixed_at": "2026-11-01T13:31:56Z",
+  "github_issue_number": 6990,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6990",
+  "last_seen_at": "2026-11-01T13:09:58.004231Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6991",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "RED: original source failed eight new path-keyed index/adoption cases; GREEN: all twenty-two focused cases passed. Final related matrix: 210 passed, 1 skipped. Twelve adversarial missing/conflicting/duplicate pin tests passed. Changed-file Ruff, compileall, diff check and six-file L0 passed.",
+      "Fresh independent processes replayed the exact sealed attempt16 index delta and predecessor. Canonical source reproduced KeyError index_daily; worktree source appended 204 rows across 12 indices and 17 October trading days. Native month readback passed and predecessor index H5 SHA256 remained 59306af2207af5b057a339b314739eb8cdcdfc577c37618dfe53d7881d820fe8. Receipts: X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2166-sealed-index-red.json and BUG-2166-sealed-index-green.json. Only new small X scratch outputs were written; no candidate, database, profile, runtime or network access.",
+      "Fresh worktree worker preflight PASS: SOURCE adapter version21 and contract bed7197accc74556a147bbe9d826ff183e7db51f9666846954e892bf4924c113 are unchanged; registry SHA256 122e5b545217ee1bdca271015665c9ec42b4403935ee93aa40cada0454b59db1 is unchanged. Operation dmr_106d4729334644eb90e2bd01eb97d83f SOURCE checkpoint remains reusable; do not redo SOURCE or completed exports. This is not live-runtime activation or full dataset readiness.",
+      "Review 1: root cause and scoped sibling lookup audit; reuse existing resolver for exact native producer paths, including compatibility-copy decoys. Review 2: both logical/path-keyed manifests, daily/minute catalogs, conflicting pins, old units and unchanged hardlink identity. Review 3: real sealed October fix-point replay, preserved predecessor, unchanged SOURCE contract and restart/resume boundary. No additional defect remained in this bounded patch.",
+      "DESIGN-COMPLIANCE-001: real fix-point and focused regression verified, not a complete release claim; no silent fallback, fabricated facts or READY; stock pools, PIT, units, windows, old files and SOURCE semantics unchanged; no new approval, historical audit or publication gate. BUILD must resume through the same official operation after user-owned restart. DDL/DML, training, experiments, activation and process control remain false.",
+      "Sealed October fix-point RED canonical KeyError, GREEN 204 rows/12 indices/17TD; predecessor unchanged; SOURCE v21 contract unchanged; BUG-2166-sealed-index-green.json"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2166-postrestart-source-identity.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2166",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "bc6ea95c183ac55fb709cc0cf2051c7a0a59f1f0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-01T14:05:22.031122Z",
+      "mode": "read_only",
+      "observed_identity": "b5e66b6338bc31cfae69051fe6b2ae210f271763",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "341005dcf39deab8c22c49f72a49ea31996cf0e3bffeb3189b71c34838d52470",
+      "receipt_sha256": "f8a42e3946574f4b9bd87913768c0c265efec27e091d7f7c3fa517913ade6194",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "47cf05e134c392ddeafb71d8266a53afbccfc8971aff3bd2db8b0460a2be1e0e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2166",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "00d5a89f503809a2",
+    "recorded_at": "2026-11-01T13:32:57.267323Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ed015ef8dde3647e22cacbabc074579541a922a5",
+    "source_merge_commit": "bc6ea95c183ac55fb709cc0cf2051c7a0a59f1f0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6991",
+    "validation_evidence": [
+      "validation-receipt: id=2c84bd0b543a845b commit=ed015ef8dde3647e22cacbabc074579541a922a5 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_legacy_prefix.py backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_build_resume.py -q` result=`passed (210 passed, 1 skipped)`",
+      "validation-receipt: id=ffead5f261ed2fa4 commit=ed015ef8dde3647e22cacbabc074579541a922a5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_legacy_prefix.py backend/services/dataset_release/monthly_legacy_index.py backend/services/dataset_release/monthly_legacy_adoption.py backend/tests/dataset_release/test_monthly_legacy_prefix.py backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "c78b68aeaff99cf4f4cbd42f070b1d7f9af0ec52dbfd2ab350034e0d8f11ea74"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Unified monthly BUILD and export adoption still require legacy logical manifest keys",
+  "trigger_condition": {
+    "fingerprint": "f3edd4d1132351df9b19402e",
+    "source_event_id": "FE-20261101-f3edd4d11323"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=2c84bd0b543a845b commit=ed015ef8dde3647e22cacbabc074579541a922a5 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_legacy_prefix.py backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_build_resume.py -q` result=`passed (210 passed, 1 skipped)`",
+    "validation-receipt: id=ffead5f261ed2fa4 commit=ed015ef8dde3647e22cacbabc074579541a922a5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_legacy_prefix.py backend/services/dataset_release/monthly_legacy_index.py backend/services/dataset_release/monthly_legacy_adoption.py backend/tests/dataset_release/test_monthly_legacy_prefix.py backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2166 --target worker-scheduler --expected-identity bc6ea95c183ac55fb709cc0cf2051c7a0a59f1f0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
