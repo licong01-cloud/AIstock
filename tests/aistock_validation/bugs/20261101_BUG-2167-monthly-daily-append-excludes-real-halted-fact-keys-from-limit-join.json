@@ -1,0 +1,279 @@
+{
+  "actual": "Attempt17 BUILD fails required stock-day source is missing stk_limit despite matching frozen raw rows.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_quote_population.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+    "tests/aistock_validation/bugs/20261101_BUG-2167-monthly-daily-append-excludes-real-halted-fact-keys-from-limit-join.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2167",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-01T14:16:31.813355Z",
+  "description": "Attempt17 BUILD fails required stock-day source is missing stk_limit despite matching frozen raw rows.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261101-734e5ab0b53a",
+      "timestamp": "2026-11-01T14:16:31.813355Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Monthly daily append preserves real frozen zero-turnover halted daily facts and matching limits, without requiring or generating minute bars or expanding PIT buy eligibility.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_quote_population.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2167-monthly-daily-append-excludes-real-halted-fact-keys-from-limit-join.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_quote_population.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2167-monthly-daily-append-excludes-real-halted-fact-keys-from-limit-join.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_quote_population.py",
+        "backend/services/dataset_release/build_stage.py",
+        "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_quote_population.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/build_stage.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_quote_population.py",
+        "backend/services/dataset_release/build_stage.py",
+        "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_quote_population.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_quote_population.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+    ]
+  },
+  "first_seen_at": "2026-11-01T14:16:31.813355Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6995,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6995",
+  "last_seen_at": "2026-11-01T14:16:31.813355Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "First RED regression reproduced one daily failure and one strict missing-limit pass. The first related matrix passed 91 tests. An adjacent minute-support join was then reproduced as a second RED (three cases passed, one failed); after correction all eight directly affected daily/minute population and support tests passed, including strict required-limit rejection and same-day S/R preservation. Changed-file Ruff, compileall, diff check and three-file L0 passed after stabilization. Broad final regression is delegated to the existing qlib_data CI lane, not repeatedly rerun locally. Nox has no RTK wrapper and was executed directly in the existing environment.",
+      "Fresh processes replayed only sealed October SOURCE datasets; database_access=false, network_access=false, candidate_write=false. Both raw daily and stk_limit inputs have 88812 matching keys. Canonical source reproduced the actual failure at 002667.SZ/2026-10-08 after its turnover-positive population removed 59 daily limit facts; fixed daily population produced 88812 daily rows, zero missing joins and zero synthesized stock-days. The minute quote population remains 88655. Receipts: X:/AIstock_temp/DATA_PREPARATION/monthly-october-release-20261030/BUG-2167-sealed-daily-red.json and BUG-2167-sealed-daily-green.json. This is fix-point validation, not full candidate readiness.",
+      "Review round 1: exact source-key root cause, raw-fact versus PIT/turnover semantics, native daily preparation RED/GREEN and true missing-limit rejection. Review round 2: daily zero-turnover facts remain original rows; minute quote population, no-minute synthesis, existing provider files, units, dates, stock eligibility and strict invalid-data behavior are unchanged. Review round 3: real frozen October replay, no runtime DB/network access, and fresh worker preflight PASS. SOURCE adapter version21 contract bed7197accc74556a147bbe9d826ff183e7db51f9666846954e892bf4924c113 remains unchanged, so retain SOURCE checkpoint and completed output receipts.",
+      "Fourth review closed the adjacent minute auxiliary-stream issue before merge. Exact 59 excluded daily keys had no raw minute records (only eight bounded sealed buckets, 159840 rows read for diagnosis). Daily and suspension support now join to the same PIT-or-real-quote days as limit support; raw minute rows are never filtered by PIT. Fresh canonical replay for 002667.SZ and 002717.SZ reproduced unexpected auxiliary PIT/trading key; fixed replay emitted exactly 4320 source bars, synthesized_stock_days=0, database_access=false and candidate_write=false. Missing required support and invalid values still reach the original strict transformer; same-day S/R records are not deduplicated or interpreted here.",
+      "DESIGN-COMPLIANCE-001 PASS: real bounded fix-point tested, not a full-release completion claim; no silent fallback, fabricated prices/bars or READY; PIT, source facts, minute sessions, units and consumer contracts unchanged; no new approval, source audit or publication gate. Production DDL/DML, activation, training, experiments and process control remain false. Resume the same dmr_106d4729334644eb90e2bd01eb97d83f BUILD only after user-owned runtime restart.",
+      "Exact sealed October daily fix-point RED 002667.SZ/2026-10-08, GREEN 88812 rows, 0 missing joins, 0 synthesized stock-days; minute quote population unchanged; SOURCE v21 contract unchanged.",
+      "Sealed October RED/GREEN: 88812 daily rows zero missing/synthesized; minute follow-on RED unexpected 002667.SZ/2026-10-08, GREEN exactly4320 source bars for two stocks without synthesis or DB/network; SOURCE v21 unchanged."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly daily append excludes real halted fact keys from limit join",
+  "trigger_condition": {
+    "fingerprint": "734e5ab0b53a90ea301bf858",
+    "source_event_id": "FE-20261101-734e5ab0b53a"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

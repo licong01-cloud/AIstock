@@ -2028,10 +2028,13 @@ def _prepare_legacy_bin_patch(
     month_start = pit.cutoff.replace(day=1)
     if prefix.cutoff >= month_start:
         raise CandidateBuildStageError("legacy month tail cutoff does not advance")
-    from .monthly_quote_population import observed_quote_days
+    from .monthly_quote_population import observed_daily_fact_days, observed_quote_days
 
     known_codes = frozenset(source.qfq_authority.by_code)
-    quote_days = observed_quote_days(
+    # Daily joins retain real zero-turnover facts; those same rows must not
+    # create required minute bars. Neither population changes PIT eligibility.
+    population = observed_daily_fact_days if dataset == "daily_bin" else observed_quote_days
+    quote_days = population(
         _merged_rows(source, component, "kline_daily_raw", staging=invocation.staging_root,
                      key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
                      checkpoint=checkpoint, date_ranges=((month_start, pit.cutoff),),
@@ -2828,14 +2831,16 @@ def _prepare_bin_patch_phase(
             metrics=metrics,
         )
     else:
+        from .monthly_quote_population import filter_minute_support_rows
+
         rows = CanonicalStockTransformer().transform_minute(
             transform,
-            daily_rows=_merged_rows(
+            daily_rows=filter_minute_support_rows(_merged_rows(
                 source, component, "kline_daily_raw", staging=invocation.staging_root,
                 key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
                 checkpoint=checkpoint, date_ranges=ranges, instruments=codes,
                 metrics=source_metrics("kline_daily_raw"),
-            ),
+            ), pit_snapshot=pit, quote_days=quote_days),
             minute_rows=_merged_rows(
                 source,
                 component,
@@ -2874,7 +2879,7 @@ def _prepare_bin_patch_phase(
                 metrics=source_metrics("stk_limit"),
                 quote_days=quote_days,
             ),
-            suspend_rows=_merged_rows(
+            suspend_rows=filter_minute_support_rows(_merged_rows(
                 source,
                 component,
                 "suspend_d",
@@ -2888,7 +2893,7 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("suspend_d"),
-            ),
+            ), pit_snapshot=pit, quote_days=quote_days),
             checkpoint=checkpoint,
             metrics=metrics,
         )
