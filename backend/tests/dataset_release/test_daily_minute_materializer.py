@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import csv
+import os
 from datetime import date
 from pathlib import Path
 
@@ -23,6 +24,130 @@ from backend.services.dataset_release.daily_minute_materializer import (
 )
 from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS
 from backend.services.dataset_release.pit import freeze_pit_snapshot
+from backend.services.dataset_release.monthly_csv_resume import MonthlyCsvResume
+
+
+def _resume_spec(tmp_path):
+    return DailyMinuteMaterializationSpec(dataset='minute_bin', staging_root=tmp_path,
+        project_root=tmp_path, cutoff=date(2026,7,31), effective_start=date(2026,7,1),
+        pit_snapshot=_pit(date(2026,7,31)), dump_workers=1, toolchain=_toolchain())
+
+
+def test_partial_month_csv_failure_reuses_only_closed_stock_files(tmp_path):
+    spec = _resume_spec(tmp_path)
+    root = tmp_path/'csv'
+    def session():
+        return MonthlyCsvResume(root, binding={'source_bundle_sha256':'a'*64}, dataset='minute_bin',
+                                stock_codes=('000001.SZ','600000.SH'),index_codes=(),cutoff=spec.cutoff)
+    source = list(_rows('minute_bin'))
+    def failure():
+        yield from source[:3]
+        raise RuntimeError('next source stock failed')
+    with pytest.raises(RuntimeError,match='next source stock'):
+        session().prepare(spec, rows=failure())
+    closed = root/'000001.SZ.csv'
+    before = closed.stat()
+    assert closed.is_file() and not (root/'600000.SH.csv').exists()
+    receipt = session().prepare(spec, rows=source[2:]).receipt
+    assert receipt['csv']['rows'] == 4
+    assert receipt['actual_work']['stock_rows_reused'] == 2
+    assert receipt['actual_work']['stock_rows_transformed'] == 2
+    assert closed.stat().st_mtime_ns == before.st_mtime_ns
+
+
+@pytest.mark.parametrize('fault',['source','changed','unknown','nonfinite','truncated'])
+def test_month_csv_recovery_rejects_real_identity_and_content_errors(tmp_path, fault):
+    spec = _resume_spec(tmp_path)
+    root = tmp_path/'csv'
+    root.mkdir()
+    _write_ordered_stock_csvs(_rows('minute_bin'),csv_root=root,dataset='minute_bin',cutoff=spec.cutoff,checkpoint=lambda:None)
+    kwargs = dict(dataset='minute_bin',stock_codes=('000001.SZ','600000.SH'),index_codes=(),cutoff=spec.cutoff)
+    binding={'source_bundle_sha256':'a'*64}
+    path=root/'000001.SZ.csv'
+    if fault in {'source','changed'}:
+        MonthlyCsvResume(root,binding=binding,**kwargs)
+        if fault=='source':
+            binding={'source_bundle_sha256':'b'*64}
+        else:
+            path.write_bytes(path.read_bytes()+b'corrupt')
+    elif fault=='unknown':
+        path.rename(root/'000002.SZ.csv')
+    elif fault=='nonfinite':
+        path.write_bytes(path.read_bytes().replace(b',1,',b',NaN,',1))
+    else:
+        path.write_bytes(path.read_bytes()[:-1])
+    with pytest.raises(DailyMinuteMaterializationError):
+        MonthlyCsvResume(root,binding=binding,**kwargs)
+
+
+def test_completed_month_csv_retry_does_not_reparse_or_rehash_data(tmp_path, monkeypatch):
+    spec = _resume_spec(tmp_path)
+    root = tmp_path/'csv'
+    root.mkdir()
+    _write_ordered_stock_csvs(_rows('minute_bin'),csv_root=root,dataset='minute_bin',cutoff=spec.cutoff,checkpoint=lambda:None)
+    kwargs=dict(binding={'source_bundle_sha256':'a'*64},dataset='minute_bin',
+                stock_codes=('000001.SZ','600000.SH'),index_codes=(),cutoff=spec.cutoff)
+    first=MonthlyCsvResume(root,**kwargs)
+    def forbidden(*args,**kw):
+        raise AssertionError('closed CSV must use its native recorded signature')
+    monkeypatch.setattr('backend.services.dataset_release.monthly_csv_resume._inspect',forbidden)
+    assert MonthlyCsvResume(root,**kwargs).files == first.files
+
+
+@pytest.mark.parametrize('change',['metadata','missing'])
+def test_completed_month_csv_handles_metadata_only_change_and_exact_file_recovery(tmp_path,change):
+    spec=_resume_spec(tmp_path)
+    root=tmp_path/'csv'
+    kwargs=dict(binding={'source_bundle_sha256':'a'*64},dataset='minute_bin',
+                stock_codes=('000001.SZ','600000.SH'),index_codes=(),cutoff=spec.cutoff)
+    first=MonthlyCsvResume(root,**kwargs)
+    expected=first.prepare(spec,rows=_rows('minute_bin')).receipt
+    path=root/'000001.SZ.csv'
+    if change=='metadata':
+        value=path.stat()
+        os.utime(path,ns=(value.st_atime_ns,value.st_mtime_ns+1000000))
+        current=MonthlyCsvResume(root,**kwargs)
+        receipt=current.prepare(spec,rows=()).receipt
+        assert receipt['actual_work']['stock_rows_transformed']==0
+    else:
+        path.unlink()
+        current=MonthlyCsvResume(root,**kwargs)
+        receipt=current.prepare(spec,rows=(row for row in _rows('minute_bin') if row['instrument']=='000001.SZ')).receipt
+        assert receipt['actual_work']['stock_rows_transformed']==2
+    assert receipt['csv']==expected['csv']
+
+
+def test_native_csv_and_metadata_crash_fragments_are_retained_not_published(tmp_path):
+    spec=_resume_spec(tmp_path)
+    root=tmp_path/'csv'
+    metadata=root/'.completed'
+    metadata.mkdir(parents=True)
+    fragments=(root/'.000001.SZ.abcdefgh.partial.csv', metadata/'.binding.json.abcdef12.partial')
+    for path in fragments:
+        path.write_bytes(b'unfinished native bytes')
+    resume=MonthlyCsvResume(root,binding={'source_bundle_sha256':'a'*64},dataset='minute_bin',
+                            stock_codes=('000001.SZ','600000.SH'),index_codes=(),cutoff=spec.cutoff)
+    receipt=resume.prepare(spec,rows=_rows('minute_bin')).receipt
+    assert receipt['csv']['rows']==4
+    assert not any(path.exists() for path in fragments)
+    preserved=list((root/'.unfinished').iterdir())
+    assert len(preserved)==2 and all(path.read_bytes()==b'unfinished native bytes' for path in preserved)
+    assert not any('.partial' in path.name for path in preserved)
+
+
+def test_month_csv_resume_rejects_linked_work_root(tmp_path):
+    from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResumeError
+    outside=tmp_path/'outside'
+    outside.mkdir()
+    link=tmp_path/'linked'
+    try:
+        link.symlink_to(outside,target_is_directory=True)
+    except OSError:
+        pytest.skip('symbolic links are unavailable in this environment')
+    with pytest.raises(MonthlyBuildResumeError,match='contains a link'):
+        MonthlyCsvResume(link,binding={'source_bundle_sha256':'a'*64},dataset='minute_bin',
+                         stock_codes=('000001.SZ',),index_codes=(),cutoff=date(2026,7,31))
+    assert not list(outside.iterdir())
 
 
 @pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
