@@ -31,16 +31,28 @@
   "evidence_uris": [],
   "expected": "Resume original operation and SOURCE; adopt native same-operation closed CSVs with explicit bounded readback and signatures, retain verified index component, process only unfinished instruments, never invent PASS for partial output or repeat historical export.",
   "file_scope_contract": {
-    "added_files": ["backend/services/dataset_release/monthly_csv_resume.py"],
-    "changed_files": [
-      "backend/services/dataset_release/monthly_build_resume.py",
+    "actual_changed_files": [
       "backend/services/dataset_release/build_stage.py",
-      "backend/services/dataset_release/daily_minute_materializer.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_csv_resume.py",
+      "backend/tests/dataset_release/test_daily_minute_materializer.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
       "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
-      "backend/tests/dataset_release/test_daily_minute_materializer.py"
+      "tests/aistock_validation/bugs/20261101_BUG-2170-monthly-build-retries-discard-completed-csv-preparation-progress-and-rep.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "backend/services/dataset_release/monthly_csv_resume.py"
+    ],
+    "changed_files": [
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_csv_resume.py",
+      "backend/tests/dataset_release/test_daily_minute_materializer.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261101_BUG-2170-monthly-build-retries-discard-completed-csv-preparation-progress-and-rep.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_build_resume.py",
@@ -157,8 +169,9 @@
   },
   "first_seen_at": "2026-11-01T18:12:31.448136Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1a5ab5a3e5ad75b1195b05f3804a988482d67226",
+  "fix_summary": "Persist the existing monthly data binding before prepare, retain its original materialization attempt, and recover legacy partial preparation only when the native index receipt binds exactly the same SOURCE/cutoff/predecessor. Existing CSVs acquire per-file completion receipts with native hashes/signatures, and completed stock codes are excluded before canonical transformation and sealed source merge. Retain construction files unchanged; verify/reuse the completed native index. Use the existing native canonical writer and patch receipt schema. No new release branch, SOURCE collection, business policy, dependency, approval or publication gate.",
+  "fixed_at": "2026-11-01T18:55:31Z",
   "github_issue_number": 7004,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7004",
   "last_seen_at": "2026-11-01T18:12:31.448136Z",
@@ -166,6 +179,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7005",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -177,7 +191,6 @@
   ],
   "risk_area": "bug",
   "root_cause": "The native monthly runner saved its resume record only after all prepare components returned. Closed per-stock CSVs and a fully verified native index therefore existed without a prepare checkpoint after a later stock failed. A retry selected a fresh staging directory, while the CSV preparer rejected any existing root. This caused unnecessary recomputation of already correct month output, not missing upstream facts.",
-  "fix_summary": "Persist the existing monthly data binding before prepare, retain its original materialization attempt, and recover legacy partial preparation only when the native index receipt binds exactly the same SOURCE/cutoff/predecessor. Existing CSVs acquire per-file completion receipts with native hashes/signatures, and completed stock codes are excluded before canonical transformation and sealed source merge. Retain construction files unchanged; verify/reuse the completed native index. Use the existing native canonical writer and patch receipt schema. No new release branch, SOURCE collection, business policy, dependency, approval or publication gate.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -188,22 +201,49 @@
       "Review 1: same operation/SOURCE/cutoff/predecessor binding and no overwrite/re-export of completed native outputs. Review 2: factual population and PIT eligibility remain separate, units/QFQ/session/strict missing-value semantics are unchanged, only unfinished codes enter the transform, mismatched bytes remain errors. Review 3: per-stock durability, exact missing-file regeneration, metadata-only change readback, bounded one-time legacy CSV adoption, and preservation of uncommitted crash fragments. Existing index files use their original native receipt signatures, not a historical rescan. Review 4: CI41337992339 passed 2377 tests with87 skips and exposed one private-preparation repeat-call compatibility regression. Recovery is now limited to formal legacy monthly BUILD; private/other preparation retains its original already-exists exception and never adopts release progress. Rerun only that failing node locally, then rely on the required CI rerun. Native completed-index fix-point also verified all14 stored signatures, 12 indices and204 October rows without data writes (BUG-2170-native-index-reuse.json).",
       "DESIGN-COMPLIANCE-001 PASS: native end-to-end fix points rather than a POC or whole-release completion claim; no fake PASS/READY, fallback or invented source data; no unapproved business/PIT migration; no new manual approval, resource or historical audit gate. Production DDL/DML, activation, training, experiment and process control remain false. SOURCE version21 and its sealed bundle 9834867ae964e20128c1b52f35ca69b6b75dc321d6dbd99be04c432bef8db711 are unchanged. Runtime loading and complete October candidate/deployment/consumer validation remain separate pending steps."
     ],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "planned_target_ids": ["backend-main", "worker-scheduler"],
     "target_ids": [
       "worker-scheduler"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2170",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "12f4985972bd4629",
+    "recorded_at": "2026-11-01T18:56:11.409466Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ab4c5e8af2a2ee23d616d8d2d0191379646be243",
+    "source_merge_commit": "1a5ab5a3e5ad75b1195b05f3804a988482d67226",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7005",
+    "validation_evidence": [
+      "pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_daily_minute_materializer.py backend/tests/dataset_release/test_monthly_mature_build_runner.py -q -> passed 264; targeted private preparation regression -> passed; CI 41338641800 -> passed",
+      "nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "75574d1c6bf72996b2a9118157d936a16f0b1431ec9f2cf1a84507b0bc9d67f9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -212,6 +252,10 @@
     "fingerprint": "2370f65a0b184b264412456b",
     "source_event_id": "FE-20261101-2370f65a0b18"
   },
+  "validation_evidence": [
+    "pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_daily_minute_materializer.py backend/tests/dataset_release/test_monthly_mature_build_runner.py -q -> passed 264; targeted private preparation regression -> passed; CI 41338641800 -> passed",
+    "nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
