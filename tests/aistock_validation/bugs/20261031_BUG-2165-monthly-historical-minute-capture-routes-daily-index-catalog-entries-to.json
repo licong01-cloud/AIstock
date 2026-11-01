@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-10-31T19:26:53.413140Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c49d32bf1e29587ac2487e702e0f5faa39d5b952",
+  "fixed_at": "2026-11-01T02:21:53Z",
   "github_issue_number": 6985,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6985",
   "last_seen_at": "2026-10-31T19:26:53.413140Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6987",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -146,6 +147,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -157,7 +159,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2165",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dc1542a03051d33f",
+    "recorded_at": "2026-11-01T02:22:44.953584Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5db217fd67896388490a42fdadf920ef49e90095",
+    "source_merge_commit": "c49d32bf1e29587ac2487e702e0f5faa39d5b952",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6987",
+    "validation_evidence": [
+      "validation-receipt: id=edcaeb94ff718edb commit=5db217fd67896388490a42fdadf920ef49e90095 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`passed`",
+      "validation-receipt: id=30edafc54c253d92 commit=5db217fd67896388490a42fdadf920ef49e90095 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_minute_coverage.py backend/services/dataset_release/monthly_postgres_source.py backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "d9ac8f4d03858ee32a9190380830de29bc30479c5e5c4cb373f98e5f47729624"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -166,6 +190,10 @@
     "fingerprint": "5a4d154cf1a3f925cb8ddcfb",
     "source_event_id": "FE-20261031-5a4d154cf1a3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=edcaeb94ff718edb commit=5db217fd67896388490a42fdadf920ef49e90095 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`passed`",
+    "validation-receipt: id=30edafc54c253d92 commit=5db217fd67896388490a42fdadf920ef49e90095 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_minute_coverage.py backend/services/dataset_release/monthly_postgres_source.py backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
