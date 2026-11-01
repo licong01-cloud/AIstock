@@ -2921,6 +2921,8 @@ def _prepare_bin_patch_phase(
     return patch, {
         "transform": metrics.as_dict(),
         "source_merges": {name: value.as_dict() for name, value in sorted(merge_metrics.items())},
+        **({"minute_lifecycle": dict(source.minute_lifecycle_summary)}
+           if dataset == "minute_bin" and isinstance(source, ArtifactReadyBuildSource) else {}),
     }
 
 
