@@ -2831,14 +2831,16 @@ def _prepare_bin_patch_phase(
             metrics=metrics,
         )
     else:
+        from .monthly_quote_population import filter_minute_support_rows
+
         rows = CanonicalStockTransformer().transform_minute(
             transform,
-            daily_rows=_merged_rows(
+            daily_rows=filter_minute_support_rows(_merged_rows(
                 source, component, "kline_daily_raw", staging=invocation.staging_root,
                 key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
                 checkpoint=checkpoint, date_ranges=ranges, instruments=codes,
                 metrics=source_metrics("kline_daily_raw"),
-            ),
+            ), pit_snapshot=pit, quote_days=quote_days),
             minute_rows=_merged_rows(
                 source,
                 component,
@@ -2877,7 +2879,7 @@ def _prepare_bin_patch_phase(
                 metrics=source_metrics("stk_limit"),
                 quote_days=quote_days,
             ),
-            suspend_rows=_merged_rows(
+            suspend_rows=filter_minute_support_rows(_merged_rows(
                 source,
                 component,
                 "suspend_d",
@@ -2891,7 +2893,7 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("suspend_d"),
-            ),
+            ), pit_snapshot=pit, quote_days=quote_days),
             checkpoint=checkpoint,
             metrics=metrics,
         )

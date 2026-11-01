@@ -149,19 +149,25 @@ def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
 
 
 @pytest.mark.parametrize("missing_limit", [False, True])
-def test_daily_halted_fact_survives_buy_exit_without_minute_bar_or_limit_fallback(tmp_path, missing_limit):
-    invocation, source, pit, toolchain, provider, data, _ = _setup(tmp_path)
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_daily_halted_fact_survives_buy_exit_without_minute_bar_or_limit_fallback(tmp_path, missing_limit, dataset):
+    invocation, source, pit, toolchain, provider, data, _ = _setup(tmp_path, dataset=dataset)
     first, last = date(2026, 9, 1), date(2026, 9, 2)
     pit = replace(pit, cutoff=last, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
-    original = (provider / "features/000001.sz/close.day.bin").read_bytes()
+    old_file = provider / ("features/000001.sz/close.day.bin" if dataset == "daily_bin" else "features/000001.sz/close.1min.bin")
+    original = old_file.read_bytes()
     daily = data["kline_daily_raw"][0]
     data["kline_daily_raw"] = [{**daily, "volume_hand": 0, "amount_li": 0}, {**daily, "trade_date": last}]
     limit = data["stk_limit"][0]
-    data["stk_limit"] = ([] if missing_limit else [limit]) + [{**limit, "trade_date": last}]
+    data["stk_limit"] = ([] if missing_limit and dataset == "daily_bin" else [limit]) + (
+        [] if missing_limit and dataset == "minute_bin" else [{**limit, "trade_date": last}])
     data["adj_factor"].append({**data["adj_factor"][-1], "trade_date": last})
     data["suspend_d"] = [{"ts_code": "000001.SZ", "trade_date": first, "suspend_type": "S", "suspend_timing": None}]
     source.trading_days = lambda: (date(2026, 8, 31), first, last)
     source.qfq_authority = build_qfq_denominator_authority(data["adj_factor"], pit_snapshot=pit, cutoff=last)
+    if dataset == "minute_bin":
+        data["kline_minute_raw"] = [
+            {**row, "trade_time": stamp} for row, stamp in zip(data["kline_minute_raw"], canonical_session_times(last))]
     base = source.ordered_partitions
 
     def partitions(component, dataset, **kwargs):
@@ -169,7 +175,6 @@ def test_daily_halted_fact_survives_buy_exit_without_minute_bar_or_limit_fallbac
         if dataset == "stk_limit":
             return tuple(OrderedMappingPartition(p.identity, _filter_stk_limit_rows_to_pit(
                 p.rows, pit, quote_days=kwargs.get("quote_days", ()))) for p in result)
-        assert dataset != "kline_minute_raw"
         return result
 
     source.ordered_partitions = partitions
@@ -178,19 +183,22 @@ def test_daily_halted_fact_survives_buy_exit_without_minute_bar_or_limit_fallbac
         stream.write(index_csv.read_text(encoding="utf-8").splitlines()[1].replace(str(first), str(last)) + "\n")
     if missing_limit:
         with pytest.raises(CanonicalStockTransformError, match="stk_limit"):
-            stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset="daily_bin",
+            stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
                                       toolchain=toolchain, checkpoint=lambda: None)
     else:
-        prepared = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset="daily_bin",
+        prepared = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
                                              toolchain=toolchain, checkpoint=lambda: None)
         payload = invocation.cas.get_json(prepared["qlib_dump_operations"][0]["preparation_ref"])
         stock = next(item for item in payload["csv_refs"] if Path(item["id"]).stem == "000001.SZ")
         with (invocation.staging_root / stock["id"]).open(encoding="utf-8", newline="") as stream:
             rows = list(csv.DictReader(stream))
-        assert [row["date"] for row in rows] == [str(first), str(last)]
-        assert float(rows[0]["volume"]) == float(rows[0]["amount"]) == 0
+        if dataset == "daily_bin":
+            assert [row["date"] for row in rows] == [str(first), str(last)]
+            assert float(rows[0]["volume"]) == float(rows[0]["amount"]) == 0
+        else:
+            assert len(rows) == 240 and all(row["date"].startswith(str(last)) for row in rows)
         assert float(rows[0]["close"]) == float(rows[0]["prev_close"]) == 6
-    assert (provider / "features/000001.sz/close.day.bin").read_bytes() == original
+    assert old_file.read_bytes() == original
     assert pit.spans[0].eligible_end < first
     assert observed_quote_days(data["kline_daily_raw"], trading_days=(first, last)) == (("000001.SZ", last),)
 
@@ -559,6 +567,19 @@ def test_quote_population_is_exact_observed_trading_days_not_catalog_extension()
     assert observed_daily_fact_days(rows, known_codes=frozenset({"000001.SZ"}),
                                     trading_days=(day, date(2026, 9, 2))) == (
         ("000001.SZ", day), ("000001.SZ", date(2026, 9, 2)))
+
+
+def test_minute_support_preserves_required_invalid_facts_and_same_day_events(tmp_path):
+    from backend.services.dataset_release.monthly_quote_population import filter_minute_support_rows
+    _, _, pit, _, _, _, _ = _setup(tmp_path)
+    first, second, outside = date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)
+    rows = [{"ts_code": "000001.SZ", "trade_date": first, "pre_close": None},
+            {"ts_code": "000001.SZ", "trade_date": second, "suspend_type": "S"},
+            {"ts_code": "000001.SZ", "trade_date": second, "suspend_type": "R"},
+            {"ts_code": "000001.SZ", "trade_date": outside, "suspend_type": "S"}]
+    assert list(filter_minute_support_rows(iter(rows), pit_snapshot=pit,
+                                           quote_days=(("000001.SZ", second),))) == rows[:3]
+    assert rows[0]["pre_close"] is None  # Still fails in the existing price normalizer.
 
 
 def test_quote_keys_keep_limit_fact_without_changing_buy_spans(tmp_path):
