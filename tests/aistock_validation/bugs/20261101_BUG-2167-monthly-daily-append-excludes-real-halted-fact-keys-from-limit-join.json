@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2167",
-  "closed_at": null,
+  "closed_at": "2026-11-01T17:04:10.725855Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -112,8 +112,8 @@
   },
   "first_seen_at": "2026-11-01T14:16:31.813355Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fad2bbbb2df2f15662c3ec91273c08861dba999e",
+  "fixed_at": "2026-11-01T14:47:24Z",
   "github_issue_number": 6995,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6995",
   "last_seen_at": "2026-11-01T14:16:31.813355Z",
@@ -121,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6996",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -149,9 +150,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2167-postrestart-source-identity-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2167",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "fad2bbbb2df2f15662c3ec91273c08861dba999e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-01T17:03:47.691458Z",
+      "mode": "read_only",
+      "observed_identity": "1c640b9afe59759586aef241559b577fdfefb56e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a83e20133d76270c6af393070f2e83148553df09335d0a36921382656e09066f",
+      "receipt_sha256": "6e32105a1e8719f64452ec691f14668e6417e141b0f1f2052440c90e202ae9a2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2cff7484fdc55be869c2f89a6dfea6cd28897c564ed752a60bca26d3d84d8432",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -161,7 +185,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2167",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3b3eb966a4e28ee8",
+    "recorded_at": "2026-11-01T14:48:34.757221Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "04c7a62eb21c0869d7306a200d4b8b75b16bed05",
+    "source_merge_commit": "fad2bbbb2df2f15662c3ec91273c08861dba999e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6996",
+    "validation_evidence": [
+      "validation-receipt: id=eac1d20a0c493165 commit=1d5994832a880a4b71e52207741a049dbb42c9bf kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q -k \"daily_halted_fact or quote_tail or quote_population or minute_support\"` result=`passed (8 passed)`",
+      "validation-receipt: id=0753b9074123ebf5 commit=1d5994832a880a4b71e52207741a049dbb42c9bf kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_quote_population.py backend/services/dataset_release/build_stage.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "2d4fb15f9997b04dc321b5d1babd1f83aa53bd5235bcb80a95d53d04a8c73774"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -170,6 +216,11 @@
     "fingerprint": "734e5ab0b53a90ea301bf858",
     "source_event_id": "FE-20261101-734e5ab0b53a"
   },
+  "validation_evidence": [
+    "validation-receipt: id=eac1d20a0c493165 commit=1d5994832a880a4b71e52207741a049dbb42c9bf kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q -k \"daily_halted_fact or quote_tail or quote_population or minute_support\"` result=`passed (8 passed)`",
+    "validation-receipt: id=0753b9074123ebf5 commit=1d5994832a880a4b71e52207741a049dbb42c9bf kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_quote_population.py backend/services/dataset_release/build_stage.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2167 --target worker-scheduler --expected-identity fad2bbbb2df2f15662c3ec91273c08861dba999e -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
