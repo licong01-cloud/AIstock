@@ -20,15 +20,21 @@
 
 所有126D/6300行保留。先比较每D与原候选/原生结果，再对原三臂共同102D复核旧报告；两个完整配对口径若不同须分别披露，不借改变分母生成新收益主张。逐股已扣费净值、现金槽0、未知null及四项分解由公共函数重建并独立算术校验。
 
+费用独立校验使用原D参考锚毛价格比，先除以`1+observed_gap_bps/10000`转为T开盘基准，再乘卖出费因子/买入费因子。原0.95/5.95bps不改，缺少或非法开盘比显式失败，不以D参考价代替开盘买入价。
+
 离线输出当前Shadow形状的页面数据包，附`replay_context`标记历史工程、NON_VINTAGE、折/训练截止、模拟时钟和来源hash。沿用当前ModelObservation/公共API类型；在现有业务指标上方显示历史标识，将“捕获于”标为“回放时钟”，历史模式不请求实时行情。数据包只是隔离验证传输，不新增生产HTTP路由或后端定时任务。浏览器场景消费实际历史回放生成的固定样本，不能只以合成成熟样本验收。
 
-## Implementation / Verification Plan
+## Implementation Plan
 
 1. 新增离线适配器/命令和直接合同测试；禁止fit/DB/实时源，所有来源前后hash一致。
 2. 当前公共函数执行三折126D全量历史回放，对账原6300预测及finance、原panel/daily；旧102共同D均值只作算术一致性，不是新经济确认。
 3. 历史实数与显式故障注入覆盖21点后/午夜/截止、版本漂移、缺行/重复/NaN、父hash冲突和重用；注入样本不计真实表现。
 4. 当前页面验证真实成熟、真实UNKNOWN/未成熟、双Top10/全50筛选、分解、历史标识及不请求实时行情。复用预构建runner-owned隔离frontend，不操作用户backend。
 5. 三轮自审（人口/时钟/算术、故障/无副作用、UI/交付边界）及必要修订后最小测试/lint/compile/L0/ownership/CI路由/F1验收；既有授权下提交合入与主目录同步。
+
+## Verification Plan
+
+以直接合同测试覆盖时钟、来源、缺失/异常、父hash和幂等；真实126D运行及新进程标准库算术读回覆盖预测/估值/分解与保护工件。页面使用该运行的真实历史包，另以既有实时业务场景验证兼容。最小本地矩阵稳定后只运行一次，广泛间接和跨模块回归交已有CI/nightly；精确命令与退出码记录在证据根validation_receipt.json，合入状态独立记录在delivery_receipt.json。
 
 ## Design Acceptance Index
 
@@ -46,13 +52,13 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-701 | 离线适配器与CLI | 来源manifest和126D历史运行 | PLANNED | 实现进行中 |
-| F-702 | 原predict_specialist/finance_projection/paired_result/review_day | 全历史逐D/逐股对账 | PLANNED | 实现进行中 |
-| F-703 | 历史时间适配 | before-H payload guard及原状态计数 | PLANNED | 实现进行中 |
-| F-704 | 历史故障场景 | 直接回归及真实数据注入回执 | PLANNED | 实现进行中 |
-| F-705 | ModelObservation/API类型/历史fixture | 当前页面真实历史浏览器 | PLANNED | 实现进行中 |
-| F-706 | 原不可变发布接口 | hash/重用/拒绝覆盖读回 | PLANNED | 实现进行中 |
-| F-707 | 本设计、结果报告和验证回执 | F1门禁/三轮审核/CI | PLANNED | 实现进行中 |
+| F-701 | backend/services/advisory_model_first/lstm_historical_engineering_replay.py; scripts/advisory_lstm_historical_engineering_replay.py | artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/run-v2/engineering_manifest.json，126D/6300行/0fit | PASS | none |
+| F-702 | 原predict_specialist/finance_projection/paired_result/review_day及新CLI.audit | artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/run-v2/evaluated/report.json；独立费用5488行与102组分解 | PASS | none |
+| F-703 | HistoricalReplay.evaluate/evaluation; Archive.finance_at | backend/tests/advisory_model_first/test_lstm_historical_engineering_replay.py; artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/run-v2/evaluated/payoff_reads.json，126次before-H/111次原折内读取 | PASS | none |
+| F-704 | fault_scenarios/InjectedArchive; 直接合同测试 | backend/tests/advisory_model_first/test_lstm_historical_engineering_replay.py，20 PASS；artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/run-v2/evaluated/fault_scenarios.json，12 PASS | PASS | none |
+| F-705 | frontend/src/components/advisory/workbench/ModelObservation.tsx; frontend/src/lib/api/advisoryWorkbench.ts; frontend/tests/fixtures/advisory-lstm-historical-replay.json | frontend/tests/paper-v2/advisory-workbench.spec.ts，真实历史4场景与原业务4场景共8 PASS；artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/browser.json | PASS | none |
+| F-706 | 原不可变发布接口; freeze/run与源码闭包 | artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/independent_readback.json，24来源/V2十文件不变；重复调用stage不变 | PASS | none |
+| F-707 | 本设计与docs/analysis/advisory_lstm_historical_engineering_replay_20261102.md；精确CI/ownership路由 | artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/validation_receipt.json；三轮自审/新进程独立算术/真实历史页面 | PASS | none |
 
 ## Risks / Rollout / Production Gates
 

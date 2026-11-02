@@ -1,7 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.56
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.57
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-27
+
+> 2026-11-02工程主线调整：按用户要求，程序开发、修复和验收不等待下一交易日。新增[历史工程回放F1](advisory_lstm_historical_engineering_replay_v1_f1_design_20261102.md)，使用原P19三折模型与2025年全126D/6300行，通过当前公共推理、原5TD估值投影和现有业务页验证；完整配对102D复现旧57.277530bps，未达到100bps目标，不是新增独立经济证据。真实UNKNOWN/IMMATURE/CASH保留，0fit/新候选/DB写/生产替换。原V2协议、源码闭包和自然前向观察不改，研报/现金流/价格/Exit仍暂停。真实历史回放、故障注入、页面与正式经济判断分态；详见[结果报告](../analysis/advisory_lstm_historical_engineering_replay_20261102.md)。
 
 > 2026-11-01最新断点：[LSTM-BUSINESS-1 F2](advisory_lstm_top10_business_review_v1_f2_design_20261101.md)明确精确LSTM的Top10辅助观察，用户选择100bps/5TD批次净增量目标；旧开发57.28bps低于目标，不宣称达标。新增两臂/UNKNOWN/CASH/换股/逐股与损益贡献纯投影及现有页，原生产Top20保持；新版V2协议已事前冻结，沿原150D/唯一经济判断/有限截止，收益无关地提前识别不可恢复漏捕获，UNKNOWN修复宽限不删。V1物理工件及Git producer原样归档，不再作第二次确认。真实50行换入9/移出9/共同1、0成熟/0评价文件打开，新进程源hash不变；53后端相关项和浏览器合同通过，0新fit/经济确认/生产替换。源码合入/CI和用户重启后的运行加载分态，详见[结果报告](../analysis/advisory_lstm_top10_business_review_20261101.md)。研报/现金流/价格/Exit继续暂停。
 > 2026-11-01上一轮确认断点：新增[LSTM-CONFIRM-1 F1](advisory_lstm_prospective_confirmation_v1_f1_design_20261101.md)固定前向确认与预算能力已真实冻结、零收益预检完成。未来2026-11-02起首150个预定D，单一原生Top10对照、一次正式判断、固定宽限及绝对最晚2027-08-31结束；不能漏日换日或无限扩样。旧噪声条件下识别旧57.28bps情景约需144D；150D的MDE约55.96bps，噪声1.5倍则83.94bps，不保证未来功效。真实日历只到2026年底，预检WAITING_CALENDAR，0评价文件读取；这不阻断原荐股。唯一study_root、固定模型/5TD/成本/UNKNOWN不变，0fit/0经济确认/0生产替换。原P20的1D捕获/0成熟和先行10月30日预测保持，本次确认从未来D另起，详见[结果报告](../analysis/advisory_lstm_prospective_confirmation_20261101.md)。本轮长任务完成，不挂起等待未来数据，不自动恢复研报/现金流/价格/Exit。
@@ -2309,6 +2311,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-306 | LSTM-VALUE-1冻结模型价值诊断：精确文件角色与训练KEY、16维贡献/数学边界、原126D/102共同D增量依赖性、0fit及唯一处理决定，不冒称独立经济确认 |
 | F-307 | LSTM-CONFIRM-1固定前向150预定D与有限期限、单一原生Top10对照/一次统计判断、原模型和估值复核、条件预算及零收益真实预检，不改变生产门禁 |
 | F-308 | LSTM-BUSINESS-1精确Top10辅助对象/用户100bps目标、两臂和换股损益只读业务视图、V2归档来源与漏捕获提前失效、原模型/统计/生产Top20不变 |
+| F-309 | 历史数据独立完成工程验收：原三折126D/6300行、公共推理及5TD投影逐项对账、模拟成熟/恢复时钟、真实历史页面、0fit与原V2隔离 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2499,6 +2502,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-306 | §16.0、`docs/architecture/advisory_lstm_rank_value_review_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_rank_value_review.py; artifact: X:/AIstock_temp/ADVISORY/lstm-value-20261101/portable-v2/research_audit_receipt.json | VERIFIED_DIAGNOSTICS_KEEP_FROZEN_MODEL_ZERO_FIT | none |
 | F-307 | §16.0、`docs/architecture/advisory_lstm_prospective_confirmation_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py; artifact: X:/AIstock_temp/ADVISORY/lstm-confirmation-20261101/independent_audit_receipt.json | VERIFIED_FROZEN_PROTOCOL_AND_ZERO_OUTCOME_PREFLIGHT | none |
 | F-308 | §16.0、`docs/architecture/advisory_lstm_top10_business_review_v1_f2_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_top10_business_review.py; backend/tests/advisory_model_first/test_lstm_business_protocol.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/independent_audit_receipt.json | VERIFIED_BUSINESS_VIEW_V2_SOURCE_AND_BROWSER | approved_by_user：用户拥有后端重启；运行加载在重启后只读验证，当前不宣称已激活 |
+| F-309 | §16.0、`docs/architecture/advisory_lstm_historical_engineering_replay_v1_f1_design_20261102.md` | backend/tests/advisory_model_first/test_lstm_historical_engineering_replay.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/independent_readback.json | VERIFIED_REAL_HISTORY_ENGINEERING_REPLAY | 工程验证使用已消费的开发历史，不升级为PIT或独立经济确认 |
 
 
 ## 12. Verification Plan
@@ -2796,6 +2800,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 ## 16. 当前下一步
 
 ### 16.0 当前唯一任务队列与真实断点（2026-10-27 接续）
+
+2026-11-02现行任务：开发验收与未来真实收益积累解除等待关系。原126个heldout D全部完成离线工程回放，当前推理与原6300行预测/排名一致，原111个可到期批次估值和15个原截止限制批次完整保留；102个完整配对、9个UNKNOWN和15个IMMATURE均不删。原5TD费用审计显式计入D参考锚至T开盘的observed_gap，禁止将D锚毛价格比直接当作T开盘收益。当前页面消费真实回放包并显示原折/截止与模拟时钟，历史模式不请求实时行情。设计F-701～F-707、独立对账及验证状态见新F1/结果报告。原V2后续仅承担自然前向与唯一正式经济判断，不再作为程序开发门禁；禁止根据本回放重新训练、选日期或宣称新OOS收益。
 
 2026-10-28 产品界面并行交付：用户已确认卡片总览、策略详情及当日推荐效果图，授权[荐股工作台详细设计](advisory_recommendation_workbench_f2_design_20261028.md)先审核合入，再开发审核合入。该任务统一已保存推荐事实的只读业务视图，复用每日数据完整性共享合同，不更改下述研究队列、原生推荐/持仓、模型或运行调度；不自动恢复研报/现金流/价格研究。源码与运行激活分别验收，后端重启仍由用户执行。
 

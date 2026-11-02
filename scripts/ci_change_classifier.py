@@ -283,6 +283,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/advisory_score_hmm_admission_mve.py": ("advisory_modeling_backend",),
     "scripts/advisory_causal_admission_v2_mve.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_rank_value_review.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_historical_engineering_replay.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_prospective_confirmation.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_top10_business_review.py": ("advisory_modeling_backend",),
 }

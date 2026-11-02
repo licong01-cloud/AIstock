@@ -1,5 +1,6 @@
 """Offline replay preserves production math while time and storage stay isolated."""
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -172,3 +173,25 @@ def test_unknown_and_cash_keep_original_fifty_rows_and_fixed_slots(history):
     assert all(v is None for v in review["components"].values())
     assert status["replay_context"]["clock_is_simulated"] is True
     assert status["independent_economic_confirmation"] is False
+
+
+@pytest.mark.parametrize("gap", [np.nan, -10000.])
+def test_invalid_entry_gap_cannot_pass_independent_fee_audit(history, gap):
+    finance = history.finance.copy()
+    finance.loc[0, "observed_gap_bps"] = gap
+    with pytest.raises(ValueError, match="entry gap"):
+        app.verify_fees(finance)
+
+
+def test_hash_valid_evaluation_with_wrong_parent_is_rejected(history):
+    h = history
+    h.engine.capture(h.day)
+    h.now[0] = app.shadow.clock("2025-04-09", 15)
+    h.engine.evaluate(h.day)
+    path = next((h.engine.path(h.day).parent / "evaluations").glob("*.json"))
+    packet = json.loads(path.read_bytes())
+    packet["prediction_sha256"] = "b" * 64
+    packet["sha256"] = app.shadow.spo.sha({k: v for k, v in packet.items() if k != "sha256"})
+    path.write_bytes(json.dumps(packet).encode())
+    with pytest.raises(ValueError, match="parent differs"):
+        h.engine.evaluation(h.day)
