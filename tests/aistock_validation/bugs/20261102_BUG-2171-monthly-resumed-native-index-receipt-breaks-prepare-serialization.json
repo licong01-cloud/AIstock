@@ -28,12 +28,18 @@
   ],
   "expected": "Same-operation retained index returns the canonical IndexMaterializationReceipt and serializes through normal prepare exactly as a fresh native append; no data writes or producer calls when reused.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/build_stage.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2171-monthly-resumed-native-index-receipt-breaks-prepare-serialization.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/build_stage.py",
-      "backend/tests/dataset_release/test_monthly_legacy_index.py"
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2171-monthly-resumed-native-index-receipt-breaks-prepare-serialization.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/build_stage.py",
@@ -119,11 +125,15 @@
       "三轮审核：1）对照原生指数首次生产者的所有 receipt 字段及下游 prepare/finalize/validation，保持类型和内容一致；2）检查已有文件零改写、SOURCE/前驱/cutoff及普通文件签名约束不变，复用时不调用来源；3）真实 prepare 调用链及 CAS 回调、其他非 legacy/私有准备和CSV断点恢复回归通过，未引入新审批、历史全扫或无关组件重导。",
       "DESIGN-COMPLIANCE-001：实际生产修复点及真实保留文件独立读取验证，不把局部单测、mock边界或未完成月更宣称为完整发布；不吞异常、不造成功/数据；不改变PIT、单位、交易时标或缺失语义；不新增人工门禁。数据库写入、激活、训练、实验、进程控制均为false。"
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
