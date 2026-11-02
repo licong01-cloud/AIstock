@@ -95,11 +95,9 @@ def main():
             prepared, features = study.load_prepared(args.prepared, args.prepared_sha256)
             validate_output_location(output, dataset_root=Path(features["source"]["candidate_root"]))
             safe_output = True
-        del features
         if args.mode == "preflight":
             with guard(allow_ridge=False):
-                for loc in prepared["training_labels"].values():
-                    study.core.inputs._asset(loc["path"], loc["sha256"])
+                _, samples = study.training_packets(prepared, features)
                 study.pinned_json(prepared["old_a_path"], study.OLD_A_PIN)
             write_once(
                 output,
@@ -108,6 +106,7 @@ def main():
                         status="PASS",
                         prepared_sha256=prepared["receipt_sha256"],
                         source_commit=head,
+                        common_training_samples=samples,
                         fits=0,
                         evaluation_outcomes_read=False,
                         database_access=False,
@@ -117,6 +116,7 @@ def main():
             )
             print("PREFLIGHT PASS; fits=0; evaluation_outcomes_read=false")
             return 0
+        del features
         if args.mode == "child":
             study.require(args.executor_commit == head, "child source differs")
             numeric = numeric_environment()

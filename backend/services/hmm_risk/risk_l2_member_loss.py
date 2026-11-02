@@ -646,7 +646,8 @@ def predict(model, rows, days, as_of, calendar):
     return output, dict(clipped_rows=int(clipped))
 
 
-def fit_vintage(features, training, vintage, source_commit, on_fit_start, *, member_source_identity):
+def training_rows(features, training, vintage):
+    """Validate a complete vintage before allowing any fit attempt."""
     core.verify_receipt(training)
     plan = rolling.schedule(features["calendar"], vintage)
     require(
@@ -679,6 +680,35 @@ def fit_vintage(features, training, vintage, source_commit, on_fit_start, *, mem
                 and training["original_status"][day][code] == "AVAILABLE"
             ):
                 rows.append((day, code, vector, target["B"], target["C"]))
+    require(bool(rows), "empty common training mask", "train_label_evidence_insufficient")
+    require(
+        all(
+            len(r[2]) == 20
+            and np.isfinite(r[2]).all()
+            and all(type(y) in (float, int) and math.isfinite(y) and 0 <= y < 1 for y in r[3:])
+            for r in rows
+        ),
+        "nonfinite/malformed paired training facts",
+    )
+    return rows
+
+
+def training_packets(prepared, features):
+    packets, summary = {}, {}
+    for vintage in rolling.VINTAGES:
+        loc = prepared["training_labels"][vintage["id"]]
+        packet = core.inputs._asset(loc["path"], loc["sha256"])
+        rows = training_rows(features, packet, vintage)
+        packets[vintage["id"]] = packet
+        summary[vintage["id"]] = dict(
+            rows=len(rows), dates=len({r[0] for r in rows}), mask_sha256=canonical_sha256([[r[0], r[1]] for r in rows])
+        )
+    return packets, summary
+
+
+def fit_vintage(features, training, vintage, source_commit, on_fit_start, *, member_source_identity):
+    rows = training_rows(features, training, vintage)
+    plan = rolling.schedule(features["calendar"], vintage)
     parameters, stats = fit_pair(rows, on_fit_start)
     output = {}
     for arm in ARMS:
@@ -922,10 +952,10 @@ def evaluate(features, sealed, facts, old_a):
 
 def execute_child(prepared_path, prepared_sha256, output, source_commit):
     prepared, features = load_prepared(prepared_path, prepared_sha256)
+    packets, _ = training_packets(prepared, features)
     sealed = []
     for vintage in rolling.VINTAGES:
-        loc = prepared["training_labels"][vintage["id"]]
-        training = core.inputs._asset(loc["path"], loc["sha256"])
+        training = packets[vintage["id"]]
         pair = fit_vintage(
             features,
             training,

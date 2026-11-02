@@ -326,11 +326,12 @@ def test_four_fit_sealing_precedes_evaluation_and_failed_kernel_does_not_retry(s
     monkeypatch.setattr(h, "pinned_json", lambda *_: {})
     monkeypatch.setattr(h, "evaluate", lambda *_: {})
     output = tmp_path / "out"
+    audit_output = {"path": output}
     read = h.core.inputs._asset
 
     def audited(path, pin):
         if path == locs["2026Q3"]["path"]:
-            assert (output / "2026Q2_B.sealed.json").exists() and (output / "2026Q2_C.sealed.json").exists()
+            assert not audit_output["path"].exists()
         if path == str(factpath):
             assert len(list(output.glob("*.sealed.json"))) == 4
         return read(path, pin)
@@ -344,9 +345,23 @@ def test_four_fit_sealing_precedes_evaluation_and_failed_kernel_does_not_retry(s
 
     monkeypatch.setattr(h.loss, "fit_parameters", fail)
     failed = tmp_path / "failed"
+    audit_output["path"] = failed
     with pytest.raises(RuntimeError):
         h.execute_child("unit", "b" * 64, failed, "a" * 40)
     assert len(list(failed.glob("*.attempt.json"))) == 1 and not list(failed.glob("*.sealed.json"))
+
+    bad = deepcopy(labels["2026Q3"])
+    bad["labels"]["2026-06-15"][f["catalog"][0]]["C"] = float("inf")
+    # Invalid input is rejected before Q2 can consume its first fit.
+    original_read = h.core.inputs._asset
+    monkeypatch.setattr(
+        h.core.inputs, "_asset", lambda p, pin: bad if p == locs["2026Q3"]["path"] else original_read(p, pin)
+    )
+    blocked = tmp_path / "blocked"
+    audit_output["path"] = blocked
+    with pytest.raises((FormalStateError, ValueError)):
+        h.execute_child("unit", "b" * 64, blocked, "a" * 40)
+    assert not blocked.exists()
 
 
 def test_bin_price_reader_uses_existing_integer_li_and_preserves_legal_missing(tmp_path):
