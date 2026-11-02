@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-02T02:17:23.732428Z",
-  "description": "AttributeError in _index_receipt_payload before CSV adoption.",
+  "description": "BUG-2170 的已完成指数复用分支返回持久化 details 字典，首次导出分支返回 IndexMaterializationReceipt；正常 prepare 调用 _index_receipt_payload 时访问 details 导致 AttributeError。仅恢复该分支的正式返回类型，不重算或改写已有指数、日线、分钟线或 SOURCE。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -103,7 +103,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/dataset_release/test_monthly_legacy_index.py::test_native_index_appends_month_and_preserves_legacy_raw_unit_contract -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -111,7 +111,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED：新增首次导出→复用→正常 prepare 序列化调用回归，在原源码上两种历史 manifest 键均复现 dict has no attribute details。GREEN：两种格式及正常 prepare/CAS 回调边界共3项通过。禁止复用期间再次调用指数生产者；日期/SOURCE 不匹配或文件漂移继续明确报错。",
+      "一次最终相关矩阵：pytest test_monthly_legacy_index.py test_monthly_legacy_build_stage.py test_monthly_build_resume.py test_build_stage.py -q -> passed 229。修改后 Ruff、git diff --check、L0通过。后续仅规范只读签名断言，排除读取会改变但不代表数据漂移的 atime；不重复运行整套矩阵。",
+      "独立进程只读原 attempt18：12只指数、204条10月记录、14个原生输出文件签名全部通过；返回正式 IndexMaterializationReceipt，正常 payload 序列化成功，原文件 dev/inode/size/mtime 签名不变。source_bundle_sha256=9834867ae964e20128c1b52f35ca69b6b75dc321d6dbd99be04c432bef8db711，contract_digest=43c14f45ec233334d063da91ddc870992d21f12b973a7d8a733035a17c79cbb3。未查询数据库或行情源、未写原 candidate/profile、未控制进程。",
+      "独立进程 code-owned worker --preflight -> passed。SOURCE adapter v21、producer registry及BUILD contract均未改变；database_opened=false、operation_claimed=false、candidate_write_performed=false、profile_write_performed=false、runtime_action_performed=false。运行态加载及完整10月数据集验收仍单独待办，不以源码测试代替数据发布完成。",
+      "三轮审核：1）对照原生指数首次生产者的所有 receipt 字段及下游 prepare/finalize/validation，保持类型和内容一致；2）检查已有文件零改写、SOURCE/前驱/cutoff及普通文件签名约束不变，复用时不调用来源；3）真实 prepare 调用链及 CAS 回调、其他非 legacy/私有准备和CSV断点恢复回归通过，未引入新审批、历史全扫或无关组件重导。",
+      "DESIGN-COMPLIANCE-001：实际生产修复点及真实保留文件独立读取验证，不把局部单测、mock边界或未完成月更宣称为完整发布；不吞异常、不造成功/数据；不改变PIT、单位、交易时标或缺失语义；不新增人工门禁。数据库写入、激活、训练、实验、进程控制均为false。"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
