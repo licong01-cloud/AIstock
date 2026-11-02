@@ -2,6 +2,8 @@
 
 2026-11-02，Advisory/model_first。用户在研究复盘后授权“开始按建议执行”。本次只检验已经在P20观察的P19第3折原模型，不选择三折赢家、不拟合、不搜索参数。实现和结果按以下索引验收。
 
+真实118D检验及独立算术复核完成：106完整配对D主增量−136.023748bps，STRESS_NOT_SUPPORTED_CURRENT_PAIR，按下方事前三分支停止为此冻结模型追加主动开发。累计248实际fit＋1旧index不变；原V2、P20及生产不改。详[结果报告](../analysis/advisory_lstm_frozen_specialist_stress_20261102.md)。
+
 ## Background / Goal / Scope
 
 原P18验证共享最终模型在2026-03-11～08-28的118D/5900原Top50，结果负面；P19专属模型的正结果仅为2025三折开发。唯一问题：固定当前专属第3折在同一已消费后续历史能否保持成本后Top10增量。源数据、旧共享模型结果已被研究者看过，任何结果都只能用于开发压力诊断，不能作为独立样本外、历史PIT或正式经济确认。
@@ -61,13 +63,17 @@ predicted阶段只解码固定输入和模型，复用`spo_top10_5td_v1.predict`
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-801 | 新研究叶/CLI | protocol、旧阶段链和全人口运行 | PLANNED | 实现进行中 |
-| F-802 | predicted/evaluated隔离阶段 | 金融读取顺序与不可变父hash测试 | PLANNED | 实现进行中 |
-| F-803 | 公共cohort/stress_report与三臂汇总 | 原118D/主端点/三臂人口与逐股费用读回 | PLANNED | 实现进行中 |
-| F-804 | 纯决定函数与结果报告 | 三分支/100bps/不激活测试 | PLANNED | 实现进行中 |
-| F-805 | 直接测试及独立审核脚本 | 新进程预测/算术/来源/V2 hash | PLANNED | 实现进行中 |
-| F-806 | 设计/报告/蓝图及精确路由 | 自审/最小验证/CI交付收据 | PLANNED | 实现进行中 |
+| F-801 | backend/services/advisory_model_first/lstm_frozen_specialist_stress_v1.py; scripts/advisory_lstm_frozen_specialist_stress.py | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/recovery-v2/protocol.json，原链/5900行/0fit | PASS | none |
+| F-802 | CLI.predicted/evaluated、公共不可变发布器 | backend/tests/advisory_model_first/test_lstm_frozen_specialist_stress_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/recovery-v2/evaluated/read_receipt.json | PASS | none |
+| F-803 | 公共cohort/stress_report与新evaluate三臂汇总 | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/recovery-v2/evaluated/report.json，118D全保留，主/辅助106D独立核验 | PASS | none |
+| F-804 | 新研究叶decision及结果报告 | backend/tests/advisory_model_first/test_lstm_frozen_specialist_stress_v1.py，三分支与100bps分报；真实STOP_ADDITIONAL_DEVELOPMENT_THIS_FROZEN_MODEL | PASS | none |
+| F-805 | 23项直接测试、新进程独立审核 | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/independent_audit_receipt.json，5900预测/5623费用/三组区间与35源/V2不变 | PASS | none |
+| F-806 | 本设计、分析报告、蓝图F-310及精确CI/ownership条目 | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/validation_receipt.json，三轮自审和逐项符合性；CI/合入独立见delivery_receipt | PASS | none |
 
 ## Risks / Rollout
 
 该窗和模型选择均非独立；固定第3折只是已在观察的候选，不代表训练至2026的模型。共享模型训练截止不同，三臂差值不能隔离专属化因果。原NON_VINTAGE、5TD重叠、完整组选择和开发复用保持。任何负面/未知保留，不私增审批或把等待新交易日作为工程门禁。仅离线文件交付，无生产DDL/DML、依赖/客户端变更、服务或激活操作；新任务树未获删除授权则保留。
+
+## Production Gates
+
+production_ddl_gate=noop，production_dml_gate=noop，dependency_install=noop，backend_restart_required=false，production_activation=false。当前任务不改变生产调用路径或正式V2协议，无运行激活步骤；源合入、主目录同步、研究结果和生产状态分别记录。无任何新人工审批或数据准备窗口要求。
