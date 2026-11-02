@@ -103,8 +103,8 @@ F-011：目标、样本、预算及风险识别评价（D1/D2/D3/D5）；F-012�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-011 | backend/services/hmm_risk/risk_l2_member_loss.py：pair_target/training_rows/fit_pair/cohort_metrics/evaluate | backend/tests/hmm_risk/test_risk_l2_member_loss.py；18 passed；同mask/因果成熟/失败前置/配对分母直接测试；§13正式文件样本读回 | VERIFIED_SOURCE | 无 |
-| F-012 | 同service：FrozenMemberSource/provider_path/validate_model/infer_prepared | 同直接测试的alias/停牌NA/无回退/旧schema拒绝/两个carrier；正式prepare_v2 identity与131目录读回；真实模型双入口仍属后续研究，未代报 | VERIFIED_SOURCE | 无 |
-| F-013 | 同service：execute_child/close_processes；scripts/hmm_risk/run_risk_l2_member_loss.py | 封闭4模型、8-fit上限/失败不重试测试；F2及PIT/schema/security/L0；§13分别列源码PR与0/8预算，不冒充研究完成 | VERIFIED_SOURCE | 无 |
+| F-012 | 同service：FrozenMemberSource/provider_path/validate_model/infer_prepared | backend/tests/hmm_risk/test_risk_l2_member_loss.py：alias/停牌NA/无回退/旧schema拒绝/两个carrier；正式prepare_v2 identity与131目录读回；真实模型双入口仍属后续研究，未代报 | VERIFIED_SOURCE | 无 |
+| F-013 | 同service：execute_child/close_processes；scripts/hmm_risk/run_risk_l2_member_loss.py | backend/tests/hmm_risk/test_risk_l2_member_loss.py：封闭4模型、8-fit上限/失败不重试；python -m nox -s l0；§13分别列源码PR与0/8预算，不冒充研究完成 | VERIFIED_SOURCE | 无 |
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
@@ -135,3 +135,5 @@ C可能只是放大波动、无法由现有20D预测；行业级信号仍不能�
 正式文件prepare已在固定源码`016c47218b5a2f861edeb893815f931f35c27750`完成，准备包为`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/prepare_v2/prepared.json`，canonical SHA=`cb889ddc486ed4ebea6e9278423bcaaa87245b9ce80a3be64829b29b6ee9b574`，实际读取10,406个已钉住文件，数据库/数据集写入为0。两季度共同mask分别88,929行/714日、89,569行/715日。额外1个合法NA键均为`2026-01-12/801178.SI`：`603056.SH`在as-of 01-09只有日内停牌且收盘有效，正式reader保留该成员；01-12及01-26的必要端点为全天停牌NaN，故整个标签NA（缺失权重约2.3715%），不移除该股重归一化。先前scratch把日内停牌也当全天排除而得到42成员，正式reader为43成员；以原正式停牌语义为准，不要求数据窗口补造报价。
 
 最终审修将两个vintage完整输入/共同mask检查移至首个fit前，Q3错误不得先消耗Q2预算；之后封存4模型才读取评价结果。源码PR #7013已创建，正式研究消耗仍为0/8；有界真实双入口及效果评价须在模型产生后执行。本节不把代码测试、准备包或源码CI绿色当模型有效、生产加载或新QE_READY。
+
+固定源码`0b963509e`的正式CLI `preflight`已通过：`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/preflight_v1.json`，两个vintage的共同mask均完成前置验证；`fits=0`、`evaluation_outcomes_read=false`、`database_access=false`、`runtime_action=false`。源码PR后续文档状态提交不改变该preflight对应的实现，正式研究尚未启动。
