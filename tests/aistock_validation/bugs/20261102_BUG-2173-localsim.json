@@ -16,10 +16,10 @@
   "created_at": "2026-11-02T03:01:22.671721Z",
   "description": "summary调用_pnl时丢弃missing_dates；现有前端已支持显示缺失日期但收不到。",
   "design_compliance": {
-    "no_simplified_delivery": "账户概览完整传递现行收益校验得到的缺失估值日期，不替换为静态说明。",
-    "no_silent_error": "保留部分数据、警告和收益未知，不补收盘估值、期初资金或交易流水。",
     "no_business_semantic_drift": "只传递已计算日期，不改费用、选股、撮合、账户、持仓、资金、账本和旧研究。",
-    "no_new_approval_or_gate": "不增加业务参数、审批或门禁，后端仍由用户重启。"
+    "no_new_approval_or_gate": "不增加业务参数、审批或门禁，后端仍由用户重启。",
+    "no_silent_error": "保留部分数据、警告和收益未知，不补收盘估值、期初资金或交易流水。",
+    "no_simplified_delivery": "账户概览完整传递现行收益校验得到的缺失估值日期，不替换为静态说明。"
   },
   "events": [
     {
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-11-02T03:01:22.671721Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "343882919c0d9fd3fd35c3fc637896052e252268",
+  "fixed_at": "2026-11-02T03:24:11Z",
   "github_issue_number": 7011,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7011",
   "last_seen_at": "2026-11-02T03:01:22.671721Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7012",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -135,6 +136,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -146,7 +148,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2173",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "36198654e134218a",
+    "recorded_at": "2026-11-02T03:25:03.659601Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1a48afc15b1aab0f64cd9233c13cea9fbc2d5827",
+    "source_merge_commit": "343882919c0d9fd3fd35c3fc637896052e252268",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7012",
+    "validation_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -q -> passed (72 tests; source pins unchanged)",
+      "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench.py tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json -> passed (0 blocking)",
+      "git diff --check -> passed (three-file scope, three sequential same-agent reviews)"
+    ],
+    "validation_evidence_digest": "fea9005cb9df9faf7a91bee82843c277dec3b0986f773d4c6c0bf842eb6da131"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -155,6 +180,11 @@
     "fingerprint": "c32d3de796ddc41460718e51",
     "source_event_id": "FE-20261102-c32d3de796dd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -q -> passed (72 tests; source pins unchanged)",
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench.py tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json -> passed (0 blocking)",
+    "git diff --check -> passed (three-file scope, three sequential same-agent reviews)"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
