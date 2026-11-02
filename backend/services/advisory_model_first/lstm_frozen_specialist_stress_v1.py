@@ -28,9 +28,10 @@ def validate_inputs(inputs, axis):
     axis = axis.copy()
     for field in (DAY, "target_trade_date"):
         axis[field] = pd.to_datetime(axis[field])
-    order = [DAY, "selection_effective_rank"]
-    pd.testing.assert_frame_equal(inputs[AXIS].sort_values(order).reset_index(drop=True),
-        axis[AXIS].sort_values(order).reset_index(drop=True), check_dtype=False)
+    # P18 captured all five identity fields as text, including numeric ranks.
+    # Compare its original row order without lexicographic rank sorting.
+    pd.testing.assert_frame_equal(inputs[AXIS].reset_index(drop=True).astype(str),
+        axis[AXIS].reset_index(drop=True).astype(str))
     return days
 
 

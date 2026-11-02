@@ -46,6 +46,14 @@ def test_no_fit_or_original_fold_guard_is_called(trial, monkeypatch):
     assert packet == before
 
 
+def test_original_p18_text_axis_and_original_row_order(trial):
+    inputs, _packet, axis, _ = trial
+    text_axis = axis.astype(str)
+    assert len(app.validate_inputs(inputs, text_axis)) == 118
+    with pytest.raises(AssertionError):
+        app.validate_inputs(inputs.iloc[::-1].reset_index(drop=True), text_axis)
+
+
 @pytest.mark.parametrize("problem", ["missing", "duplicate", "wrong_manifest", "wrong_axis", "infinite", "wrong_fold", "wrong_cutoff", "corrupt_weight"])
 def test_population_and_frozen_model_drift_fail(problem, trial):
     inputs, packet, axis, _ = trial
