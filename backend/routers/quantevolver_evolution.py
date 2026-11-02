@@ -1651,6 +1651,12 @@ class CustomEvoRunRequest(BaseModel):
     force_full_train: bool = Field(False, description="Force full training when submitting a pending custom_evo task")
 
 
+class CustomEvoPendingNodeReassignmentRequest(BaseModel):
+    operation_id: str = Field(..., min_length=1, max_length=128)
+    loop_indexes: List[int] = Field(..., min_length=1)
+    node_id: str = Field(..., min_length=1)
+
+
 def _persisted_qe_dataset_context(loop_config: Dict[str, Any] | None) -> Dict[str, Any] | None:
     from ..services.quantevolver.qe_active_dataset_profile import (
         QE_ACTIVE_PROFILE_SUMMARY_PARAM,
@@ -2127,7 +2133,7 @@ async def get_workspace_preflight(node_id: str):
 def get_batch_execution_policy():
     from ..services.quantevolver.qe_batch_execution_policy import (
         QE_BATCH_EXECUTION_POLICY, QE_TRAINING_LOOP_CAPACITY, QE_BACKTEST_LOOP_CAPACITY,
-        QE_CPU_TRAINING_LOOP_CAPACITY, CPU_NODE, GPU_NODE,
+        QE_CPU_TRAINING_LOOP_CAPACITY, CPU_NODE, GPU_NODE, CPU_NODES,
     )
 
     return {
@@ -2138,11 +2144,12 @@ def get_batch_execution_policy():
             "gpu_full_fit_loop": QE_TRAINING_LOOP_CAPACITY,
             "pure_backtest_loop": QE_BACKTEST_LOOP_CAPACITY,
         },
-        "model_node_affinity": {"cpu": CPU_NODE, "gpu": GPU_NODE},
+        "model_node_affinity": {"gpu": GPU_NODE},
+        "cpu_training_nodes": list(CPU_NODES),
         "prediction_replay_nodes": [CPU_NODE, GPU_NODE],
         "slot_lifetime": "whole_loop",
         "stricter_model_and_global_capacity_guards": "preserved",
-        "existing_task_bindings": "immutable",
+        "existing_task_bindings": "submitted_immutable_pending_explicit_cas",
     }
 
 
@@ -2543,6 +2550,47 @@ async def rerun_custom_evo_loop(
     except Exception as e:
         logger.error(f"Failed to rerun custom_evo loop {task_id}/Loop{loop_index}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/custom-loops/reassign-pending", summary="Reassign untouched Loops without adding experiments")
+async def reassign_pending_custom_evo_loops(
+    task_id: str, req: CustomEvoPendingNodeReassignmentRequest, background_tasks: BackgroundTasks,
+):
+    try:
+        indexes = req.loop_indexes
+        if len(set(indexes)) != len(indexes) or any(index < 1 for index in indexes):
+            raise HTTPException(status_code=400, detail="loop_indexes must be unique positive indexes")
+        existing = await scheduler.get_custom_evo_editable_config(task_id)
+        old_by_index = {int(cfg["loop_index"]): cfg for cfg in existing["loops"]}
+        if not set(indexes) <= set(old_by_index):
+            raise HTTPException(status_code=409, detail="QE_PENDING_MOVE_LOOP_NOT_FOUND")
+        expected = [old_by_index[index] for index in indexes]
+        contexts = [_persisted_qe_dataset_context(cfg) for cfg in expected]
+        if any(ctx is None for ctx in contexts):
+            raise HTTPException(status_code=409, detail="QE_PENDING_MOVE_VERSIONED_BINDING_REQUIRED")
+        identities = [
+            {key: str(ctx["profile_summary"].get(key) or "") for key in ("generation", "release_id", "cutoff")}
+            for ctx in contexts
+        ]
+        if not all(identities[0].values()) or any(identity != identities[0] for identity in identities):
+            raise HTTPException(status_code=409, detail="QE_PENDING_MOVE_PROFILE_IDENTITY_INCOMPLETE")
+        public = _public_custom_evo_config({"loops": expected})["loops"]
+        prepared, _, _ = await _prepare_custom_evo_loop_configs(
+            [CustomEvoLoopConfig(**{**cfg, "node_id": req.node_id}) for cfg in public],
+            request_node_id=req.node_id, node_parallelism_payload=None,
+            assigned_loop_indexes=indexes, required_profile_identity=identities[0],
+            apply_batch_policy=True, balanced_batch_nodes=False,
+        )
+        result = await scheduler.reassign_pending_custom_evo_loops(
+            task_id=task_id, operation_id=req.operation_id,
+            expected_loop_configs=expected, prepared_loop_configs=prepared,
+        )
+        background_tasks.add_task(scheduler.submit_custom_evo_selected_loops, task_id, result["moved_loop_indexes"])
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/tasks/{task_id}/custom-loops/append", summary="Append custom_evo Loops to an existing task")

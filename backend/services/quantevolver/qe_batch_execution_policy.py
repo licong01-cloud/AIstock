@@ -21,6 +21,7 @@ POLICY_KEY = "_qe_batch_execution_policy"
 MODEL_BINDING_KEY = "_qe_model_execution"
 CPU_NODE = "rdagent-node1"
 GPU_NODE = "wsl2-5080"
+CPU_NODES = (CPU_NODE, GPU_NODE)
 DATASET_FIELDS = (
     "deployment_snapshot_id", "dataset_manifest_sha256", "cutoff_trade_date",
     "qlib_calendar_sha256", "qlib_instruments_sha256",
@@ -79,7 +80,7 @@ def bind_batch_model_nodes(
     loops: Sequence[Mapping[str, Any]], *, available_nodes: Sequence[str],
     balanced: bool, preferred_node: str | None = None, model_lookup: Any = None,
 ) -> list[dict[str, Any]]:
-    """GPU train/inference stays on WSL; CPU models stay on the remote node.
+    """Place CPU models on either capable node; GPU execution requires WSL.
 
     Immutable prediction replay is CPU work without model execution and can
     use either node. Explicit placement cannot override model compatibility.
@@ -94,7 +95,7 @@ def bind_batch_model_nodes(
         if not loop.get("prediction_replay") and model_id not in cache:
             cache[model_id] = model_lookup(model_id)
         kind = loop_compute_kind(loop, cache.get(model_id))
-        required = {"cpu": CPU_NODE, "gpu": GPU_NODE}.get(kind)
+        required = GPU_NODE if kind == "gpu" else None
         requested = loop.get("node_id") or preferred_node
         if balanced:
             loop["node_id"] = required
@@ -102,6 +103,8 @@ def bind_batch_model_nodes(
             raise ValueError(f"QE_BATCH_MODEL_NODE_MISMATCH: {model_id} requires {required}, got {requested}")
         else:
             loop["node_id"] = requested
+        if kind == "cpu" and not balanced and requested not in CPU_NODES:
+            raise ValueError("QE_BATCH_CPU_NODE_NOT_CAPABLE: " + str(requested))
         if required and required not in available_nodes:
             raise ValueError("QE_BATCH_MODEL_NODE_NOT_BOUND: " + required)
         binding = {"model_id": model_id, "compute_kind": kind}
@@ -110,7 +113,13 @@ def bind_batch_model_nodes(
             raise ValueError("QE_BATCH_MODEL_BINDING_CHANGED: " + model_id)
         loop[MODEL_BINDING_KEY] = binding
     if balanced:
-        result = place_batch_loops(result, available_nodes=available_nodes)
+        # GPU pins must not drag every CPU member of a seed cohort onto WSL.
+        flexible = [loop for loop in result if loop[MODEL_BINDING_KEY]["compute_kind"] != "gpu"]
+        capable = [node for node in available_nodes if node in CPU_NODES]
+        if flexible and not capable:
+            raise ValueError("QE_BATCH_CPU_NODE_NOT_BOUND")
+        placed = iter(place_batch_loops(flexible, available_nodes=capable) if flexible else [])
+        result = [next(placed) if loop[MODEL_BINDING_KEY]["compute_kind"] != "gpu" else loop for loop in result]
     return result
 
 
@@ -128,12 +137,16 @@ def batch_node_parallelism(
     loops: Sequence[Mapping[str, Any]],
     requested: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
-    """Remote CPU fits: 4; WSL GPU fits: 2; pure backtests: 4."""
+    """CPU fits and pure backtests: 4 per node; GPU/mixed fits: 2."""
     nodes = {str(loop["node_id"]) for loop in loops}
     defaults = {
         node: (QE_BACKTEST_LOOP_CAPACITY if all(
             is_pure_backtest(loop) for loop in loops if str(loop["node_id"]) == node
-        ) else (QE_CPU_TRAINING_LOOP_CAPACITY if node == CPU_NODE else QE_TRAINING_LOOP_CAPACITY))
+        ) else (QE_CPU_TRAINING_LOOP_CAPACITY if all(
+            is_pure_backtest(loop)
+            or (loop.get(MODEL_BINDING_KEY) or {}).get("compute_kind") == "cpu"
+            for loop in loops if str(loop["node_id"]) == node
+        ) or node == CPU_NODE else QE_TRAINING_LOOP_CAPACITY))
         for node in nodes
     }
     result = normalize_node_parallelism(nodes, {**defaults, **dict(requested or {})})
@@ -253,10 +266,12 @@ def strategy_node_parallelism(
         for loop in loops:
             binding = loop.get(MODEL_BINDING_KEY) or {}
             kind = binding.get("compute_kind")
-            required = {"cpu": CPU_NODE, "gpu": GPU_NODE}.get(kind)
+            required = GPU_NODE if kind == "gpu" else None
             if binding.get("model_id") != loop.get("model_id") or kind not in {"cpu", "gpu", "prediction_replay"}:
                 raise ValueError("QE_BATCH_MODEL_BINDING_REQUIRED")
             if required and loop.get("node_id") != required:
                 raise ValueError("QE_BATCH_MODEL_NODE_MISMATCH")
+            if kind == "cpu" and loop.get("node_id") not in CPU_NODES:
+                raise ValueError("QE_BATCH_CPU_NODE_NOT_CAPABLE")
         return batch_node_parallelism(loops, requested)
     return normalize_node_parallelism({str(loop["node_id"]) for loop in loops}, requested)

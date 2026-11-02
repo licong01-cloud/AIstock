@@ -8,6 +8,7 @@ import base64
 import hashlib
 import re
 import weakref
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -6646,47 +6647,50 @@ class AutoEvolutionScheduler:
         parsed["loops"] = sorted(normalized_loops, key=lambda item: int(item.get("loop_index") or 0))
         return parsed
 
+    @staticmethod
+    def _custom_evo_has_submission_evidence(row: Dict[str, Any]) -> bool:
+        row_status = str(row.get("status") or "").lower()
+        if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
+            return True
+        if row_status != "pending":
+            return False
+        if row.get("experiment_id"):
+            return True
+        raw_config = row.get("config_json")
+        if isinstance(raw_config, str):
+            try:
+                raw_config = json.loads(raw_config)
+            except json.JSONDecodeError:
+                # An unreadable pending config cannot be proven to be an
+                # untouched registry reservation, so fail closed.
+                return True
+        if not isinstance(raw_config, dict):
+            return True
+        registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
+        if not isinstance(registration, dict):
+            # Only a canonical registry reservation is allowed to keep a
+            # pending row editable/startable. Legacy or malformed pending
+            # rows remain nonstartable until explicitly reconciled.
+            return True
+        return any(
+            key in raw_config
+            for key in (
+                "execution_manifest",
+                "execution_manifest_sha256",
+                _QE_RETRY_SUBMISSION_KEY,
+                _QE_RERUN_SUBMISSION_KEY,
+            )
+        )
+
     def _custom_evo_start_state_from_rows(
         self,
         task: Dict[str, Any],
         loop_rows: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         status = str(task.get("status") or "").lower()
-        def _has_submission_evidence(row: Dict[str, Any]) -> bool:
-            row_status = str(row.get("status") or "").lower()
-            if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
-                return True
-            if row_status != "pending":
-                return False
-            if row.get("experiment_id"):
-                return True
-            raw_config = row.get("config_json")
-            if isinstance(raw_config, str):
-                try:
-                    raw_config = json.loads(raw_config)
-                except json.JSONDecodeError:
-                    # An unreadable pending config cannot be proven to be an
-                    # untouched registry reservation, so fail closed.
-                    return True
-            if not isinstance(raw_config, dict):
-                return True
-            registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
-            if not isinstance(registration, dict):
-                # Only a canonical registry reservation is allowed to keep a
-                # pending row editable/startable. Legacy or malformed pending
-                # rows remain nonstartable until explicitly reconciled.
-                return True
-            return any(
-                key in raw_config
-                for key in (
-                    "execution_manifest",
-                    "execution_manifest_sha256",
-                    _QE_RETRY_SUBMISSION_KEY,
-                    _QE_RERUN_SUBMISSION_KEY,
-                )
-            )
-
-        submitted_loop_count = sum(1 for row in loop_rows if _has_submission_evidence(row))
+        submitted_loop_count = sum(
+            1 for row in loop_rows if self._custom_evo_has_submission_evidence(row)
+        )
         startable = (
             task.get("task_type") == "custom_evo"
             and status == "pending"
@@ -6847,6 +6851,7 @@ class AutoEvolutionScheduler:
             "engine_mode": strategy_config.get("engine_mode") or "unified",
             "node_parallelism": strategy_config.get("node_parallelism") or {},
             "execution_policy": strategy_config.get("execution_policy"),
+            "pending_node_reassignments": strategy_config.get("pending_node_reassignments") or [],
             "phase_pipeline_enabled": bool(strategy_config.get("phase_pipeline_enabled", False)),
             "resource_telemetry_enabled": False,
             "resource_monitoring_status": "removed",
@@ -7326,7 +7331,7 @@ class AutoEvolutionScheduler:
                         conn.commit()
                         return None
                     cur.execute(
-                        "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s",
+                        "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s FOR UPDATE",
                         (loop_db_id,),
                     )
                     existing = cur.fetchone()
@@ -7340,6 +7345,13 @@ class AutoEvolutionScheduler:
                         if isinstance(existing, dict)
                         else existing[1] if existing and len(existing) > 1 else None
                     )
+                    claim_node_id = target_node_id or slot.get("node_id")
+                    if existing_node_id and claim_node_id and existing_node_id != claim_node_id:
+                        # A pending Loop may have been explicitly reassigned while
+                        # this waiter held an old task snapshot. Never claim it on
+                        # the stale node; the new node's submitter owns the work.
+                        conn.commit()
+                        return None
                     if (existing is not None and existing_status != "pending") or (
                         existing is None and not insert_if_missing
                     ):
@@ -7563,6 +7575,138 @@ class AutoEvolutionScheduler:
                 self._release_custom_evo_mutation_lock(lock_conn, task_id)
             finally:
                 lock_cm.__exit__(None, None, None)
+
+    @staticmethod
+    def _pending_node_reassignment_config(old: Dict[str, Any], prepared: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace physical locations only; retain every research/registry field."""
+        from .qe_active_dataset_profile import QE_ACTIVE_PROFILE_SUMMARY_PARAM
+        from .qe_dataset_contract import QE_DIRECT_V2_DATASET_BINDING_PARAM
+        from .qe_batch_execution_policy import DATASET_FIELDS
+
+        if old.get(POLICY_KEY, {}).get("version") != QE_BATCH_EXECUTION_POLICY:
+            raise ValueError("QE_PENDING_MOVE_VERSIONED_BINDING_REQUIRED")
+        identity = old[POLICY_KEY].get("dataset_identity") or {}
+        if not all(identity.get(field) for field in DATASET_FIELDS):
+            raise ValueError("QE_PENDING_MOVE_DATASET_IDENTITY_INCOMPLETE")
+        if prepared.get(POLICY_KEY, {}).get("dataset_identity") != old[POLICY_KEY].get("dataset_identity"):
+            raise ValueError("QE_PENDING_MOVE_DATASET_IDENTITY_CHANGED")
+        old_params = deepcopy(old.get("custom_params") or {})
+        new_params = deepcopy(prepared.get("custom_params") or {})
+        physical_paths = {
+            "candidate_root", "provider_uri_day", "provider_uri_1min", "factor_data_dir",
+            "suspend_data_dir", "index_context_path",
+        }
+        old_binding = old_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+        new_binding = new_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+        if not isinstance(old_binding, dict) or not isinstance(new_binding, dict):
+            raise ValueError("QE_PENDING_MOVE_DATASET_BINDING_REQUIRED")
+        if ({k: v for k, v in old_binding.items() if k not in physical_paths}
+                != {k: v for k, v in new_binding.items() if k not in physical_paths}):
+            raise ValueError("QE_PENDING_MOVE_DATASET_PINS_CHANGED")
+        node_id = str(prepared.get("node_id") or "")
+        if not node_id or node_id == old.get("node_id"):
+            raise ValueError("QE_PENDING_MOVE_DIFFERENT_NODE_REQUIRED")
+        result = deepcopy(old)
+        result["node_id"] = node_id
+        for key in (QE_DIRECT_V2_DATASET_BINDING_PARAM, QE_ACTIVE_PROFILE_SUMMARY_PARAM):
+            if key not in new_params:
+                raise ValueError("QE_PENDING_MOVE_PROFILE_REQUIRED")
+            old_params[key] = new_params[key]
+        old_params["execution_node_id"] = node_id
+        for registration in (result.get(QE_RUN_REGISTRATION_PARAM), old_params.get(QE_RUN_REGISTRATION_PARAM)):
+            if not isinstance(registration, dict):
+                raise ValueError("QE_PENDING_MOVE_REGISTRATION_REQUIRED")
+            registration["node_id"] = node_id
+        result["custom_params"] = old_params
+        result["resolved_dataset"] = deepcopy(prepared.get("resolved_dataset"))
+        result["stock_pool"] = prepared.get("stock_pool")
+        return result
+
+    async def reassign_pending_custom_evo_loops(
+        self, *, task_id: str, operation_id: str,
+        expected_loop_configs: List[Dict[str, Any]], prepared_loop_configs: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """CAS-move untouched reservations, without creating or retrying a Loop."""
+        indexes = [int(cfg["loop_index"]) for cfg in expected_loop_configs]
+        prepared = {int(cfg["loop_index"]): cfg for cfg in prepared_loop_configs}
+        if not indexes or len(set(indexes)) != len(indexes) or set(indexes) != set(prepared):
+            raise ValueError("QE_PENDING_MOVE_INVALID_LOOP_INDEXES")
+        request_identity = {"indexes": sorted(indexes), "nodes": {str(i): prepared[i]["node_id"] for i in indexes}}
+        with get_conn() as conn:
+            self._acquire_custom_evo_mutation_lock(conn, task_id)
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Lock reservations before the task: the submission CAS also
+                    # takes the Loop row before updating task status.
+                    cur.execute(
+                        "SELECT * FROM qe_evolution_loops WHERE task_id = %s "
+                        "AND loop_index = ANY(%s) ORDER BY loop_index FOR UPDATE",
+                        (task_id, indexes),
+                    )
+                    rows = {int(row["loop_index"]): dict(row) for row in cur.fetchall()}
+                    cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s FOR UPDATE", (task_id,))
+                    task = cur.fetchone()
+                    if not task or task.get("task_type") != "custom_evo":
+                        raise ValueError("QE_PENDING_MOVE_CUSTOM_TASK_REQUIRED")
+                    strategy = self._parse_custom_evo_strategy_config(task["strategy_evo_config"], task_id=task_id)
+                    history = list(strategy.get("pending_node_reassignments") or [])
+                    prior = next((r for r in history if r["operation_id"] == operation_id), None)
+                    if prior is not None:
+                        if prior["request_identity"] != request_identity:
+                            raise ValueError("QE_PENDING_MOVE_OPERATION_ID_CONFLICT")
+                        conn.commit()
+                        return {**prior, "already_applied": True}
+                    if task.get("status") not in ("pending", "running"):
+                        raise ValueError("QE_PENDING_MOVE_TASK_NOT_ACTIVE")
+                    current = {int(cfg["loop_index"]): cfg for cfg in strategy["loops"]}
+                    moves = []
+                    for old in expected_loop_configs:
+                        index = int(old["loop_index"])
+                        row = rows.get(index)
+                        if not row or row.get("status") != "pending" or self._custom_evo_has_submission_evidence(row):
+                            raise ValueError(f"QE_PENDING_MOVE_LOOP_ALREADY_SUBMITTED: Loop{index}")
+                        row_config = row.get("config_json")
+                        if isinstance(row_config, str):
+                            row_config = json.loads(row_config)
+                        if current.get(index) != old or row_config != old or row.get("node_id") != old.get("node_id"):
+                            raise ValueError(f"QE_PENDING_MOVE_CONFIG_CHANGED: Loop{index}")
+                        replacement = self._pending_node_reassignment_config(old, prepared[index])
+                        current[index] = replacement
+                        moves.append({"loop_index": index, "from_node": old["node_id"],
+                                      "to_node": replacement["node_id"], "before_sha256": sha256_json(old),
+                                      "after_sha256": sha256_json(replacement)})
+                    combined = [current[int(cfg["loop_index"])] for cfg in strategy["loops"]]
+                    nodes = {str(cfg["node_id"]) for cfg in combined}
+                    requested = {k: v for k, v in (strategy.get("node_parallelism") or {}).items() if k in nodes}
+                    normalized, _, limits = self._normalize_full_custom_evo_nodes(combined, task.get("node_id"), requested)
+                    # Model/capacity validation must not rewrite any running config.
+                    if normalized != combined:
+                        raise ValueError("QE_PENDING_MOVE_NORMALIZATION_CHANGED_CONFIG")
+                    receipt = {"task_id": task_id, "operation_id": operation_id, "request_identity": request_identity,
+                               "moved_loop_indexes": sorted(indexes), "moves": moves, "node_parallelism": limits,
+                               "at": datetime.now(timezone.utc).isoformat()}
+                    strategy["loops"] = combined
+                    strategy["node_parallelism"] = limits
+                    strategy["pending_node_reassignments"] = history + [receipt]
+                    for index in indexes:
+                        cur.execute(
+                            "UPDATE qe_evolution_loops SET node_id = %s, config_json = %s, updated_at = NOW() "
+                            "WHERE task_id = %s AND loop_index = %s AND status = 'pending'",
+                            (current[index]["node_id"], json.dumps(current[index]), task_id, index),
+                        )
+                        if cur.rowcount != 1:
+                            raise ValueError("QE_PENDING_MOVE_CAS_FAILED")
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET strategy_evo_config = %s, updated_at = NOW() WHERE task_id = %s",
+                        (json.dumps(strategy), task_id),
+                    )
+                conn.commit()
+                return {**receipt, "already_applied": False}
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                self._release_custom_evo_mutation_lock(conn, task_id)
 
     async def append_custom_evo_loops(
         self,
