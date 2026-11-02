@@ -1,6 +1,6 @@
 # 申万L2成员损失：单候选与配对控制详细设计
 
-> v1.0；2026-11-02；F2设计文档；父蓝图v3.00 §1.26/§7。状态：目标可行性分析及设计完成，源码/正式训练尚未执行。本次用户要求开始上一轮的目标对照与详细设计任务，未将完成文档等同于已启动8-fit研究。
+> v1.1；2026-11-02；F2设计文档；父蓝图v3.00 §1.26/§7。状态：设计已随PR #7008合入；正在实施源码，正式研究尚未启动。文档合入不等同于训练完成。
 > 2026-11-02接续授权：用户要求“执行文档的提交合入，开始下一步的实施”，本设计进入源码实施；实际源码、fit消耗、结果与生产状态分别记录，不将授权或文档合入记成训练完成。
 
 ## 1. Background / 目标和依据
@@ -84,7 +84,7 @@
 
 ## 9. Contracts D6 / L2-MEMBER-LOSS-D6：连续交付和终止
 
-本次包已完成零fit目标对照与设计审修，停在可实施设计。下一实施包应连续完成HMM源码/直接测试→多轮审修及必要门禁→按授权交付源码→干净固定commit上的正式8-fit→完整预测/有界双入口→结果分析与单一后续结论，不将adapter、测试、预检拆成小研发阶段。
+设计包已完成零fit目标对照与设计审修，并随PR #7008合入。当前实施包连续完成HMM源码/直接测试→多轮审修及必要门禁→按授权交付源码→干净固定commit上的正式8-fit→完整预测/有界双入口→结果分析与单一后续结论，不将adapter、测试、预检拆成小研发阶段。
 
 遇未知输入缺失/身份冲突在fit前停止并给精确键；正式fit失败即停止，保留真实消耗；达到8-fit上限不重试；效果无新增价值则结束，不自动换horizon、参数、模型或消费公式。合法市场缺失按D2逐标签处理，不作为全模型拒收理由。其他业务模块源码仍由对应owner修改。
 
@@ -118,4 +118,14 @@ C可能只是放大波动、无法由现有20D预测；行业级信号仍不能�
 
 逐项符合性：完整交付指定目标对照和精确设计，未报源码/模型完成；所有NA/undefined/负面结果保留，无默认安全值；新目标/控制/预算明确列出，不改旧批准合同；只提出本研究的一个取舍规则，不加生产审批、额外显著性/覆盖门槛或全行业合取要求。设计F2验收与最终diff检查结果在交付时记录。
 
-本轮验证：`aistock_feature_workflow.py validate --design <本文件> --tier F2 --format summary` PASS（3项/3行，warnings=0）；三份文档`git diff --check`通过。只变更本设计、目标对照报告和父蓝图；业务源码/测试/数据/profile/服务零修改，未创建PR或执行合入。
+设计交付验证：`aistock_feature_workflow.py validate --design <本文件> --tier F2 --format summary` PASS（3项/3行，warnings=0）；三份文档`git diff --check`通过；文档PR #7008已合入，merge=`c619a0a721806fcd088f6fa25e8a3fc410e510bc`。该记录仅指设计交付，不将其视为后续源码或模型验收。
+
+## 13. 实施状态与实际验证
+
+实施工作树为`feature/hmm-l2-member-loss-20261102`。新增service、CLI及直接测试均限定在§3三条HMM路径；复用现存正式reader与Ridge数值核，不修改共享reader、QE、数据集或服务。
+
+实际新买队列只读文件字节SHA=`4da038f25d37e87f407ab21bec1768eccba202164f517093782bcedb3b53da02`；旧A预测字节SHA=`75250a22ea24aef564fc40c265744855122c9f95d244d9a03416e8025e9dd267`。两者进入request固定身份；个股10日参考收益由同release Qlib重新读取，不把scratch舍入结果当正式标签。
+
+两轮作者审修已修正：源码request字节pin不能混用feature request canonical；评价主指标不能被episode局部变量覆盖；文件入口必须复用正确的文件hash reader；封闭回执必须包含两个vintage的全部四模型及完整预测grid，不能仅凭声明fit数量通过。另补齐undefined原因、B/C共同日期均值及旧A三方同股票同日期对照，避免不同分母的指标误比较。审核不是独立第三方背书。
+
+当前已通过17项直接测试、29项PIT/schema/security切片、Ruff、py_compile及L0；正式prepare、双入口和8-fit结果待实际执行后更新，尚未报告模型成功。canonical实际changed-files分类为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，不能沿用文档的none。源码fresh-process import已覆盖hmm_risk/health及新依赖；本研究无runtime activation或服务操作，源码合入与任何生产运行验收分别报告。
