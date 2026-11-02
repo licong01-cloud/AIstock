@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from backend.services.hmm_risk import risk_l2_member_loss as h
+from backend.services.hmm_risk.contracts import StateModelSetError
 from backend.services.hmm_risk.formal_state_model import FormalStateError, receipt
 from backend.services.hmm_risk.formal_state_executor import write_once
 
@@ -55,6 +56,18 @@ def test_maturity_is_resolved_before_source_endpoint_reads():
     plan = h.target_dates(calendar, ["2026-03-16", "2026-03-31"], "2026-03-31")
     assert plan["mature"] == ["2026-03-16"] and plan["immature"] == ["2026-03-31"]
     assert plan["last_outcome"] == "2026-03-30"
+
+
+def test_provider_authority_relocation_is_explicit_and_cannot_change_identity():
+    from pathlib import Path
+
+    path = Path(h.__file__).parent / "manifests" / "provider_absence_v1.json"
+    pin = "494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba"
+    assert h.provider_path(path, pin) == path
+    with pytest.raises(StateModelSetError):
+        h.provider_path(path, "0" * 64)
+    with pytest.raises(FormalStateError):
+        h.provider_path(Path("provider_absence_v1.json"), pin)
 
 
 def test_paired_fit_shares_mask_and_scaler_and_counts_failed_fit():

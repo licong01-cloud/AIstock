@@ -126,6 +126,8 @@ C可能只是放大波动、无法由现有20D预测；行业级信号仍不能�
 
 实际新买队列只读文件字节SHA=`4da038f25d37e87f407ab21bec1768eccba202164f517093782bcedb3b53da02`；旧A预测字节SHA=`75250a22ea24aef564fc40c265744855122c9f95d244d9a03416e8025e9dd267`。两者进入request固定身份；个股10日参考收益由同release Qlib重新读取，不把scratch舍入结果当正式标签。
 
+首轮真实prepare在fit前发现原包provider文件路径指向已清理工作树，记录0次attempt。新CLI要求显式`--provider-absence-manifest <绝对路径>`，只允许原canonical SHA=`494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba`；当前仓库正式文件与此一致。只改变明确的文件定位，不改变原feature/request字节、authority身份或任何数据，禁止自动寻找替代文件或回退。
+
 两轮作者审修已修正：源码request字节pin不能混用feature request canonical；评价主指标不能被episode局部变量覆盖；文件入口必须复用正确的文件hash reader；封闭回执必须包含两个vintage的全部四模型及完整预测grid，不能仅凭声明fit数量通过。另补齐undefined原因、B/C共同日期均值及旧A三方同股票同日期对照，避免不同分母的指标误比较。审核不是独立第三方背书。
 
 当前已通过17项直接测试、29项PIT/schema/security切片、Ruff、py_compile及L0；正式prepare、双入口和8-fit结果待实际执行后更新，尚未报告模型成功。canonical实际changed-files分类为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，不能沿用文档的none。源码fresh-process import已覆盖hmm_risk/health及新依赖；本研究无runtime activation或服务操作，源码合入与任何生产运行验收分别报告。

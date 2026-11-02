@@ -27,7 +27,7 @@ from scripts.hmm_risk.run_risk_l2_rolling import clean_head  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("prepare", "preflight", "run", "child", "infer"))
-    for name in ("study", "cohort", "old-a", "prepared", "model", "request", "features"):
+    for name in ("study", "cohort", "old-a", "prepared", "model", "request", "features", "provider-absence-manifest"):
         parser.add_argument("--" + name, type=Path)
     for name in ("cohort-sha256", "prepared-sha256", "model-sha256", "features-sha256", "executor-commit"):
         parser.add_argument("--" + name)
@@ -71,13 +71,22 @@ def main():
             return 0
         if args.mode == "prepare":
             study.require(
-                all((args.study, args.cohort, args.cohort_sha256, args.old_a)), "explicit study/cohort/A pins required"
+                all((args.study, args.cohort, args.cohort_sha256, args.old_a, args.provider_absence_manifest)),
+                "explicit study/cohort/A/provider pins required",
             )
             with guard(allow_ridge=False):
                 _, features = study.loss.load_study(args.study)
                 validate_output_location(output, dataset_root=Path(features["source"]["candidate_root"]))
                 safe_output = True
-                prepared = study.prepare(args.study, args.cohort, args.cohort_sha256, args.old_a, output, head)
+                prepared = study.prepare(
+                    args.study,
+                    args.cohort,
+                    args.cohort_sha256,
+                    args.old_a,
+                    output,
+                    head,
+                    provider_absence_manifest=args.provider_absence_manifest,
+                )
             study.require(clean_head() == head, "source changed during prepare")
             print(f"PREPARED fits=0; hash={prepared['receipt_sha256']}")
             return 0

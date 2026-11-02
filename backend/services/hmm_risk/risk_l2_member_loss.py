@@ -19,6 +19,7 @@ from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, canonical_jso
 from backend.services.hmm_risk.formal_state_executor import read_json, validate_output_location, write_once
 from backend.services.hmm_risk.formal_state_model import receipt
 from backend.services.hmm_risk.monthly_release_input import _Files, _manifest_pins, _unique_object
+from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
 from backend.services.hmm_risk.security_identity import load_security_source_identity_manifest
 
 core, rolling, require = loss.core, loss.rolling, loss.require
@@ -169,15 +170,28 @@ def pinned_json(path, expected):
     return value
 
 
+def provider_path(path, expected):
+    path = Path(path)
+    require(
+        path.is_absolute() and not any(reader._is_indirect_path(p) for p in (path, *path.parents)),
+        "explicit absolute provider authority required",
+    )
+    before = core.inputs._stamp(path)
+    authority = load_provider_absence_manifest(path, expected_sha256=expected)
+    require(authority.manifest_sha256 == expected and core.inputs._stamp(path) == before, "provider authority differs")
+    return path
+
+
 class FrozenMemberSource:
     """Current formal file reader plus bounded scalar member observations."""
 
-    def __init__(self, features, original):
+    def __init__(self, features, original, *, provider_absence_manifest):
         self.source = features["source"]
+        provider = provider_path(provider_absence_manifest, self.source["provider_absence_sha256"])
         self.assets = reader.load_rotation_l1_direct_v2_source_assets(
             Path(self.source["candidate_root"]),
             security_identity_manifest=Path(self.source["security_identity_manifest"]),
-            provider_absence_manifest=Path(self.source["provider_absence_manifest"]),
+            provider_absence_manifest=provider,
             data_window_end=date(2026, 9, 30),
             frozen_release_binding=self.source["release_binding"],
         )
@@ -437,7 +451,7 @@ def cohort_facts(entries, source):
     return output
 
 
-def prepare(study_path, cohort_path, cohort_sha256, old_a_path, output, source_commit):
+def prepare(study_path, cohort_path, cohort_sha256, old_a_path, output, source_commit, *, provider_absence_manifest):
     original, features = loss.load_study(study_path)
     validate_output_location(output, dataset_root=Path(features["source"]["candidate_root"]))
     require(re.fullmatch(r"[0-9a-f]{40}", source_commit) is not None, "invalid source commit")
@@ -446,7 +460,7 @@ def prepare(study_path, cohort_path, cohort_sha256, old_a_path, output, source_c
     entries = pinned_json(cohort_path, cohort_sha256)
     old_a = pinned_json(old_a_path, OLD_A_PIN)
     validate_old_a(old_a, features)
-    source = FrozenMemberSource(features, original)
+    source = FrozenMemberSource(features, original, provider_absence_manifest=provider_absence_manifest)
     train_locators = {}
     for vintage in rolling.VINTAGES:
         plan = rolling.schedule(features["calendar"], vintage)
@@ -500,6 +514,7 @@ def prepare(study_path, cohort_path, cohort_sha256, old_a_path, output, source_c
             cohort_source_sha256=cohort_sha256,
             release_binding=features["source"]["release_binding"],
             member_source_identity=source_identity,
+            provider_absence_manifest=str(provider_absence_manifest),
             source_aliases=dict(source.source_aliases),
             fits=0,
             database_access=False,
