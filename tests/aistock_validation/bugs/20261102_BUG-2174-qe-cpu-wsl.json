@@ -4,7 +4,10 @@
     "backend/services/quantevolver/qe_batch_execution_policy.py",
     "backend/routers/quantevolver_evolution.py",
     "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
-    "tests/aistock_validation/bugs/20261102_BUG-2174-qe-cpu-wsl.json"
+    "tests/aistock_validation/bugs/20261102_BUG-2174-qe-cpu-wsl.json",
+    "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "scripts/aistock_runtime_semantics.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2174",
@@ -15,7 +18,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-02T08:56:54.117947Z",
-  "description": "CPU固定remote，WSL在预测正式发布前空闲。",
+  "description": "取消CPU模型只能在远端执行的限制，保留GPU硬件校验及节点容量保护。通过正式入口对同任务尚未提交的Loop执行同数据身份CAS改派，保留原实验和种子配对，不复制Loop或中断运行中的工作。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,7 +34,10 @@
     "changed_files": [
       "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/routers/quantevolver_evolution.py",
-      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "scripts/aistock_runtime_semantics.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -106,13 +112,19 @@
     "planned_files": [
       "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/routers/quantevolver_evolution.py",
-      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "scripts/aistock_runtime_semantics.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/routers/quantevolver_evolution.py",
-      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "scripts/aistock_runtime_semantics.py"
     ]
   },
   "first_seen_at": "2026-11-02T08:56:54.117947Z",
@@ -138,11 +150,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded worktree router and policy; formal preparation of existing Loop5 on wsl2-5080 passed with CPU capacity4 and original dataset manifest590b3b20. Receipt: tmp/handoff/BUG-2174/fresh_process_prepare.json. No API process action or production DML.",
+      "Existing DEV127.0.0.1:5433/aistock_dev real SQL tested successful atomic move, idempotent operation receipt, whole-group rejection for running/submitted/changed work, and stale-node claim guard. All synthetic rows rolled back.",
+      "Six complete WSL Composer packages passed exact configuration comparison after physical root substitution; canonical prepare, factor/model sources and research inputs unchanged. Receipt: F:/Dev/AIstock/tmp/handoff/qe-cpu-wsl-rebalance-20261102/compose_receipt.json. Both node Python environments share LightGBM4.6.0,numpy2.1.2,pandas2.2.3,sklearn1.7.2,pyqlib0.9.6.99. No production submission or service control."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -268,5 +288,6 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "scope_expansion_reason": "Complete CPU capability placement and safe same-task migration of only never-submitted pending Loops; update directly affected policy tests and runtime business-smoke schema."
 }

@@ -1867,11 +1867,12 @@ def _validate_qe_batch_execution_policy(payload: Any) -> tuple[str, str | None, 
         "version": "qe_model_workload_v2",
         "default_node_allocation": "balanced",
         "per_node_workload_limits": {"cpu_full_fit_loop": 4, "gpu_full_fit_loop": 2, "pure_backtest_loop": 4},
-        "model_node_affinity": {"cpu": "rdagent-node1", "gpu": "wsl2-5080"},
+        "model_node_affinity": {"gpu": "wsl2-5080"},
+        "cpu_training_nodes": ["rdagent-node1", "wsl2-5080"],
         "prediction_replay_nodes": ["rdagent-node1", "wsl2-5080"],
         "slot_lifetime": "whole_loop",
         "stricter_model_and_global_capacity_guards": "preserved",
-        "existing_task_bindings": "immutable",
+        "existing_task_bindings": "submitted_immutable_pending_explicit_cas",
     }
     if not isinstance(payload, dict):
         return "failed", "QE execution policy must be a JSON object", {}
