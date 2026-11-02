@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-11-02T03:01:22.671721Z",
   "description": "summary调用_pnl时丢弃missing_dates；现有前端已支持显示缺失日期但收不到。",
+  "design_compliance": {
+    "no_simplified_delivery": "账户概览完整传递现行收益校验得到的缺失估值日期，不替换为静态说明。",
+    "no_silent_error": "保留部分数据、警告和收益未知，不补收盘估值、期初资金或交易流水。",
+    "no_business_semantic_drift": "只传递已计算日期，不改费用、选股、撮合、账户、持仓、资金、账本和旧研究。",
+    "no_new_approval_or_gate": "不增加业务参数、审批或门禁，后端仍由用户重启。"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,12 +37,18 @@
   ],
   "expected": "账户概览携带历史收益核验实际缺失日期，继续保留当前持仓、合法累计估值和缺口UNKNOWN；完整历史返回空日期。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/localsim_workbench.py",
-      "backend/tests/simulation_runtime/test_localsim_workbench.py"
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_workbench.py",
@@ -111,20 +123,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "fresh_process_evidence": [
+      "Fresh Python imported persistent task source and passed 72 direct workbench/financial-metric tests. Exact missing-date regression failed before and passed after. XML and source hashes: X:/AIstock_temp/localsim-followup-20261102-r1/targeted-final.xml and review-r2.json. In-memory fixtures only; no backend/service started. Production activation pending user restart."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
@@ -244,11 +262,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "25-35%"
     }
-  },
-  "design_compliance": {
-    "no_simplified_delivery": "??summary????????????????missing_dates????????????",
-    "no_silent_error": "??partial????????UNKNOWN????????????????",
-    "no_business_semantic_drift": "?????????????????????????????????????",
-    "no_new_approval_or_gate": "??????????????????????"
   }
 }
