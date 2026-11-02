@@ -96,8 +96,8 @@
   },
   "first_seen_at": "2026-11-02T02:17:23.732428Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "79336696ca381b21e37a127b202603b94ce24860",
+  "fixed_at": "2026-11-02T02:30:48Z",
   "github_issue_number": 7007,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7007",
   "last_seen_at": "2026-11-02T02:17:23.732428Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7009",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -132,6 +133,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -143,7 +145,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2171",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9265109fa1c6d025",
+    "recorded_at": "2026-11-02T02:31:27.104382Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e1ad575aee3833d845ebf0ff234018c23f4005e7",
+    "source_merge_commit": "79336696ca381b21e37a127b202603b94ce24860",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7009",
+    "validation_evidence": [
+      "nox -s l0 -> passed",
+      "pytest backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_build_stage.py -q -> passed 229 tests"
+    ],
+    "validation_evidence_digest": "2533b30649454d904cc24119af009c7489f457cb8bc8ed19cfa7f9e507169886"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -152,6 +176,10 @@
     "fingerprint": "68ad07166a72c2c88d0dfb54",
     "source_event_id": "FE-20261102-68ad07166a72"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed",
+    "pytest backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_build_stage.py -q -> passed 229 tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
