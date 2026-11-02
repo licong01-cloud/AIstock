@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import historicalReplay from "../fixtures/advisory-lstm-historical-replay.json";
 
 const snapshot = "a".repeat(64);
 const target = "2026-10-28";
@@ -83,6 +84,86 @@ async function setup(page: Page, state: State) {
   });
 }
 const main = (page: Page) => page.getByTestId("advisory-workbench");
+
+// Only the observation payload is real archived evidence. Program shell metadata
+// is test transport and does not assert that this Program existed in 2025.
+async function historicalSetup(page: Page, mode: keyof typeof historicalReplay.cases, invalid = false) {
+  const payload = structuredClone(historicalReplay.cases[mode]);
+  const state: State = { seen: [] };
+  await setup(page, state);
+  if (invalid) payload.replay_context.schema = "unrecognized";
+  await page.route("**/api/**", async route => {
+    const request = route.request(), url = new URL(request.url());
+    const resource = url.pathname.replace("/api/v1", "");
+    if (resource === `/advisory/programs/${payload.program_id}/reranking-shadow`) {
+      state.seen.push(`${request.method()} ${url.pathname}${url.search}`);
+      expect(request.method()).toBe("GET");
+      expect(url.searchParams.get("target_trade_date")).toBe(payload.selected.target_date);
+      return json(route, payload);
+    }
+    if (resource.startsWith(`${api}/programs/${payload.program_id}`)) {
+      state.seen.push(`${request.method()} ${url.pathname}${url.search}`);
+      expect(request.method()).toBe("GET");
+      const shell = { ...summary("lstm"), program_id: payload.program_id,
+        program: { ...summary("lstm").program, program_id: payload.program_id, program_name: "LSTM历史工程回放验收" },
+        target_date: payload.selected.target_date, default_target_date: payload.selected.target_date,
+        selected: { ...version(payload.program_id, payload.selected.target_date), date_context: { selection_as_of_trade_date: payload.selected.decision_date } },
+        date_options: [payload.selected.target_date] };
+      if (resource.endsWith(`/${payload.program_id}`)) return json(route, shell);
+      if (resource.endsWith("/daily")) return json(route, { ...shell, status: "NO_CURRENT_LIST", items: [], total_count: 0, limit: 20, offset: 0, summary: null });
+    }
+    return route.fallback();
+  });
+  await page.goto(`/paper-v2/advisory?program_id=${payload.program_id}`);
+  await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
+  return { payload, state };
+}
+
+// JSON transport canonicalizes IEEE negative zero to zero.
+const historicalBps = (v: number | null) => v == null ? "—" : `${v > 0 ? "+" : ""}${((v || 0) / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+for (const mode of ["complete", "unknown", "immature"] as const) {
+  test(`real archived historical replay ${mode} preserves values and disables live quotes`, async ({ page }) => {
+    const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+    await page.setViewportSize({ width: 1700, height: 1000 });
+    expect(historicalReplay.provenance.real_historical_data).toBe(true);
+    const { payload, state } = await historicalSetup(page, mode);
+    await expect(page.getByTestId("reranking-replay-evidence")).toContainText(payload.replay_context.training_cutoff);
+    await expect(page.getByTestId("reranking-replay-evidence")).toContainText("模拟");
+    const selected = page.getByTestId("reranking-selected-review"), review = payload.selected.business_review;
+    for (const [label, value] of [["所选批次原生Top10", review.native_net_bps], ["所选批次辅助Top10", review.specialist_net_bps], ["所选批次净增量", review.delta_bps]] as const) {
+      await expect(selected.locator("div").filter({ has: page.getByText(label, { exact: true }) }).last().locator("strong")).toHaveText(historicalBps(value));
+    }
+    await selected.getByText("查看增量来源与损益分解", { exact: true }).click();
+    for (const [label, value] of [["新增盈利贡献", review.components.added_profit_bps], ["错失盈利贡献", review.components.missed_profit_bps], ["避免损失贡献", review.components.avoided_loss_bps], ["新增损失贡献", review.components.added_loss_bps]] as const) {
+      await expect(selected.locator("div").filter({ has: page.getByText(label, { exact: true }) }).last().locator("strong")).toHaveText(historicalBps(value));
+    }
+    const table = page.getByTestId("reranking-business-rows");
+    await expect(table.locator("tbody tr")).toHaveCount(10);
+    await main(page).getByRole("button", { name: "原生Top10", exact: true }).click();
+    await expect(table.locator("tbody tr")).toHaveCount(10);
+    await main(page).getByRole("button", { name: "全部原始候选", exact: true }).click();
+    await expect(table.locator("tbody tr")).toHaveCount(50);
+    for (const row of review.rows) {
+      const actual = table.getByRole("row").filter({ has: page.getByRole("cell", { name: row.instrument, exact: true }) });
+      await expect(actual.locator("td").nth(1)).toHaveText("不适用");
+      await expect(actual.locator("td").nth(5)).toContainText(historicalBps(row.net_bps));
+      await expect(actual.locator("td").nth(6)).toHaveText(historicalBps(row.delta_contribution_bps));
+    }
+    expect(state.seen.filter(url => /\/(quotes|returns)\?/.test(url))).toEqual([]);
+    expect(errors).toEqual([]);
+    if (process.env.ADVISORY_HISTORY_SCREENSHOT_DIR) {
+      await main(page).getByRole("button", { name: "辅助Top10", exact: true }).click();
+      await page.screenshot({ path: `${process.env.ADVISORY_HISTORY_SCREENSHOT_DIR}/${mode}.png`, fullPage: true });
+    }
+  });
+}
+
+test("real archived historical replay rejects malformed evidence identity", async ({ page }) => {
+  const { state } = await historicalSetup(page, "complete", true);
+  await expect(main(page).getByRole("alert")).toContainText("历史回放证据身份不完整");
+  await expect(page.getByTestId("reranking-business-rows")).toHaveCount(0);
+  expect(state.seen.filter(url => /\/(quotes|returns)\?/.test(url))).toEqual([]);
+});
 
 test('dense recommendation rows do not refetch on quote-induced height changes', async ({ page }) => {
   const state: State = { seen: [], dense: true };
