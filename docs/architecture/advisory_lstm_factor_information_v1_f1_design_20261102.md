@@ -1,6 +1,6 @@
 # LSTM逐因子信息重排序：输入评审与条件实验（F1）
 
-2026-11-02；Advisory/model_first；EXPLORATORY_SCREEN。用户批准按六阶段长任务执行。当前状态：INPUT_REVIEW_IN_PROGRESS；尚未提名候选、拟合或读取新增收益标签。
+2026-11-02；Advisory/model_first；EXPLORATORY_SCREEN。用户批准按六阶段长任务执行。真实研究与独立算术审核完成：3次新拟合、复用3份旧基线，开发主增量+35.434324bps/5TD，压力主增量−78.096451bps；STOP_THIS_FACTOR_CANDIDATE。累计251实际研究fit＋1旧index；原生包、V2及生产不改。详[结果报告](../analysis/advisory_lstm_factor_information_review_20261102.md)。
 
 ## Background / Goal / Feature Card
 
@@ -61,7 +61,7 @@
 | F-901 | 查重矩阵和唯一信息假设，旧负研究不重跑/改判 |
 | F-902 | 目标包真实消费、原人口、公式/数值/处理器/时钟身份及来源保护 |
 | F-903 | 零拟合无标签输入质量与精确三分支，正常缺失保留 |
-| F-904 | 条件设计/最多6次真实fit，或明确前置失败而不执行 |
+| F-904 | 用户6次上限内复用原基线、实际上限3次新fit，训练身份/时钟和原人口不变，无final/额外恢复 |
 | F-905 | 条件完整历史评价与独立审核，或精确残余和owner请求 |
 | F-906 | 多轮审核、直接验证、scope/CI/F1/符合性及分态交付 |
 
@@ -69,12 +69,12 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-901 | 本设计；待产出查重矩阵 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/novelty_review.json | IN_PROGRESS | 查重进行中 |
-| F-902 | 待实现输入评审 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/input_review.json | IN_PROGRESS | 真实消费及值来源待核验 |
-| F-903 | 待实现零拟合评审 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/input_review.json | IN_PROGRESS | 前置未完成 |
-| F-904 | 本设计条件预算 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/decision.json | IN_PROGRESS | 不允许前置前拟合 |
-| F-905 | 待产出分析报告 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/review_receipt.json | IN_PROGRESS | 待实际终态 |
-| F-906 | 待直接验证和多轮审核 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/validation_receipt.json | IN_PROGRESS | 待交付 |
+| F-901 | 本设计拟合前producer、分析报告；旧M/P0/N3/P16/P19逐项差异 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/novelty_review_readback_utf8.json; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/novelty_review.json | PASS | none |
+| F-902 | 输入审计、包权重/代码/处理器/46字段来源；按已声明NON_VINTAGE重构合同验收，不声称原张量逐位parity | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/input_review.json; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/formula_review.json | PASS | none |
+| F-903 | lstm_factor_information_v1.check_inputs/numeric；保留全部21150原行 | backend/tests/advisory_model_first/test_lstm_factor_information_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/decision.json | PASS | none |
+| F-904 | matched_training/fit及CLI一次执行；原3份基线KEY/编码匹配；3个STARTED/FINISHED | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/study/terminal/evaluated/receipt.json | PASS | none |
+| F-905 | predict/summarize/decision及独立第二实现，主/辅助分母分报；保留负结果，不构成独立经济确认 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/independent_audit_receipt.json | PASS | none |
+| F-906 | 25项直接测试、三轮自审、设计逐项符合性、精确CI/ownership和文档；源码合入/CI另见delivery_receipt | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/validation_receipt.json; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/review_receipt.json | PASS | none |
 
 ## Risks / Production Gates
 
