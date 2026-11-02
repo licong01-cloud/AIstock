@@ -245,6 +245,11 @@ class InjectedArchive:
         return value
 
 
+def require(condition):
+    if not condition:
+        raise AssertionError("historical fault-scenario contract failed")
+
+
 def fault_scenarios(root, plan, day):
     base, result = Archive(plan["sources"]), []
     info = base.day(day)
@@ -265,12 +270,12 @@ def fault_scenarios(root, plan, day):
                      ("last_minute", replay.shadow.clock(target, 9, 29))):
         source, now, engine = setup(name)
         source.ready = False
-        assert engine.capture(day)["status"] == "WAITING_DATA" and not engine.path(day).exists()
+        require(engine.capture(day)["status"] == "WAITING_DATA" and not engine.path(day).exists())
         source.ready, now[0] = True, at
-        assert engine.capture(day)["status"] == "PREDICTED"
+        require(engine.capture(day)["status"] == "PREDICTED")
         raw, reads = engine.path(day).read_bytes(), source.input_reads
-        assert engine.capture(day)["status"] == "PREDICTION_REUSED"
-        assert engine.path(day).read_bytes() == raw and source.input_reads == reads
+        require(engine.capture(day)["status"] == "PREDICTION_REUSED")
+        require(engine.path(day).read_bytes() == raw and source.input_reads == reads)
         passed(name)
     for name in ("open_deadline", "crossing_open"):
         source, now, engine = setup(name)
@@ -283,20 +288,20 @@ def fault_scenarios(root, plan, day):
                 pass
             else:
                 raise AssertionError("crossing-open prediction was accepted")
-        assert engine.capture(day)["status"] == "MISSED_CAPTURE_WINDOW"
-        assert not engine.path(day).exists()
+        require(engine.capture(day)["status"] == "MISSED_CAPTURE_WINDOW")
+        require(not engine.path(day).exists())
         passed(name)
     source, _now, engine = setup("revision")
     source.change_once = True
-    assert engine.capture(day)["status"] == "WAITING_DATA" and not engine.path(day).exists()
-    assert engine.capture(day)["status"] == "PREDICTED"
+    require(engine.capture(day)["status"] == "WAITING_DATA" and not engine.path(day).exists())
+    require(engine.capture(day)["status"] == "PREDICTED")
     passed("revision")
     for name in ("missing", "duplicate", "infinite", "finance_nan", "finance_duplicate"):
         source, now, engine = setup(name)
         source.problem = name
         try:
             if name.startswith("finance_"):
-                assert engine.capture(day)["status"] == "PREDICTED"
+                require(engine.capture(day)["status"] == "PREDICTED")
                 now[0] = replay.shadow.clock(info["horizon_end"], 15)
                 engine.evaluate(day)
             else:
@@ -307,12 +312,12 @@ def fault_scenarios(root, plan, day):
             raise AssertionError(f"injected invalid history was accepted: {name}")
         passed(name)
     source, now, engine = setup("first_complete")
-    assert engine.capture(day)["status"] == "PREDICTED"
+    require(engine.capture(day)["status"] == "PREDICTED")
     now[0] = replay.shadow.clock(info["horizon_end"], 15)
-    assert engine.evaluate(day)["status"] == "COMPLETE"
+    require(engine.evaluate(day)["status"] == "COMPLETE")
     reads, first = len(base.payoff_reads), engine.evaluation(day)["sha256"]
-    assert engine.evaluate(day)["status"] == "EVALUATION_REUSED"
-    assert first == engine.evaluation(day)["sha256"] and len(base.payoff_reads) == reads
+    require(engine.evaluate(day)["status"] == "EVALUATION_REUSED")
+    require(first == engine.evaluation(day)["sha256"] and len(base.payoff_reads) == reads)
     passed("first_complete")
     return result
 
