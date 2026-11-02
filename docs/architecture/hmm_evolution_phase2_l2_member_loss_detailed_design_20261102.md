@@ -1,6 +1,6 @@
 # 申万L2成员损失：单候选与配对控制详细设计
 
-> v1.0；2026-11-02；F2设计文档；父蓝图v3.00 §1.26/§7。状态：目标可行性分析及设计完成，源码/正式训练尚未执行。本次用户要求开始上一轮的目标对照与详细设计任务，未将完成文档等同于已启动8-fit研究。
+> v1.1；2026-11-02；F2设计文档；父蓝图v3.00 §1.26/§7。状态：设计已随PR #7008合入；正在实施源码，正式研究尚未启动。文档合入不等同于训练完成。
 > 2026-11-02接续授权：用户要求“执行文档的提交合入，开始下一步的实施”，本设计进入源码实施；实际源码、fit消耗、结果与生产状态分别记录，不将授权或文档合入记成训练完成。
 
 ## 1. Background / 目标和依据
@@ -23,7 +23,7 @@
 
 ## 4. Contracts D1 / L2-MEMBER-LOSS-D1：唯一目标及配对控制
 
-决策日`t`，`a=prev_open(t)`；`M[t,s]`是在a处于共享PIT股票池、正式归属L2行业s且a未停牌的股票集合。不可根据t之后是否停牌、收益或QE入选结果修改M。取截至a最新真实流通市值`v[a,i]>0`，沿原正式市值来源/无效事件语义，`w[t,i]=v[a,i]/sum(M的v)`，十日期间不再平衡。
+决策日`t`，`a=prev_open(t)`；`M[t,s]`是在a处于共享PIT股票池、正式归属L2行业s且a未被既有正式suspend reader判为全天停牌的股票集合。日内停牌不自动等于全天无行情，不据此删除当日有真实收盘价的成员。不可根据t之后是否停牌、收益或QE入选结果修改M。取截至a最新真实流通市值`v[a,i]>0`，沿原正式市值来源/无效事件语义，`w[t,i]=v[a,i]/sum(M的v)`，十日期间不再平衡。
 
 原生价格P采用C-010现有严格解码，唯一整数厘不能恢复时显式失败。`R[t,i]=P[t+10,i]/P[t,i]−1`，交易日偏移来自同一冻结calendar；不把特征as-of、执行日和标签锚点再次滞后。R是原生价格参考收益，不宣称分红或交易费用后的持仓回报。
 
@@ -44,7 +44,7 @@
 | 2026Q2 | 2023-04-01..2026-03-31 | 2026-03-31 | 2026-04-01..06-30 |
 | 2026Q3 | 2023-07-01..2026-06-30 | 2026-06-30 | 2026-07-01..09-30 |
 
-共同训练mask为原该vintage成熟/有效标签键、原20D有限特征键及B/C标签有效键的交集；B/C严格同mask，不根据任一拟合结果筛样本。零fit读回参考为Q2 88,930行/714日、Q3 89,570行/715日；这是当前输入事实，不是新增最低样本量门禁。
+共同训练mask为原该vintage成熟/有效标签键、原20D有限特征键及B/C标签有效键的交集；B/C严格同mask，不根据任一拟合结果筛样本。前期scratch零fit参考为Q2 88,930行/714日、Q3 89,570行/715日；正式reader实施后读回为88,929/714、89,569/715。各少1行的原因及精确键见§13，不据此改变训练窗口或补价；这些数量是输入事实，不是新增最低样本量门禁。
 
 在任何标签价格读取之前，先按冻结日历限定`pos(t)+10<=pos(train_end)`；不得先读取越过训练截止的outcome再过滤。Q2与Q3分别截断，不因Q3后来已知而补写Q2的未成熟标签。
 
@@ -84,7 +84,7 @@
 
 ## 9. Contracts D6 / L2-MEMBER-LOSS-D6：连续交付和终止
 
-本次包已完成零fit目标对照与设计审修，停在可实施设计。下一实施包应连续完成HMM源码/直接测试→多轮审修及必要门禁→按授权交付源码→干净固定commit上的正式8-fit→完整预测/有界双入口→结果分析与单一后续结论，不将adapter、测试、预检拆成小研发阶段。
+设计包已完成零fit目标对照与设计审修，并随PR #7008合入。当前实施包连续完成HMM源码/直接测试→多轮审修及必要门禁→按授权交付源码→干净固定commit上的正式8-fit→完整预测/有界双入口→结果分析与单一后续结论，不将adapter、测试、预检拆成小研发阶段。
 
 遇未知输入缺失/身份冲突在fit前停止并给精确键；正式fit失败即停止，保留真实消耗；达到8-fit上限不重试；效果无新增价值则结束，不自动换horizon、参数、模型或消费公式。合法市场缺失按D2逐标签处理，不作为全模型拒收理由。其他业务模块源码仍由对应owner修改。
 
@@ -96,15 +96,15 @@
 
 ### Design Acceptance Index
 
-F-011：目标、样本、预算及风险识别评价（D1/D2/D3/D5）；F-012：身份、合法NA、双入口及新旧隔离（D2/D4）；F-013：完整交付、owner边界与停止（D6）。本索引此时验收的是设计完整性，源码/实验另行记录，不以文档PASS冒充模型成功。
+F-011：目标、样本、预算及风险识别评价（D1/D2/D3/D5）；F-012：身份、合法NA、双入口及新旧隔离（D2/D4）；F-013：完整交付、owner边界与停止（D6）。本索引验收设计与源码合同完整性，真实研究结果、双入口运行及生产状态另列§13，不以源码/文档PASS冒充模型成功。
 
 ### Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计§4～§6/§8；成员目标分析§1～§3 | artifact: docs/analysis/hmm_l2_member_loss_target_feasibility_20261102.md；artifact: tmp/handoff/hmm-l2-member-loss-20261102/comparison_v2.json | VERIFIED | 无 |
-| F-012 | 本设计§3/§5/§7/§10 | artifact: tmp/handoff/hmm-l2-member-loss-20261102/review_v3.json；四个原生读回样本、全96,972键恒等式及完整NA计数 | VERIFIED | 无 |
-| F-013 | 本设计§8～§11；父蓝图§1.26/§7 | artifact: docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md；artifact: docs/analysis/hmm_l2_member_loss_target_feasibility_20261102.md | VERIFIED | 无 |
+| F-011 | backend/services/hmm_risk/risk_l2_member_loss.py：pair_target/training_rows/fit_pair/cohort_metrics/evaluate | backend/tests/hmm_risk/test_risk_l2_member_loss.py；18 passed；同mask/因果成熟/失败前置/配对分母直接测试；§13正式文件样本读回 | VERIFIED_SOURCE | 无 |
+| F-012 | 同service：FrozenMemberSource/provider_path/validate_model/infer_prepared | backend/tests/hmm_risk/test_risk_l2_member_loss.py：alias/停牌NA/无回退/旧schema拒绝/两个carrier；正式prepare_v2 identity与131目录读回；真实模型双入口仍属后续研究，未代报 | VERIFIED_SOURCE | 无 |
+| F-013 | 同service：execute_child/close_processes；scripts/hmm_risk/run_risk_l2_member_loss.py | backend/tests/hmm_risk/test_risk_l2_member_loss.py：封闭4模型、8-fit上限/失败不重试；python -m nox -s l0；§13分别列源码PR与0/8预算，不冒充研究完成 | VERIFIED_SOURCE | 无 |
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
@@ -118,4 +118,22 @@ C可能只是放大波动、无法由现有20D预测；行业级信号仍不能�
 
 逐项符合性：完整交付指定目标对照和精确设计，未报源码/模型完成；所有NA/undefined/负面结果保留，无默认安全值；新目标/控制/预算明确列出，不改旧批准合同；只提出本研究的一个取舍规则，不加生产审批、额外显著性/覆盖门槛或全行业合取要求。设计F2验收与最终diff检查结果在交付时记录。
 
-本轮验证：`aistock_feature_workflow.py validate --design <本文件> --tier F2 --format summary` PASS（3项/3行，warnings=0）；三份文档`git diff --check`通过。只变更本设计、目标对照报告和父蓝图；业务源码/测试/数据/profile/服务零修改，未创建PR或执行合入。
+设计交付验证：`aistock_feature_workflow.py validate --design <本文件> --tier F2 --format summary` PASS（3项/3行，warnings=0）；三份文档`git diff --check`通过；文档PR #7008已合入，merge=`c619a0a721806fcd088f6fa25e8a3fc410e510bc`。该记录仅指设计交付，不将其视为后续源码或模型验收。
+
+## 13. 实施状态与实际验证
+
+实施工作树为`feature/hmm-l2-member-loss-20261102`。新增service、CLI及直接测试均限定在§3三条HMM路径；复用现存正式reader与Ridge数值核，不修改共享reader、QE、数据集或服务。
+
+实际新买队列只读文件字节SHA=`4da038f25d37e87f407ab21bec1768eccba202164f517093782bcedb3b53da02`；旧A预测字节SHA=`75250a22ea24aef564fc40c265744855122c9f95d244d9a03416e8025e9dd267`。两者进入request固定身份；个股10日参考收益由同release Qlib重新读取，不把scratch舍入结果当正式标签。
+
+首轮真实prepare在fit前发现原包provider文件路径指向已清理工作树，记录0次attempt。新CLI要求显式`--provider-absence-manifest <绝对路径>`，只允许原canonical SHA=`494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba`；当前仓库正式文件与此一致。只改变明确的文件定位，不改变原feature/request字节、authority身份或任何数据，禁止自动寻找替代文件或回退。
+
+两轮作者审修已修正：源码request字节pin不能混用feature request canonical；评价主指标不能被episode局部变量覆盖；文件入口必须复用正确的文件hash reader；封闭回执必须包含两个vintage的全部四模型及完整预测grid，不能仅凭声明fit数量通过。另补齐undefined原因、B/C共同日期均值及旧A三方同股票同日期对照，避免不同分母的指标误比较。审核不是独立第三方背书。
+
+当前已通过18项直接测试、29项PIT/schema/security切片、Ruff、py_compile及L0。canonical实际changed-files分类为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，不能沿用文档的none。源码fresh-process import已覆盖hmm_risk/health及新依赖；本研究无runtime activation或服务操作，源码合入与任何生产运行验收分别报告。
+
+正式文件prepare已在固定源码`016c47218b5a2f861edeb893815f931f35c27750`完成，准备包为`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/prepare_v2/prepared.json`，canonical SHA=`cb889ddc486ed4ebea6e9278423bcaaa87245b9ce80a3be64829b29b6ee9b574`，实际读取10,406个已钉住文件，数据库/数据集写入为0。两季度共同mask分别88,929行/714日、89,569行/715日。额外1个合法NA键均为`2026-01-12/801178.SI`：`603056.SH`在as-of 01-09只有日内停牌且收盘有效，正式reader保留该成员；01-12及01-26的必要端点为全天停牌NaN，故整个标签NA（缺失权重约2.3715%），不移除该股重归一化。先前scratch把日内停牌也当全天排除而得到42成员，正式reader为43成员；以原正式停牌语义为准，不要求数据窗口补造报价。
+
+最终审修将两个vintage完整输入/共同mask检查移至首个fit前，Q3错误不得先消耗Q2预算；之后封存4模型才读取评价结果。源码PR #7013已创建，正式研究消耗仍为0/8；有界真实双入口及效果评价须在模型产生后执行。本节不把代码测试、准备包或源码CI绿色当模型有效、生产加载或新QE_READY。
+
+固定源码`0b963509e`的正式CLI `preflight`已通过：`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/preflight_v1.json`，两个vintage的共同mask均完成前置验证；`fits=0`、`evaluation_outcomes_read=false`、`database_access=false`、`runtime_action=false`。源码PR后续文档状态提交不改变该preflight对应的实现，正式研究尚未启动。
