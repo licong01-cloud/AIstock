@@ -8,6 +8,7 @@ import pytest
 
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS
+from backend.services.dataset_release.monthly_build_resume import _signature
 from backend.services.dataset_release.monthly_legacy_prefix import load_legacy_prefix
 from backend.services.dataset_release.monthly_legacy_index import append_legacy_index_context
 
@@ -45,20 +46,25 @@ def _inputs(tmp_path, *, manifest_key="index_daily"):
     return prefix, Source(), path, old
 
 
-@pytest.mark.parametrize('manifest_key', ['index_daily', 'index_context__index_daily.h5'])
-def test_native_index_appends_month_and_preserves_legacy_raw_unit_contract(tmp_path, manifest_key):
-    from backend.services.dataset_release.build_stage import _patch_index_component, _index_receipt_payload
+def _invocation(tmp_path, prefix):
     from backend.services.dataset_release.contracts import Component, ComponentAction
-    prefix, source, old_path, old = _inputs(tmp_path, manifest_key=manifest_key)
-    before = old_path.read_bytes()
     staging = tmp_path / "september"
     staging.mkdir()
     raw = (prefix.root / "qe_dataset_manifest.json").read_bytes()
-    invocation = SimpleNamespace(staging_root=staging, profile=SimpleNamespace(candidate_root=str(tmp_path), indices=DOMESTIC_INDEX_DEFINITIONS),
+    return SimpleNamespace(staging_root=staging, profile=SimpleNamespace(candidate_root=str(tmp_path), indices=DOMESTIC_INDEX_DEFINITIONS),
         build_inputs={"source_bundle_sha256": "e" * 64, "monthly_legacy_predecessor": {
             "predecessor": {"candidate_root": str(prefix.root), "cutoff": "2026-08-31", "release_id": "august", "dataset_manifest_sha256": prefix.manifest_sha256},
             "predecessor_manifest_ref": {"id": "qe_dataset_manifest.json", "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "dataset_manifest_sha256": prefix.manifest_sha256}}},
         plan={"actions": [{"component": Component.DOMESTIC_INDEX_CONTEXT.value, "action": ComponentAction.INCREMENTAL.value}]})
+
+
+@pytest.mark.parametrize('manifest_key', ['index_daily', 'index_context__index_daily.h5'])
+def test_native_index_appends_month_and_preserves_legacy_raw_unit_contract(tmp_path, monkeypatch, manifest_key):
+    from backend.services.dataset_release.build_stage import _patch_index_component, _index_receipt_payload
+    prefix, source, old_path, old = _inputs(tmp_path, manifest_key=manifest_key)
+    before = old_path.read_bytes()
+    invocation = _invocation(tmp_path, prefix)
+    staging = invocation.staging_root
     receipt, adoption = _patch_index_component(invocation, source=source, cutoff=date(2026, 9, 2))
     payload = _index_receipt_payload(receipt, staging=staging)
     assert payload["schema_version"] == "aistock_monthly_native_index_materialization_v1"
@@ -78,10 +84,80 @@ def test_native_index_appends_month_and_preserves_legacy_raw_unit_contract(tmp_p
     verified = validate_aggregate_month_receipt(root=staging, receipt=payload, component="index",
         cutoff=date(2026, 9, 2), predecessor_manifest_sha256=prefix.manifest_sha256, source_bundle_sha256="e" * 64)
     assert len(verified["verified_output_files"]) == 14
+    # Exercise the actual prepare caller's serialization, not just the helper:
+    # a retained native receipt must have the same type and content as a new one.
+    signatures = {path: _signature(path) for path in (staging / "index_context").rglob("*") if path.is_file()}
+    calls = list(source.calls)
+    def no_reexport(*args, **kwargs):
+        raise AssertionError("completed native index must not be exported again")
+    monkeypatch.setattr("backend.services.dataset_release.monthly_legacy_index.append_legacy_index_context", no_reexport)
+    reused, reused_adoption = _patch_index_component(invocation, source=None, cutoff=date(2026, 9, 2))
+    resumed_payload = _index_receipt_payload(reused, staging=staging)
+    assert reused == receipt
+    assert resumed_payload == payload
+    assert reused_adoption == adoption and source.calls == calls
+    assert {path: _signature(path) for path in signatures} == signatures
+    assert len(validate_aggregate_month_receipt(root=staging, receipt=resumed_payload, component="index",
+        cutoff=date(2026, 9, 2), predecessor_manifest_sha256=prefix.manifest_sha256,
+        source_bundle_sha256="e" * 64)["verified_output_files"]) == 14
+    with pytest.raises(Exception, match="identity differs"):
+        _patch_index_component(invocation, source=None, cutoff=date(2026, 9, 3))
+    invocation.build_inputs["source_bundle_sha256"] = "f" * 64
+    with pytest.raises(Exception, match="identity differs"):
+        _patch_index_component(invocation, source=None, cutoff=date(2026, 9, 2))
+    invocation.build_inputs["source_bundle_sha256"] = "e" * 64
     receipt.h5_path.write_bytes(b"drifted")
+    with pytest.raises(Exception, match="file changed"):
+        _patch_index_component(invocation, source=None, cutoff=date(2026, 9, 2))
     with pytest.raises(Exception, match="changed"):
         validate_aggregate_month_receipt(root=staging, receipt=payload, component="index",
             cutoff=date(2026, 9, 2), predecessor_manifest_sha256=prefix.manifest_sha256, source_bundle_sha256="e" * 64)
+
+
+def test_resumed_normal_prepare_serializes_index_before_entering_csv_phase(tmp_path, monkeypatch):
+    """Keep the real prepare/index/CAS boundary; stop before unrelated stocks."""
+    import backend.services.dataset_release.build_stage as stages
+    from backend.services.dataset_release.canonical import digest_named_fields
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.contracts import Component, ComponentAction
+    from backend.services.dataset_release.monthly_build_resume import _atomic
+
+    prefix, source, _, _ = _inputs(tmp_path)
+    invocation = _invocation(tmp_path, prefix)
+    fresh, _ = stages._patch_index_component(invocation, source=source, cutoff=date(2026, 9, 2))
+    expected = stages._index_receipt_payload(fresh, staging=invocation.staging_root)
+    invocation.candidate_root = tmp_path
+    invocation.run_id, invocation.release_id = "dmr_" + "1" * 32, "september"
+    invocation.staging_relative_path = "september"
+    invocation.plan.update(action_plan_digest="a" * 64, actions=[
+        {"component": component.value, "action": ComponentAction.INCREMENTAL.value} for component in Component])
+    binding = {"operation_id": invocation.run_id, "release_id": invocation.release_id,
+               "source_bundle_sha256": "e" * 64, "action_plan_digest": "a" * 64}
+    _atomic(tmp_path / ".staging" / f".{invocation.run_id}.resume-test.json", {
+        "schema_version": "aistock_monthly_build_resume_v1", "partial_prepare": True,
+        "binding": binding, "binding_digest": digest_named_fields("aistock_monthly_build_data_binding_v1", binding),
+        "staging_relative_path": "september", "steps": {}, "files": {}})
+    invocation.cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    invocation.project_root = tmp_path
+    invocation.profile.qlib_toolchain = SimpleNamespace(build_verified=lambda _: object())
+    pit = SimpleNamespace(cutoff=date(2026, 9, 2))
+    frozen = SimpleNamespace(trading_days=lambda: (pit.cutoff,), index_rows=lambda: ())
+    monkeypatch.setattr(stages, "_build_source", lambda _: (frozen, pit))
+    reached, completed = [], []
+    class CsvPhaseReached(Exception):
+        pass
+    def enter_csv(*args, **kwargs):
+        assert kwargs["dataset"] == "daily_bin"
+        raise CsvPhaseReached()
+    monkeypatch.setattr(stages, "_prepare_bin_patch", enter_csv)
+    with pytest.raises(CsvPhaseReached):
+        stages._prepare(invocation, ledger=SimpleNamespace(chunk=reached.append), checkpoint=lambda: None,
+                        component_completed=lambda component, receipt: completed.append((component, receipt)))
+    assert reached == ["index-context"]
+    assert len(completed) == 1 and completed[0][0] is Component.DOMESTIC_INDEX_CONTEXT
+    assert invocation.cas.get_json(completed[0][1]["domain_receipt_ref"]) == expected
+    assert invocation.cas.get_json(completed[0][1]["materialization_receipt_ref"]) == fresh.details
 
 
 def test_native_index_missing_month_fact_stops_without_provider_fallback(tmp_path):

@@ -4061,6 +4061,20 @@ def _patch_index_component(
                 relative = normalize_root_relative_path(item['relative_path'])
                 if _signature(retained.parent / relative) != item.get('target_signature'):
                     raise CandidateBuildStageError('retained native index file changed')
+            # Keep the producer's return contract on the reuse path too. The
+            # prepare stage serializes IndexMaterializationReceipt, not its
+            # on-disk details dictionary. Do not rerun the completed producer.
+            from .index_contract import index_contract_digest
+            receipt = IndexMaterializationReceipt(
+                root=retained.parent,
+                h5_path=retained.parent / "index_daily.h5",
+                parquet_path=retained.parent / "index_context.parquet",
+                csv_root=retained.parent / "index_csv",
+                rows=receipt["rows"],
+                provider_fill_rows=0,
+                contract_digest=index_contract_digest(),
+                details=receipt,
+            )
         else:
             receipt = append_legacy_index_context(prefix, source=source,
                 output_root=invocation.staging_root / "index_context", cutoff=cutoff,
