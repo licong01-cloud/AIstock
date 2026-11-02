@@ -7,7 +7,9 @@
     "tests/aistock_validation/bugs/20261102_BUG-2174-qe-cpu-wsl.json",
     "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
     "backend/services/quantevolver/qe_evolution_service.py",
-    "scripts/aistock_runtime_semantics.py"
+    "scripts/aistock_runtime_semantics.py",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2174",
@@ -125,7 +127,9 @@
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
       "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "scripts/aistock_runtime_semantics.py"
+      "scripts/aistock_runtime_semantics.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -134,7 +138,9 @@
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
       "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "scripts/aistock_runtime_semantics.py"
+      "scripts/aistock_runtime_semantics.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
     ]
   },
   "first_seen_at": "2026-11-02T08:56:54.117947Z",
@@ -165,7 +171,8 @@
     "fresh_process_evidence": [
       "Fresh Python process loaded worktree router and policy; formal preparation of existing Loop5 on wsl2-5080 passed with CPU capacity4 and original dataset manifest590b3b20. Receipt: tmp/handoff/BUG-2174/fresh_process_prepare.json. No API process action or production DML.",
       "Existing DEV127.0.0.1:5433/aistock_dev real SQL tested successful atomic move, idempotent operation receipt, whole-group rejection for running/submitted/changed work, and stale-node claim guard. All synthetic rows rolled back.",
-      "Six complete WSL Composer packages passed exact configuration comparison after physical root substitution; canonical prepare, factor/model sources and research inputs unchanged. Receipt: F:/Dev/AIstock/tmp/handoff/qe-cpu-wsl-rebalance-20261102/compose_receipt.json. Both node Python environments share LightGBM4.6.0,numpy2.1.2,pandas2.2.3,sklearn1.7.2,pyqlib0.9.6.99. No production submission or service control."
+      "Six complete WSL Composer packages passed exact configuration comparison after physical root substitution; canonical prepare, factor/model sources and research inputs unchanged. Receipt: F:/Dev/AIstock/tmp/handoff/qe-cpu-wsl-rebalance-20261102/compose_receipt.json. Both node Python environments share LightGBM4.6.0,numpy2.1.2,pandas2.2.3,sklearn1.7.2,pyqlib0.9.6.99. No production submission or service control.",
+      "Additional source review closed the authoritative coordinator cap: actual catalog CPU model plus its device overrides may request4 on WSL; GPU/unresolved modes retain2/1 and reservation cohort proof is unchanged. rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py -q -> 43 passed. Original108 direct checks remain passed; total151. No model or experiment budget changes."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -185,7 +192,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "scope_expansion_reason": "Complete CPU capability placement and safe same-task migration of only never-submitted pending Loops; update directly affected policy tests and runtime business-smoke schema.",
+  "scope_expansion_reason": "Model-aware WSL CPU capacity must also be enforced by the authoritative global submission coordinator; preserve GPU2 and existing reservation proof.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
