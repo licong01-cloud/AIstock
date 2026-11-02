@@ -30,16 +30,26 @@
   "evidence_uris": [],
   "expected": "CPU训练可在两个已验证节点执行，GPU仍需GPU节点；两节点各CPU训练/纯回测上限4、GPU训练上限2；现有运行Loop不迁移、不重复提交。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2174-qe-cpu-wsl.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/routers/quantevolver_evolution.py",
-      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
-      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "scripts/aistock_runtime_semantics.py"
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2174-qe-cpu-wsl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_batch_execution_policy.py",
@@ -151,18 +161,22 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
     "fresh_process_evidence": [
       "Fresh Python process loaded worktree router and policy; formal preparation of existing Loop5 on wsl2-5080 passed with CPU capacity4 and original dataset manifest590b3b20. Receipt: tmp/handoff/BUG-2174/fresh_process_prepare.json. No API process action or production DML.",
       "Existing DEV127.0.0.1:5433/aistock_dev real SQL tested successful atomic move, idempotent operation receipt, whole-group rejection for running/submitted/changed work, and stale-node claim guard. All synthetic rows rolled back.",
       "Six complete WSL Composer packages passed exact configuration comparison after physical root substitution; canonical prepare, factor/model sources and research inputs unchanged. Receipt: F:/Dev/AIstock/tmp/handoff/qe-cpu-wsl-rebalance-20261102/compose_receipt.json. Both node Python environments share LightGBM4.6.0,numpy2.1.2,pandas2.2.3,sklearn1.7.2,pyqlib0.9.6.99. No production submission or service control."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -171,6 +185,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Complete CPU capability placement and safe same-task migration of only never-submitted pending Loops; update directly affected policy tests and runtime business-smoke schema.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
@@ -288,6 +303,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_reason": "Complete CPU capability placement and safe same-task migration of only never-submitted pending Loops; update directly affected policy tests and runtime business-smoke schema."
+  }
 }
