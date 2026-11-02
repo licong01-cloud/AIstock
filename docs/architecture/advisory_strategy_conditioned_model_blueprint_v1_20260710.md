@@ -1,7 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.57
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.58
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-27
+
+> 2026-11-02最新研究终态：[冻结专属模型跨期压力F1](advisory_lstm_frozen_specialist_stress_v1_f1_design_20261102.md)已完成一次0fit/新候选检验。当前P19第3折在P18原118D/5900行的106个完整配对D，相对原生Top10为−136.023748bps，描述性95%[−245.235493,−24.895916]；相对共享−18.266291bps且区间跨零。原生/共享/专属均值+96.451572/−21.305886/−39.572176bps。按事前分支STOP_ADDITIONAL_DEVELOPMENT_THIS_FROZEN_MODEL，不再为此冻结模型追加主动开发；原V2/P20自然观察、100bps目标及生产Top20不改，不停原生LSTM包。此次用户明确授权已消费历史压力范围，不作独立确认或PIT，详[结果报告](../analysis/advisory_lstm_frozen_specialist_stress_20261102.md)。
 
 > 2026-11-02工程主线调整：按用户要求，程序开发、修复和验收不等待下一交易日。新增[历史工程回放F1](advisory_lstm_historical_engineering_replay_v1_f1_design_20261102.md)，使用原P19三折模型与2025年全126D/6300行，通过当前公共推理、原5TD估值投影和现有业务页验证；完整配对102D复现旧57.277530bps，未达到100bps目标，不是新增独立经济证据。真实UNKNOWN/IMMATURE/CASH保留，0fit/新候选/DB写/生产替换。原V2协议、源码闭包和自然前向观察不改，研报/现金流/价格/Exit仍暂停。真实历史回放、故障注入、页面与正式经济判断分态；详见[结果报告](../analysis/advisory_lstm_historical_engineering_replay_20261102.md)。
 
@@ -2312,6 +2314,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-307 | LSTM-CONFIRM-1固定前向150预定D与有限期限、单一原生Top10对照/一次统计判断、原模型和估值复核、条件预算及零收益真实预检，不改变生产门禁 |
 | F-308 | LSTM-BUSINESS-1精确Top10辅助对象/用户100bps目标、两臂和换股损益只读业务视图、V2归档来源与漏捕获提前失效、原模型/统计/生产Top20不变 |
 | F-309 | 历史数据独立完成工程验收：原三折126D/6300行、公共推理及5TD投影逐项对账、模拟成熟/恢复时钟、真实历史页面、0fit与原V2隔离 |
+| F-310 | 当前P19第3折固定118D跨期压力：一次零fit、预测先于估值、复用共享结果、双臂/三臂分母、事前三分支与100bps分报，原V2/生产不变 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2503,6 +2506,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-307 | §16.0、`docs/architecture/advisory_lstm_prospective_confirmation_v1_f1_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_prospective_confirmation.py; artifact: X:/AIstock_temp/ADVISORY/lstm-confirmation-20261101/independent_audit_receipt.json | VERIFIED_FROZEN_PROTOCOL_AND_ZERO_OUTCOME_PREFLIGHT | none |
 | F-308 | §16.0、`docs/architecture/advisory_lstm_top10_business_review_v1_f2_design_20261101.md` | backend/tests/advisory_model_first/test_lstm_top10_business_review.py; backend/tests/advisory_model_first/test_lstm_business_protocol.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/independent_audit_receipt.json | VERIFIED_BUSINESS_VIEW_V2_SOURCE_AND_BROWSER | approved_by_user：用户拥有后端重启；运行加载在重启后只读验证，当前不宣称已激活 |
 | F-309 | §16.0、`docs/architecture/advisory_lstm_historical_engineering_replay_v1_f1_design_20261102.md` | backend/tests/advisory_model_first/test_lstm_historical_engineering_replay.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/independent_readback.json | VERIFIED_REAL_HISTORY_ENGINEERING_REPLAY | 工程验证使用已消费的开发历史，不升级为PIT或独立经济确认 |
+| F-310 | §16.0、`docs/architecture/advisory_lstm_frozen_specialist_stress_v1_f1_design_20261102.md` | backend/tests/advisory_model_first/test_lstm_frozen_specialist_stress_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/independent_audit_receipt.json | VERIFIED_NEGATIVE_FIXED_SPECIALIST_STRESS_ZERO_FIT | none |
 
 
 ## 12. Verification Plan
@@ -2800,6 +2804,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 ## 16. 当前下一步
 
 ### 16.0 当前唯一任务队列与真实断点（2026-10-27 接续）
+
+2026-11-02当前主动研究已结束：P19 fold3原模型在原118D/5900行跨期压力失败，主双臂/辅助三臂恰好同为106完整D，−136.023748bps，季度段+2.994465/−63.915469/−291.471431bps。净避亏+10.992128与净盈利机会−147.015876闭合；113成熟D均干预、平均换入8.407080只，非未生效或删未知。23直接项、独立5900预测/5623费用/三组区间及来源保护通过，首次字面轴比较失败在金融读取前停止并保留，恢复仍0fit/同规则。按事前决定停止为此冻结模型追加开发，不救参数/重读其它窗；原P18/P19旧结论、V2正式观察与生产不改。现无新候选提名/拟合预算，研报/现金流/价格/Exit继续暂停；未来只在实质不同机制与有限预算明确时另评单一研究，不能以占满长任务或等待行情替代模型进展。
 
 2026-11-02现行任务：开发验收与未来真实收益积累解除等待关系。原126个heldout D全部完成离线工程回放，当前推理与原6300行预测/排名一致，原111个可到期批次估值和15个原截止限制批次完整保留；102个完整配对、9个UNKNOWN和15个IMMATURE均不删。原5TD费用审计显式计入D参考锚至T开盘的observed_gap，禁止将D锚毛价格比直接当作T开盘收益。当前页面消费真实回放包并显示原折/截止与模拟时钟，历史模式不请求实时行情。设计F-701～F-707、独立对账及验证状态见新F1/结果报告。原V2后续仅承担自然前向与唯一正式经济判断，不再作为程序开发门禁；禁止根据本回放重新训练、选日期或宣称新OOS收益。
 
