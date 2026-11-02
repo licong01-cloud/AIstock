@@ -1,7 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.59
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.60
 
 > 初始日期：2026-07-10
 > 修订日期：2026-11-02
+
+> 2026-11-02当前执行检查点：[固定54字段受限非线性F1](advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md)已获最多6次新金融fit授权，采用同平方损失Ridge对照及一个固定浅树HGB候选；不扩数据/包/窗口，原生Top10成本后100bps主端点保持。源码与28项直接合同测试完成，真实研究尚未开始：公共QE训练owner活跃，按既有互斥在读取训练标签前停止，0新金融fit/0新经济结论，累计仍251＋1旧index。现有历史输入已足够，不等待新交易日；后续继续同一协议，未追加预算或操作QE。真实评价、独立审核、F1终审及PR/CI/合入均pending，不将源码检查点当完整交付或上线模型；详见[状态报告](../analysis/advisory_lstm_factor_nonlinear_review_20261102.md)。下方#7017仍是最近已完成研究终态。
 
 > 2026-11-02最新主线终态：[LSTM逐因子信息F1](advisory_lstm_factor_information_v1_f1_design_20261102.md)已按六阶段长任务完成查重、46历史因子输入评审、唯一候选设计/开发、3次新fit及独立算术审核。21150原行保留，八字段＋46父包定义坐标、线性SPO+，复用3份训练身份相同的旧基线。开发主101D为+35.434324bps/5TD、95%[−19.975200,93.135248]；压力主108D为−78.096451、95%[−204.020480,55.359484]，STOP_THIS_FACTOR_CANDIDATE、追加预算0。辅助压力105D对八字段+50.345522不能替代原生主端点，不与旧106D做非配对相减。输入为NON_VINTAGE版本化重构，不声称原父张量逐位复现/PIT；仅停止该精确候选，不否定所有因子信息。累计251真实fit＋1旧index，当前无达100bps的新上线模型或自动排队实验；V2/原生包/生产与暂停方向不变。详[结果报告](../analysis/advisory_lstm_factor_information_review_20261102.md)。下方旧日期段落记录历史检查点，不重新排已完成任务。
 
@@ -2318,6 +2320,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-309 | 历史数据独立完成工程验收：原三折126D/6300行、公共推理及5TD投影逐项对账、模拟成熟/恢复时钟、真实历史页面、0fit与原V2隔离 |
 | F-310 | 当前P19第3折固定118D跨期压力：一次零fit、预测先于估值、复用共享结果、双臂/三臂分母、事前三分支与100bps分报，原V2/生产不变 |
 | F-311 | 逐因子信息长任务：查重/原21150行/46字段来源、重构与NON_VINTAGE边界、同算法旧基线训练身份匹配、唯一3fit候选、主辅分母/100bps/独立算术审核及停止 |
+| F-312 | 固定54字段同MSE的Ridge/受限HGB一次6fit研究：同输入/时钟/资格、原生100bps主端点、互斥/预算、独立复算及事前停止；真实研究待执行 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2511,6 +2514,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-309 | §16.0、`docs/architecture/advisory_lstm_historical_engineering_replay_v1_f1_design_20261102.md`；工程验收使用已消费历史，不升级为PIT或独立经济确认 | backend/tests/advisory_model_first/test_lstm_historical_engineering_replay.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/independent_readback.json | VERIFIED_REAL_HISTORY_ENGINEERING_REPLAY | none |
 | F-310 | §16.0、`docs/architecture/advisory_lstm_frozen_specialist_stress_v1_f1_design_20261102.md` | backend/tests/advisory_model_first/test_lstm_frozen_specialist_stress_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/independent_audit_receipt.json | VERIFIED_NEGATIVE_FIXED_SPECIALIST_STRESS_ZERO_FIT | none |
 | F-311 | §16.0、`docs/architecture/advisory_lstm_factor_information_v1_f1_design_20261102.md`；按重构与已消费历史合同验收，不构成生产或独立经济确认 | backend/tests/advisory_model_first/test_lstm_factor_information_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/independent_audit_receipt.json | VERIFIED_FACTOR_INFORMATION_NEGATIVE_BOUNDED_STUDY | none |
+| F-312 | `docs/architecture/advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md`、新叶与CLI | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py; docs/analysis/advisory_lstm_factor_nonlinear_review_20261102.md | IN_PROGRESS | 28直接项通过，QE训练owner活跃，0新金融fit；真实评价/审核/交付pending |
 
 
 ## 12. Verification Plan
