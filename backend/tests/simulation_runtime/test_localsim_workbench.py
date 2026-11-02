@@ -190,6 +190,44 @@ def test_incomplete_evidence_never_becomes_zero_or_fake_complete(fault):
     assert result.warnings
 
 
+def test_summary_exposes_missing_close_dates_without_hiding_valid_current_holdings():
+    data = facts()
+    data["snapshots"][-1].update(
+        trade_date="2026-01-07", snapshot_time=datetime(2026, 1, 7, 7, tzinfo=UTC),
+        cash="8995", market_value="1200", nav="10195", position_count=1,
+    )
+    data["positions"].append({
+        **data["positions"][0], "run_id": "r2", "trade_date": "2026-01-07",
+        "market_price": "12", "market_value": "1200", "available_quantity": 100,
+    })
+    data["cash"] = data["cash"][:1]
+    data["fills"] = data["fills"][:1]
+    data["runs"][-1]["trade_date"] = "2026-01-07"
+    data["calendar"].append({"cal_date": "2026-01-07"})
+    service = Service(data)
+
+    interval = service.view("a", "pnl", group_by="security")
+    result = service.view("a", "summary")
+
+    assert interval.missing_dates == ["2026-01-06"]
+    assert result.missing_dates == interval.missing_dates
+    assert result.status == "partial" and result.warnings
+    assert result.summary.pnl is None
+    assert money(result.summary.nav) == 10195
+    assert money(result.summary.cumulative_pnl) == 195
+    assert result.items[0].quantity == 100 and result.items[0].known
+    assert money(result.summary.fees) == 5
+
+
+def test_complete_summary_keeps_empty_coverage_gaps_and_actual_net_profit():
+    result = Service().view("a", "summary")
+    assert result.status == "complete" and result.warnings == []
+    assert result.missing_dates == []
+    assert money(result.summary.pnl) == 190
+    assert money(result.summary.cumulative_pnl) == 190
+    assert money(result.summary.fees) == 10
+
+
 def test_intraday_snapshot_cannot_become_close_to_close_return():
     data = facts()
     data["snapshots"][-1]["snapshot_time"] = datetime(2026, 1, 6, 1, 34, tzinfo=UTC)

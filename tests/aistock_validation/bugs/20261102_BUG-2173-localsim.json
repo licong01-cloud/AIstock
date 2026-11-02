@@ -1,0 +1,266 @@
+{
+  "actual": "summary调用_pnl时丢弃missing_dates；现有前端已支持显示缺失日期但收不到。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/localsim_workbench.py",
+    "backend/tests/simulation_runtime/test_localsim_workbench.py",
+    "tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2173",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-02T03:01:22.671721Z",
+  "description": "summary调用_pnl时丢弃missing_dates；现有前端已支持显示缺失日期但收不到。",
+  "design_compliance": {
+    "no_simplified_delivery": "账户概览完整传递现行收益校验得到的缺失估值日期，不替换为静态说明。",
+    "no_silent_error": "保留部分数据、警告和收益未知，不补收盘估值、期初资金或交易流水。",
+    "no_business_semantic_drift": "只传递已计算日期，不改费用、选股、撮合、账户、持仓、资金、账本和旧研究。",
+    "no_new_approval_or_gate": "不增加业务参数、审批或门禁，后端仍由用户重启。"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261102-c32d3de796dd",
+      "timestamp": "2026-11-02T03:01:22.671702Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/localsim-followup-20261102-r1/runtime-and-pnl-audit-r1.json",
+    "X:/AIstock_temp/localsim-followup-20261102-r1/regression-before.xml",
+    "X:/AIstock_temp/localsim-followup-20261102-r1/regression-after.xml",
+    "X:/AIstock_temp/localsim-followup-20261102-r1/targeted-final.xml"
+  ],
+  "expected": "账户概览携带历史收益核验实际缺失日期，继续保留当前持仓、合法累计估值和缺口UNKNOWN；完整历史返回空日期。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/localsim_workbench.py",
+        "backend/tests/simulation_runtime/test_localsim_workbench.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/localsim_workbench.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_workbench.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/localsim_workbench.py",
+        "backend/tests/simulation_runtime/test_localsim_workbench.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py"
+    ]
+  },
+  "first_seen_at": "2026-11-02T03:01:22.671721Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7011,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7011",
+  "last_seen_at": "2026-11-02T03:01:22.671721Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_localsim_workbench.py::test_summary_exposes_missing_close_dates_without_hiding_valid_current_holdings -q",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "fresh_process_evidence": [
+      "Fresh Python imported persistent task source and passed 72 direct workbench/financial-metric tests. Exact missing-date regression failed before and passed after. XML and source hashes: X:/AIstock_temp/localsim-followup-20261102-r1/targeted-final.xml and review-r2.json. In-memory fixtures only; no backend/service started. Production activation pending user restart."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM账户概览遗漏历史缺失估值日期",
+  "trigger_condition": {
+    "fingerprint": "c32d3de796ddc41460718e51",
+    "source_event_id": "FE-20261102-c32d3de796dd"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
