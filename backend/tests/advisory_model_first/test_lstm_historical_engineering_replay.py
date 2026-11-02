@@ -25,7 +25,8 @@ def history(trial, tmp_path):
     finance["valuation_policy_sha256"] = app.shadow.RELEASE["valuation_policy_sha256"]
     finance["valuation_status"] = "AVAILABLE"
     finance["valuation_gross_terminal_ratio"] = 1. + np.arange(50) / 1000
-    finance["hypothetical_liquidation_net_bps"] = 10000 * (finance.valuation_gross_terminal_ratio * (1 - 5.95/10000) / (1 + .95/10000) - 1)
+    finance["observed_gap_bps"] = np.arange(50) - 25.
+    finance["hypothetical_liquidation_net_bps"] = 10000 * (finance.valuation_gross_terminal_ratio / (1 + finance.observed_gap_bps/10000) * (1 - 5.95/10000) / (1 + .95/10000) - 1)
     finance["exit_execution_status"] = "EXECUTABLE"
     info = dict(fold=1, fold_end="2025-05-30", horizon_end="2025-04-09", target_date="2025-04-02")
     source = SimpleNamespace(days=[day], ready=True, revision=7, inputs=lambda _d: trial.rows,

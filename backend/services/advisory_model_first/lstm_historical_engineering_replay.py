@@ -53,7 +53,11 @@ def verify_fees(finance):
         value = row.hypothetical_liquidation_net_bps
         if row.valuation_status == "AVAILABLE":
             ratio = row.valuation_gross_terminal_ratio
-            expected = 10000 * (ratio * (1 - 5.95 / 10000) / (1 + .95 / 10000) - 1)
+            # The gross ratio is D-reference anchored, not T-open anchored.
+            entry_ratio = 1 + row.observed_gap_bps / 10000
+            if not math.isfinite(entry_ratio) or entry_ratio <= 0:
+                raise ValueError("saved entry gap is not a positive finite price ratio")
+            expected = 10000 * (ratio / entry_ratio * (1 - 5.95 / 10000) / (1 + .95 / 10000) - 1)
             if not math.isfinite(expected) or not math.isclose(value, expected, abs_tol=1e-8):
                 raise ValueError("saved net valuation contradicts the frozen buy/sell costs")
         elif row.valuation_status == "CASH_ENTRY_NOT_EXECUTABLE" and value != 0:
