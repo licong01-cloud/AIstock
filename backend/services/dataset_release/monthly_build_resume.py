@@ -138,6 +138,7 @@ def retained_staging_root(context, compiled, release_root: Path, default: Path) 
         parent = release_root / ".staging"
         _plain(parent)
         pattern = re.compile(rf"\.{re.escape(binding['candidate_name'])}\.{re.escape(context.operation_id)}\.attempt-([0-9]+)\.building")
+        partial: list[tuple[int, Path]] = []
         if parent.is_dir():
             for previous in parent.iterdir():
                 matched = pattern.fullmatch(previous.name)
@@ -151,10 +152,29 @@ def retained_staging_root(context, compiled, release_root: Path, default: Path) 
                         raise MonthlyBuildResumeError(
                             f"completed legacy exports retained at {previous}; explicit receipt adoption required, re-export forbidden"
                         )
+                    # Native month index receipts bind the otherwise
+                    # unjournaled CSV preparation to the same sealed SOURCE.
+                    index_receipt = previous / 'index_context/index_materialization_receipt.json'
+                    if (previous / '.month-inputs').is_dir() and index_receipt.is_file():
+                        _plain(index_receipt)
+                        native = json.loads(index_receipt.read_bytes())
+                        if (native.get('schema_version') == 'aistock_monthly_native_index_materialization_v1'
+                                and native.get('status') == 'PASS'
+                                and native.get('source_bundle_sha256') == binding['source_bundle_sha256']
+                                and native.get('cutoff') == binding['target_cutoff']
+                                and native.get('predecessor_manifest_sha256') == (binding.get('predecessor') or {}).get('dataset_manifest_sha256')):
+                            partial.append((int(matched[1]), previous))
+                        else:
+                            raise MonthlyBuildResumeError('incomplete preparation SOURCE identity differs')
+        if partial:
+            return max(partial, key=lambda item: item[0])[1]
         return default
     record = _read_record(path, binding, digest)
     if "prepare" not in record["steps"]:
-        return default  # Preserve incomplete preparation; never overwrite it.
+        retained = release_root / str(record.get('staging_relative_path', ''))
+        if record.get('partial_prepare') is True and retained.is_dir():
+            return _retained_root(record, release_root, binding, context)
+        return default
     return _retained_root(record, release_root, binding, context)
 
 
@@ -169,7 +189,7 @@ class MonthlyBuildResume:
         binding, digest, self.path = identity
         if self.path.exists():
             self.record = _read_record(self.path, binding, digest)
-            if "prepare" in self.record["steps"]:
+            if "prepare" in self.record["steps"] or (self.record.get('partial_prepare') is True and staging_root.is_dir()):
                 if _retained_root(self.record, release_root, binding, context) != staging_root:
                     raise MonthlyBuildResumeError("runner did not use the retained data location")
                 pending = staging_root.parent / f".{staging_root.name}.industry-history-commit.json"
@@ -198,12 +218,16 @@ class MonthlyBuildResume:
                     if _signature(staging_root / relative) != expected:
                         raise MonthlyBuildResumeError(f"retained export changed: {relative}")
                 return
+        matched = re.fullmatch(rf"\.{re.escape(binding['candidate_name'])}\.{re.escape(context.operation_id)}\.attempt-([0-9]+)\.building", staging_root.name)
+        materialization = int(matched[1]) if matched else context.attempt
         self.record = {
             "schema_version": "aistock_monthly_build_resume_v1", "binding": binding,
-            "binding_digest": digest, "materialization_attempt": context.attempt,
+            "binding_digest": digest, "materialization_attempt": materialization,
             "staging_relative_path": staging_root.relative_to(release_root).as_posix(),
-            "steps": {}, "files": {},
+            "steps": {}, "files": {}, "partial_prepare": True,
         }
+        # Persist before prepare, not only after all components succeed.
+        _atomic(self.path, self.record)
 
     def get(self, step: str) -> Mapping[str, Any] | None:
         ref = self.record.get("steps", {}).get(step)
@@ -313,3 +337,25 @@ def materialization_attempt(staging_root: Path, *, operation_id: str, execution_
     ):
         raise MonthlyBuildResumeError("retained materialization lease identity differs")
     return attempt
+
+
+def validate_partial_preparation(invocation) -> None:
+    """Allow only the existing journal's exact SOURCE-bound private tree."""
+    parent = invocation.candidate_root / '.staging'
+    for path in parent.iterdir():
+        if f'.{invocation.run_id}.resume-' not in path.name or path.suffix != '.json':
+            continue
+        _plain(path)
+        value = json.loads(path.read_bytes())
+        binding = value.get('binding', {})
+        digest = digest_named_fields('aistock_monthly_build_data_binding_v1', binding)
+        if (value.get('schema_version') == 'aistock_monthly_build_resume_v1'
+                and value.get('partial_prepare') is True and value.get('binding_digest') == digest
+                and binding.get('operation_id') == invocation.run_id
+                and binding.get('source_bundle_sha256') == invocation.build_inputs.get('source_bundle_sha256')
+                and binding.get('action_plan_digest') == invocation.plan.get('action_plan_digest')
+                and binding.get('release_id') == invocation.release_id
+                and value.get('staging_relative_path') == invocation.staging_relative_path):
+            _plain(invocation.staging_root)
+            return
+    raise MonthlyBuildResumeError('existing prepare tree has no matching partial SOURCE journal')
