@@ -3,7 +3,9 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-11-05
 
-> 2026-11-05资源规则修订：用户明确要求远端QE不得阻断Advisory训练，本机资源充足也不得阻断。下方11月2日按QE状态一律等待的检查点是历史记录，已被本次规则替代。当前固定54字段研究保持原协议与最多6fit预算，只追加0fit时的create-only执行资源修订；QE状态仅观测，本机CPU/内存/输出空间按本研究既定2线程、2GiB、200MiB上限检查，不以running/pending数、接口可用性或节点别名作为否决条件，不操作QE。38项直接合同测试已通过，随后进行原研究。
+> 2026-11-05最新终态：[固定54字段受限非线性F1](advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md)真实6fit与独立审核已完成。HGB相对原生主开发101D为+28.742680bps、95%[−37.351650,91.482719]；压力主109D为−46.389696、95%[−128.778334,39.935410]，按事前规则STOP_NONLINEAR_CANDIDATE_PAUSE_CURRENT_FACTOR_MODEL_SEARCH，累计257实际fit＋1旧index、追加预算0。辅助压力108D对同MSE/54字段Ridge为+35.941156、区间跨零，不能替代原生主端点或与不同分母主均值相减。38直接项、24400分数/排名、每臂11111费用/244D损益、6组区间及71来源角色hash通过。原生/V2/生产及暂停方向不变；没有新可上线模型，源码CI/合入分态见[报告](../analysis/advisory_lstm_factor_nonlinear_review_20261102.md)。
+>
+> 同日资源规则已按用户指令纠正并真实验证：远端QE不阻断，本机资源足够也可训练；原协议不覆盖，仅追加零fit资源修订。QE仍running期间本研究18.54秒完成6fit，13个快照的最小可用内存12.37GiB、最小空闲CPU线程估计19.14。QE状态/接口未知只记录、不作否决；不操作QE或等待新交易日。下方11月2日的0fit/等待状态均为历史检查点，不再作为当前队列。
 
 > 2026-11-02当前执行检查点：[固定54字段受限非线性F1](advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md)已获最多6次新金融fit授权，采用同平方损失Ridge对照及一个固定浅树HGB候选；不扩数据/包/窗口，原生Top10成本后100bps主端点保持。源码与28项直接合同测试完成，真实研究尚未开始：公共QE训练owner活跃，按既有互斥在读取训练标签前停止，0新金融fit/0新经济结论，累计仍251＋1旧index。现有历史输入已足够，不等待新交易日；后续继续同一协议，未追加预算或操作QE。真实评价、独立审核、F1终审及PR/CI/合入均pending，不将源码检查点当完整交付或上线模型；详见[状态报告](../analysis/advisory_lstm_factor_nonlinear_review_20261102.md)。下方#7017仍是最近已完成研究终态。
 
@@ -2322,7 +2324,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-309 | 历史数据独立完成工程验收：原三折126D/6300行、公共推理及5TD投影逐项对账、模拟成熟/恢复时钟、真实历史页面、0fit与原V2隔离 |
 | F-310 | 当前P19第3折固定118D跨期压力：一次零fit、预测先于估值、复用共享结果、双臂/三臂分母、事前三分支与100bps分报，原V2/生产不变 |
 | F-311 | 逐因子信息长任务：查重/原21150行/46字段来源、重构与NON_VINTAGE边界、同算法旧基线训练身份匹配、唯一3fit候选、主辅分母/100bps/独立算术审核及停止 |
-| F-312 | 固定54字段同MSE的Ridge/受限HGB一次6fit研究：同输入/时钟/资格、原生100bps主端点、互斥/预算、独立复算及事前停止；真实研究待执行 |
+| F-312 | 固定54字段同MSE的Ridge/受限HGB一次6fit研究：同输入/时钟/资格、原生100bps主端点、实际资源准入/预算、独立复算及事前停止；负面分支完整验收 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2516,7 +2518,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-309 | §16.0、`docs/architecture/advisory_lstm_historical_engineering_replay_v1_f1_design_20261102.md`；工程验收使用已消费历史，不升级为PIT或独立经济确认 | backend/tests/advisory_model_first/test_lstm_historical_engineering_replay.py; frontend/tests/paper-v2/advisory-workbench.spec.ts; artifact: X:/AIstock_temp/ADVISORY/lstm-historical-engineering-replay-20261102/independent_readback.json | VERIFIED_REAL_HISTORY_ENGINEERING_REPLAY | none |
 | F-310 | §16.0、`docs/architecture/advisory_lstm_frozen_specialist_stress_v1_f1_design_20261102.md` | backend/tests/advisory_model_first/test_lstm_frozen_specialist_stress_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/independent_audit_receipt.json | VERIFIED_NEGATIVE_FIXED_SPECIALIST_STRESS_ZERO_FIT | none |
 | F-311 | §16.0、`docs/architecture/advisory_lstm_factor_information_v1_f1_design_20261102.md`；按重构与已消费历史合同验收，不构成生产或独立经济确认 | backend/tests/advisory_model_first/test_lstm_factor_information_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/independent_audit_receipt.json | VERIFIED_FACTOR_INFORMATION_NEGATIVE_BOUNDED_STUDY | none |
-| F-312 | `docs/architecture/advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md`、新叶与CLI | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py; docs/analysis/advisory_lstm_factor_nonlinear_review_20261102.md | IN_PROGRESS | 28直接项通过，QE训练owner活跃，0新金融fit；真实评价/审核/交付pending |
+| F-312 | §16.0、`docs/architecture/advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md`、新叶/CLI；用户授权资源修订只改执行准入，模型与经济合同不变 | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/independent_audit_receipt.json | VERIFIED_NONLINEAR_NEGATIVE_BOUNDED_STUDY | none |
 
 
 ## 12. Verification Plan
@@ -2813,7 +2815,9 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-11-02 接续）
+### 16.0 当前唯一任务队列与真实断点（2026-11-05 接续）
+
+2026-11-05本轮长任务完成真实研究：[固定54字段受限非线性F1](advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md)只做3折Ridge/HGB共6fit，原21150输入行、开发126D及压力118D保持。HGB原生主101/109共同D分别+28.742680/−46.389696bps，区间均跨零，未达100bps目标；辅助101/108D对同信息Ridge为−22.234272/+35.941156bps，分母单列，不为候选改判。开发三折−102.344874/+75.688938/+68.038233，压力三季度均负；成熟日干预111/111和113/113，非模型未生效。事前终态STOP_NONLINEAR_CANDIDATE_PAUSE_CURRENT_FACTOR_MODEL_SEARCH，累计257＋1旧index、追加fit预算0。38直接项、两臂24400评分/排名、每臂11111费用/244D损益、6组区间和71来源角色/44唯一路径hash独立复核通过；原协议及核心模型闭包不改，追加资源修订只放行本CLI执行规则。QE仍running时资源充足，研究18.54秒真实完成；不再以远端或本机QE状态一律阻断。当前完成该精确候选交付并暂停当前54字段有限模型轮换，不自动新增算法/子集/阈值/数据支线。所有结论仍NON_VINTAGE/已消费探索证据，不外推所有ML无效。生产、原生荐股和旧V2自然协议不变；不等待新交易日来完成开发，不消费旧V2成熟结果为本候选补证。来源/源码/CI/合入分态见结果报告与X根回执。以下带日期段落只记录对应历史事实。
 
 2026-11-02最新长任务已完成：逐因子信息候选3次新fit、原3份八字段模型复用，训练人口/编码身份匹配，原21150行不筛选。开发主101D+35.434324bps，压力主108D−78.096451bps；压力辅助105D相对旧八字段+50.345522仅描述性，不能掩盖未达原生100bps目标。112/113成熟压力日发生干预，净避亏+31.134891仍不足抵消净盈利机会−109.231343。25直接项、独立12200评分/11111费用/244D四项损益/四组区间与34源保护通过；新进程STUDY_REUSED且0fit。终态STOP_THIS_FACTOR_CANDIDATE，累计251真实fit＋1旧index；无额外恢复、final-fit、参数/字段/日期搜索或自动下一候选。文件消费PASS、探索输入READY不等于原张量parity/PIT或生产模型READY。后续研发不等待新交易日；原V2只按既定协议自然记录与唯一正式经济判断，不改原生LSTM/生产Top20；研报/现金流/价格/Exit继续暂停。来源/源码/CI/合入与经济分态见新设计、报告及X根回执。下列带日期条目保留此前事实，不覆盖本段最新资源去留决定。
 

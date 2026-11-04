@@ -1,6 +1,6 @@
 # LSTM固定因子输入的受限非线性重排序（F1）
 
-2026-11-02；Advisory/model_first；EXPLORATORY_SCREEN。用户批准在一个长任务完成设计、最多6次新金融拟合、历史开发/压力检验、独立审核及源码交付。当前DESIGN_FROZEN_BEFORE_FIT，0新金融fit，前序251实际fit＋1旧index。
+登记2026-11-02，执行/终审2026-11-05；Advisory/model_first；EXPLORATORY_SCREEN。用户批准的长任务已完成6次新金融拟合、历史开发/压力检验与独立审核；累计257实际fit＋1旧index。压力主端点负，STOP_NONLINEAR_CANDIDATE_PAUSE_CURRENT_FACTOR_MODEL_SEARCH，追加预算0；真实结果见[分析报告](../analysis/advisory_lstm_factor_nonlinear_review_20261102.md)。源码CI/合入与经济分态，不是生产模型交付。
 
 ## Background / Goal / Feature Card
 
@@ -91,11 +91,11 @@
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | F-951 | 本设计及新叶/CLI；既有文件/原终态/人口绑定，非新数据来源 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/source_review.json | PASS | none |
-| F-952 | 新叶fit/predict/模型JSON | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py | IN_PROGRESS | 合成训练/推理与边界已通过；真实训练/parity待执行 |
-| F-953 | 新CLI及create-only claims | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/training_owner_preflight.json | IN_PROGRESS | QE既有训练owner活跃，0新金融fit；未跳过互斥 |
-| F-954 | 新叶summary/decision及真实评价 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/study/evaluated/report.json | IN_PROGRESS | 真实评价未开始 |
-| F-955 | 直接测试和第二实现 | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py | IN_PROGRESS | 28直接项通过；第二实现已编译，真实审核待输出 |
-| F-956 | 本设计、分析报告、蓝图及最小校验 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/validation_source_checkpoint.json | IN_PROGRESS | 源码检查点可追溯；真实研究/F1终审/CI/合入未完成 |
+| F-952 | 新叶fit/predict/模型JSON，同KEY/目标/编码与固定参数 | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/independent_audit_receipt.json | PASS | none |
+| F-953 | 新CLI、create-only claims及用户授权的纯资源修订，真实6 STARTED/6 FINISHED | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/study/terminal/evaluated/receipt.json | PASS | none |
+| F-954 | 新叶summary/decision，原生主101/109D、辅助101/108D及固定100bps停止 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/study/evaluated/report.json | PASS | none |
+| F-955 | 38直接项、24400评分/排名、6组区间、244D/每臂及71角色/44唯一路径保护 | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/independent_audit_receipt.json | PASS | none |
+| F-956 | 本设计、分析报告、蓝图及三轮符合性；CI/合入单列delivery_receipt | artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/validation_receipt.json | PASS | none |
 
 ## Risks / Production Gates
 
