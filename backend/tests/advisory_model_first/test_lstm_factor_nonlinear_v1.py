@@ -194,7 +194,7 @@ def test_registry_required_for_complete_reuse(tmp_path, monkeypatch):
         runner.verify_registry(dict(experiment_id='another'))
 
 
-def test_active_qe_blocks_before_any_training_label_or_claim(tmp_path, monkeypatch):
+def test_insufficient_local_capacity_blocks_before_any_training_label_or_claim(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, 'OUTPUT', tmp_path)
     monkeypatch.setattr(runner, 'load', lambda path: {'experiment_id': 'one'})
     monkeypatch.setattr(runner, 'verify', lambda plan: None)
@@ -202,14 +202,77 @@ def test_active_qe_blocks_before_any_training_label_or_claim(tmp_path, monkeypat
     monkeypatch.setattr(runner.pd, 'read_parquet', lambda *a, **k: reads.append(a))
 
     def busy():
-        raise ValueError('QE training owner is active; no research fit started')
+        raise ValueError('insufficient local CPU/memory/output capacity')
 
-    monkeypatch.setattr(runner.previous, 'qe_idle', busy)
-    with pytest.raises(ValueError, match='QE training owner is active'):
+    monkeypatch.setattr(runner, 'resource_admission', busy)
+    with pytest.raises(ValueError, match='insufficient local'):
         runner.run()
     assert reads == []
     assert not (tmp_path / 'study/fit_claims').exists()
     assert not (tmp_path / 'execution_failure.json').exists()
+
+
+@pytest.mark.parametrize('node', ['remote-node', 'localhost', None])
+def test_running_qe_never_vetoes_sufficient_local_capacity(monkeypatch, node):
+    monkeypatch.setattr(runner, 'local_capacity', lambda: dict(free_cpu_threads=2.,
+        available_memory_bytes=2 * 1024**3, free_output_bytes=200 * 1024**2))
+    observed = [dict(observed=node is not None, active=100 if node else None, node_ids=[node] if node else [])]
+    monkeypatch.setattr(runner, 'qe_observation', lambda: observed)
+    result = runner.resource_admission()
+    assert result['capacity_sufficient'] and result['qe'] == observed
+
+
+@pytest.mark.parametrize('field,value', [('free_cpu_threads', 1.99), ('free_cpu_threads', np.nan),
+    ('available_memory_bytes', 2 * 1024**3 - 1), ('free_output_bytes', 200 * 1024**2 - 1)])
+def test_actual_resource_shortage_blocks_only_next_start(monkeypatch, field, value):
+    snapshot = dict(free_cpu_threads=4., available_memory_bytes=4 * 1024**3, free_output_bytes=1024**3)
+    snapshot[field] = value
+    monkeypatch.setattr(runner, 'local_capacity', lambda: snapshot)
+    monkeypatch.setattr(runner, 'qe_observation', lambda: [])
+    with pytest.raises(ValueError, match='insufficient local'):
+        runner.resource_admission()
+    assert not runner.resource_admission(require_capacity=False)['capacity_sufficient']
+
+
+def test_unavailable_qe_observation_is_explicit_unknown_and_not_a_veto(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise runner.previous.requests.ConnectionError('offline')
+    monkeypatch.setattr(runner.previous.requests, 'get', unavailable)
+    rows = runner.qe_observation()
+    assert len(rows) == 3 and all(r['active'] is None and not r['observed'] for r in rows)
+
+
+def test_resource_amendment_rejects_model_or_budget_drift(monkeypatch):
+    actual = {runner.AMENDED_SCRIPT: 'new', 'model.py': 'unchanged'}
+    plan = dict(contract=json.loads(runner.json_bytes(core.CONTRACT)), versions={}, max_new_fits=6,
+        closure={runner.AMENDED_SCRIPT: 'old', 'model.py': 'unchanged'})
+    amendment = dict(schema='advisory_resource_amendment_v1', original_plan_sha256=core.info.spo.sha(plan),
+        closure=dict(actual), resource_policy=runner.RESOURCE_POLICY,
+        research_contract_sha256=core.info.spo.sha(core.CONTRACT), financial_fits_started_at_amendment=0, max_new_fits=6)
+    monkeypatch.setattr(runner, 'load', lambda path: amendment)
+    monkeypatch.setattr(runner, 'closure', lambda: actual)
+    monkeypatch.setattr(runner, 'versions', lambda: {})
+    monkeypatch.setattr(runner, 'paths', lambda: {})
+    assert runner.verify(plan) == amendment
+    amendment['max_new_fits'] = 7
+    with pytest.raises(ValueError, match='resource-only amendment'):
+        runner.verify(plan)
+    amendment['max_new_fits'] = 6
+    actual['model.py'] = 'changed'
+    amendment['closure'] = dict(actual)
+    with pytest.raises(ValueError, match='resource-only amendment'):
+        runner.verify(plan)
+
+
+def test_resource_amendment_cannot_follow_any_financial_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, 'OUTPUT', tmp_path)
+    monkeypatch.setattr(runner.subprocess, 'check_output', lambda *a, **k: b'')
+    folder = tmp_path / 'study/fit_claims'
+    folder.mkdir(parents=True)
+    (folder / 'ridge1_started.json').write_text('{}')
+    with pytest.raises(ValueError, match='only before financial execution'):
+        runner.amend_resource()
+    assert not (tmp_path / 'resource_amendment.json').exists()
 
 
 def test_primary_pairs_do_not_depend_on_ridge_completeness_or_old_arm_label():

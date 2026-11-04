@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import importlib.metadata
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -31,6 +32,10 @@ PARENT_TERMINAL = '85f42c1c5174106e44fa1f9f50ebe6979cc1003a125a9450a4d246462125e
 FILES = tuple(dict.fromkeys((*previous.SOURCE_FILES, 'scripts/advisory_lstm_factor_nonlinear.py',
     'backend/services/advisory_model_first/lstm_factor_nonlinear_v1.py')))
 load, ref, json_bytes, parquet_bytes = previous.load, previous.ref, previous.files.json_bytes, previous.files.parquet_bytes
+RESOURCE_POLICY = dict(schema='advisory_local_capacity_v1', cpu_threads=2, gpu=0,
+    minimum_available_memory_bytes=2 * 1024**3, minimum_free_output_bytes=200 * 1024**2,
+    qe_running_is_not_a_veto=True, qe_status_is_observation_only=True)
+AMENDED_SCRIPT = 'scripts/advisory_lstm_factor_nonlinear.py'
 
 
 def paths():
@@ -66,11 +71,93 @@ def checked(plan, name):
 
 
 def verify(plan):
-    if (plan['contract'] != json.loads(json_bytes(core.CONTRACT)) or plan['closure'] != closure()
+    if (plan['contract'] != json.loads(json_bytes(core.CONTRACT))
             or plan['versions'] != versions() or plan['max_new_fits'] != 6):
         raise ValueError('contract/source/environment/budget drift')
+    actual = closure()
+    amendment = load(OUTPUT / 'resource_amendment.json')
+    changed = [name for name in actual if actual[name] != plan['closure'].get(name)]
+    if (set(actual) != set(plan['closure']) or changed != [AMENDED_SCRIPT]
+            or amendment['schema'] != 'advisory_resource_amendment_v1'
+            or amendment['original_plan_sha256'] != core.info.spo.sha(plan)
+            or amendment['closure'] != actual or amendment['resource_policy'] != RESOURCE_POLICY
+            or amendment['research_contract_sha256'] != core.info.spo.sha(core.CONTRACT)
+            or amendment['financial_fits_started_at_amendment'] != 0 or amendment['max_new_fits'] != 6):
+        raise ValueError('resource-only amendment or original model closure differs')
     for name in paths():
         checked(plan, name)
+    return amendment
+
+
+def amend_resource():
+    """Append a zero-fit resource correction; never replace the frozen research plan."""
+    if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT).strip():
+        raise ValueError('resource amendment requires a clean committed producer')
+    study = OUTPUT / 'study'
+    if list((study / 'fit_claims').glob('*_started.json')) or (study / 'prepared').exists():
+        raise ValueError('resource amendment is allowed only before financial execution')
+    plan = load(study / 'preregistered/protocol.json')
+    read_stage(study / 'preregistered', stage='preregistered', plan_sha256=core.info.spo.sha(plan), parent_sha256=None)
+    verify_parent()
+    amendment = dict(schema='advisory_resource_amendment_v1', original_plan_sha256=core.info.spo.sha(plan),
+        resource_policy=RESOURCE_POLICY, closure=closure(True), research_contract_sha256=core.info.spo.sha(core.CONTRACT),
+        max_new_fits=6, financial_fits_started_at_amendment=0,
+        authorization='2026-11-05 user: remote QE must not block; sufficient local capacity allows concurrent training',
+        producer_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+        captured_at=datetime.now(timezone.utc).isoformat())
+    # Validate every invariant before publishing the create-only amendment.
+    actual = amendment['closure']
+    if (set(actual) != set(plan['closure']) or [n for n in actual if actual[n] != plan['closure'][n]] != [AMENDED_SCRIPT]
+            or plan['contract'] != json.loads(json_bytes(core.CONTRACT)) or plan['versions'] != versions()
+            or plan['max_new_fits'] != 6):
+        raise ValueError('amendment may change only the execution script, never the model or research contract')
+    for name in paths():
+        checked(plan, name)
+    with (OUTPUT / 'resource_amendment.json').open('xb') as handle:
+        handle.write(json_bytes(amendment))
+    verify(plan)
+    print(json.dumps(dict(status='RESOURCE_AMENDMENT_FROZEN', new_financial_fits=0,
+        original_protocol_sha256=core.info.spo.sha(plan), amendment_sha256=core.info.spo.sha(amendment))))
+
+
+def qe_observation():
+    result = []
+    for endpoint in ('/experiments?status=running&limit=200', '/evolution/tasks?status=running', '/evolution/tasks?status=pending'):
+        try:
+            response = previous.requests.get('http://127.0.0.1:8001/api/v1/quantevolver' + endpoint, timeout=2)
+            response.raise_for_status()
+            value = response.json()
+            rows = value['items'] if 'experiments?' in endpoint else value['data']
+            count = value['total'] if 'experiments?' in endpoint else len(rows)
+            if type(count) is not int or count < 0 or not isinstance(rows, list):
+                raise ValueError('invalid QE observation')
+            result.append(dict(endpoint=endpoint, observed=True, active=count,
+                node_ids=sorted({r['node_id'] for r in rows if isinstance(r.get('node_id'), str)})))
+        except (previous.requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            result.append(dict(endpoint=endpoint, observed=False, active=None, error_type=type(exc).__name__))
+    return result
+
+
+def local_capacity():
+    process = psutil.Process()
+    capacity = len(process.cpu_affinity()) if hasattr(process, 'cpu_affinity') else psutil.cpu_count(logical=True)
+    usage = psutil.cpu_percent(interval=.5)
+    return dict(cpu_capacity=capacity, cpu_percent=usage, free_cpu_threads=capacity * (1 - usage / 100),
+        available_memory_bytes=psutil.virtual_memory().available,
+        free_output_bytes=psutil.disk_usage(str(OUTPUT)).free, gpu_requested=0)
+
+
+def resource_admission(*, require_capacity=True):
+    snapshot = local_capacity()
+    enough = (all(math.isfinite(snapshot[k]) and snapshot[k] >= 0 for k in
+        ('free_cpu_threads', 'available_memory_bytes', 'free_output_bytes'))
+        and snapshot['free_cpu_threads'] >= RESOURCE_POLICY['cpu_threads']
+        and snapshot['available_memory_bytes'] >= RESOURCE_POLICY['minimum_available_memory_bytes']
+        and snapshot['free_output_bytes'] >= RESOURCE_POLICY['minimum_free_output_bytes'])
+    if require_capacity and not enough:
+        raise ValueError('insufficient local CPU/memory/output capacity; no new financial fit allowed')
+    return dict(policy=RESOURCE_POLICY, local=snapshot, capacity_sufficient=enough, qe=qe_observation(),
+        captured_at=datetime.now(timezone.utc).isoformat())
 
 
 def verify_parent():
@@ -117,7 +204,7 @@ def run():
     study = OUTPUT / 'study'
     plan = load(study / 'preregistered/protocol.json')
     digest = core.info.spo.sha(plan)
-    verify(plan)
+    amendment = verify(plan)
     terminal = study / 'terminal/evaluated/receipt.json'
     if terminal.exists():
         parent = None
@@ -129,9 +216,9 @@ def run():
         return
     if list((study / 'fit_claims').glob('*_started.json')):
         raise ValueError('partial STARTED: no implicit refit or extra financial budget')
-    previous.qe_idle()  # No training labels or claims while another training owner is active.
+    initial_resources = resource_admission()  # Check actual local capacity before any training labels.
     started = time.monotonic()
-    claims, telemetry = core.FitClaims(study / 'fit_claims', digest), []
+    claims, telemetry = core.FitClaims(study / 'fit_claims', digest), [dict(moment='BEFORE_LABELS', **initial_resources)]
 
     def budget():
         m = psutil.Process().memory_info()
@@ -157,7 +244,9 @@ def run():
         if len(dev) != 15250 or dev[core.DAY].nunique() != 305 or len(stress) != 5900 or stress[core.DAY].nunique() != 118:
             raise ValueError('original full population differs')
         parent = publish('prepared', parent, {'inputs.parquet': parquet_bytes(inputs),
-            'receipt.json': json_bytes(dict(original_rows=21150, numerical_fields=54, evaluation_labels_decoded=False))})
+            'execution_authorization.json': json_bytes(amendment),
+            'receipt.json': json_bytes(dict(original_rows=21150, numerical_fields=54, evaluation_labels_decoded=False,
+                execution_amendment_sha256=core.info.spo.sha(amendment)))})
         for fold, (cutoff, first, last) in enumerate(core.info.spo.base.FOLDS, 1):
             finance = pd.read_parquet(checked(plan, 'train' + str(fold)))
             train = dev.loc[dev[core.DAY].le(cutoff)].merge(finance, on=core.KEY, how='left', validate='one_to_one', indicator=True)
@@ -169,7 +258,7 @@ def run():
             for arm in core.PARAMS:
                 def before_fit(arm=arm, fold=fold):
                     budget()
-                    telemetry.append(dict(fold=fold, arm=arm, moment='BEFORE_START', qe=previous.qe_idle()))
+                    telemetry.append(dict(fold=fold, arm=arm, moment='BEFORE_START', **resource_admission()))
                     claims.write(arm, fold)
 
                 packet, oracle = core.fit(train, fold, arm, prior_meta['training_keys_sha256'], before_fit=before_fit, budget=budget)
@@ -188,7 +277,7 @@ def run():
                     artifacts['stress_predictions.parquet'] = parquet_bytes(core.predict(stress, packet, phase='stress', oracle=oracle))
                 parent = publish(f'fold{fold}/{arm}/trained', parent, artifacts)
                 claims.write(arm, fold, parent)
-                telemetry.append(dict(fold=fold, arm=arm, moment='AFTER_FINISH', qe=previous.qe_idle()))
+                telemetry.append(dict(fold=fold, arm=arm, moment='AFTER_FINISH', **resource_admission(require_capacity=False)))
                 print(json.dumps(dict(status='FIT_FINISHED', fold=fold, arm=arm, certificate=packet['certificate'])), flush=True)
         panels = {a: [] for a in core.PARAMS}
         for fold in (1, 2, 3):
@@ -223,6 +312,7 @@ def run():
             matched_ridge=dict(development=ridge_development, stress=ridge_stress),
             decision=core.decision(development, stress_report, by_fold), actual_new_financial_fits=starts,
             cumulative_actual_fits=251 + starts, old_index_count=1, candidate_count=1,
+            execution_amendment_sha256=core.info.spo.sha(amendment),
             historical_pit=False, independent_economic_confirmation=False, production_ready=False)
         artifacts = {'report.json': json_bytes(report), 'resource.json': json_bytes(dict(qe_checks=telemetry,
             elapsed_seconds=time.monotonic() - started, rss_bytes=psutil.Process().memory_info().rss, cpu_threads=2, gpu=0))}
@@ -259,10 +349,15 @@ def run():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['freeze', 'run'])
+    parser.add_argument('action', choices=['freeze', 'amend-resource', 'run'])
     args = parser.parse_args()
     with threadpool_limits(limits=2), _exclusive_file_lock(OUTPUT / 'runner.lock'):
-        freeze() if args.action == 'freeze' else run()
+        if args.action == 'freeze':
+            freeze()
+        elif args.action == 'amend-resource':
+            amend_resource()
+        else:
+            run()
 
 
 if __name__ == '__main__':

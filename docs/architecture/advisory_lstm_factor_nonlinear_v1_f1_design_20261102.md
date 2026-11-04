@@ -55,7 +55,11 @@
 
 新独立预算最多6次金融STARTED=3折×2臂。每个STARTED以独占create-only claim计入预算，失败仍消耗；不借上一轮已用额度，不赠送第7fit/恢复/最终重训。合成数学/序列化验证与金融研究计数分开报告。研究前序251fit＋1旧index，完成6次时累计257＋1，不把次数当独立假设数。
 
-单owner锁与原子阶段沿既有方式，新root不覆盖；partial STARTED拒绝隐式重训，已完成全链再次执行只读STUDY_REUSED、0fit。研究结束前必须完成一条research registry记录；若registry缺失，不得把重复调用报为完整复用。读取训练标签前及每次新fit前后，只读核对公共QE running experiments/running tasks/pending tasks三路径；发现其它owner活跃则停止本研究、不操作QE。首次前置占用不创建STARTED或失败金融收据，占用解除可执行同一未开始协议。2CPU线程、0GPU、RSS≤2GiB、研究运行≤1800秒、研究输出≤200MiB。
+单owner锁与原子阶段沿既有方式，新root不覆盖；partial STARTED拒绝隐式重训，已完成全链再次执行只读STUDY_REUSED、0fit。研究结束前必须完成一条research registry记录；若registry缺失，不得把重复调用报为完整复用。2CPU线程、0GPU、RSS≤2GiB、研究运行≤1800秒、研究输出≤200MiB。
+
+2026-11-05用户明确修订执行资源规则：远端QE不得阻断，本机资源充足也不得阻断训练。替代此前按QE running/pending数量一律等待的规则。读取训练标签前及每次新fit前核对本机可用CPU估计≥2线程、available内存≥2GiB、X输出空闲≥200MiB；这些界限直接对应本研究已冻结资源上限，不追加硬件/审批要求。fit后保留真实资源观测，瞬时负载变化不作已完成模型的失败条件；自身RSS/时间/输出硬预算仍执行。QE三路径仅best-effort只读观测，保留不可用/UNKNOWN，不把网络错误、远端/本机任务状态或pending数当作资源不足证据。仍不启动/停止或改派QE。
+
+旧preregistered协议保持不变；只在0 STARTED且无prepared时，从干净producer追加create-only `resource_amendment.json`，绑定原protocol SHA、相同contract/6fit预算和新脚本闭包。闭包只允许本CLI变化，核心模型及其依赖必须逐字hash不变。prepared将整份修订副本纳入阶段链，后续report/terminal绑定修订SHA；原实验身份、候选/参数/来源/时钟/费用和经济阈值全部不变，不新建研究root或覆盖旧协议。任何已有金融STARTED后不得追加本修订。
 
 ## Evaluation / Decision
 
