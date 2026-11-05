@@ -1,7 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.60
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.61
 
 > 初始日期：2026-07-10
 > 修订日期：2026-11-05
+
+> 2026-11-05最新路线评审已完成：[三模型零拟合报告](../analysis/advisory_lstm_three_model_route_review_20261105.md)保留原126/118D、12200评价行和三模型36600既存预测。三模型共同开发101D、压力108D，压力SPO+/Ridge/HGB相对原生为−78.096451/−81.637570/−45.696415bps；HGB原109D主终点仍−46.389696，不替换。三者压力平均一致换出原生6.4167只、一致换入1.9630只，共同部分净贡献−65.022346bps；这是权重不平衡子集的事后损益分解，不是新组合收益或缺信息的因果证明。独立732模型对日/209共同日/12区间与34源角色hash核对通过。终态NO_NEW_CANDIDATE_EVIDENCE_MAINTAIN_PAUSE，新增候选/fit/预测/政策均0，累计257＋1旧index不变。保留当前54字段有限模型轮换暂停，不从分歧或已知压力结果自动立项；原生/V2、暂停方向及资源规则不变，CI/合入另列。
 
 > 2026-11-05最新终态：[固定54字段受限非线性F1](advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md)真实6fit与独立审核已完成。HGB相对原生主开发101D为+28.742680bps、95%[−37.351650,91.482719]；压力主109D为−46.389696、95%[−128.778334,39.935410]，按事前规则STOP_NONLINEAR_CANDIDATE_PAUSE_CURRENT_FACTOR_MODEL_SEARCH，累计257实际fit＋1旧index、追加预算0。辅助压力108D对同MSE/54字段Ridge为+35.941156、区间跨零，不能替代原生主端点或与不同分母主均值相减。38直接项、24400分数/排名、每臂11111费用/244D损益、6组区间及71来源角色hash通过。原生/V2/生产及暂停方向不变；没有新可上线模型，源码CI/合入分态见[报告](../analysis/advisory_lstm_factor_nonlinear_review_20261102.md)。
 >
@@ -2325,6 +2327,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-310 | 当前P19第3折固定118D跨期压力：一次零fit、预测先于估值、复用共享结果、双臂/三臂分母、事前三分支与100bps分报，原V2/生产不变 |
 | F-311 | 逐因子信息长任务：查重/原21150行/46字段来源、重构与NON_VINTAGE边界、同算法旧基线训练身份匹配、唯一3fit候选、主辅分母/100bps/独立算术审核及停止 |
 | F-312 | 固定54字段同MSE的Ridge/受限HGB一次6fit研究：同输入/时钟/资格、原生100bps主端点、实际资源准入/预算、独立复算及事前停止；负面分支完整验收 |
+| F-313 | 三模型零拟合路线评审：复用旧诊断、原244D/12200行与三模型共同分母、集合/排序分歧、共同损益、独立算术及不凭分歧自动提名；既有暂停/资源/生产边界保持 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2519,6 +2522,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-310 | §16.0、`docs/architecture/advisory_lstm_frozen_specialist_stress_v1_f1_design_20261102.md` | backend/tests/advisory_model_first/test_lstm_frozen_specialist_stress_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-specialist-stress-20261102/independent_audit_receipt.json | VERIFIED_NEGATIVE_FIXED_SPECIALIST_STRESS_ZERO_FIT | none |
 | F-311 | §16.0、`docs/architecture/advisory_lstm_factor_information_v1_f1_design_20261102.md`；按重构与已消费历史合同验收，不构成生产或独立经济确认 | backend/tests/advisory_model_first/test_lstm_factor_information_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/independent_audit_receipt.json | VERIFIED_FACTOR_INFORMATION_NEGATIVE_BOUNDED_STUDY | none |
 | F-312 | §16.0、`docs/architecture/advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md`、新叶/CLI；用户授权资源修订只改执行准入，模型与经济合同不变 | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/independent_audit_receipt.json | VERIFIED_NONLINEAR_NEGATIVE_BOUNDED_STUDY | none |
+| F-313 | §16.0、`docs/analysis/advisory_lstm_three_model_route_review_20261105.md`；原生主结果与共同诊断分账，旧已消费历史仅描述、不作因果或独立确认 | artifact: X:/AIstock_temp/ADVISORY/lstm-three-model-route-review-20261105/independent_audit_receipt.json | VERIFIED_ZERO_FIT_ROUTE_REVIEW_NO_NOMINATION | none |
 
 
 ## 12. Verification Plan
@@ -2816,6 +2820,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 ## 16. 当前下一步
 
 ### 16.0 当前唯一任务队列与真实断点（2026-11-05 接续）
+
+2026-11-05后续零拟合路线任务已完成：三模型共同101/108D，各臂原生主结果保持，原126/118D与全部12200评价行保留。SPO+/Ridge/HGB虽有排名分歧，三对压力Top10平均交集为6.4915/3.0932/4.2034只，但共同换出/换入的净贡献为−65.022346bps；模型间其它差异不足以把任一压力主端点推到100bps目标。新12组区间均跨零，描述性分歧/共亏不自动转化为新的可部署机制。复用旧VALUE-1贡献/边界/依赖诊断、因子输入验收和旧锚定/组合/净替换路径，不重跑、不为旧方案改名救活。独立12200股票行/36600既存预测/732模型对日/209共同日/12区间与34源角色hash一致。NO_NEW_CANDIDATE_EVIDENCE_MAINTAIN_PAUSE，候选/fit/预测/政策/新窗口均0，累计257＋1不变。当前任务结束、无自动下一模型；只有明确新信息/实质不同机制及可追溯输入依据才提出一个有限候选设计，或有精确可复现错误时处理正确性BUG。NON_VINTAGE探索允许如实声明，不新增历史PIT或未来交易日的开发门禁；研报/现金流/价格/Exit保持暂停，原生和旧V2不改。以下均为历史完成记录，不能恢复为新队列。
 
 2026-11-05本轮长任务完成真实研究：[固定54字段受限非线性F1](advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md)只做3折Ridge/HGB共6fit，原21150输入行、开发126D及压力118D保持。HGB原生主101/109共同D分别+28.742680/−46.389696bps，区间均跨零，未达100bps目标；辅助101/108D对同信息Ridge为−22.234272/+35.941156bps，分母单列，不为候选改判。开发三折−102.344874/+75.688938/+68.038233，压力三季度均负；成熟日干预111/111和113/113，非模型未生效。事前终态STOP_NONLINEAR_CANDIDATE_PAUSE_CURRENT_FACTOR_MODEL_SEARCH，累计257＋1旧index、追加fit预算0。38直接项、两臂24400评分/排名、每臂11111费用/244D损益、6组区间和71来源角色/44唯一路径hash独立复核通过；原协议及核心模型闭包不改，追加资源修订只放行本CLI执行规则。QE仍running时资源充足，研究18.54秒真实完成；不再以远端或本机QE状态一律阻断。当前完成该精确候选交付并暂停当前54字段有限模型轮换，不自动新增算法/子集/阈值/数据支线。所有结论仍NON_VINTAGE/已消费探索证据，不外推所有ML无效。生产、原生荐股和旧V2自然协议不变；不等待新交易日来完成开发，不消费旧V2成熟结果为本候选补证。来源/源码/CI/合入分态见结果报告与X根回执。以下带日期段落只记录对应历史事实。
 
