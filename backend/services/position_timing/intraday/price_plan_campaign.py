@@ -71,6 +71,14 @@ def _context(spec):
     for ref in refs:
         checked_file(ref)
     reader = CandidateReader(FileRef.model_validate(preflight["inputs"]["candidate_manifest"]))
+    try:
+        return _selection_context(spec, preflight, refs, inventory, reader, period)
+    except BaseException:
+        reader.close()
+        raise
+
+
+def _selection_context(spec, preflight, refs, inventory, reader, period):
     calendar = [str(d.date()) for d in reader.calendar("day")]
     end = period["trade_dates"][-1] if period else preflight["candidate_end_trade_date"]
     days = [d for d in calendar if preflight["start_trade_date"] <= d <= end]

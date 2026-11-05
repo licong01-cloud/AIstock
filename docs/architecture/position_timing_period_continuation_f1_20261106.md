@@ -41,6 +41,8 @@
 
 facts字段：`preflight`、`price_templates`、`producer_source_commit`、`source_batch_verified=true`、`source_inspection` FileRef、`outcomes_read_stage=AFTER_COMPLETE_SOURCE_BATCH_INSPECTION`、`nav_observation_scope=ALL_PRODUCER_ACCOUNT_NAV_OBSERVATIONS`、`accounts`。每账户包含`account_id`和日期顺序完全匹配的`days` FileRef。`source_inspection`无需冒用尚未定义的LocalSIM schema，但必须是含`preflight`、`price_templates`、`candidate_manifest`、`trade_dates`、`producer_source_commit`、`account_days_sha256=digest(facts.accounts)`和`stage=COMPLETE_SOURCE_BATCH_INSPECTED`的正式producer完整批次收据；额外owner字段可保留。顶层facts和全部day的完整SHA在打开新期间day收益前完成核验。source_inspection必须先验；source-before-outcomes不等于不hash结果文件。
 
+source_inspection还须携带`cost_policy_file_sha256`，等于preflight.inputs.cost_policy.sha256；`execution_contract_sha256`等于preparation_request.execution_contract的canonical摘要，防止不同费用或执行参数借用同一来源验收。
+
 逐日账户事实复用既有LocalSIM day语义：`account_id`、`rule`、`delay_seconds`、`operation`、`trade_date`、`terminal_as_of`、`terminal_nav_cny`、`fees_cny`和完整`nav_observations=[{as_of,nav_cny}]`。账户日、费用、NAV由LocalSIM生产，本分析只消费；不以日终近似冒充分钟MDD。必须同日时区明确、严格递增且不超过14:57，末条等于共同终点和terminal NAV。JSON单文件上限32MiB，日期最多512日，逐账户日流式处理；13户完整，不能缺失后删行或补零。
 
 每户期间PnL=`terminal-opening_nav`；期间收益=`terminal/opening_nav-1`；累计收益=`terminal/origin_initial_cash-1`；期间费用只累计新day；累计费用=父累计费用+期间费用。期间MDD从各自opening NAV起算；累计MDD接父高水位和父MDD，再顺序消费新期间完整NAV观察。不能补充值拉平不同账户。

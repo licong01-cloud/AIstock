@@ -351,6 +351,8 @@ def period_source_preflight(spec: PeriodAnalysisSpec):
             inspected["candidate_manifest"] == p["inputs"]["candidate_manifest"] and
             inspected["trade_dates"] == p["trade_dates"] and
             inspected["account_days_sha256"] == digest(facts["accounts"]) and
+            inspected["cost_policy_file_sha256"] == p["inputs"]["cost_policy"]["sha256"] and
+            inspected["execution_contract_sha256"] == digest(preparation["execution_contract"]) and
             inspected["producer_source_commit"] == facts["producer_source_commit"], "PERIOD_SOURCE_INSPECTION")
     commit = facts["producer_source_commit"]
     require(isinstance(commit, str) and len(commit) == 40 and all(c in "0123456789abcdef" for c in commit), "PERIOD_PRODUCER")

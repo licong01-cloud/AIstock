@@ -32,12 +32,14 @@ def period(tmp_path):
                   "account_receipt": payload(freeze(tmp_path/f"receipt{i}.json", {"fixture": "prior ledger"}))}
                  for i, (r, d) in enumerate(profiles)]
     prior = payload(freeze(tmp_path/"parent-results.json", {"fixture": "prior summary"}))
+    original["inputs"]["cost_policy"] = payload(freeze(tmp_path/"cost-policy.json", {"fixture": "frozen costs"}))
     request = {"schema_version": "localsim_period_continuation_preparation_v2", "candidate_manifest": original["inputs"]["candidate_manifest"],
                "manifest_sha256": original["manifest_sha256"], "package_id": original["package_id"],
                "trade_dates": [d["trade_date"] for d in inventory["days"]], "start_trade_date": "2026-01-05",
                "end_trade_date": "2026-01-06", "executable_study_request": False, "account_count": 13,
                "selection_inventory_sha256": digest(inventory), "parent_endpoint_refs": endpoints,
-               "parent_request": prior, "parent_results": prior, "parent_completion": prior}
+               "parent_request": prior, "parent_results": prior, "parent_completion": prior,
+               "execution_contract": {"fixture": "unchanged execution"}}
     request["identity"] = digest(request)
     request["release_identity"] = "localsim_period_preparation_v2_" + request["identity"][:24]
     request_ref = freeze(tmp_path/"preparation_request.json", request)
@@ -70,7 +72,7 @@ def period(tmp_path):
 
 def facts_for(period, *, first_nav=None):
     spec, root = period
-    p, _, openings, _ = pc.load_period_context(spec.preflight)
+    p, preparation, openings, _ = pc.load_period_context(spec.preflight)
     templates = build(spec, root/"plans")["templates"]
     accounts = []
     for i, a in enumerate(openings):
@@ -85,7 +87,9 @@ def facts_for(period, *, first_nav=None):
         accounts.append({"account_id": a["account_id"], "days": days})
     inspection = freeze(root/"source-inspection.json", {"stage": "COMPLETE_SOURCE_BATCH_INSPECTED", "preflight": spec.preflight,
         "price_templates": templates, "candidate_manifest": p["inputs"]["candidate_manifest"], "trade_dates": p["trade_dates"],
-        "producer_source_commit": "b"*40, "account_days_sha256": digest(accounts)})
+        "producer_source_commit": "b"*40, "account_days_sha256": digest(accounts),
+        "cost_policy_file_sha256": p["inputs"]["cost_policy"]["sha256"],
+        "execution_contract_sha256": digest(preparation["execution_contract"])})
     facts = {"schema_version": "position_timing_period_facts_v1", "preflight": spec.preflight, "price_templates": templates,
              "source_batch_verified": True, "source_inspection": inspection, "producer_source_commit": "b"*40,
              "outcomes_read_stage": "AFTER_COMPLETE_SOURCE_BATCH_INSPECTION",
@@ -197,3 +201,15 @@ def test_resigned_metadata_cannot_change_the_frozen_account_contract(period, dam
         "preflight": ref, "preparation_request": p["preparation_request"], "identity": p["identity"], "status": p["status"]})
     with pytest.raises(IntradayError):
         pc.load_period_context(ref)
+
+
+@pytest.mark.parametrize("key", ["cost_policy_file_sha256", "execution_contract_sha256"])
+def test_different_fees_or_execution_cannot_borrow_source_acceptance(period, key):
+    spec = facts_for(period)
+    facts = read(spec.facts)
+    source = read(facts["source_inspection"])
+    source[key] = "0"*64
+    facts["source_inspection"] = payload(freeze(period[1]/"wrong-cost-source.json", source))
+    spec = spec.model_copy(update={"facts": freeze(period[1]/"wrong-cost-facts.json", facts)})
+    with pytest.raises(IntradayError, match="PERIOD_SOURCE_INSPECTION"):
+        cr.analyze_period(spec, period[1]/"bad-reports")
