@@ -2,7 +2,9 @@
   "actual": "Nightly 41893825138 advisory_modeling_backend 六分片五个成功，分片2停在 test_batch_runner_rejects_future_sensitive_factor_output，182s触发180s预算。先隔离计时/采样定位真实测试成本，再修复成本或调度失衡，保留所有测试/386交易日/60标的/因果验证及180s门限，不训练不写业务库。",
   "allowed_write_scope": [
     "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py",
-    "tests/aistock_validation/bugs/20261105_BUG-2181-advisory-180.json"
+    "tests/aistock_validation/bugs/20261105_BUG-2181-advisory-180.json",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2181",
@@ -25,13 +27,15 @@
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/actions/runs/41893825138"
   ],
-  "expected": "????????????????????????????????????",
+  "expected": "完整既有测试在原180秒预算内完成；保留全部文件、模块级fixture、386日与60标的因果验证及覆盖率门禁。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py"
+      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py"
@@ -62,6 +66,11 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py"
+    ],
+    "actual_changed_files": [
+      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
     ]
   },
   "first_seen_at": "2026-11-05T18:47:26.125866Z",
