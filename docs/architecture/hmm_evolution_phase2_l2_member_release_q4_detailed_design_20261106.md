@@ -63,8 +63,10 @@ F-011：D1/D3/D5唯一模型与价值问题；F-012：D2/D4身份、因果和载
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-011 | backend/services/hmm_risk/risk_l2_member_release.py：schedule/training_rows/execute_child | backend/tests/hmm_risk/test_risk_l2_member_release.py：季度/成熟/共同mask/失败计数测试；真实研究状态见§11 | VERIFIED_SOURCE | 无 |
-| F-012 | 同service及release_industry_binding.py；共享reader显式分派与读取稳定性检查 | backend/tests/hmm_risk/test_release_industry_binding.py；backend/tests/hmm_risk/test_risk_l2_member_release.py；正式文件回执见§11.1 | VERIFIED_SOURCE_AND_FORMAL_FILE | 同新输入数据库事实实读NOT_EVALUATED，原历史双入口不继承 |
+| F-012 | 同service及release_industry_binding.py；共享reader显式分派与读取稳定性检查；本行仅source/文件载体断言 | backend/tests/hmm_risk/test_release_industry_binding.py；backend/tests/hmm_risk/test_risk_l2_member_release.py；正式文件回执见§11.1 | VERIFIED_SOURCE_FILE_ONLY | 无 |
 | F-013 | scripts/hmm_risk/run_risk_l2_member_release.py：guard/clean_head/双process与不重试 | backend/tests/hmm_risk/test_risk_l2_member_release.py：attempt先行/两process预算/完整grid回读；生产状态见§11 | VERIFIED_SOURCE | 无 |
+
+本Index没有将新数据数据库事实实读或当前在线加载列为已验证断言：D4只允许既有历史数据库快照验证共同核，不承诺本包直接上线。§11.1单列NOT_EVALUATED，不是获豁免的已完成项目；后续真实双入口消费仍须独立核验。F2源码/文件合同通过不能消除该未完成的业务状态，也不使本包成为生产采用。
 
 ## 10. Risks / Production Gates / Rollback
 
