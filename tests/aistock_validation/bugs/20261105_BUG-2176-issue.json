@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-11-05T07:24:47.992602Z",
   "description": "BUG-2175同轮发现的worker执行部分，按运行目标单独交付：历史VALIDATE_ONLY重复排序挤占新日和新修订，index_daily/2026-10-28的row_count_seed_is_not_a_complete_source_scan未进入FETCH。复用现有有界队列，按数据集公平选取、近期新修订优先；不改判定阈值、不增加物理全量检查。",
+  "design_compliance_001": {
+    "business_semantics_preserved": "PASS - 保留每日正式全历史复权合同；定向补录按缺失股票，PIT和字段规则不变",
+    "no_silent_errors": "PASS - 上游真缺失保持NULL/INCOMPLETE，未知保持UNVERIFIED",
+    "no_unapproved_gates": "PASS - 无新DDL、框架、审批和物理全量校验；原有执行预算不变",
+    "no_unapproved_simplification": "PASS - 未将源码/DEV测试通过冒充运行态修复完成"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +32,18 @@
   "evidence_uris": [],
   "expected": "现有10项/45秒预算内处理公平队列；需要来源完成结果的旧分区建立精确FETCH，真实缺口继续INCOMPLETE，未知继续UNVERIFIED。与BUG-2175分别验收，仍由用户重启。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2176-issue.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/data_integrity/worker.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2176-issue.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/worker.py",
@@ -100,31 +112,63 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "production_status": {
+    "backend_restart_owner": "user",
+    "data_repairs": "program deployment and current-state verification pending; upstream unavailable values remain NULL",
+    "database_write": false,
+    "ddl": false,
+    "profile_write": false,
+    "runtime_action": false
+  },
+  "related_bugs": [
+    "BUG-2175"
+  ],
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "修复RED复现，保持真缺失/UNKNOWN且不改变PIT、数据字段及验收阈值。",
+      "round": 1
+    },
+    {
+      "result": "真实现有DEV验证退避、修订唤醒、来源完成、日期恢复；撤销新增上游全局分区门禁，行业仅复用原有单次预检。",
+      "round": 2
+    },
+    {
+      "result": "复核并发lease fencing、按股修复范围、显式队列优先级、失败历史保留和近期同步性能。",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
+  "root_cause": "验证候选按旧重试时间排列造成单一历史队列占用预算；UNVERIFIED缺少完整扫描的两个原因未进入已有定向FETCH分支。",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python imported tracked worker and validated 82 direct contracts; existing DEV native queue query selected recent datasets fairly among 2002 targets in 3.201 ms; temp rows rolled back; production_write=false, runtime_action=false."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
-    ],
-    "backend_restart_required": true,
-    "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "not_required",
-    "post_restart_effective_gate": "pending_user_restart",
-    "persistence_basis": "git_tracked_source",
-    "fresh_process_evidence": [
-      "Fresh Python imported tracked worker and validated 82 direct contracts; existing DEV native queue query selected recent datasets fairly among 2002 targets in 3.201 ms; temp rows rolled back; production_write=false, runtime_action=false."
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
@@ -138,6 +182,11 @@
     "fingerprint": "16513051291ca38ce0b69e62",
     "source_event_id": "FE-20261105-16513051291c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_daily_data_integrity.py -> 82 passed (including explicit existing DEV opt-in)",
+    "existing DEV temporary target queue: 2002 targets -> 10 selected; three datasets included before second history item; execution_ms=3.201; rollback=true",
+    "Ruff, L0 and diff check passed; limit=10 and budget_seconds=45 unchanged"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -245,42 +294,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "root_cause": "验证候选按旧重试时间排列造成单一历史队列占用预算；UNVERIFIED缺少完整扫描的两个原因未进入已有定向FETCH分支。",
-  "validation_evidence": [
-    "python -m pytest backend/tests/test_daily_data_integrity.py -> 82 passed (including explicit existing DEV opt-in)",
-    "existing DEV temporary target queue: 2002 targets -> 10 selected; three datasets included before second history item; execution_ms=3.201; rollback=true",
-    "Ruff, L0 and diff check passed; limit=10 and budget_seconds=45 unchanged"
-  ],
-  "review_rounds": [
-    {
-      "round": 1,
-      "result": "修复RED复现，保持真缺失/UNKNOWN且不改变PIT、数据字段及验收阈值。"
-    },
-    {
-      "round": 2,
-      "result": "真实现有DEV验证退避、修订唤醒、来源完成、日期恢复；撤销新增上游全局分区门禁，行业仅复用原有单次预检。"
-    },
-    {
-      "round": 3,
-      "result": "复核并发lease fencing、按股修复范围、显式队列优先级、失败历史保留和近期同步性能。"
-    }
-  ],
-  "design_compliance_001": {
-    "no_unapproved_simplification": "PASS - 未将源码/DEV测试通过冒充运行态修复完成",
-    "no_silent_errors": "PASS - 上游真缺失保持NULL/INCOMPLETE，未知保持UNVERIFIED",
-    "business_semantics_preserved": "PASS - 保留每日正式全历史复权合同；定向补录按缺失股票，PIT和字段规则不变",
-    "no_unapproved_gates": "PASS - 无新DDL、框架、审批和物理全量校验；原有执行预算不变"
-  },
-  "production_status": {
-    "database_write": false,
-    "ddl": false,
-    "profile_write": false,
-    "runtime_action": false,
-    "backend_restart_owner": "user",
-    "data_repairs": "program deployment and current-state verification pending; upstream unavailable values remain NULL"
-  },
-  "related_bugs": [
-    "BUG-2175"
-  ]
+  }
 }
