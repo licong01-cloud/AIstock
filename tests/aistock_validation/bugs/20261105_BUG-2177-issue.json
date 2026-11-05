@@ -1,0 +1,294 @@
+{
+  "actual": "BUG-2175/2176重启后只读复核发现两项同模块遗留：sector_data/2026-11-05当前canonical分区已VALID，但已reconciled的恢复目标不会再次归并同日failed计划；stk_limit物理5224行及pre_close均有效，验证分支重建ValidationResult时丢失physical_rows，导致台账显示0行。仅修复既有状态投影与验证计数，不修改业务事实、PIT、上游缺口、执行预算、发布门禁或日程时间。index_daily/2026-10-28已有exact FETCH，因同数据集10月19日补取未完成而正常去重，不绕过去重新增任务。",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/services/data_integrity/validation.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/tests/test_daily_data_integrity_dev.py",
+    "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2177",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-05T16:42:58.779814Z",
+  "description": "BUG-2175/2176重启后只读复核发现两项同模块遗留：sector_data/2026-11-05当前canonical分区已VALID，但已reconciled的恢复目标不会再次归并同日failed计划；stk_limit物理5224行及pre_close均有效，验证分支重建ValidationResult时丢失physical_rows，导致台账显示0行。仅修复既有状态投影与验证计数，不修改业务事实、PIT、上游缺口、执行预算、发布门禁或日程时间。index_daily/2026-10-28已有exact FETCH，因同数据集10月19日补取未完成而正常去重，不绕过去重新增任务。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261105-5f52e8b7f918",
+      "timestamp": "2026-11-05T16:42:58.779814Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "当前同日VALID分区可修正旧failed/delayed计划显示且不改历史作业或更晚失败；stk_limit保留真实行数及真实缺失、无效价格判定。运行态验收与源码合入分离，不执行生产DML或服务控制。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/data_integrity/validation.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_daily_data_integrity_dev.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/validation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity_dev.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/data_integrity/validation.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_daily_data_integrity_dev.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py"
+    ]
+  },
+  "first_seen_at": "2026-11-05T16:42:58.779814Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7031,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7031",
+  "last_seen_at": "2026-11-05T16:42:58.779814Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "本地数据已恢复后的计划状态与涨跌停行数未正确收敛",
+  "trigger_condition": {
+    "fingerprint": "5f52e8b7f9185fe6557538dc",
+    "source_event_id": "FE-20261105-5f52e8b7f918"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
