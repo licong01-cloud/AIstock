@@ -37,23 +37,23 @@
   "expected": "当前同日VALID分区可修正旧failed/delayed计划显示且不改历史作业或更晚失败；stk_limit保留真实行数及真实缺失、无效价格判定。运行态验收与源码合入分离，不执行生产DML或服务控制。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/data_integrity/repository.py",
       "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_daily_data_integrity.py",
-      "backend/tests/test_daily_data_integrity_dev.py"
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/data_integrity/repository.py",
       "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_daily_data_integrity.py",
-      "backend/tests/test_daily_data_integrity_dev.py"
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -190,7 +190,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python pytest processes loaded tracked scheduler/repository/validation fixes; direct regression 291 passed,2 skipped and existing DEV rollback/temp-table native SQL 2 passed; runtime_action=false, production_write=false"
+      "Fresh Python pytest processes loaded tracked scheduler/repository/validation fixes; direct regression 291 passed,2 skipped and existing DEV rollback/temp-table native SQL 2 passed; runtime_action=false, production_write=false",
+      "Fresh Python pytest processes loaded tracked scheduler/repository/validation fixes; 291 passed,2 skipped and existing DEV two targeted native checks passed; production_write=false,runtime_action=false"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
