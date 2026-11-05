@@ -192,14 +192,14 @@ class FrozenMemberSource:
             Path(self.source["candidate_root"]),
             security_identity_manifest=Path(self.source["security_identity_manifest"]),
             provider_absence_manifest=provider,
-            data_window_end=date(2026, 9, 30),
+            data_window_end=date.fromisoformat(self.source["release_binding"]["cutoff"]),
             frozen_release_binding=self.source["release_binding"],
         )
         self.files = _Files(self.assets["release_root"])
         manifest = self.files.read(self.files.path("qe_dataset_manifest.json"))
         self.pins = _manifest_pins(manifest)
         require(
-            manifest["dataset_manifest_sha256"] == loss.MANIFEST_PIN,
+            manifest["dataset_manifest_sha256"] == self.source["release_binding"]["manifest_sha256"],
             "member source release changed",
             "identity_mismatch",
         )
@@ -213,7 +213,12 @@ class FrozenMemberSource:
         request = pinned_json(original["source_request_path"], original["source_request_sha256"])
         core.verify_receipt(request)
         frozen, _, _ = core.model_source(request)
-        self.adapter = reader._industry_adapter(self.source["industry_authority"], forbidden_roots=())
+        self.adapter = reader._industry_adapter(
+            self.source["industry_authority"],
+            forbidden_roots=(),
+            candidate_root=Path(self.source["candidate_root"]),
+            release_binding=self.source["release_binding"],
+        )
         require(tuple(reader._canonical_sector_codes(self.adapter)[1]) == tuple(self.catalog), "member catalog changed")
         self.projection = reader._IndustryProjectionIndex(self.adapter, calendar=self.dates)
         security_path = self.assets["files"]["security_identity"]
@@ -223,7 +228,9 @@ class FrozenMemberSource:
             )
         )
         require(
-            self.security.evidence()["manifest_sha256"] == frozen["security_identity_sha256"],
+            self.security.evidence()["manifest_sha256"] == self.source["security_identity_sha256"]
+            and features["model_identity"]["feature_definition_sha256"]
+            == canonical_sha256(frozen["feature_definition"]),
             "security identity changed",
         )
         self.suspended = reader._load_suspend_keys(
@@ -600,6 +607,11 @@ def validate_model(model, expected=None):
 
 def predict(model, rows, days, as_of, calendar):
     validate_model(model)
+    return predict_parameters(model, rows, days, as_of, calendar)
+
+
+def predict_parameters(model, rows, days, as_of, calendar):
+    """Shared pure kernel; each carrier authenticates its own model first."""
     require(days and days == sorted(set(days)) and calendar == sorted(set(calendar)), "prediction dates differ")
     positions = {d: i for i, d in enumerate(calendar)}
     vintage = model["vintage"]
