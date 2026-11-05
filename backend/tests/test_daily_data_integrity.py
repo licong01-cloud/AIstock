@@ -36,6 +36,86 @@ def test_completed_provider_scan_rearms_validation_without_fact_changes(monkeypa
     assert len(calls) == 1 and calls[0][1] == {"source_completed": complete}
 
 
+@pytest.mark.parametrize("reason", ["complete_source_scan_not_bound_to_revision",
+    "row_count_seed_is_not_a_complete_source_scan", "index_quote_query_scope_incomplete"])
+def test_unproven_source_scan_creates_exact_fetch_instead_of_endless_validation(monkeypatch, reason):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    import backend.services.data_sync_targets as targets
+    repo = Mock()
+    monkeypatch.setattr(targets, "DataSyncTargetRepository", lambda: repo)
+    worker = DailyIntegrityWorker(repository=SimpleNamespace(transaction=lambda: nullcontext(object())))
+    worker._repair_target(Obligation("index_daily", "daily_series", "16:50"), date(2026, 10, 28),
+        ValidationResult(PartitionState.UNVERIFIED, (), {}, reason=reason))
+    record = repo.upsert_target.call_args.args[0]
+    assert record.dataset == "index_daily" and record.target_date == date(2026, 10, 28)
+    assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
+
+
+def test_fair_validation_query_uses_only_the_small_target_ledger():
+    import ast
+    import inspect
+    import textwrap
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    tree = ast.parse(textwrap.dedent(inspect.getsource(DailyIntegrityWorker.run_once)))
+    query = next(n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+                 and isinstance(n.value, str) and n.value.startswith("WITH due AS"))
+    assert "ROW_NUMBER() OVER (PARTITION BY dataset" in query
+    assert "dataset_rank" in query and "LIMIT %s" in query
+    assert "market.kline" not in query and "market.sector_data" not in query
+    assert inspect.signature(DailyIntegrityWorker.run_once).parameters["limit"].default == 10
+    assert inspect.signature(DailyIntegrityWorker.run_once).parameters["budget_seconds"].default == 45
+
+
+@pytest.mark.skipif(__import__("os").environ.get("AISTOCK_INTEGRITY_DEV_TEST") != "1", reason="explicit existing DEV opt-in")
+def test_fair_validation_native_dev_plan_does_not_starve_recent_partitions():
+    import ast
+    import inspect
+    import json
+    import os
+    from pathlib import Path
+    import textwrap
+    from datetime import timedelta
+    import psycopg2
+    from psycopg2.extras import execute_values
+    from scripts.prepare_canonical_pit_monthly import _load_database_config
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    c = _load_database_config("dev", Path(os.environ["AISTOCK_INTEGRITY_ENV_FILE"]))
+    assert c.port == 5433 and c.dbname == "aistock_dev" and c.host in {"localhost", "127.0.0.1"}
+    tree = ast.parse(textwrap.dedent(inspect.getsource(DailyIntegrityWorker.run_once)))
+    query = next(n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+                 and isinstance(n.value, str) and n.value.startswith("WITH due AS"))
+    query = query.replace("market.data_sync_targets", "pg_temp.integrity_worker_queue")
+    conn = psycopg2.connect(host=c.host, port=c.port, dbname=c.dbname, user=c.user, password=c.password,
+        options="-c statement_timeout=3000 -c lock_timeout=1000", application_name="BUG-2176-DEV-queue-plan")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE integrity_worker_queue (LIKE market.data_sync_targets INCLUDING DEFAULTS) ON COMMIT DROP")
+            values = [(f"old_{i}", "adj_factor", date(2010, 1, 1)+timedelta(days=i), "retry", f"old_key_{i}") for i in range(2000)]
+            values += [("new_announcement", "anns_metadata", date(2026, 11, 4), "pending", "new_ann"),
+                       ("new_basic", "bak_basic", date(2026, 11, 4), "pending", "new_basic")]
+            execute_values(cur, """INSERT INTO pg_temp.integrity_worker_queue
+                (target_id,dataset,target_date,target_status,target_key_sha256,data_source,target_scope,priority,next_retry_at)
+                VALUES %s""", [(a,b,c,d,e,"canonical_db",'{"operation":"VALIDATE_ONLY"}',50,"2026-01-01") for a,b,c,d,e in values])
+            params = (date(2026, 11, 5), ["adj_factor", "anns_metadata", "bak_basic"], 10)
+            cur.execute("""SELECT dataset FROM pg_temp.integrity_worker_queue WHERE target_date<=%s
+                ORDER BY (dataset=ANY(%s::text[])) DESC,priority,COALESCE(next_retry_at,created_at),target_date LIMIT %s""", params)
+            assert {r[0] for r in cur.fetchall()} == {"adj_factor"}
+            cur.execute(query, params)
+            selected = cur.fetchall()
+            assert {r[0] for r in selected[:3]} == {"adj_factor", "anns_metadata", "bak_basic"}
+            cur.execute("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) " + query, params)
+            plan = cur.fetchone()[0][0]
+            assert plan["Execution Time"] < 1000
+            print(json.dumps({"queued": len(values), "selected": len(selected), "execution_ms": plan["Execution Time"]}))
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 @pytest.mark.parametrize("dataset", ["tushare_forecast_raw", "tushare_express_raw", "tushare_fina_indicator_raw"])
 def test_raw_financial_scans_share_supported_stock_scope_without_rewriting_legacy_hash(dataset):
     from backend.services.tushare_dataset_specs import DATASET_REGISTRY

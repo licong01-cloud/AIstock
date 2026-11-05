@@ -44,11 +44,19 @@ class DailyIntegrityWorker:
                     if due is not None and due <= datetime.now(CN):
                         enqueue_validation(conn, obligation.dataset, seed_day)
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""SELECT dataset,target_date FROM market.data_sync_targets
+                cur.execute("""WITH due AS (
+                    SELECT dataset,target_date,priority,target_status,next_retry_at,created_at,
+                        ROW_NUMBER() OVER (PARTITION BY dataset ORDER BY
+                            priority,(target_status='pending') DESC,target_date DESC,
+                            COALESCE(next_retry_at,created_at),target_id) AS dataset_rank
+                    FROM market.data_sync_targets
                     WHERE data_source='canonical_db' AND target_scope->>'operation'='VALIDATE_ONLY'
                       AND target_status IN ('pending','retry') AND target_date<=%s
-                      AND (next_retry_at IS NULL OR next_retry_at<=clock_timestamp())
-                    ORDER BY (dataset=ANY(%s::text[])) DESC,priority,COALESCE(next_retry_at,created_at),target_date LIMIT %s""",
+                      AND (next_retry_at IS NULL OR next_retry_at<=clock_timestamp()))
+                    SELECT dataset,target_date FROM due
+                    ORDER BY (dataset=ANY(%s::text[])) DESC,priority,dataset_rank,
+                        (target_status='pending') DESC,target_date DESC,
+                        COALESCE(next_retry_at,created_at),dataset LIMIT %s""",
                     (today, [o.dataset for o in required], limit))
                 candidates = [dict(r) for r in cur.fetchall()]
         validated = stale = 0
@@ -121,7 +129,8 @@ class DailyIntegrityWorker:
                     enqueue_validation(conn, dataset, day)
             return
         if (result.state not in {PartitionState.INCOMPLETE, PartitionState.WAIT_UPSTREAM}
-                and result.reason != "complete_source_scan_not_bound_to_revision"):
+                and result.reason not in {"complete_source_scan_not_bound_to_revision",
+                    "row_count_seed_is_not_a_complete_source_scan", "index_quote_query_scope_incomplete"}):
             return
         from backend.services.data_sync_targets import DataSyncTargetRecord, DataSyncTargetRepository
         dataset = "stock_moneyflow_ts" if obligation.dataset == "moneyflow_ts" else obligation.dataset
