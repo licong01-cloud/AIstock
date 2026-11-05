@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2177",
-  "closed_at": null,
+  "closed_at": "2026-11-05T18:24:39.832472Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,14 +38,20 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_daily_data_integrity_dev.py",
       "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_daily_data_integrity_dev.py",
       "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
     ],
@@ -197,10 +203,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/BUG-2177-final-postrestart-20261106/verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2177",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "36ee6a882d798406eecd0dbb358d8a9387e8c638",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-05T18:23:17.241996Z",
+      "mode": "read_only",
+      "observed_identity": "c03dcf1730a38787faccd777949daf5c65e813ec",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6ebf7b65ab93cf3c4c3dcc00a57ed1e7bda52887b722f1aac92c19e83d28bacc",
+      "receipt_sha256": "1857fa1730073aa04bd165de8c2a3df09c4a98ebe7c251cc65c613c3ecdbc238",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0819072ff8d8e9851a5bbe7fe73fb60aec60e94424ba182965a4c3aaccde933e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -209,16 +237,16 @@
     ]
   },
   "runtime_followup": {
-    "followup_source_pr": "https://github.com/licong01-cloud/AIstock/pull/7036",
-    "followup_source_merge": "c03dcf1730a38787faccd777949daf5c65e813ec",
+    "final_readback_20261106": "2026-11-06 02:23只读验收PASS：运行身份c03dcf1730a38787faccd777949daf5c65e813ec；sector_data旧卡片02:22自动success/last_error=NULL且分区VALID157/157；stk_limit5224行、physical_rows5224、VALID1/1；index_daily/2026-10-28为VALID5159/5159；原6337c690失败作业仍为failed；未执行生产DML、补采或进程控制。",
     "followup_ci": "passed - 42081060586",
-    "receipt_lineage": "保留primary source_merge_receipt原始不可变身份；后继修复在本字段明确追加，不覆盖原回执。最终运行态必须同时包含后继修复并实际读回旧行业卡片恢复。",
+    "followup_source_merge": "c03dcf1730a38787faccd777949daf5c65e813ec",
+    "followup_source_pr": "https://github.com/licong01-cloud/AIstock/pull/7036",
     "predecessor_source_merge": "36ee6a882d798406eecd0dbb358d8a9387e8c638",
     "predecessor_source_pr": "https://github.com/licong01-cloud/AIstock/pull/7032",
     "production_readonly_projection": "原sector_data卡片在最终跨日判据下可恢复；实际生产元数据只读SELECT及EXPLAIN ANALYZE返回1条，6.375ms；未执行UPDATE或采集。",
     "readback_20261106": "身份已生效；stk_limit行数5224与实表一致且已reconciled；index_daily/2026-10-28为VALID；sector_data旧卡片仍failed，未关闭BUG、未消费身份PASS回执冒充业务完成。",
+    "receipt_lineage": "保留primary source_merge_receipt原始不可变身份；后继修复在本字段明确追加，不覆盖原回执。最终运行态必须同时包含后继修复并实际读回旧行业卡片恢复。",
     "red_green": "新增重排计划时钟的两项RED复现失败后修正并GREEN；DEV覆盖仅重排、真实新失败、长作业迟发失败、其他日期补取及旧失败。",
-    "final_readback_20261106": "2026-11-06 02:23只读验收PASS：运行身份c03dcf1730a38787faccd777949daf5c65e813ec；sector_data旧卡片02:22自动success/last_error=NULL且分区VALID157/157；stk_limit5224行、physical_rows5224、VALID1/1；index_daily/2026-10-28为VALID5159/5159；原6337c690失败作业仍为failed；未执行生产DML、补采或进程控制。",
     "runtime_state": "verified"
   },
   "schema_version": "aistock_validation_bug_v1",
@@ -247,7 +275,7 @@
     ],
     "validation_evidence_digest": "81abf50b6bf0f6a634a767484d0409024de86da9169e52eceb845a25e2db2163"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -260,7 +288,8 @@
     "python -m nox -s l0 --no-venv -> passed",
     "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_daily_data_integrity.py backend/tests/test_data_sync_targets.py -q -> 291 passed, 2 skipped",
     "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures -q -> 2 passed in existing DEV",
-    "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata -q -> 3 passed including existing DEV cross-day metadata cases"
+    "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata -q -> 3 passed including existing DEV cross-day metadata cases",
+    "post-restart-verify BUG-2177 backend-main -> passed; observed c03dcf173 includes both source fixes; original sector schedule recovered automatically, original failed job retained; stk_limit=5224 and index_daily VALID; readonly business readback passed"
   ],
   "verification_budget": {
     "budget": "light",
