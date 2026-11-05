@@ -1138,7 +1138,13 @@ class _QlibPriceEncoding:
             raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib stock prefix has no encoding identity")
         prefix = self.prefixes.get(symbol)
         if prefix is None:
-            return ()
+            scales = self.parent._scales(symbol, day) if self.parent is not None else ()
+            if scales:
+                for field in ("open", "high", "low", "close", "factor"):
+                    relative = f"components/daily_bin_candidate/features/{symbol.lower()}/{field}.day.bin"
+                    if (relative not in self.pins or self.pins[relative] != self.parent.pins.get(relative)):
+                        raise _fail(REASON_HASH_MISMATCH, "Qlib inherited encoding has an unrecorded target change")
+            return scales
         start, end, scale = prefix
         position = self.calendar_positions.get(day)
         if position is None or not start <= position <= end:
