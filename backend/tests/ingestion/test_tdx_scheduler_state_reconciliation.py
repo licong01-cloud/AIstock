@@ -1093,10 +1093,11 @@ def test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata
     query, _params = queries[0]
     assert "LIMIT 100" in query and "SKIP LOCKED" in query
     assert "data_revision=p.validated_revision" in query
-    assert "p.refreshed_at>=s.updated_at" in query
+    assert "p.refreshed_at>=s.updated_at" not in query
+    assert "j.finished_at>p.refreshed_at" in query
     assert "s.last_status IN ('failed','delayed')" in query
     assert "s.last_run_at AT TIME ZONE 'Asia/Shanghai'" in query
-    assert "market.ingestion_jobs" not in query and "market.kline" not in query
+    assert "UPDATE market.ingestion_jobs" not in query and "market.kline" not in query
 
 
 def test_schedule_projection_error_is_visible_and_does_not_stop_other_recovery(monkeypatch, caplog):

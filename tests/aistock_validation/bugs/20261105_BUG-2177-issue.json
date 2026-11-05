@@ -38,20 +38,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/services/data_integrity/repository.py",
-      "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_daily_data_integrity_dev.py",
       "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/services/data_integrity/repository.py",
-      "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_daily_data_integrity_dev.py",
       "tests/aistock_validation/bugs/20261105_BUG-2177-issue.json"
     ],
@@ -183,7 +177,7 @@
     "第三轮：检查新失败保护、元数据并发锁和异常隔离；真实缺失/脏版本/旧规则/运行任务保持不变，最终相关回归291 passed/2 skipped，DEV两项通过。"
   ],
   "risk_area": "bug",
-  "root_cause": "恢复计划展示仅由未完成目标的回调触发，已reconciled目标不再进入补偿；stk_limit重建ValidationResult丢失key_result的physical_rows，且旧VALID零计数不会被普通入队唤醒。",
+  "root_cause": "恢复计划展示仅由未完成目标的回调触发，已reconciled目标不再进入补偿；stk_limit重建ValidationResult丢失key_result的physical_rows，且旧VALID零计数不会被普通入队唤醒。重启实测还确认next_run重排会刷新schedule.updated_at，原先将该通用更新时间当作失败时间的保护条件误挡旧卡片恢复；改用实际同日失败作业的finished_at判据。",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -191,7 +185,8 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python pytest processes loaded tracked scheduler/repository/validation fixes; direct regression 291 passed,2 skipped and existing DEV rollback/temp-table native SQL 2 passed; runtime_action=false, production_write=false",
-      "Fresh Python pytest processes loaded tracked scheduler/repository/validation fixes; 291 passed,2 skipped and existing DEV two targeted native checks passed; production_write=false,runtime_action=false"
+      "Fresh Python pytest processes loaded tracked scheduler/repository/validation fixes; 291 passed,2 skipped and existing DEV two targeted native checks passed; production_write=false,runtime_action=false",
+      "Fresh Python processes loaded followup scheduler; 3 final exact tests passed, production readonly metadata projection selected original card in 6.638ms; production writes=0, services controlled=0; user restart still required"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -210,6 +205,14 @@
     "target_ids": [
       "backend-main"
     ]
+  },
+  "runtime_followup": {
+    "predecessor_source_merge": "36ee6a882d798406eecd0dbb358d8a9387e8c638",
+    "predecessor_source_pr": "https://github.com/licong01-cloud/AIstock/pull/7032",
+    "production_readonly_projection": "原sector_data卡片在最终跨日判据下可恢复；实际生产元数据只读SELECT及EXPLAIN ANALYZE返回1条，6.375ms；未执行UPDATE或采集。",
+    "readback_20261106": "身份已生效；stk_limit行数5224与实表一致且已reconciled；index_daily/2026-10-28为VALID；sector_data旧卡片仍failed，未关闭BUG、未消费身份PASS回执冒充业务完成。",
+    "red_green": "新增重排计划时钟的两项RED复现失败后修正并GREEN；DEV覆盖仅重排、真实新失败、长作业迟发失败、其他日期补取及旧失败。",
+    "runtime_state": "followup_source_pending_user_restart"
   },
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "复审确认仅修复验证结果无法唤醒既有VALID但row_count=0的stk_limit分区；增加repository.py，在既有精确日期enqueue_validation入口一次性复验明确异常计数，不补采、不提高扫描频率、不增加物理全量校验。",

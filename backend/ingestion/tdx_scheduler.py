@@ -1389,7 +1389,16 @@ class TDXScheduler:
               AND NULLIF(BTRIM(p.validation_id),'') IS NOT NULL
               AND p.scope_version=%s AND p.rule_version=%s
               AND (p.dataset<>ALL(%s::text[]) OR p.metadata->'validation'->'checks'->>'coverage_basis'=%s)
-              AND p.refreshed_at>=s.last_run_at AND p.refreshed_at>=s.updated_at
+              AND p.refreshed_at>=s.last_run_at
+              AND NOT EXISTS (
+                  SELECT 1 FROM market.ingestion_jobs AS j
+                  WHERE j.status IN ('failed','timeout')
+                    AND j.created_at>=(p.trade_date::timestamp AT TIME ZONE 'Asia/Shanghai')
+                    AND j.finished_at>p.refreshed_at
+                    AND j.summary->>'dataset' IN (s.dataset,p.dataset)
+                    AND (j.summary->>'target_date'=p.trade_date::text
+                         OR (j.summary->>'target_date' IS NULL
+                             AND (j.created_at AT TIME ZONE 'Asia/Shanghai')::date=p.trade_date)))
             ORDER BY s.last_run_at DESC,s.schedule_id LIMIT 100
             FOR UPDATE OF s,p SKIP LOCKED)
             UPDATE market.ingestion_schedules AS s
@@ -2810,7 +2819,16 @@ class TDXScheduler:
                           AND s.dataset=ANY(%s) AND s.mode='incremental'
                           AND s.last_status IN ('failed','delayed')
                           AND (s.last_run_at AT TIME ZONE 'Asia/Shanghai')::date=p.trade_date
-                          AND p.refreshed_at>=s.last_run_at AND p.refreshed_at>=s.updated_at
+                          AND p.refreshed_at>=s.last_run_at
+                          AND NOT EXISTS (
+                              SELECT 1 FROM market.ingestion_jobs AS j
+                              WHERE j.status IN ('failed','timeout')
+                                AND j.created_at>=(p.trade_date::timestamp AT TIME ZONE 'Asia/Shanghai')
+                                AND j.finished_at>p.refreshed_at
+                                AND j.summary->>'dataset' IN (s.dataset,p.dataset)
+                                AND (j.summary->>'target_date'=p.trade_date::text
+                                     OR (j.summary->>'target_date' IS NULL
+                                         AND (j.created_at AT TIME ZONE 'Asia/Shanghai')::date=p.trade_date)))
                           AND s.last_run_at<=%s""",
                         (canonical_dataset(dataset_key), target_date, SCOPE_VERSION, RULE_VERSION,
                          sorted({dataset_key, _AUTO_RETRY_SCHEDULE_ALIASES.get(dataset_key, dataset_key)}), finished_at))
