@@ -48,6 +48,12 @@ class SectorDataBuildContractError(RuntimeError):
     """Raised when sector-data source or candidate contracts are ambiguous."""
 
 
+class SectorDataSourcePending(SectorDataBuildContractError):
+    """Existing producer preflight found missing source facts, not bad PIT."""
+
+    source_pending = True
+
+
 SECTOR_DATA_ASSIGNMENT_SCHEMA = "sector_data_dual_authority_assignment_v1"
 SECTOR_DATA_FACT_SCHEMA = "sector_data_dual_authority_fact_v1"
 SECTOR_DATA_REPORT_SCHEMA = "sector_data_dual_authority_report_v1"
@@ -1556,7 +1562,9 @@ class SectorDataBuilder:
                     or missing_sector_facts
                     or missing_moneyflow_facts
                 ):
-                    raise SectorDataBuildContractError(
+                    error_type = (SectorDataBuildContractError if any((universe_not_ready,
+                        missing_mapping, ambiguous, invalid_identity)) else SectorDataSourcePending)
+                    raise error_type(
                         "SECTOR_DATA_PIT_CONTRACT_INVALID: "
                         f"trade_date={trade_date}, "
                         f"universe_not_ready={universe_not_ready}, "

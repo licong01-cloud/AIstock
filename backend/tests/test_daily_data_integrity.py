@@ -13,6 +13,29 @@ from backend.services.data_integrity.provider import provider_scan, verify_scan
 from backend.services.tushare_dataset_specs import DAILY_BASIC, DIVIDEND
 
 
+def test_history_validation_backoff_is_bounded_and_recent_data_stays_fast():
+    from backend.services.data_integrity.repository import validation_retry_minutes
+    today = date(2026, 11, 5)
+    assert validation_retry_minutes(date(2026, 11, 4), today=today, unchanged=True, attempts=80) == 30
+    assert validation_retry_minutes(date(2026, 5, 20), today=today, unchanged=False, attempts=80) == 30
+    assert validation_retry_minutes(date(2026, 5, 20), today=today, unchanged=True, attempts=80) == 1440
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_completed_provider_scan_rearms_validation_without_fact_changes(monkeypatch, complete):
+    from backend.tests.test_dataset_refresh_audit import _FakeConn
+    from backend.services.data_refresh_audit import DataRefreshAuditRepository
+    from backend.services.data_integrity import repository
+    calls = []
+    monkeypatch.setattr(repository, "schema_installed", lambda _: True)
+    monkeypatch.setattr(repository, "enqueue_validation", lambda *a, **kw: calls.append((a, kw)))
+    conn = _FakeConn(fetchone_result=(3,))
+    DataRefreshAuditRepository(conn_factory=lambda: conn).record_success(
+        dataset="index_daily", trade_date=date(2026, 10, 28), row_count=1005,
+        metadata={"provider_scan": {"entries": ["fact"]}, "provider_query_scope_complete": complete})
+    assert len(calls) == 1 and calls[0][1] == {"source_completed": complete}
+
+
 @pytest.mark.parametrize("dataset", ["tushare_forecast_raw", "tushare_express_raw", "tushare_fina_indicator_raw"])
 def test_raw_financial_scans_share_supported_stock_scope_without_rewriting_legacy_hash(dataset):
     from backend.services.tushare_dataset_specs import DATASET_REGISTRY

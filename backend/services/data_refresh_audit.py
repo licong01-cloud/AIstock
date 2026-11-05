@@ -335,7 +335,12 @@ class DataRefreshAuditRepository:
         from .data_integrity.repository import enqueue_validation, schema_installed
 
         if data_source != "canonical_db" and schema_installed(conn):
-            enqueue_validation(conn, dataset, trade_date)
+            completed = (status == "success" and quality_status in {"ok", "empty_valid"}
+                         and bool(metadata.get("provider_scan"))
+                         and (dataset != "index_daily" or metadata.get("provider_query_scope_complete") is True))
+            # A new complete scan can repair missing query provenance without
+            # changing a single fact. Wake that revision, not an old retry timer.
+            enqueue_validation(conn, dataset, trade_date, source_completed=completed)
             if status == "success":
                 with conn.cursor() as revision_cur:
                     revision_cur.execute("""SELECT data_revision FROM market.dataset_date_refresh_audit

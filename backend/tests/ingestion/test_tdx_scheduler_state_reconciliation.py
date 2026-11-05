@@ -140,6 +140,26 @@ def test_existing_final_sweep_reclassifies_old_provider_alert_without_refetch():
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_sector_source_partial_is_waiting_without_another_physical_scan(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder_module
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 11, 4)
+    queries, logs, retries = [], [], []
+    scheduler._fetchall = lambda *_: pytest.fail("must reuse producer preflight, not add another check")
+    scheduler._execute = lambda *_: None
+    scheduler._log_ingestion_run = lambda *a, **kw: logs.append(a)
+    scheduler._schedule_delayed_retry = lambda *a, **kw: retries.append((a, kw))
+    def pending(*args):
+        queries.append(args)
+        raise sector_builder_module.SectorDataSourcePending("missing_sw_daily_facts=4902")
+    builder = SimpleNamespace(build_range=pending)
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: builder)
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit",
+        {"start_date": str(day), "end_date": str(day)})
+    assert logs[0][4] == "delayed" and len(retries) == 1
+    assert len(queries) == 1
 BUG_1106_MIGRATION = (
     ROOT / "backend" / "migrations" / "ingestion_jobs_scheduler_scan_indexes_20260816.sql"
 )
