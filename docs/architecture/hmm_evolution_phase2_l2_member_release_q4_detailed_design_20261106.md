@@ -1,6 +1,6 @@
 # 申万L2成员损失：新release与Q4连续交付
 
-> v1.0；2026-11-06；F2；父蓝图§1.27。用户“开始执行合并的连续任务”批准本包方向和Q4四次拟合预算；源码、预检、正式研究及QE采用分开报告。当前正式新增fit=0/4。
+> v1.1；2026-11-06；F2；父蓝图§1.27。用户“开始执行合并的连续任务”批准本包方向和Q4四次拟合预算；源码、预检、正式研究及QE采用分开报告。正式新增fit=4/4已完成，预算耗尽；本次只回填真实结果，不改变D1～D6。
 
 ## 1. Background / 终极目标
 
@@ -63,7 +63,7 @@ F-011：D1/D3/D5唯一模型与价值问题；F-012：D2/D4身份、因果和载
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-011 | backend/services/hmm_risk/risk_l2_member_release.py：schedule/training_rows/execute_child | backend/tests/hmm_risk/test_risk_l2_member_release.py：季度/成熟/共同mask/失败计数测试；真实研究状态见§11 | VERIFIED_SOURCE | 无 |
-| F-012 | 同service及release_industry_binding.py；共享reader仅显式分派与读取稳定性检查 | backend/tests/hmm_risk/test_release_industry_binding.py；backend/tests/hmm_risk/test_risk_l2_member_release.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/release_industry_readback_v1.json | VERIFIED_SOURCE | 无 |
+| F-012 | 同service及release_industry_binding.py；共享reader显式分派与读取稳定性检查 | backend/tests/hmm_risk/test_release_industry_binding.py；backend/tests/hmm_risk/test_risk_l2_member_release.py；正式文件回执见§11.1 | VERIFIED_SOURCE_AND_FORMAL_FILE | 同新输入数据库事实实读NOT_EVALUATED，原历史双入口不继承 |
 | F-013 | scripts/hmm_risk/run_risk_l2_member_release.py：guard/clean_head/双process与不重试 | backend/tests/hmm_risk/test_risk_l2_member_release.py：attempt先行/两process预算/完整grid回读；生产状态见§11 | VERIFIED_SOURCE | 无 |
 
 ## 10. Risks / Production Gates / Rollback
@@ -73,6 +73,20 @@ F-011：D1/D3/D5唯一模型与价值问题；F-012：D2/D4身份、因果和载
 production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false。源码runtime分类以实际changed-files为准，不由离线执行推定none。
 
 ## 11. 审修、实施与真实状态
+
+### 11.1 最新终态（取代下方开发过程的待运行状态）
+
+固定研究HEAD=`25e5a8ffcf273271793fa4baf68a2bdaff2257fd`；输入manifest仍为§4冻结值。正式prepare_v4及file_preflight_v4 PASS，共同训练716日、89,871行；prepared canonical=`203e4beaf175e453953bd81d860c2af9031265d2589347fb8ba971663c8b6929`。双fresh-process正式4/4 fits字节一致、父进程封闭通过，acceptance canonical=`8342abe3b6c65b0a2e61e4a91cd1303174b04feaa62c25ddecea0f2fbaae52a6`。B/C各17日×131=2,227行，全部available。输出及唯一结果摘要位于`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/`。旧8-fit和新4-fit均不得重跑。
+
+原Q2/Q3四模型已在原生效期基于新release真实20维重新推断，四次fresh-process CLI均零fit，旧资产SHA未变。封存之后读取评价事实：4–9月125个全行业共同定义日，B/C对成员亏损Rank IC为0.186587/0.255571，C−B=+0.068984；不是原QE新买同样本99日的+0.045903口径，不能相互比较或当作收益提升。C高风险组的平均成员亏损5.8694%、上行5.1206%；低风险组为2.4902%/2.0595%。风险与机会同时增强，不能自动套禁买、降仓或1-p。
+
+Q4仅7个成熟日，B/C Rank IC=0.664752/0.661386，C−B=−0.003366，未证明新季度C增量；另10日保持OUTCOME_NOT_MATURE。全期另有2个合法FIXED_COHORT_ENDPOINT_NA，不补价或删成员重归一化。没有QE账户净收益证据，没有同新输入的数据库事实实读，原历史双入口不冒充当前验收。QE新买队列/新输入双入口/消费者准入各自仍NOT_EVALUATED；无新QE任务、DB/数据集/profile写入或服务动作。
+
+源码PR #7037目前范围门禁阻断：独立修复的登记记录随分支集成，PR被按BUG范围验收。独立价格编码修复PR #7049最终CI全绿但未合入；待用户授权先交付该PR，再同步主线及复验feature最终HEAD CI，不删除正式BUG记录、扩大BUG scope或修改流水线。研究执行身份保持上面的固定HEAD，不伪造绑定到后续文档提交。
+
+结果文档第一轮自审核对原回执/文件SHA、125与7+10日算术、716/89,871训练mask和4/4计数；第二轮核对与父蓝图/原成员设计的一致性，明确全行业与真实新买口径不同、上下行机会并列、无新数据DB实读和QE采用。没有独立第三方审核，缺口不因F2 PASS消失。已批准D1～D6未修改，不为结果记录新增环境变量、DB表或重启。
+
+### 11.2 开发审修过程（历史状态）
 
 初始发现：共享C-013目录仅存在8月和9月，10月release内industry_l2_history_authority的end_date仍为2026-08-31；尚不能宣称10月C-013闭合，也不能断言基础行情缺失。新fit=0/4，旧8/8保持。
 

@@ -146,4 +146,4 @@ C可能只是放大波动、无法由现有20D预测；行业级信号仍不能�
 
 2026-04-01/07-01各131行的历史文件/数据库快照双入口已验证，最大数值差约2.838e-10/2.202e-10，未实时查库。QE_READY=NOT_EVALUATED、economic_value_confirmed=false；未执行新QE任务或生产采用。原设计8-fit预算至此耗尽。
 
-用户2026-11-06批准执行[新release/Q4连续包](hmm_evolution_phase2_l2_member_release_q4_detailed_design_20261106.md)：仅新增Q4 B/C×双process共4-fit，不改变本合同的旧训练/模型/结果身份。新release推断必须实际重新读输入，不将旧prepared/hash换绑。新包当前0/4；原C-013边界后的分类消费已通过同release共享membership/code map开发读回，未改变本研究训练分类或资产。完整20D预检和新研究仍待执行，不能将此误称为旧研究未完成或基础行情漏采。
+用户2026-11-06批准执行[新release/Q4连续包](hmm_evolution_phase2_l2_member_release_q4_detailed_design_20261106.md)：仅新增Q4 B/C×双process共4-fit，不改变本合同的旧训练/模型/结果身份。新release推断已真实重新读取输入，未将旧prepared/hash换绑；正式20D预检、旧季度四次零fit重推及新Q4 4/4 fits均已完成，各臂17日×131完整可用，预算耗尽。原C-013边界后的分类仅显式使用同release共享membership/code map，没有改变本研究训练分类或资产。新数据全行业125日C−B Rank IC=+0.068984，与本节原真实新买99日口径不同；Q4只有7个成熟日、C−B=−0.003366，另10日未成熟。真实新买队列、新输入数据库实读和经济采用仍未评估；完整新结果只引用新设计§11及`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/result_summary_v1.md`，不覆盖本节旧终态或要求重跑旧8-fit。
