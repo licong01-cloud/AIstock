@@ -158,6 +158,7 @@ rules:
       - scripts/advisory_lstm_frozen_specialist_stress.py
       - scripts/advisory_lstm_factor_information.py
       - scripts/advisory_lstm_factor_nonlinear.py
+      - scripts/advisory_lstm_pool_relation.py
       - scripts/advisory_lstm_prospective_confirmation.py
       - scripts/advisory_lstm_top10_business_review.py
       - scripts/advisory_model_prepare_request.py
