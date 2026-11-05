@@ -210,13 +210,31 @@ def test_native_broker_consumes_frozen_fee_policy_and_historical_source():
     assert context.local_broker._ledger.fee_model.open_cost == 0.002
 
 
-def test_native_current_day_source_is_realtime_even_with_old_causal_cursor():
+@pytest.mark.parametrize("wall_utc,trade_date,expected", [
+    (datetime(2026, 1, 5, 15, 59, tzinfo=UTC), date(2026, 1, 5), MinuteDataSource.TDX_REALTIME),
+    (datetime(2026, 1, 5, 16, 1, tzinfo=UTC), date(2026, 1, 6), MinuteDataSource.TDX_REALTIME),
+    (datetime(2026, 1, 5, 16, 1, tzinfo=UTC), date(2026, 1, 5), MinuteDataSource.DB_HISTORICAL),
+    (datetime(2026, 1, 6, 0, 1, tzinfo=UTC), date(2026, 1, 6), MinuteDataSource.TDX_REALTIME),
+    (datetime(2026, 1, 6, 16, 1, tzinfo=UTC), date(2026, 1, 6), MinuteDataSource.DB_HISTORICAL),
+])
+def test_native_current_day_source_is_realtime_even_with_old_causal_cursor(
+    monkeypatch, wall_utc, trade_date, expected,
+):
+    import backend.services.simulation_runtime.scheduler as scheduler_module
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # Model a UTC host while the selector uses the Shanghai trading day.
+            return wall_utc.astimezone(tz) if tz is not None else wall_utc.replace(tzinfo=None)
+
     repo, manifest, _profile, _account, _scope, release, binding = _bundle()
     state = load_native_account_context(binding=binding, release=release, repository=repo, manifest_loader=lambda _id: manifest)
+    monkeypatch.setattr(scheduler_module, "datetime", FrozenDateTime)
     source = ProductionSimulationRunContextProvider._resolve_local_sim_market_data_source(
-        portfolio=state, trade_date=date.today(), as_of_time=datetime(2026, 1, 5, 15, 30, tzinfo=UTC),
+        portfolio=state, trade_date=trade_date, as_of_time=datetime(2026, 1, 1, 15, 30, tzinfo=UTC),
     )
-    assert source is MinuteDataSource.TDX_REALTIME
+    assert source is expected
 
 
 @pytest.mark.parametrize("execution_audit", [{}, {"risk_policy": {"profile": {"enabled": False}, "excluded_count": 0, "excluded": []}}])
