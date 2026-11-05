@@ -104,11 +104,19 @@ def test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true
     query, params = statements[0]
     query = query.replace("market.ingestion_schedules", "pg_temp.schedule_projection")
     query = query.replace("market.dataset_date_refresh_audit", "pg_temp.partition_projection")
+    query = query.replace("market.ingestion_jobs", "pg_temp.job_projection")
     assert "market." not in query
     failure = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
     proof = failure + timedelta(hours=5)
     cases = {"recovered": {}, "delayed": {"status": "delayed"},
-        "newer_failure": {"updated": proof+timedelta(minutes=1)},
+        "rescheduled": {"updated": proof+timedelta(hours=12)},
+        "newer_failure": {"run": proof+timedelta(minutes=1), "updated": proof+timedelta(minutes=1)},
+        "late_failure": {"job_finished": proof+timedelta(minutes=1)},
+        "late_next_day": {"job_created": failure+timedelta(days=1), "job_finished": proof+timedelta(days=1)},
+        "next_day_unscoped": {"job_created": failure+timedelta(days=1), "job_finished": proof+timedelta(days=1),
+                              "job_target_date": None},
+        "old_failure": {"job_finished": proof-timedelta(minutes=1)},
+        "other_date_retry": {"job_finished": proof+timedelta(minutes=1), "job_target_date": "2026-10-28"},
         "newer_day": {"run": failure+timedelta(days=1)},
         "dirty": {"revision": 2}, "missing": {"state": "INCOMPLETE"},
         "unknown": {"state": "UNVERIFIED"}, "error": {"state": "ERROR"},
@@ -126,6 +134,8 @@ def test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true
             dataset text,trade_date date,data_source text,data_revision bigint,validated_revision bigint,
             validation_status text,validation_id text,scope_version text,rule_version text,
             refreshed_at timestamptz,metadata jsonb) ON COMMIT DROP""")
+        cur.execute("""CREATE TEMP TABLE job_projection(
+            status text,created_at timestamptz,finished_at timestamptz,summary jsonb) ON COMMIT DROP""")
         for name, overrides in cases.items():
             dataset = overrides.get("dataset", name)
             cur.execute("INSERT INTO pg_temp.schedule_projection VALUES(%s,%s,%s,%s,%s,%s,%s,'old failure')",
@@ -136,10 +146,16 @@ def test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true
                 (dataset, failure.date(), overrides.get("revision", 1), overrides.get("state", "VALID"),
                  overrides.get("validation_id", "valid-proof"), SCOPE_VERSION, overrides.get("rule", RULE_VERSION),
                  proof, Json({"validation": {"checks": {"coverage_basis": overrides.get("basis")}}})))
+            if "job_finished" in overrides:
+                cur.execute("INSERT INTO pg_temp.job_projection VALUES('failed',%s,%s,%s)",
+                    (overrides.get("job_created", failure), overrides["job_finished"], Json({"dataset": dataset,
+                        "target_date": overrides.get("job_target_date", str(failure.date()))})))
         cur.execute(query, params)
-        assert cur.rowcount == 4
+        assert cur.rowcount == 8
         cur.execute("SELECT schedule_id FROM pg_temp.schedule_projection WHERE last_status='success'")
-        assert {r[0] for r in cur.fetchall()} == {"recovered", "delayed", "current_dense", "alias"}
+        assert {r[0] for r in cur.fetchall()} == {
+            "recovered", "delayed", "current_dense", "alias", "rescheduled", "old_failure", "other_date_retry",
+            "next_day_unscoped"}
         cur.execute(query, params)
         assert cur.rowcount == 0
         cur.execute("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) " + query, params)
