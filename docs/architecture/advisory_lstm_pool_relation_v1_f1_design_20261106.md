@@ -88,17 +88,23 @@ P1/P2已完成→设计三轮审核/F1验证/PR合入→从最新main独立源�
 
 ## Design Acceptance Matrix
 
-本表验收的是本次设计交付；DESIGN_PASS不代表源码或研究完成。后继实施须逐项替换为实际实现/运行证据，未执行前不得报告功能完成。
+设计经PR #7033先行合入。2026-11-06已完成真实六fit、历史评价与独立算术验收，结果见[实施报告](../analysis/advisory_lstm_pool_relation_review_20261106.md)。下表PASS指研究能力与既定任务完成，不代表候选盈利或生产可用；源码CI/合入独立以X根delivery_receipt.json为准。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-961 | 本文Background/Scope | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/novelty_review.json；independent_screen_audit.json | DESIGN_PASS | none |
-| F-962 | 本文Contracts | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/synthetic_receipt.json；input_contract.json | DESIGN_PASS | none |
-| F-963 | 本文Model | artifact: docs/architecture/advisory_lstm_pool_relation_v1_f1_design_20261106.md | DESIGN_PASS | none |
-| F-964 | 本文Budget/资源 | artifact: docs/architecture/advisory_lstm_pool_relation_v1_f1_design_20261106.md | DESIGN_PASS | none |
-| F-965 | 本文Evaluation | artifact: docs/architecture/advisory_lstm_pool_relation_v1_f1_design_20261106.md | DESIGN_PASS | none |
-| F-966 | 本文Implementation/Verification | artifact: docs/architecture/advisory_lstm_pool_relation_v1_f1_design_20261106.md | DESIGN_PASS | none |
-| F-967 | 本文Scope/Non-goals | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/scope.json | DESIGN_PASS | none |
+| F-961 | scripts/advisory_lstm_pool_relation.py:freeze / screen_alignment | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/novelty_review.json；independent_screen_audit.json；首窗8950行实现对齐 | PASS | none |
+| F-962 | backend/services/advisory_model_first/lstm_pool_relation_v1.py:contexts / matrix | backend/tests/advisory_model_first/test_lstm_pool_relation_v1.py；artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/independent_research_audit.json | PASS | none |
+| F-963 | backend/services/advisory_model_first/lstm_pool_relation_v1.py:fit / predict / validate_model | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/study/fold3/candidate/trained/model.json；独立24400分数/排名与三折训练编码 | PASS | none |
+| F-964 | scripts/advisory_lstm_pool_relation.py:run；lstm_pool_relation_v1.py:FitClaims | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/study/evaluated/resource.json；6 STARTED/FINISHED及新进程STUDY_REUSED新增0fit | PASS | none |
+| F-965 | backend/services/advisory_model_first/lstm_pool_relation_v1.py:summarize / decision | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/study/evaluated/report.json；主+42.502494/−67.070940bps、STOP_EXACT_CONTEXT_CANDIDATE | PASS | none |
+| F-966 | docs/analysis/advisory_lstm_pool_relation_review_20261106.md；scripts/ci_change_classifier.py；tests/aistock_validation/catalog/file_ownership.yaml | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/implementation_review.json；independent_research_audit.json；numerical_diagnostic.json；直接14项 | PASS | none |
+| F-967 | 本文Scope/Non-goals；CLI仅离线研究 | artifact: X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/scope.json；累计263实际fit＋1旧index，无生产/服务操作 | PASS | none |
+
+## Research Result / 实际终态
+
+唯一候选实际6fit，原开发126D/压力118D完整保留，候选与原生101/108完整D的主净增量分别+42.502494/−67.070940bps，95%区间均跨零；辅助对排名同伴分别−4.214454/+14.312235bps，区间也均跨零。压力主端点<=0触发事前停止，追加fit=0，无生产模型。
+
+独立算术与新进程复用通过。压力窗2026-04-29的既存VSTD5有限极值导致巨大未校准分数，前序Ridge已有同现象；最大算术绝对差2048但归一相对差<=7.6384e−14，排名精确一致。未删除/剪裁/重训，保留输入含义与原张量parity限制，详报告及numerical_diagnostic.json。此为已消费NON_VINTAGE探索，不作全部重排序无效的外推。
 
 ## Risks / Production Gates
 
