@@ -13090,13 +13090,24 @@ def build_ci_issue_janitor_plan(
         issue_value = int(issue_number) if str(issue_number).isdigit() else issue_number
         entry: dict[str, Any] = {"issue": issue_value, "action": "skip"}
         try:
+            if runner_recovered_only:
+                issue = _load_github_issue(issue_number)
+                group = ci_failure_summary.nightly_issue_group(str(issue.get("body") or ""))
+                if group and group["module"] != "validation.runner":
+                    entry["reason"] = "not_nightly_runner_recovery_scope"
+                    evaluated.append(entry)
+                    continue
             triage = build_triage_ci_issue_plan(
                 issue_number=issue_number,
                 skip_github_summary=skip_github_summary,
             )
-        except WorkflowError as exc:
+        except (WorkflowError, ValueError) as exc:
             entry.update({"action": "failed", "reason": str(exc)})
             failed.append(entry)
+            evaluated.append(entry)
+            continue
+        if runner_recovered_only and not _nightly_runner_infra_recovery_eligible(triage):
+            entry["reason"] = "not_nightly_runner_recovery_scope"
             evaluated.append(entry)
             continue
         entry["classification"] = triage.get("classification_recommendation")

@@ -1659,6 +1659,11 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "deferred_when_multiple_issues" if multiple_groups else "allowed_for_single_issue"
             ),
         }
+        own_jobs = [
+            copy.deepcopy(item) for item in summary.get("failed_jobs") or []
+            if item.get("nox_session") in sessions
+            and item.get("nightly_diagnostic_session") == item.get("nox_session")
+        ]
         job = copy.deepcopy(_primary_failed_job(scoped))
         job["suspected_module"] = module
         job["nox_session"] = sessions[0] if len(sessions) == 1 else None
@@ -1669,7 +1674,9 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
         failure_label = ", ".join(sessions) or ", ".join(failure_kinds) or "missing session identity"
         job["error_signature"] = errors[0] if errors else "Nightly failed sessions: " + failure_label
         job["key_log_excerpt"] = _unique([*job.get("key_log_excerpt", []), *errors])
-        scoped["failed_jobs"] = [job]
+        scoped["failed_jobs"] = (
+            own_jobs if own_jobs and {item.get("nox_session") for item in own_jobs} == set(sessions) else [job]
+        )
         # A module group must keep one durable Issue while its failing session
         # membership changes between Nightly runs.  Session identities remain
         # in the title/body, but they must not be part of the dedupe identity.
@@ -1788,6 +1795,13 @@ def bind_nightly_issue_group(summary: dict[str, Any], group: dict[str, Any]) -> 
             continue
         if job.get("nightly_diagnostic_session") != job.get("nox_session"):
             raise ValueError("Nightly diagnostics lack session-isolated log provenance; collect scoped logs")
+        source = job.get("nightly_diagnostic_source")
+        if source is not None and (
+            not isinstance(source, dict) or source.get("kind") != "same_run_session_receipt"
+            or source.get("run_id") != group["run_id"] or source.get("commit") != group["commit"]
+            or source.get("session") != job.get("nox_session")
+        ):
+            raise ValueError("Nightly session receipt provenance does not match the Issue")
         if not (job.get("failed_tests") or job.get("error_signature")):
             raise ValueError("Nightly session lacks failure diagnostics; collect scoped logs")
         row = copy.deepcopy(job)
@@ -1975,6 +1989,53 @@ def _build_nightly_llm_triage_advice(
     return advice
 
 
+def _nightly_receipt_jobs(
+    payload: dict[str, Any], *, run_id: str, commit: str | None,
+    statuses: dict[str, str], run_url: str | None,
+) -> list[dict[str, Any]]:
+    """Use completed same-run session witnesses without reading an active Actions run."""
+    if not run_id.isdigit() or not re.fullmatch(r"[0-9a-f]{40}", str(commit or "")):
+        return []
+    raw = payload.get("nightly_session_results")
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    jobs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or _status_value(row.get("result")) not in NIGHTLY_FAILURE_STATUSES:
+            continue
+        session = str(row.get("session") or "").strip()
+        kind = row.get("failure_kind")
+        # Legacy status-only rows remain unscoped and cannot authorize intake.
+        if not session or kind not in {"timeout", "nonzero_exit"}:
+            continue
+        if session in seen or not _test_plan_module_for_nox_session(session):
+            raise ValueError("Nightly session receipt has duplicate or unregistered identity")
+        duration = row.get("duration_seconds")
+        budget = row.get("timeout_seconds")
+        code = row.get("return_code")
+        if (not isinstance(duration, (int, float)) or isinstance(duration, bool)
+                or not 0 <= duration < float("inf")
+                or not isinstance(budget, (int, float)) or isinstance(budget, bool)
+                or not 0 < budget < float("inf")):
+            raise ValueError("Nightly session receipt lacks finite duration/budget evidence")
+        if kind == "timeout" and (code is not None or duration < budget):
+            raise ValueError("Nightly timeout receipt contradicts its duration or return code")
+        if kind == "nonzero_exit" and (not isinstance(code, int) or isinstance(code, bool) or code == 0):
+            raise ValueError("Nightly failed-exit receipt lacks a nonzero return code")
+        seen.add(session)
+        job = _nightly_job_from_statuses(statuses, run_url=run_url, failed_sessions=[session])
+        evidence = (f"NIGHTLY_SESSION_END session={session} result=failure failure_kind={kind} "
+                    f"return_code={code} duration_seconds={duration} timeout_seconds={budget}")
+        job.update(
+            nightly_diagnostic_session=session,
+            nightly_diagnostic_source={"kind": "same_run_session_receipt", "run_id": run_id,
+                                       "commit": commit, "session": session},
+            error_signature=evidence, key_log_excerpt=[evidence],
+        )
+        jobs.append(job)
+    return jobs
+
+
 def summarize_nightly_status(
     payload: dict[str, Any],
     *,
@@ -2021,6 +2082,10 @@ def summarize_nightly_status(
         failure_groups=failure_groups,
         runner_health=runner_health,
     )
+    receipt_jobs = _nightly_receipt_jobs(
+        payload, run_id=effective_run_id, commit=effective_commit,
+        statuses=statuses, run_url=effective_run_url,
+    ) if statuses.get("nightly_l3") in NIGHTLY_FAILURE_STATUSES else []
     summary = finalize_summary(
         {
             "schema_version": "aistock_ci_failure_summary_v1",
@@ -2033,7 +2098,7 @@ def summarize_nightly_status(
             "branch": effective_branch,
             "commit": effective_commit,
             "manual_summary": title,
-            "failed_jobs": [job] if failed_keys else [],
+            "failed_jobs": [job, *receipt_jobs] if failed_keys else [],
             "extraction_errors": [] if failed_keys else ["nightly status payload did not include a failing stage"],
             "nightly_statuses": statuses,
             "nightly_fingerprint": fingerprint,

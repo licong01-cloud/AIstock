@@ -598,6 +598,64 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
     }
 
 
+def _completed_nightly_receipts():
+    return {
+        "statuses": {"nightlyL3": "failure"}, "run_id": "9001", "commit": "a" * 40,
+        "nightly_session_results": [
+            {"session": "advisory_modeling_backend", "result": "failure", "failure_kind": "timeout",
+             "duration_seconds": 182.0, "timeout_seconds": 180, "return_code": None},
+            {"session": "simulation_core_l2", "result": "failure", "failure_kind": "nonzero_exit",
+             "duration_seconds": 44.0, "timeout_seconds": 300, "return_code": 1},
+        ],
+    }
+
+
+def test_completed_nightly_receipts_round_trip_into_each_issue_without_foreign_diagnostics():
+    combined = summary.summarize_nightly_status(_completed_nightly_receipts())
+    issues = summary.build_github_issue_payloads(combined)
+    assert len(issues) == 2
+    for issue in issues:
+        group = summary.nightly_issue_group(issue["body"])
+        scoped = summary.bind_nightly_issue_group(combined, group)
+        assert len(scoped["failed_jobs"]) == 1
+        job = scoped["failed_jobs"][0]
+        assert job["nightly_diagnostic_session"] == group["sessions"][0]
+        foreign = ({"advisory_modeling_backend", "simulation_core_l2"} - set(group["sessions"])).pop()
+        assert foreign not in issue["body"]
+        assert foreign not in json.dumps(summary.build_context_pack(scoped))
+        assert job["nightly_diagnostic_source"]["commit"] == "a" * 40
+
+
+@pytest.mark.parametrize("changes", [
+    {"duration_seconds": 1}, {"return_code": 0}, {"timeout_seconds": 0},
+    {"duration_seconds": float("nan")}, {"duration_seconds": True},
+])
+def test_completed_nightly_receipt_rejects_contradictory_timeout(changes):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][0].update(changes)
+    with pytest.raises(ValueError):
+        summary.summarize_nightly_status(payload)
+
+
+@pytest.mark.parametrize("field,value", [("return_code", 0), ("return_code", True), ("session", "unregistered_session")])
+def test_completed_nightly_receipt_rejects_invalid_failure_identity(field, value):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][1][field] = value
+    with pytest.raises(ValueError):
+        summary.summarize_nightly_status(payload)
+
+
+@pytest.mark.parametrize("field", ["run_id", "commit", "session"])
+def test_nightly_receipt_binding_rejects_foreign_provenance(field):
+    payload = summary.summarize_nightly_status(_completed_nightly_receipts())
+    issue = summary.build_github_issue_payloads(payload)[0]
+    group = summary.nightly_issue_group(issue["body"])
+    row = next(j for j in payload["failed_jobs"] if j.get("nox_session") in group["sessions"])
+    row["nightly_diagnostic_source"][field] = "foreign"
+    with pytest.raises(ValueError, match="provenance"):
+        summary.bind_nightly_issue_group(payload, group)
+
+
 def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads() -> None:
     payload = _failed_nightly_sessions("9001", "position_timing_backend", "paper_v2_l3")
 

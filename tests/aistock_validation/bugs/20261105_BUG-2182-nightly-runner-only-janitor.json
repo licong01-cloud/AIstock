@@ -28,7 +28,7 @@
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/actions/runs/41893825138"
   ],
-  "expected": "Expected behavior should be restored.",
+  "expected": "同轮真实会话回执按run/commit/session严格隔离后可登记；仅runner恢复关单不读取或关闭业务失败，缺失和伪造证据仍阻断。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
