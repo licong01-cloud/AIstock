@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2175",
-  "closed_at": "2026-11-05T16:02:35.176546Z",
+  "closed_at": "2026-11-05T16:09:50.681603Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
