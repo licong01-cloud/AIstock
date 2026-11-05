@@ -80,6 +80,8 @@ LocalSIM尚未交付新runner/结果；本次公开合同使其可接入，不�
 
 全部新增为离线CLI/纯统计；database/network/live_market/process/runtime_action=false，无DDL、无服务重启或生产激活。所有新产物新身份发布，旧研究/288案例不改写。
 
+现行runtime catalog保守将backend Python匹配到backend-main，本任务不改分类或增加豁免。“无需重启”仅指新进程执行离线CLI，不宣称线上加载/激活通过；未来在线接线的用户重启与运行验证另行处理。
+
 ## Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
