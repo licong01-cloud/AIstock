@@ -93,7 +93,7 @@ flowchart LR
 | F-206 | 目标及历史SELL人口的独立文件行情预检、资源预算和真实阻断 |
 | F-207 | 不可变准备request/preflight/inventory/初态，损坏或改写拒绝 |
 | F-208 | v1库存默认和旧研究、账户、数据、服务不变 |
-| F-209 | 定向负例、真实WSL输入、F2/L0/CI和owner可直接消费的字段/路径/SHA |
+| F-209 | 定向负例、真实WSL输入、F2/L0和owner可直接消费的字段/路径/SHA；CI为合入门禁 |
 
 ## 7. Implementation Plan / 实施顺序
 
@@ -115,15 +115,15 @@ flowchart LR
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-201 |period_continuation.py；timing_campaign.py|定向日期与投影测试；真实17日库存|planned|none |
-| F-202 |period_continuation.py|SHA/身份/政策负例；真实绑定清单|planned|none |
-| F-203 |period_continuation.py|原生journal/账本回读；13账户lineage|planned|none |
-| F-204 |period_continuation.py|T+1及错误持仓/预留负例|planned|none |
-| F-205 |period_continuation.py；本设计§5.4/5.5|每户NAV/高水位及origin验证|planned|none |
-| F-206 |period_continuation.py|文件源缺失/停牌及历史SELL人口|planned|none |
-| F-207 |period_continuation.py|不可变发布与篡改拒绝|planned|none |
-| F-208 |timing_campaign.py|旧入口默认及旧文件hash保护|planned|none |
-| F-209 |test_localsim_period_continuation.py；验收报告|WSL、定向测试、F2/L0/CI|planned|none |
+| F-201 | backend/services/simulation_execution/localsim/period_continuation.py；backend/services/simulation_execution/localsim/timing_campaign.py | 17日850目标；pytest-final-a/b.xml | passed | none |
+| F-202 | backend/services/simulation_execution/localsim/period_continuation.py | 7种release/profile/PIT核验；输入身份负例 | passed | none |
+| F-203 | backend/services/simulation_execution/localsim/period_continuation.py | 13份真实父journal和原生账本；readback-r2.json | passed | none |
+| F-204 | backend/services/simulation_execution/localsim/period_continuation.py | 原生T+1结算、归属和父现金/NAV篡改拒绝 | passed | none |
+| F-205 | backend/services/simulation_execution/localsim/period_continuation.py；本设计§5.4/5.5 | 2353个NAV day锚点；13份opening文件 | passed | none |
+| F-206 | backend/services/simulation_execution/localsim/period_continuation.py | 2324证券日/550788bar；缺价及停牌负例 | passed | none |
+| F-207 | backend/services/simulation_execution/localsim/period_continuation.py | 不可变receipt、失败前缀和篡改拒绝；独立inspect | passed | none |
+| F-208 | backend/services/simulation_execution/localsim/timing_campaign.py | 旧默认库存等价；pytest-legacy-guards.xml；父文件保护 | passed | none |
+| F-209 | backend/tests/simulation_execution/test_localsim_period_continuation.py；docs/analysis/localsim_period_continuation_inputs_acceptance_20261106.md | X:/AIstock_temp/localsim-october-continuation-20261106/下的WSL、测试、F2/L0收据；CI按最终PR HEAD验收 | passed | none |
 
 ## 12. DESIGN-COMPLIANCE-001 / 四项复核
 
