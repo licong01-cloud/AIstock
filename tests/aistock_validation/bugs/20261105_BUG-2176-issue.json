@@ -100,8 +100,8 @@
   },
   "first_seen_at": "2026-11-05T07:24:47.992602Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8b1d8cd0ed8d15a2fed217b0cc2cff089b1a907a",
+  "fixed_at": "2026-11-05T08:16:54Z",
   "github_issue_number": 7025,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7025",
   "last_seen_at": "2026-11-05T07:24:47.992602Z",
@@ -109,6 +109,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7028",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -162,6 +163,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -173,7 +175,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2176",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f3c77951cea30963",
+    "recorded_at": "2026-11-05T08:17:37.959350Z",
+    "runtime_contract_digest": "ddbaf05345a9a3005fa81a62fb6ea823acdb7c7d7a66697936079ff9abba3dd1",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8ac9aff03c6c3566873c31794cf425e23e46df00",
+    "source_merge_commit": "8b1d8cd0ed8d15a2fed217b0cc2cff089b1a907a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7028",
+    "validation_evidence": [
+      "validation-receipt: id=efdad65e3db56c97 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=c07d5169889d8798 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`84 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "fc1f6350ac5a56385981fc410950d4e0dd397b7e19fea5de0fd44957d295b31e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -185,7 +209,9 @@
   "validation_evidence": [
     "python -m pytest backend/tests/test_daily_data_integrity.py -> 82 passed (including explicit existing DEV opt-in)",
     "existing DEV temporary target queue: 2002 targets -> 10 selected; three datasets included before second history item; execution_ms=3.201; rollback=true",
-    "Ruff, L0 and diff check passed; limit=10 and budget_seconds=45 unchanged"
+    "Ruff, L0 and diff check passed; limit=10 and budget_seconds=45 unchanged",
+    "validation-receipt: id=efdad65e3db56c97 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=c07d5169889d8798 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`84 passed, 1 skipped`"
   ],
   "verification_budget": {
     "budget": "standard",
