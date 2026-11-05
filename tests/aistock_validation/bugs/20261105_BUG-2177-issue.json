@@ -218,7 +218,8 @@
     "production_readonly_projection": "原sector_data卡片在最终跨日判据下可恢复；实际生产元数据只读SELECT及EXPLAIN ANALYZE返回1条，6.375ms；未执行UPDATE或采集。",
     "readback_20261106": "身份已生效；stk_limit行数5224与实表一致且已reconciled；index_daily/2026-10-28为VALID；sector_data旧卡片仍failed，未关闭BUG、未消费身份PASS回执冒充业务完成。",
     "red_green": "新增重排计划时钟的两项RED复现失败后修正并GREEN；DEV覆盖仅重排、真实新失败、长作业迟发失败、其他日期补取及旧失败。",
-    "runtime_state": "followup_source_pending_user_restart"
+    "final_readback_20261106": "2026-11-06 02:23只读验收PASS：运行身份c03dcf1730a38787faccd777949daf5c65e813ec；sector_data旧卡片02:22自动success/last_error=NULL且分区VALID157/157；stk_limit5224行、physical_rows5224、VALID1/1；index_daily/2026-10-28为VALID5159/5159；原6337c690失败作业仍为failed；未执行生产DML、补采或进程控制。",
+    "runtime_state": "verified"
   },
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "复审确认仅修复验证结果无法唤醒既有VALID但row_count=0的stk_limit分区；增加repository.py，在既有精确日期enqueue_validation入口一次性复验明确异常计数，不补采、不提高扫描频率、不增加物理全量校验。",
