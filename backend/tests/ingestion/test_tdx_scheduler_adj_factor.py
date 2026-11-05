@@ -54,6 +54,55 @@ def _argument_value(args: list[str], name: str) -> str:
     return args[args.index(name) + 1]
 
 
+def test_exact_factor_repair_passes_each_symbol_not_a_stringified_list():
+    args = TDXScheduler._default_ingestion_args("adj_factor", "incremental", {
+        "history_reconcile_symbol": ["000001.SZ", "600000.SH"]})
+    assert [args[i + 1] for i, arg in enumerate(args) if arg == "--history-reconcile-symbol"] == [
+        "000001.SZ", "600000.SH"]
+
+
+def test_exact_factor_repair_cannot_fall_back_to_the_whole_market():
+    scheduler = object.__new__(TDXScheduler)
+    with pytest.raises(ValueError, match="symbol"):
+        scheduler._enqueue_target_retry(target={"dataset": "adj_factor", "data_source": "integrity_repair",
+            "target_id": "repair", "target_date": dt.date(2018, 8, 8)}, schedule={},
+            retry_mode="incremental", triggered_by="unit", attempt=1)
+
+
+def test_exact_factor_repair_uses_only_current_named_supported_gaps():
+    scheduler = object.__new__(TDXScheduler)
+    queries = []
+    def fetch(query, params):
+        queries.append((query, params))
+        return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
+                 "validation": {"gaps": [{"classification": "MISSING",
+                     "symbols": ["000001.SZ", "000001.SZ", "920001.BJ"]}]}}]
+    scheduler._fetchall = fetch
+    target = {"target_date": dt.date(2018, 8, 8)}
+    assert scheduler._scope_adj_factor_repair(target)
+    assert target["metadata"]["history_reconcile_symbols"] == ["000001.SZ"]
+    assert len(queries) == 1 and "FROM market.dataset_date_refresh_audit" in queries[0][0]
+
+
+@pytest.mark.parametrize("day,delay_hours", [(dt.date(2026, 5, 20), 24), (dt.date(2026, 11, 4), 6)])
+def test_exact_source_gap_backoff_keeps_recent_days_fast(monkeypatch, day, delay_hours):
+    import backend.ingestion.tdx_scheduler as scheduling
+    now = dt.datetime(2026, 11, 5, 8, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(scheduling, "_now", lambda: now)
+    repo = Mock()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    scheduler = object.__new__(TDXScheduler)
+    scheduler._target_date_for_retry = lambda *_: day
+    scheduler._final_deadline_for_target = lambda *_: now-dt.timedelta(days=1)
+    scheduler._check_dataset_recovered = lambda *_: SimpleNamespace(status="gap", failure_category="physical_gap")
+    done = Future()
+    done.set_result(None)
+    scheduler._finalize_data_sync_target_retry(done, target_id="dated", dataset="bak_basic",
+        mode="incremental", options={"integrity_repair": True})
+    assert repo.mark_retry.call_args.kwargs["retry_after"] == now+dt.timedelta(hours=delay_hours)
+    repo.mark_final_blocked.assert_not_called()
+
+
 def test_adj_factor_script_starts_by_absolute_path_outside_repository(tmp_path: Path) -> None:
     script_path = Path(ingest_adj_factor.__file__).resolve()
 

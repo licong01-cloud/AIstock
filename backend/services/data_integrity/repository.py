@@ -24,6 +24,17 @@ class IntegritySchemaUnavailable(RuntimeError):
     """Rollout is pending; do not claim readiness from legacy job success."""
 
 
+def validation_retry_minutes(day: date, *, today: date, unchanged: bool, attempts: int) -> int:
+    """Unchanged old verdicts need no half-hourly physical rescan.
+
+    Writers still wake a changed revision immediately. Recent days retain the
+    existing cadence; an old, unchanged gap backs off to at most one day.
+    """
+    if not unchanged or (today - day).days < 7:
+        return 30
+    return min(1440, 360 * (2 ** min(max(attempts - 1, 0), 2)))
+
+
 def schema_installed(conn) -> bool:
     with conn.cursor() as cur:
         cur.execute("SELECT to_regprocedure('market.mark_data_integrity_changed(text,date,text,text)') IS NOT NULL", None)
@@ -52,7 +63,7 @@ def mark_changed(conn, dataset: str, dates: Iterable[date], *, reason: str, sour
     return revisions
 
 
-def enqueue_validation(conn, dataset: str, day: date) -> None:
+def enqueue_validation(conn, dataset: str, day: date, *, source_completed: bool = False) -> None:
     """A successful empty scan is work to verify, not permission for green."""
     from .catalog import RULE_VERSION, SCOPE_VERSION, canonical_dataset
     dataset = canonical_dataset(dataset)
@@ -74,18 +85,21 @@ def enqueue_validation(conn, dataset: str, day: date) -> None:
                    OR (dataset=ANY(%s) AND validation_status='VALID'
                        AND metadata#>>'{validation,checks,coverage_basis}' IS DISTINCT FROM %s))
             ON CONFLICT (dataset,data_source,target_key_sha256) DO UPDATE SET
-                metadata=CASE WHEN t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
+                metadata=CASE WHEN %s OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
                     OR t.metadata->>'desired_rule' IS DISTINCT FROM EXCLUDED.metadata->>'desired_rule'
                     OR t.metadata->>'desired_revision' IS DISTINCT FROM EXCLUDED.metadata->>'desired_revision'
                     THEN (t.metadata-'lease_token'-'lease_until')||EXCLUDED.metadata ELSE t.metadata||EXCLUDED.metadata END,
-                target_status=CASE WHEN t.target_status='reconciled' OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
+                target_status=CASE WHEN %s OR t.target_status='reconciled' OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
                     OR t.metadata->>'desired_rule' IS DISTINCT FROM EXCLUDED.metadata->>'desired_rule'
+                    OR t.metadata->>'desired_revision' IS DISTINCT FROM EXCLUDED.metadata->>'desired_revision'
                     THEN 'pending' ELSE t.target_status END,
-                next_retry_at=CASE WHEN t.target_status='reconciled' OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
+                next_retry_at=CASE WHEN %s OR t.target_status='reconciled' OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
                     OR t.metadata->>'desired_rule' IS DISTINCT FROM EXCLUDED.metadata->>'desired_rule'
+                    OR t.metadata->>'desired_revision' IS DISTINCT FROM EXCLUDED.metadata->>'desired_revision'
                     THEN clock_timestamp() ELSE t.next_retry_at END,
                 updated_at=clock_timestamp()""", ("dst_"+key[:24], key, SCOPE_VERSION, RULE_VERSION, dataset, day,
-                    SCOPE_VERSION, RULE_VERSION, list(DENSE_TRADED_DATASETS), DENSE_TRADED_BASIS))
+                    SCOPE_VERSION, RULE_VERSION, list(DENSE_TRADED_DATASETS), DENSE_TRADED_BASIS,
+                    source_completed, source_completed, source_completed))
 
 
 class IntegrityRepository:
@@ -190,7 +204,11 @@ class IntegrityRepository:
                  physical_rows,
                  counts.expected if counts else None, Json(metadata), validation_id, dataset, day))
             readback = dict(cur.fetchone())
-            retry_at = None if complete else datetime.now(timezone.utc) + timedelta(minutes=30)
+            from .catalog import CN
+            retry_minutes = validation_retry_minutes(day, today=datetime.now(CN).date(),
+                unchanged=partition.get("validation_id") == validation_id,
+                attempts=int(target.get("attempt_count") or 0) + 1)
+            retry_at = None if complete else datetime.now(timezone.utc) + timedelta(minutes=retry_minutes)
             attempt_id = "dsa_"+uuid4().hex
             attempt_number = int(target.get("attempt_count") or 0)+1
             attempt_status = "reconciled" if complete else "failed" if result.state.value == "ERROR" else "retry"

@@ -57,6 +57,86 @@ def result():
     return ValidationResult(PartitionState.VALID, (CheckCounts("row", 1, 1, 0, 0, 0, 0),), {"source": "DEV fixture"})
 
 
+def test_unchanged_old_verdict_backs_off_but_new_source_completion_wakes_it(db):
+    from datetime import datetime, timedelta, timezone
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.repository import enqueue_validation
+    ds, repo = db
+    day = date(2026, 5, 20)
+    rev = changed(repo, ds, day)
+    with repo.transaction() as conn:
+        enqueue_validation(conn, ds, day)
+    unknown = ValidationResult(PartitionState.UNVERIFIED,
+        (CheckCounts("scope", 1, 0, 0, 0, 0, 1),), {}, reason="row_count_seed_is_not_a_complete_source_scan")
+    for _ in range(2):
+        with repo.transaction() as conn, conn.cursor() as cur:
+            cur.execute("UPDATE market.data_sync_targets SET next_retry_at=clock_timestamp()-interval '1 second' WHERE dataset=%s", (ds,))
+        claim = repo.claim(ds, day)
+        repo.publish(dataset=ds, day=day, revision=rev, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+            target_id=claim["target_id"], token=claim["metadata"]["lease_token"], result=unknown)
+    with repo.transaction(readonly=True) as conn, conn.cursor() as cur:
+        cur.execute("SELECT next_retry_at FROM market.data_sync_targets WHERE dataset=%s", (ds,))
+        assert cur.fetchone()[0] > datetime.now(timezone.utc) + timedelta(hours=5)
+    with repo.transaction() as conn:
+        enqueue_validation(conn, ds, day)  # Ordinary seeding must preserve backoff.
+    assert repo.claim(ds, day) is None
+    with repo.transaction() as conn:
+        enqueue_validation(conn, ds, day, source_completed=True)
+    assert repo.claim(ds, day) is not None  # Same facts, but query completion changed.
+
+
+def test_new_revision_ignores_old_validation_backoff(db):
+    from datetime import datetime, timedelta, timezone
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.repository import enqueue_validation
+    ds, repo = db
+    day = date(2026, 5, 20)
+    rev = changed(repo, ds, day)
+    claim = repo.claim(ds, day)
+    repo.publish(dataset=ds, day=day, revision=rev, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+        target_id=claim["target_id"], token=claim["metadata"]["lease_token"],
+        result=ValidationResult(PartitionState.INCOMPLETE, (CheckCounts("row", 1, 0, 0, 1, 0, 0),), {}))
+    with repo.transaction() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE market.dataset_date_refresh_audit SET data_revision=data_revision+1 WHERE dataset=%s", (ds,))
+        cur.execute("UPDATE market.data_sync_targets SET next_retry_at=%s WHERE dataset=%s",
+                    (datetime.now(timezone.utc)+timedelta(days=1), ds))
+        enqueue_validation(conn, ds, day)
+    new = repo.claim(ds, day)
+    assert new is not None and new["metadata"]["desired_revision"] == rev+1
+
+
+def test_schedule_recovery_preserves_other_day_failures_and_failed_job_history(db, monkeypatch):
+    from datetime import datetime, timezone
+    from backend.ingestion import tdx_scheduler as scheduling
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    ds, repo = db
+    day = date(2026, 9, 1)
+    rev = changed(repo, ds, day)
+    claim = repo.claim(ds, day)
+    repo.publish(dataset=ds, day=day, revision=rev, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
+        target_id=claim["target_id"], token=claim["metadata"]["lease_token"], result=result())
+    sid = str(uuid4())
+    try:
+        with repo.transaction() as conn, conn.cursor() as cur:
+            cur.execute("""INSERT INTO market.ingestion_schedules
+                (schedule_id,dataset,mode,frequency,enabled,last_status)
+                VALUES (%s,%s,'incremental','daily',false,'failed')""", (sid, ds))
+        scheduler = scheduling.TDXScheduler.__new__(scheduling.TDXScheduler)
+        monkeypatch.setattr(scheduling, "get_conn", lambda **_: repo.transaction())
+        for stamp, status, expected in [("2026-09-01 18:00+08", "failed", "success"),
+                ("2026-09-02 18:00+08", "failed", "failed"), ("2026-09-01 19:00+08", "partial", "partial")]:
+            with repo.transaction() as conn, conn.cursor() as cur:
+                cur.execute("UPDATE market.ingestion_schedules SET last_run_at=%s,last_status=%s WHERE schedule_id=%s", (stamp, status, sid))
+            scheduler._reconcile_recovered_target_state(dataset=ds, target_id=claim["target_id"], target_date=day,
+                trigger_source="DEV recovery", finished_at=datetime.now(timezone.utc))
+            with repo.transaction(readonly=True) as conn, conn.cursor() as cur:
+                cur.execute("SELECT last_status FROM market.ingestion_schedules WHERE schedule_id=%s", (sid,))
+                assert cur.fetchone()[0] == expected
+    finally:
+        with repo.transaction() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM market.ingestion_schedules WHERE schedule_id=%s", (sid,))
+
+
 def test_publication_transaction_holds_revision_lock_and_rolls_back_on_drift(db):
     from concurrent.futures import ThreadPoolExecutor
     from backend.services.advisory_forward.repository import AdvisoryForwardPGRepository

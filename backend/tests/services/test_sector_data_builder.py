@@ -163,6 +163,19 @@ def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message
     assert [sql for sql, _ in cursor.executed][2:] == [module._PREFLIGHT_DAY_SQL]
 
 
+@pytest.mark.parametrize("preflight,pending", [((0, 0, 0, 0, 3, 0, 0), True),
+    ((0, 0, 0, 0, 0, 2, 0), True), ((0, 1, 0, 0, 3, 0, 0), False)])
+def test_source_waiting_uses_existing_single_preflight_without_hiding_pit_errors(monkeypatch, preflight, pending):
+    cursor = _Cursor(preflight=preflight)
+    connection = _Connection(cursor)
+    monkeypatch.setattr(module, "get_conn", lambda **kwargs: connection)
+    with pytest.raises(module.SectorDataBuildContractError) as raised:
+        module.SectorDataBuilder().build_date(dt.date(2026, 11, 4))
+    assert isinstance(raised.value, module.SectorDataSourcePending) is pending
+    assert [sql for sql, _ in cursor.executed].count(module._PREFLIGHT_DAY_SQL) == 1
+    assert connection.commits == 0 and connection.rollbacks == 1
+
+
 def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     sql = module._PREFLIGHT_DAY_SQL
 
