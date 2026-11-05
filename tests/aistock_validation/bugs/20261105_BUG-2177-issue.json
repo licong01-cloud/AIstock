@@ -159,8 +159,8 @@
   },
   "first_seen_at": "2026-11-05T16:42:58.779814Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "36ee6a882d798406eecd0dbb358d8a9387e8c638",
+  "fixed_at": "2026-11-05T17:10:46Z",
   "github_issue_number": 7031,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7031",
   "last_seen_at": "2026-11-05T16:42:58.779814Z",
@@ -168,6 +168,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7032",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -202,6 +203,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -214,7 +216,30 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "复审确认仅修复验证结果无法唤醒既有VALID但row_count=0的stk_limit分区；增加repository.py，在既有精确日期enqueue_validation入口一次性复验明确异常计数，不补采、不提高扫描频率、不增加物理全量校验。",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2177",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0b8aa326d74fc4af",
+    "recorded_at": "2026-11-05T17:11:50.147164Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6855165ee7a549558fefd53fd830a1dd02d586c8",
+    "source_merge_commit": "36ee6a882d798406eecd0dbb358d8a9387e8c638",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7032",
+    "validation_evidence": [
+      "python -m nox -s l0 --no-venv -> passed",
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_daily_data_integrity.py backend/tests/test_data_sync_targets.py -q -> 291 passed, 2 skipped",
+      "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures -q -> 2 passed in existing DEV"
+    ],
+    "validation_evidence_digest": "81abf50b6bf0f6a634a767484d0409024de86da9169e52eceb845a25e2db2163"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -223,6 +248,11 @@
     "fingerprint": "5f52e8b7f9185fe6557538dc",
     "source_event_id": "FE-20261105-5f52e8b7f918"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --no-venv -> passed",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_daily_data_integrity.py backend/tests/test_data_sync_targets.py -q -> 291 passed, 2 skipped",
+    "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures -q -> 2 passed in existing DEV"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
