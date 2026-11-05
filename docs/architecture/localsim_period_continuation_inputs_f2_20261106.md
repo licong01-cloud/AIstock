@@ -71,6 +71,8 @@ flowchart LR
 
 候选变化是新研究的显式文件来源变化，不是原父研究重述或同一研究输入后继。保留父/新candidate身份、匹配时点历史报价审计及数据owner已接受警告；不得因QLib文件追加导致整文件SHA不同就当作历史价格不等价。实际必要旧时点事实不一致按正式合同报告阻断，不重写现金、股数或成本。
 
+跨期审计范围显式为`OPENING_VALUATION_AND_TRADABILITY_NOT_HISTORICAL_REPLAY`：严格比较匹配可见前缀的价格、时间和当日交易资格。父期成交量/成交额不是10月初态的计算输入；完整记录其差异计数和双方前缀摘要，不舍入、不新增容差、不把旧值代入10月。`visible_prefix_equal`保留全部字段的真实相等状态；`required_inputs_equal`单独表示初态必要输入是否相同；不声称两版完整历史回放输入等价。旧研究继续冻结在其原来源。本范围不重分类数据owner的18项警告，也不接受10月必要输入缺失。
+
 ### 5.5 行情和分析锚点
 
 行情预检覆盖当期目标和可能保留的历史持仓，使用唯一`CandidateReader.market`读取所需分钟前缀、参考价、方向限价、日历和停牌权威；合法停牌与真缺价继续遵守共享入口，不新增算法。按已有20日/1024股预算预取并关闭资源，固定SHA和所有已消费文件pins。
@@ -83,21 +85,21 @@ flowchart LR
 
 | ID | 本阶段验收项 |
 |---|---|
-| PC-01 | 显式期间、合法C/D/T及精确已提交投影人口；无推理或训练 |
-| PC-02 | FileRef完整SHA、manifest/政策/profile及逐日release绑定均保留 |
-| PC-03 | FULL_13一对一父/子账户lineage，现金/持仓/成本和原生收据核验 |
-| PC-04 | 原生T+1结算及新账户归属，保留未知与未完成债务拒绝 |
-| PC-05 | 每户14:57 NAV和累计锚点，期间/累计公式和历史来源分离 |
-| PC-06 | 目标及历史SELL人口的独立文件行情预检、资源预算和真实阻断 |
-| PC-07 | 不可变准备request/preflight/inventory/初态，损坏或改写拒绝 |
-| PC-08 | v1库存默认和旧研究、账户、数据、服务不变 |
-| PC-09 | 定向负例、真实WSL输入、F2/L0/CI和owner可直接消费的字段/路径/SHA |
+| F-201 | 显式期间、合法C/D/T及精确已提交投影人口；无推理或训练 |
+| F-202 | FileRef完整SHA、manifest/政策/profile及逐日release绑定均保留 |
+| F-203 | FULL_13一对一父/子账户lineage，现金/持仓/成本和原生收据核验 |
+| F-204 | 原生T+1结算及新账户归属，保留未知与未完成债务拒绝 |
+| F-205 | 每户14:57 NAV和累计锚点，期间/累计公式和历史来源分离 |
+| F-206 | 目标及历史SELL人口的独立文件行情预检、资源预算和真实阻断 |
+| F-207 | 不可变准备request/preflight/inventory/初态，损坏或改写拒绝 |
+| F-208 | v1库存默认和旧研究、账户、数据、服务不变 |
+| F-209 | 定向负例、真实WSL输入、F2/L0/CI和owner可直接消费的字段/路径/SHA |
 
 ## 7. Implementation Plan / 实施顺序
 
 先冻结本设计和范围；补显式库存入口；实现离线期间准备及初态；定向正负测试；WSL真实17日预检和父收据回读；多轮审核修复；更新矩阵并验证F2/L0/CI；独立PR按已有授权交付。当前交付到owner价集与分析兼容节点，后续账户回放及一次新研究exact retry不在本阶段执行。
 
-## 8. Validation Plan / 验证
+## 8. Verification Plan / 验证
 
 至少覆盖：日期缺失/重复、不同包/manifest/政策、父日终或账户profile错误、伪造入金/持仓和receipt、T+1与归属、NAV不一致、历史种子未出现在新目标、行情真缺价与合法停牌、文件损坏、旧默认等价、生产与旧产物无写入。测试使用既有原生账本/协调器生成的函数夹具和真实冻结文件；夹具不是历史经济证明。
 
@@ -113,15 +115,15 @@ flowchart LR
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| PC-01 |period_continuation.py；timing_campaign.py|定向日期与投影测试；真实17日库存|planned|none |
-| PC-02 |period_continuation.py|SHA/身份/政策负例；真实绑定清单|planned|none |
-| PC-03 |period_continuation.py|原生journal/账本回读；13账户lineage|planned|none |
-| PC-04 |period_continuation.py|T+1及错误持仓/预留负例|planned|none |
-| PC-05 |period_continuation.py；本设计§5.4/5.5|每户NAV/高水位及origin验证|planned|none |
-| PC-06 |period_continuation.py|文件源缺失/停牌及历史SELL人口|planned|none |
-| PC-07 |period_continuation.py|不可变发布与篡改拒绝|planned|none |
-| PC-08 |timing_campaign.py|旧入口默认及旧文件hash保护|planned|none |
-| PC-09 |test_localsim_period_continuation.py；验收报告|WSL、定向测试、F2/L0/CI|planned|none |
+| F-201 |period_continuation.py；timing_campaign.py|定向日期与投影测试；真实17日库存|planned|none |
+| F-202 |period_continuation.py|SHA/身份/政策负例；真实绑定清单|planned|none |
+| F-203 |period_continuation.py|原生journal/账本回读；13账户lineage|planned|none |
+| F-204 |period_continuation.py|T+1及错误持仓/预留负例|planned|none |
+| F-205 |period_continuation.py；本设计§5.4/5.5|每户NAV/高水位及origin验证|planned|none |
+| F-206 |period_continuation.py|文件源缺失/停牌及历史SELL人口|planned|none |
+| F-207 |period_continuation.py|不可变发布与篡改拒绝|planned|none |
+| F-208 |timing_campaign.py|旧入口默认及旧文件hash保护|planned|none |
+| F-209 |test_localsim_period_continuation.py；验收报告|WSL、定向测试、F2/L0/CI|planned|none |
 
 ## 12. DESIGN-COMPLIANCE-001 / 四项复核
 

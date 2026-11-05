@@ -285,6 +285,36 @@ def _nav_anchor(parent, value):
     }
 
 
+def _compare_opening_markets(old, new, terminal):
+    """Opening valuation equivalence, never full historical replay equivalence.
+
+    No history is replayed in the child. Historical volume/turnover therefore
+    cannot alter inherited cash, shares, costs or marks. Disclose such differences
+    exactly; do not round, normalize, tolerate, or reuse them for October trades.
+    """
+    left = [b.model_dump(mode="json") for b in old.bars if b.received_at <= terminal]
+    right = [b.model_dump(mode="json") for b in new.bars if b.received_at <= terminal]
+    non_valuation = {"volume_shares", "amount_cny"}
+
+    def required(rows):
+        return [{k: v for k, v in row.items() if k not in non_valuation} for row in rows]
+
+    excluded = {"source_ref", "source_sha256"}
+    facts_equal = old.day_facts.model_dump(exclude=excluded) == new.day_facts.model_dump(exclude=excluded)
+    differences = {field: sum(a[field] != b[field] for a, b in zip(left, right)) for field in sorted(non_valuation)}
+    return {
+        "scope": "OPENING_VALUATION_AND_TRADABILITY_NOT_HISTORICAL_REPLAY",
+        "required_inputs_equal": required(left) == required(right) and facts_equal,
+        "visible_prefix_equal": left == right and facts_equal,
+        "full_historical_replay_input_equivalence_claimed": False,
+        "non_valuation_differences": {k: v for k, v in differences.items() if v},
+        "old_visible_prefix_sha256": digest(left),
+        "new_visible_prefix_sha256": digest(right),
+        "old_source": old.source_ref,
+        "new_source": new.source_ref,
+    }
+
+
 def _market_preflight(reader, inventory, held, terminal_day, parent_reader):
     symbols = set(held) | {t["symbol"] for d in inventory["days"] for t in d["targets"]}
     reader.prepare_window(
@@ -316,29 +346,14 @@ def _market_preflight(reader, inventory, held, terminal_day, parent_reader):
             old = parent_reader.market(symbol, terminal.date())
             new = reader.market(symbol, terminal.date())
 
-            def visible(m):
-                return [b.model_dump(mode="json") for b in m.bars if b.received_at <= terminal]
-
-            # Source digests change with a new sealed candidate; compare the
-            # authoritative values, while preserving both source identities.
-            excluded = {"source_ref", "source_sha256"}
-            same = visible(old) == visible(new) and old.day_facts.model_dump(
-                exclude=excluded
-            ) == new.day_facts.model_dump(exclude=excluded)
-            history.append(
-                {
-                    "symbol": symbol,
-                    "visible_prefix_equal": same,
-                    "old_source": old.source_ref,
-                    "new_source": new.source_ref,
-                }
-            )
-            if not same:
+            comparison = _compare_opening_markets(old, new, terminal)
+            history.append({"symbol": symbol, **comparison})
+            if not comparison["required_inputs_equal"]:
                 errors.append(
                     {
                         "trade_date": terminal_day,
                         "symbol": symbol,
-                        "reason": "PARENT_MATCHED_VISIBLE_INPUT_CHANGED",
+                        "reason": "PARENT_OPENING_VALUATION_INPUT_CHANGED",
                         "scope": "HISTORICAL_INPUT_COMPARISON",
                     }
                 )

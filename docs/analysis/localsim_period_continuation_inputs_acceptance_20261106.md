@@ -1,6 +1,6 @@
 # LocalSIM 10月输入与账户续接契约验收
 
-日期：2026-11-06。交付阶段：`INPUT_AND_OPENING_CONTRACT_ONLY`，对应设计`docs/architecture/localsim_period_continuation_inputs_f2_20261106.md`的PC-01—PC-09。本文不作为10月账户回放或经济效果验收。
+日期：2026-11-06。交付阶段：`INPUT_AND_OPENING_CONTRACT_ONLY`，对应设计`docs/architecture/localsim_period_continuation_inputs_f2_20261106.md`的F-201—F-209。本文不作为10月账户回放或经济效果验收。
 
 ## 输入与实现
 
@@ -28,11 +28,27 @@
 
 第二轮审核增加最后发布的准备receipt、无receipt拒绝、FileRef再核验、逐户profile/lineage绑定、T+1回读核验及真实父NAV时钟/终点约束。没有引入新的会计、计费、成交或筛选算法。
 
+真实首轮preflight保留在`prepared/b85416f1ecc103e328bc2b7d56b26337729f04eb7d23e52abb4ceb32923aa99f`，完整SHA `8d532b1f0e9efce2ec6a7c35e210cff7d64437d4a8438bfa0cc33c781f3670f2`，状态为`BLOCKED_SOURCE_INPUTS`。17日所需行情无缺失，阻断来自7只父期股票的分钟成交量表示差异。逐字段审计`X:/AIstock_temp/localsim-october-continuation-20261106/history-differences-r1.json`，SHA `96c1cd67ae8892218961a2974218ac613bb095eb511c17be7cac3384e4f9cf65`：价格、时间、成交额及日交易资格全部一致，只变更`volume_shares`。7只为002069.SZ、002356.SZ、300595.SZ、601002.SH、605337.SH、688161.SH、688289.SH。
+
+第三轮审核将跨期合同明确为“初态估值和交易资格等价”，而非完整历史回放输入等价。旧成交量不是继承现金、份额、成本或NAV的计算输入，故记录全字段不等及其差异摘要，不新增容差、不替换数据，不以此阻断新月份初态。本次新研究的来源变化显式冻结；不能将该结论套用到同一研究exact retry或完整历史重放的来源等价。7处差异与候选声明的18项日/分钟成交量质量警告不是同一人口，两者分别保留。真实价格或时间/交易资格变化仍阻断。
+
 已完成真实候选质量/PIT声明回读、父研究request/result/source-inspection身份核对、13账户末日journal及原生账本核对。完整17日行情preflight、定向测试和正式交付路径在本节后续补齐，不将预检查等同最终验收。
 
 L0通过：`X:/AIstock_temp/localsim-october-continuation-20261106/validation/guardrails/verify_skill_l0_paths.json`，0 finding；主guardrail扫描0 blocking。RTK无nox包装，使用项目原生`python -m nox --no-venv -s l0 -- <显式路径>`；验证输出通过本任务精确Junction落X盘。
 
 ## 状态与边界
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-201 | backend/services/simulation_execution/localsim/period_continuation.py；backend/services/simulation_execution/localsim/timing_campaign.py | backend/tests/simulation_execution/test_localsim_period_continuation.py；真实17日库存 | planned | none |
+| F-202 | backend/services/simulation_execution/localsim/period_continuation.py | 身份/SHA/政策负例；真实source声明 | planned | none |
+| F-203 | backend/services/simulation_execution/localsim/period_continuation.py | 13份原生父journal及账本回读 | planned | none |
+| F-204 | backend/services/simulation_execution/localsim/period_continuation.py | 原生T+1/归属及篡改负例 | planned | none |
+| F-205 | backend/services/simulation_execution/localsim/period_continuation.py | 原末日NAV及181日高水位读取 | planned | none |
+| F-206 | backend/services/simulation_execution/localsim/period_continuation.py | 真缺价/停牌负例及真实文件预检 | planned | none |
+| F-207 | backend/services/simulation_execution/localsim/period_continuation.py | 最后发布receipt、失败前缀拒绝及独立inspect | planned | none |
+| F-208 | backend/services/simulation_execution/localsim/timing_campaign.py | 显式文件/旧默认库存等价及旧文件保护 | planned | none |
+| F-209 | backend/tests/simulation_execution/test_localsim_period_continuation.py；docs/architecture/localsim_period_continuation_inputs_f2_20261106.md | 本任务WSL/L0/定向测试/F2/CI收据 | planned | none |
 
 源码：开发验证中；真实17日输入：待正式离线执行；账户续接：末日核验通过、待最终文件发布；10月回放/经济exact retry：未执行；运行态：未操作；经济效果：未评价。
 

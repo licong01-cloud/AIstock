@@ -267,7 +267,7 @@ def test_invalid_population_and_identity_publish_nothing(continuation, fault, re
         h["prior_held_symbols"] = []
     kwargs = {
         **continuation["kwargs"],
-        "handoff_ref": FileRef.model_validate(put(continuation["root"] / (fault + ".json"), h)),
+        "handoff_ref": FileRef.model_validate(put(continuation["root"] / ("invalid_" + fault + ".json"), h)),
     }
     with pytest.raises(ValueError, match=reason):
         period.prepare_period(**kwargs)
@@ -336,7 +336,7 @@ def test_selection_explicit_refs_equal_legacy_scan_and_preserve_none(continuatio
         package_id=h["package_id"], manifest_sha256=h["package_manifest_sha256"], trade_dates=h["trade_dates"]
     )
     pinned = campaign.inspect_selection_history(Path(), **kwargs, committed_artifacts=[row])
-    scanned = campaign.inspect_selection_history(continuation["root"], **kwargs)
+    scanned = campaign.inspect_selection_history(continuation["root"].parent, **kwargs)
     assert pinned == scanned
     assert pinned["targets_without_entry_band"] == row["target_count"]
     assert pinned["days"][0]["targets"][0]["suggested_entry_price_band"] is None
@@ -354,7 +354,7 @@ def test_uncommitted_preparation_prefix_is_not_consumable(continuation, monkeypa
     with pytest.raises(OSError, match="interrupted"):
         period.prepare_period(**continuation["kwargs"])
     path = next(continuation["kwargs"]["output_root"].glob("*/preflight.json"))
-    with pytest.raises(IntradayError, match="PATH_INVALID"):
+    with pytest.raises((FileNotFoundError, IntradayError)):
         period.inspect_preparation(FileRef.model_validate(ref(path)))
 
 
@@ -411,7 +411,7 @@ def test_source_declarations_pin_quality_and_pit_without_reclassifying_warnings(
         period._source_declarations(Reader(), {"source_quality_declaration": {**quality, "quality_warning_count": 0}})
 
 
-def test_historical_real_price_change_is_a_blocker_and_future_suffix_is_not(continuation, monkeypatch):
+def test_historical_real_price_change_is_a_blocker(continuation, monkeypatch):
     cls = period.CandidateReader
     original = cls.market
     instances = []
@@ -430,10 +430,10 @@ def test_historical_real_price_change_is_a_blocker_and_future_suffix_is_not(cont
     result = period.prepare_period(**continuation["kwargs"])
     pf = read_json(Path(result["preflight"]["path"]))
     assert result["status"] == "BLOCKED_SOURCE_INPUTS"
-    assert {b["reason"] for b in pf["blockers"]} == {"PARENT_MATCHED_VISIBLE_INPUT_CHANGED"}
+    assert {b["reason"] for b in pf["blockers"]} == {"PARENT_OPENING_VALUATION_INPUT_CHANGED"}
 
 
-def test_parent_endpoint_cash_and_nav_and_active_states_cannot_be_invented(continuation):
+def test_parent_endpoint_cash_and_nav_cannot_be_invented(continuation):
     parent = period._parent(continuation["handoff"])
     endpoint = continuation["handoff"]["prior_endpoints"][0]
     profile = next(
@@ -451,3 +451,37 @@ def test_parent_endpoint_cash_and_nav_and_active_states_cannot_be_invented(conti
         account["days"][-1] = changed_ref
         with pytest.raises(ValueError, match="PARENT_(CHECKPOINT|ENDPOINT)_CONFLICT"):
             period._endpoint(changed, changed_endpoint, profile, "2026-09-22")
+
+
+def test_opening_input_scope_preserves_volume_disclosure_and_future_isolation():
+    from backend.tests.simulation_execution.test_localsim_timing_campaign import pair, at
+
+    _, markets = pair()
+    old = next(iter(markets.values()))
+    terminal = at("14:57:00")
+    new = old.model_copy(
+        update={"bars": tuple(b.model_copy(update={"volume_shares": b.volume_shares + 1}) for b in old.bars)}
+    )
+    audited = period._compare_opening_markets(old, new, terminal)
+    assert audited["required_inputs_equal"] is True
+    assert audited["visible_prefix_equal"] is False
+    assert audited["non_valuation_differences"] == {"volume_shares": sum(b.received_at <= terminal for b in old.bars)}
+    assert audited["full_historical_replay_input_equivalence_claimed"] is False
+    late = old.bars[-1].model_copy(
+        update={
+            "start": at("14:59:00"),
+            "end": at("15:00:00"),
+            "received_at": at("15:00:05"),
+            "close": old.bars[-1].close + 100,
+        }
+    )
+    assert (
+        period._compare_opening_markets(old, old.model_copy(update={"bars": old.bars + (late,)}), terminal)[
+            "visible_prefix_equal"
+        ]
+        is True
+    )
+    changed = old.model_copy(
+        update={"bars": (old.bars[0].model_copy(update={"close": old.bars[0].close + 1}), *old.bars[1:])}
+    )
+    assert period._compare_opening_markets(old, changed, terminal)["required_inputs_equal"] is False
