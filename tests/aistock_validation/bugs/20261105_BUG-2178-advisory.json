@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2178",
-  "closed_at": null,
+  "closed_at": "2026-11-05T18:56:17Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -148,8 +148,8 @@
   },
   "first_seen_at": "2026-11-05T18:25:06.635474Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "138fe6a0e002087cbee212f4c3aa5610abca5cc4",
+  "fixed_at": "2026-11-05T18:56:17Z",
   "github_issue_number": 7038,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7038",
   "last_seen_at": "2026-11-05T18:25:06.635474Z",
@@ -157,6 +157,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7046",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -176,6 +177,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -185,7 +187,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2178",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "55585ed946ca239a",
+    "recorded_at": "2026-11-05T18:56:59.317237Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b547ec2881f6c3a72e76b47952fe1498f93c6315",
+    "source_merge_commit": "138fe6a0e002087cbee212f4c3aa5610abca5cc4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7046",
+    "validation_evidence": [
+      "validation-receipt: id=f8bcd0a71d82d62c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=pytest plan=direct status=passed command=`python -m pytest -q -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/test-final-r1 backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py` result=`10 passed; actual interpreter included -B; exact command in validation_receipt.json`",
+      "validation-receipt: id=e6c70755b45bbd94 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+      "validation-receipt: id=d79bccf8a9d934e2 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+      "validation-receipt: id=903c6d99deeaaf1c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+      "validation-receipt: id=032f0521a20efd53 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed; independent Decimal2200 audit of 24400 rows also PASS; source and replay reuse PASS; see X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/validation_receipt.json`"
+    ],
+    "validation_evidence_digest": "a61c317d0963f3ea88e8ca98c6ed3c9d3b94ad827cacf16373675c7f0dea4772"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory.model_first"
   ],
@@ -194,6 +221,13 @@
     "fingerprint": "1db0a73ffd226ca6c1ed4fe6",
     "source_event_id": "FE-20261105-1db0a73ffd22"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f8bcd0a71d82d62c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=pytest plan=direct status=passed command=`python -m pytest -q -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/test-final-r1 backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py` result=`10 passed; actual interpreter included -B; exact command in validation_receipt.json`",
+    "validation-receipt: id=e6c70755b45bbd94 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+    "validation-receipt: id=d79bccf8a9d934e2 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+    "validation-receipt: id=903c6d99deeaaf1c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+    "validation-receipt: id=032f0521a20efd53 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed; independent Decimal2200 audit of 24400 rows also PASS; source and replay reuse PASS; see X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/validation_receipt.json`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
