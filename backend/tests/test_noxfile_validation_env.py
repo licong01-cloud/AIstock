@@ -39,6 +39,36 @@ def test_offline_shards_cover_all_files_once_keep_fixtures_and_are_stable(tmp_pa
         noxfile._pytest_file_shards(("missing",))
 
 
+@pytest.mark.parametrize("workers", [1, 2, 6])
+def test_measured_long_tail_cost_balances_without_losing_files_or_module_fixtures(tmp_path, monkeypatch, workers):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    long_tail = "tests/test_long_tail.py"
+    paths = [long_tail, *[f"tests/test_fast_{i}.py" for i in range(9)]]
+    for index, relative in enumerate(paths):
+        path = tmp_path / relative
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# fixture\n", encoding="utf-8")
+    costs = {long_tail: 12}
+    groups = noxfile._pytest_file_shards(("tests", "tests"), workers=workers, cost_multipliers=costs)
+    assert sorted(path for group in groups for path in group) == sorted(paths)
+    assert len(groups) == workers
+    assert groups == noxfile._pytest_file_shards(("tests",), workers=workers, cost_multipliers=costs)
+    if workers > 1:
+        assert [long_tail] in groups
+    with pytest.raises(RuntimeError, match="absent"):
+        noxfile._pytest_file_shards(("tests",), cost_multipliers={"tests/test_missing.py": 12})
+    with pytest.raises(ValueError, match="worker"):
+        noxfile._pytest_file_shards(("tests",), workers=0)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, float("nan"), 1.5])
+def test_invalid_shard_cost_is_rejected(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    (tmp_path / "test_cost.py").touch()
+    with pytest.raises(ValueError, match="positive integer"):
+        noxfile._pytest_file_shards((".",), cost_multipliers={"test_cost.py": value})
+
+
 @pytest.mark.parametrize("fault", [None, "failed", "empty", "coverage_missing"])
 def test_offline_shards_isolate_receipts_preserve_failures_and_enforce_union_coverage(tmp_path, monkeypatch, fault):
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)

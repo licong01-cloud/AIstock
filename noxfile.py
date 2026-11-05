@@ -192,18 +192,30 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
     )
 
 
-def _pytest_file_shards(roots: tuple[str, ...], workers: int = 4) -> list[list[str]]:
+def _pytest_file_shards(
+    roots: tuple[str, ...], workers: int = 4, *, cost_multipliers: dict[str, int] | None = None,
+) -> list[list[str]]:
     """Assign every pytest file once, keeping module fixtures in one process."""
     files = {path for root in roots for pattern in ("test_*.py", "*_test.py")
              for path in (ROOT / root).rglob(pattern) if path.is_file()}
     if not files:
         raise RuntimeError("offline regression has no test files")
-    groups: list[list[str]] = [[] for _ in range(min(workers, len(files)))]
+    if workers < 1:
+        raise ValueError("offline regression requires at least one worker")
+    multipliers = {ROOT / path: value for path, value in (cost_multipliers or {}).items()}
+    if not multipliers.keys() <= files:
+        raise RuntimeError("weighted regression file is absent from the complete test roster")
+    if any(type(value) is not int or value < 1 for value in multipliers.values()):
+        raise ValueError("regression cost multiplier must be a positive integer")
+    count = min(workers, len(files))
+    groups: list[list[str]] = [[] for _ in range(count)]
     loads = [0] * len(groups)
-    for path in sorted(files, key=lambda p: (-p.stat().st_size, p.as_posix())):
+    def cost(path: Path) -> int:
+        return max(1, path.stat().st_size) * multipliers.get(path, 1)
+    for path in sorted(files, key=lambda p: (-cost(p), p.as_posix())):
         index = min(range(len(groups)), key=lambda i: (loads[i], i))
         groups[index].append(path.relative_to(ROOT).as_posix())
-        loads[index] += path.stat().st_size
+        loads[index] += cost(path)
     return [sorted(group) for group in groups]
 
 
@@ -214,7 +226,22 @@ def _run_nightly_pytest_shards(
     if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
         return False
     plan = env["AISTOCK_TEST_PLAN"]
-    groups = _pytest_file_shards(roots, workers=workers)
+    # 2026-11-06 complete JUnit timing: these six files cost 105/46/27/25/22/20s.
+    # Byte-only placement co-located the first two and exceeded 180s. Calibrate
+    # their byte costs against the remaining roster, preserving all six workers,
+    # every test file and module fixture scope. JUnit receipts expose future drift.
+    multipliers = {
+        f"backend/tests/advisory_model_first/{name}.py": multiplier
+        for name, multiplier in (
+            ("test_strategy_package_batch_prediction", 21),
+            ("test_qe_alpha_mve_pipeline", 46),
+            ("test_independent_package_alpha_audit_pipeline", 8),
+            ("test_economic_moneyflow_price_pipeline_v1", 5),
+            ("test_risk_tail_calibrated_price_5td_study_v1", 13),
+            ("test_generic_population_price_5td_pipeline_v1", 8),
+        )
+    } if plan == "advisory_modeling_backend" else {}
+    groups = _pytest_file_shards(roots, workers=workers, cost_multipliers=multipliers)
     # The complete Advisory matrix also exercises producers whose existing
     # output contract requires X. Synthetic scratch must satisfy that contract.
     scratch_parent = _offline_fixture_parent(plan)
@@ -232,11 +259,11 @@ def _run_nightly_pytest_shards(
                 worker = destination.with_name(f"{destination.stem}.shard-{directory.name}-{index}{destination.suffix}")
                 worker_env[key] = str(worker)
                 receipts.append((destination, worker))
-        worker_args = list(args)
+        worker_args = [*args, "--durations=10", f"--junitxml={directory / f'shard-{index}.xml'}"]
         if coverage_file is not None:
             worker_env["COVERAGE_FILE"] = str(directory / f".coverage.{index}")
             # Enforce the original threshold on the union, never on a partial shard.
-            worker_args.extend(("--cov-report=", "--cov-fail-under=0", f"--junitxml={directory / f'shard-{index}.xml'}"))
+            worker_args.extend(("--cov-report=", "--cov-fail-under=0"))
         log = directory / f"shard-{index}.log"
         started = time.monotonic()
         # A short sibling path satisfies repo-external artifact contracts and
