@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2176",
-  "closed_at": null,
+  "closed_at": "2026-11-05T16:02:44.656563Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -162,10 +162,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/local-sync-postrestart-20261106/BUG-2176.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2176",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "ddbaf05345a9a3005fa81a62fb6ea823acdb7c7d7a66697936079ff9abba3dd1",
+      "expected_identity": "8b1d8cd0ed8d15a2fed217b0cc2cff089b1a907a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-05T16:00:44.945393Z",
+      "mode": "read_only",
+      "observed_identity": "8b1d8cd0ed8d15a2fed217b0cc2cff089b1a907a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c5b922edb918709345149f787d9416fa545473a20637dfb97276250ce4d5fda9",
+      "receipt_sha256": "6524a59a73e488ddd13d054ed09af2d282a1a14f7a2c8444979fb35b948a5f02",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c65bac367ac0e43ebc2d6976b4c0a55dafedf94eeac6fbe45de21f319efe54f8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -197,7 +219,7 @@
     ],
     "validation_evidence_digest": "fc1f6350ac5a56385981fc410950d4e0dd397b7e19fea5de0fd44957d295b31e"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -211,7 +233,8 @@
     "existing DEV temporary target queue: 2002 targets -> 10 selected; three datasets included before second history item; execution_ms=3.201; rollback=true",
     "Ruff, L0 and diff check passed; limit=10 and budget_seconds=45 unchanged",
     "validation-receipt: id=efdad65e3db56c97 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
-    "validation-receipt: id=c07d5169889d8798 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`84 passed, 1 skipped`"
+    "validation-receipt: id=c07d5169889d8798 commit=8ac9aff03c6c3566873c31794cf425e23e46df00 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`84 passed, 1 skipped`",
+    "post-restart-verify BUG-2176 worker-scheduler -> passed; runtime identity 8b1d8cd0e"
   ],
   "verification_budget": {
     "budget": "standard",
