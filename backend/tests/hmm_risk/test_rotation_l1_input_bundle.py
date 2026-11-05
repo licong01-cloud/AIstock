@@ -957,6 +957,23 @@ def test_qlib_encoding_amended_identity_target_cannot_use_ancestor_cast(monthly_
         encoding.scale('000001.SZ', days[0])
 
 
+@pytest.mark.parametrize('unchanged', [True, False])
+def test_qlib_encoding_no_append_instrument_inherits_only_identical_files(monthly_price_encoding, unchanged):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    receipt['native_writer']['feature_receipts'].clear()
+    if unchanged:
+        for field in ('open', 'high', 'low', 'close', 'factor'):
+            relative = f'features/000001.sz/{field}.day.bin'
+            (qlib / relative).write_bytes((monthly_price_encoding[0] / relative).read_bytes())
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    if unchanged:
+        assert encoding.scale('000001.SZ', days[0]) == .9784479330245184
+    else:
+        with pytest.raises(subject.RotationL1InputBundleError, match='unrecorded target change'):
+            encoding.scale('000001.SZ', days[0])
+
+
 def test_qlib_encoding_real_000001_august_high_and_multiple_cast_population():
     # Exact October bytes: high 12.75 after an inherited September rebase.
     assert subject._raw_rebased_qlib_price(10.22513484954834, .801971435546875,
