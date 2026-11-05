@@ -182,6 +182,15 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
         "backend/tests/advisory_modeling", "backend/tests/advisory_model_first"
     ) and _run_nightly_pytest_shards(session, selected[:2], selected[2:], _env(extra_env), workers=6):
         return
+    simulation_roots = (
+        "backend/tests/simulation_runtime", "backend/tests/simulation_architecture",
+        "backend/tests/simulation_data", "backend/tests/simulation_signal",
+        "backend/tests/simulation_execution",
+    )
+    if plan == "simulation_core_l2" and selected[:5] == simulation_roots and _run_nightly_pytest_shards(
+        session, simulation_roots, selected[5:], _env(extra_env), workers=4,
+    ):
+        return
     session.run(
         "python",
         "-m",
