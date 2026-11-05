@@ -13,6 +13,12 @@ def _github_json(payload):
     return {"ok": True, "stdout": json.dumps(payload), "stderr": ""}
 
 
+def _cli_options(**options):
+    return [part for name, value in options.items() if value is not False
+            for part in (["--" + name.replace("_", "-")]
+                         + ([] if value is True else [str(value)]))]
+
+
 def _actions_run_response(**overrides):
     return _github_json({
         "databaseId": 300, "workflowName": "AIstock CI", "displayTitle": "CI",
@@ -413,17 +419,9 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
     context_markdown_path = tmp_path / "context-pack.md"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main([
-        *_log_cli_args(log_path),
-        "--output",
-        str(output_path),
-        "--markdown-output",
-        str(markdown_path),
-        "--context-output",
-        str(context_path),
-        "--context-markdown-output",
-        str(context_markdown_path),
-    ]) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        output=output_path, markdown_output=markdown_path,
+        context_output=context_path, context_markdown_output=context_markdown_path)]) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     file_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -464,13 +462,8 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     issue_payload_path = tmp_path / "issue-payload.json"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main([
-        *_log_cli_args(log_path),
-        "--run-id",
-        "26378872481",
-        "--github-issue-payload-output",
-        str(issue_payload_path),
-    ]) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        run_id="26378872481", github_issue_payload_output=issue_payload_path)]) == 0
 
     capsys.readouterr()
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -486,20 +479,9 @@ def test_cli_llm_rollout_preserves_deterministic_issue_payload(
     issue_payload_path = tmp_path / "issue-payload.json"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main(
-        [
-            *_log_cli_args(log_path),
-            "--run-id",
-            "26378872481",
-            "--llm-triage-mode",
-            mode,
-            *(["--llm-auto-file-opt-in"] if mode == "opt_in_auto_file" else []),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        run_id="26378872481", llm_triage_mode=mode, llm_auto_file_opt_in=mode == "opt_in_auto_file",
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")]) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -1076,38 +1058,14 @@ def test_cli_deferred_summary_skips_github_issue_payload(
     issue_payload_path = tmp_path / "github-issue-payload.json"
 
     def fake_summary(**_: object) -> dict[str, object]:
-        return summary.finalize_summary(
-            {
-                "schema_version": "aistock_ci_failure_summary_v1",
-                "generated_at": "2026-06-02T00:00:00Z",
-                "severity": "P1",
-                "workflow": "AIstock CI",
-                "run_id": "300",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                "branch": "bug/example",
-                "commit": "abcdef1234567890",
-                "failed_jobs": [],
-                "extraction_errors": [
-                    "run 300 is still in progress after 1 check(s); logs will be available when it is complete"
-                ],
-                "defer_issue_creation": True,
-            }
-        )
+        return _ci_summary([], run_id="300", branch="bug/example", commit="abcdef1234567890",
+            generated_at="2026-06-02T00:00:00Z", defer_issue_creation=True,
+            extraction_errors=["run 300 is still in progress after 1 check(s); logs will be available when it is complete"])
 
     monkeypatch.setattr(summary, "summarize_actions_run", fake_summary)
 
-    assert summary.main(
-        [
-            "--run-id",
-            "300",
-            "--output",
-            str(output_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(run_id="300", output=output_path,
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -1154,24 +1112,10 @@ def test_partial_unactionable_summary_blocks_payload_and_bug_promotion() -> None
 def test_manual_summary_issue_is_triage_only_not_bug_promotion(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue_payload_path = tmp_path / "github-issue-payload.json"
 
-    assert summary.main(
-        [
-            "--run-id",
-            "302",
-            "--run-url",
-            "https://github.com/licong01-cloud/AIstock/actions/runs/302",
-            "--manual-summary",
-            "manual P1 failure report needs triage",
-            "--branch",
-            "main",
-            "--commit",
-            "abcdef1234567890",
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(
+        run_id="302", run_url="https://github.com/licong01-cloud/AIstock/actions/runs/302",
+        manual_summary="manual P1 failure report needs triage", branch="main", commit="abcdef1234567890",
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -1436,20 +1380,8 @@ def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
 
     monkeypatch.setattr(llm_provider_adapter, "build_test_plan_advice", fake_test_plan_advice)
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--code-intelligence-json",
-            str(code_refs_path),
-            "--llm-triage-mode",
-            "warning_only",
-            "--output",
-            str(summary_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(nightly_status_json=status_path, code_intelligence_json=code_refs_path,
+        llm_triage_mode="warning_only", output=summary_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
