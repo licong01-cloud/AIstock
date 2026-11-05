@@ -29,11 +29,16 @@
   ],
   "expected": "完整既有测试在原180秒预算内完成；保留全部文件、模块级fixture、386日与60标的因果验证及覆盖率门禁。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2181-advisory-180.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "tests/aistock_validation/bugs/20261105_BUG-2181-advisory-180.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -66,11 +71,6 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py"
-    ],
-    "actual_changed_files": [
-      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py",
-      "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
     ]
   },
   "first_seen_at": "2026-11-05T18:47:26.125866Z",
@@ -97,10 +97,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
