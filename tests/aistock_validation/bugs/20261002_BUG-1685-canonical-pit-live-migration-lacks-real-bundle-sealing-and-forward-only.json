@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1685",
-  "closed_at": null,
+  "closed_at": "2026-10-02T17:43:34Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,57 +34,36 @@
     "X:/AIstock_temp/business-data-audit-20261002/pit-dev-migration-preflight.json"
   ],
   "expected": "真实 bundle 显式验证文件与五字段 PIT 身份，fixture 不能升级为生产证据；DEV 仅通过 owner API 创建前向新版本，计划与正式规范化后的 readback 一致，旧版本、历史激活与 Selection lease 不改写。数据 parity 或独立 W8 不满足时保持 BLOCKED，不自动激活。",
-  "fix_verification": {
-    "scope_expansion_20261002": "用户已授权下一步：核清真实 frozen PIT 身份并修复运行角色/验证登记。新增精确 catalog 文件仅登记四个 CLI-only operator 模块；不改其他 backend 角色，不引入生产 API 或重启。",
-    "root_cause": "既有 W6 producer 仅支持 fixture；DEV owning API 对旧配置补入有效默认字段，旧纯函数计划未绑定规范化后的目标 hash，真实演练正确回滚。",
-    "dev_validation": "95 个 READY portfolio 的计划均验证：先规范化再迁移与先迁移再规范化结果相同；非 PIT 有效业务语义零漂移。95 个新版本回滚演练通过。",
-    "dev_apply": "已授权的既存 aistock_dev:5433 中创建 95 个版本，配置版本总数 96 -> 191；只更新对应当前版本指针及 owner 审计，不改历史配置。",
-    "dev_readback": "独立 fresh process 确认 95 个当前版本 NO_OP_ALREADY_CANONICAL；原版本、94 条历史 activation 与 Selection native configs 指纹不变；PIT singleton 仍 legacy/generation=0。",
-    "production_authorization": "none",
-    "production_apply": "noop",
-    "activation": "BLOCKED：v15 manifest 仅绑定三字段执行股票池，未绑定正式五字段 FrozenPitSnapshot；投影为 5449 spans，与 DEV canonical 同截止 5658 spans 不同，97 frozen-only / 306 rolling-only。投影差异不冒充完整 PIT authority 差异；未签发独立 W8 PASS 或 READY_TO_ACTIVATE。",
-    "parity_detail": "冻结选股 sidecar 为 5144 symbols。306 rolling-only 中 209 spans 对应冻结侧没有的 197 symbols，另 97 为已有股票区间差异；3 字段 eligibility projection 不冒充完整 5 字段 PIT 摘要，未擅自裁剪或补造。",
-    "source_delivery_status": "SOURCE_MERGED_BUSINESS_BLOCKED：PR #5293 已获授权合入，merge=2b7250e3467c1419e6faca41c5df2c702724a0ec；CI SUCCESS，main已fast-forward。精确离线运行角色已生效，不要求后端重启。实际冻结PIT迁移仍BLOCKED，Issue保持开放，不将源码交付当成数据激活。",
-    "source_merge_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
-    "source_pr": "https://github.com/licong01-cloud/AIstock/pull/5293",
-    "successor_scope": "接入既存9月唯一任务dmr_63a313d97fd046a38d5a876265565014；cutoff=2026-09-30。仅构建一个完整共享候选，保留v15，不伪装为8月历史候选。正式五字段PIT、六池、历史代码、消费者观测/预热、行情与共享行业权威均需闭合；从SOURCE实际证据推导组件动作，禁止只补JSON身份或扩池不验行情。",
-    "formal_encoder_readback": "复用 pit.py 正式 FrozenPitSnapshot parser、canonicalize_pit_spans 与 pit_spans_sha256，支持 nullable reason 的 <NULL> 编码；不将逻辑摘要与文件字节 SHA 混用。",
-    "review_rounds": [
-      "第一轮身份审核：修复原始数组/文件 SHA 与正式逻辑 spans digest 混用；nullable reasons RED→GREEN，正式快照 count/cutoff/reason/authority 篡改 fail closed。",
-      "第二轮归属与边界审核：四个精确离线路径不要求后端探针，混合业务源仍按 backend/worker 处理；三字段投影即使一致也不能宣称 full PIT parity。",
-      "最终定向验收：W6 43 passed、CI classifier 定向4 passed、catalog16 passed；10文件 guardrail/ownership 检查 blocking=0、unmapped=0；Ruff和diff-check通过。未把数据业务BLOCKED标为完成。"
-    ],
-    "latest_readonly_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/dev-formal-pit-audit.json",
-    "latest_readonly_receipt_canonical_sha256": "81951ba07ba391fbed98ed15519f55a1867fd97bcbffb3eb2abc4ae331924641",
-    "actual_frozen_projection_analysis": "197 个缺少策略股票池身份的 symbol 中，131 个已经具备 day features 且已在 provider catalog；66 个无 day feature 目录。物理目录存在不是全历史数据完整的证明，不能把 197 个全部称为行情缺失。97 个区间差异仍需正式资格与行情边界来源核验，不裁剪或倒填。",
-    "global_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
-    "outcomes_read": false,
-    "candidate_write": false,
-    "active_profile_write": false,
-    "production_database_write": false,
-    "ddl_performed": false,
-    "runtime_action": false,
-    "design_compliance": {
-      "no_partial_as_complete": "只交付数据准备能力和 DEV 前向配置准备；真实 canonical PIT 激活及 HMM v17 READY 未完成。",
-      "no_silent_error": "PIT parity 真实差异、hash/CAS 漂移、非 PIT 语义变化及 fixture 独立证明均 fail closed。",
-      "business_semantics_unchanged": "不修改 Selection/Paper/HMM/QE 业务代码，通过现有 owner API 新建版本；历史身份不倒填。",
-      "no_unapproved_gates": "复用既有 bundle、W8、W9 和 owner 契约，不恢复月更 source-freeze、全历史 source hash 或 sample/resource 前置门禁。"
-    }
-  },
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_migration.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/prepare_canonical_pit_activation.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1685-canonical-pit-live-migration-lacks-real-bundle-sealing-and-forward-only.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/canonical_pit_migration.py",
       "scripts/prepare_canonical_pit_activation.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
-      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
       "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_migration.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
       "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "scripts/ci_change_classifier.py"
+      "scripts/ci_change_classifier.py",
+      "scripts/prepare_canonical_pit_activation.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1685-canonical-pit-live-migration-lacks-real-bundle-sealing-and-forward-only.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
@@ -239,8 +218,46 @@
   },
   "first_seen_at": "2026-10-02T11:51:28.418069Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
+  "fix_verification": {
+    "activation": "已完成后继统一发布及正式全局激活。2026-11-06只读调用正式resolver返回ACTIVE_CANONICAL、activation_generation=1、rule=shsz_a_252td_st_delist_asof_v2，coverage=2018-08-01..2026-11-06。当前10月统一operation为ACTIVATED_VERIFIED；本轮未执行激活或写库。",
+    "initial_activation_20261002": "当时BLOCKED：v15 manifest仅绑定三字段执行股票池，未绑定正式五字段FrozenPitSnapshot；投影5449 spans与DEV canonical 5658 spans存在97 frozen-only / 306 rolling-only差异。当时未签发W8 PASS，未将投影冒充完整PIT authority。该历史结论保留，不代表当前状态。",
+    "active_profile_write": false,
+    "actual_frozen_projection_analysis": "197 个缺少策略股票池身份的 symbol 中，131 个已经具备 day features 且已在 provider catalog；66 个无 day feature 目录。物理目录存在不是全历史数据完整的证明，不能把 197 个全部称为行情缺失。97 个区间差异仍需正式资格与行情边界来源核验，不裁剪或倒填。",
+    "candidate_write": false,
+    "ddl_performed": false,
+    "design_compliance": {
+      "business_semantics_unchanged": "不修改 Selection/Paper/HMM/QE 业务代码，通过现有 owner API 新建版本；历史身份不倒填。",
+      "no_partial_as_complete": "只交付数据准备能力和 DEV 前向配置准备；真实 canonical PIT 激活及 HMM v17 READY 未完成。",
+      "no_silent_error": "PIT parity 真实差异、hash/CAS 漂移、非 PIT 语义变化及 fixture 独立证明均 fail closed。",
+      "no_unapproved_gates": "复用既有 bundle、W8、W9 和 owner 契约，不恢复月更 source-freeze、全历史 source hash 或 sample/resource 前置门禁。"
+    },
+    "dev_apply": "已授权的既存 aistock_dev:5433 中创建 95 个版本，配置版本总数 96 -> 191；只更新对应当前版本指针及 owner 审计，不改历史配置。",
+    "dev_readback": "独立 fresh process 确认 95 个当前版本 NO_OP_ALREADY_CANONICAL；原版本、94 条历史 activation 与 Selection native configs 指纹不变；PIT singleton 仍 legacy/generation=0。",
+    "dev_validation": "95 个 READY portfolio 的计划均验证：先规范化再迁移与先迁移再规范化结果相同；非 PIT 有效业务语义零漂移。95 个新版本回滚演练通过。",
+    "formal_encoder_readback": "复用 pit.py 正式 FrozenPitSnapshot parser、canonicalize_pit_spans 与 pit_spans_sha256，支持 nullable reason 的 <NULL> 编码；不将逻辑摘要与文件字节 SHA 混用。",
+    "global_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
+    "latest_readonly_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/dev-formal-pit-audit.json",
+    "latest_readonly_receipt_canonical_sha256": "81951ba07ba391fbed98ed15519f55a1867fd97bcbffb3eb2abc4ae331924641",
+    "outcomes_read": false,
+    "parity_detail": "冻结选股 sidecar 为 5144 symbols。306 rolling-only 中 209 spans 对应冻结侧没有的 197 symbols，另 97 为已有股票区间差异；3 字段 eligibility projection 不冒充完整 5 字段 PIT 摘要，未擅自裁剪或补造。",
+    "production_apply": "noop",
+    "production_authorization": "none",
+    "production_database_write": false,
+    "review_rounds": [
+      "第一轮身份审核：修复原始数组/文件 SHA 与正式逻辑 spans digest 混用；nullable reasons RED→GREEN，正式快照 count/cutoff/reason/authority 篡改 fail closed。",
+      "第二轮归属与边界审核：四个精确离线路径不要求后端探针，混合业务源仍按 backend/worker 处理；三字段投影即使一致也不能宣称 full PIT parity。",
+      "最终定向验收：W6 43 passed、CI classifier 定向4 passed、catalog16 passed；10文件 guardrail/ownership 检查 blocking=0、unmapped=0；Ruff和diff-check通过。未把数据业务BLOCKED标为完成。"
+    ],
+    "root_cause": "既有 W6 producer 仅支持 fixture；DEV owning API 对旧配置补入有效默认字段，旧纯函数计划未绑定规范化后的目标 hash，真实演练正确回滚。",
+    "runtime_action": false,
+    "scope_expansion_20261002": "用户已授权下一步：核清真实 frozen PIT 身份并修复运行角色/验证登记。新增精确 catalog 文件仅登记四个 CLI-only operator 模块；不改其他 backend 角色，不引入生产 API 或重启。",
+    "source_delivery_status": "SOURCE_MERGED_MIGRATION_VERIFIED：PR #5293 merge=2b7250e3467c1419e6faca41c5df2c702724a0ec，CI SUCCESS。原DEV迁移验证与本轮正式生产resolver独立读回共同确认该迁移已完成；Selection原生lease观察属于BUG-1683的独立消费者验收，不冒称其通过。不要求后端重启。",
+    "source_merge_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
+    "source_pr": "https://github.com/licong01-cloud/AIstock/pull/5293",
+    "successor_scope": "接入既存9月唯一任务dmr_63a313d97fd046a38d5a876265565014；cutoff=2026-09-30。仅构建一个完整共享候选，保留v15，不伪装为8月历史候选。正式五字段PIT、六池、历史代码、消费者观测/预热、行情与共享行业权威均需闭合；从SOURCE实际证据推导组件动作，禁止只补JSON身份或扩池不验行情。"
+  },
+  "fixed_at": "2026-10-02T17:43:34Z",
   "github_issue_number": 5285,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5285",
   "last_seen_at": "2026-10-02T11:51:28.418069Z",
@@ -248,6 +265,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5293",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -269,41 +287,38 @@
     "inference_basis": "actual_changed_files_and_exact_catalog_roles",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_ids": []
   },
-  "validation_evidence": [
-    "validation-receipt: id=2176f1e080fe2dca commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`passed`",
-    "validation-receipt: id=da096692559ef263 commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-venv -- --changed-only` result=`passed`",
-    "validation-receipt: id=f2cb1263fe204ddf commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`"
-  ],
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
   "source_merge_receipt": {
-    "schema_version": "aistock_source_merge_receipt_v1",
-    "receipt_id": "6b79785dc0c7150c",
     "bug_id": "BUG-1685",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5293",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6b79785dc0c7150c",
+    "recorded_at": "2026-10-02T17:50:19.562767Z",
+    "runtime_contract_digest": "abcdfefcbe9479797430832b2521e7df3fabcd1297bca3e1dabaafe38ca5f626",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
     "source_head_oid": "c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49",
     "source_merge_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5293",
     "validation_evidence": [
       "CI verdict SUCCESS; run=37012925468; head=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49",
       "W6 43 passed; CI classifier 4 passed; catalog 16 passed"
     ],
-    "validation_evidence_digest": "3c763fc440e9668b9d483ca864c95350ef75c38bac22fa61ef412b5acaebdca9",
-    "runtime_contract_digest": "abcdfefcbe9479797430832b2521e7df3fabcd1297bca3e1dabaafe38ca5f626",
-    "runtime_verification": "not_required",
-    "runtime_identity_match": "not_required",
-    "production_gates": {
-      "production_ddl_gate": "noop",
-      "production_frontend_dependency_gate": "noop",
-      "production_backend_dependency_gate": "noop"
-    },
-    "recorded_at": "2026-10-02T17:50:19.562767Z"
+    "validation_evidence_digest": "3c763fc440e9668b9d483ca864c95350ef75c38bac22fa61ef412b5acaebdca9"
   },
-  "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -312,6 +327,12 @@
     "fingerprint": "d718abe99b185385c3488b5a",
     "source_event_id": "FE-20261002-d718abe99b18"
   },
+  "validation_evidence": [
+    "validation-receipt: id=2176f1e080fe2dca commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`passed`",
+    "validation-receipt: id=da096692559ef263 commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-venv -- --changed-only` result=`passed`",
+    "validation-receipt: id=f2cb1263fe204ddf commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`",
+    "原95个DEV原生配置迁移及独立回读见fix_verification；本轮正式resolver独立只读确认production ACTIVE_CANONICAL、generation=1、shsz_a_252td_st_delist_asof_v2、coverage_end=2026-11-06、activation_envelope_digest=9895b284233ffd8d94f2494ab9b81b600ff39943cdc332b06fc6d29650b4fab9；不以Selection lease观察器结果代替本BUG的迁移交付"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
