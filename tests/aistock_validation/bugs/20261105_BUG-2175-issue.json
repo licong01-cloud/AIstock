@@ -208,8 +208,8 @@
   },
   "first_seen_at": "2026-11-05T07:13:57.324392Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "08a476f84f44c47b98d9f86168b503926a61ffec",
+  "fixed_at": "2026-11-05T08:08:11Z",
   "github_issue_number": 7024,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7024",
   "last_seen_at": "2026-11-05T07:13:57.324392Z",
@@ -217,6 +217,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7026",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -270,6 +271,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -282,7 +284,29 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_split_reason": "按运行目标拆分：BUG-2175修复backend-main同步编排和账本回执，BUG-2176独立修复验证worker；不新增调度器。",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2175",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a1651d5fd232d9ee",
+    "recorded_at": "2026-11-05T08:09:05.362485Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3d032285acf7f80d144c7d0edc85b18bea968124",
+    "source_merge_commit": "08a476f84f44c47b98d9f86168b503926a61ffec",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7026",
+    "validation_evidence": [
+      "validation-receipt: id=4f39a005674a7ecb commit=3d032285acf7f80d144c7d0edc85b18bea968124 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=ec5919e3d4e440e5 commit=3d032285acf7f80d144c7d0edc85b18bea968124 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/services/test_sector_data_builder.py backend/tests/test_daily_data_integrity.py -q` result=`313 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "dc52f27797c86436de2f256d6aff183c35fb2633c673b8dbe9de8dcaa43217df"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -295,7 +319,9 @@
     "RED: exact factor symbol routing and historical backoff/source-scan tests failed before fix; GREEN passed.",
     "python -m pytest four directly affected files -> 313 passed, 1 skipped",
     "existing DEV PostgreSQL targeted repair/recovery contracts -> 6 passed; all unique fixture keys removed; production_write=false",
-    "changed-file Ruff and python -m nox -s l0 --no-venv -> passed; git diff --check -> passed"
+    "changed-file Ruff and python -m nox -s l0 --no-venv -> passed; git diff --check -> passed",
+    "validation-receipt: id=4f39a005674a7ecb commit=3d032285acf7f80d144c7d0edc85b18bea968124 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=ec5919e3d4e440e5 commit=3d032285acf7f80d144c7d0edc85b18bea968124 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/services/test_sector_data_builder.py backend/tests/test_daily_data_integrity.py -q` result=`313 passed, 1 skipped`"
   ],
   "verification_budget": {
     "budget": "standard",
