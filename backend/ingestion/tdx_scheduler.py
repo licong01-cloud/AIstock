@@ -1319,6 +1319,10 @@ class TDXScheduler:
         if last_sweep is not None and now - last_sweep < dt.timedelta(minutes=10):
             return []
         self._last_final_target_recovery_sweep = now
+        try:
+            self._reconcile_recovered_schedule_states()
+        except Exception:
+            _logger.exception("recovered schedule projection failed; retaining current schedule states")
         candidates = self._fetchall(
             """SELECT DISTINCT ON (dataset, target_date)
                       target_id, dataset, target_date, metadata, data_source, target_status,
@@ -1364,6 +1368,34 @@ class TDXScheduler:
             )
             reconciled.append(target_id)
         return reconciled
+
+    def _reconcile_recovered_schedule_states(self) -> None:
+        """Converge old schedule cards even if their recovery targets are done.
+
+        Reuse the ten-minute maintenance sweep and current dated verdicts only;
+        never refetch facts, rewrite failed jobs or clear a newer schedule error.
+        """
+        from ..services.data_integrity.catalog import ALIASES, RULE_VERSION, SCOPE_VERSION
+        from ..services.data_integrity.contracts import DENSE_TRADED_BASIS, DENSE_TRADED_DATASETS
+        self._execute("""WITH recovered AS (
+            SELECT s.schedule_id
+            FROM market.ingestion_schedules AS s
+            JOIN market.dataset_date_refresh_audit AS p
+              ON p.dataset=COALESCE(%s::jsonb->>s.dataset,s.dataset)
+             AND p.trade_date=(s.last_run_at AT TIME ZONE 'Asia/Shanghai')::date
+             AND p.data_source='canonical_db'
+            WHERE s.enabled=TRUE AND s.mode='incremental' AND s.last_status IN ('failed','delayed')
+              AND p.data_revision>=0 AND p.data_revision=p.validated_revision AND p.validation_status='VALID'
+              AND NULLIF(BTRIM(p.validation_id),'') IS NOT NULL
+              AND p.scope_version=%s AND p.rule_version=%s
+              AND (p.dataset<>ALL(%s::text[]) OR p.metadata->'validation'->'checks'->>'coverage_basis'=%s)
+              AND p.refreshed_at>=s.last_run_at AND p.refreshed_at>=s.updated_at
+            ORDER BY s.last_run_at DESC,s.schedule_id LIMIT 100
+            FOR UPDATE OF s,p SKIP LOCKED)
+            UPDATE market.ingestion_schedules AS s
+            SET last_status='success',last_error=NULL,updated_at=clock_timestamp()
+            FROM recovered WHERE s.schedule_id=recovered.schedule_id""",
+            (pgx.Json(ALIASES), SCOPE_VERSION, RULE_VERSION, sorted(DENSE_TRADED_DATASETS), DENSE_TRADED_BASIS))
 
     def _defer_obsolete_integrity_fetch(self, target: Dict[str, Any]) -> bool:
         """Revalidate obsolete alarms; never refetch unsupported stock gaps.
@@ -2778,6 +2810,7 @@ class TDXScheduler:
                           AND s.dataset=ANY(%s) AND s.mode='incremental'
                           AND s.last_status IN ('failed','delayed')
                           AND (s.last_run_at AT TIME ZONE 'Asia/Shanghai')::date=p.trade_date
+                          AND p.refreshed_at>=s.last_run_at AND p.refreshed_at>=s.updated_at
                           AND s.last_run_at<=%s""",
                         (canonical_dataset(dataset_key), target_date, SCOPE_VERSION, RULE_VERSION,
                          sorted({dataset_key, _AUTO_RETRY_SCHEDULE_ALIASES.get(dataset_key, dataset_key)}), finished_at))

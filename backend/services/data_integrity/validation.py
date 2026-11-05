@@ -294,7 +294,7 @@ class PhysicalValidator:
                 count = CheckCounts("traded_equity_limit", len(set(expected)), len(set(expected))-len(invalid)-missing, 0,
                                     missing, len(invalid), 0)
                 return ValidationResult(PartitionState.VALID if count.complete else PartitionState.INCOMPLETE,
-                    (count,), {"price_contract": "source_reference_and_limits_no_estimation"},
+                    (count,), {**result.checks, "price_contract": "source_reference_and_limits_no_estimation"},
                     result.gaps+(({"classification": "INVALID", "symbols": invalid},) if invalid else ()))
             if dataset == "moneyflow_ts":
                 from backend.data_service.moneyflow_contract import TUSHARE_MONEYFLOW_AMOUNT_COLUMNS, TUSHARE_MONEYFLOW_VOLUME_COLUMNS
