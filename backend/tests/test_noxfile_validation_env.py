@@ -139,6 +139,32 @@ def test_advisory_full_shards_keep_roots_workers_numeric_limits_and_X_output_con
     assert noxfile._offline_fixture_parent("hmm_risk_backend") == noxfile.ROOT.parent
 
 
+def test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regression(monkeypatch):
+    monkeypatch.setattr(noxfile, "_env", lambda env: env)
+    shards, direct = [], []
+    monkeypatch.setattr(noxfile, "_run_nightly_pytest_shards", lambda *args, **kwargs: shards.append((args, kwargs)) or True)
+    class Session:
+        name = "simulation_core_l2"
+        def run(self, *args, **kwargs):
+            direct.append((args, kwargs))
+    noxfile.simulation_core_l2(Session())
+    assert len(shards) == 1
+    args, options = shards[0]
+    assert args[1] == (
+        "backend/tests/simulation_runtime", "backend/tests/simulation_architecture",
+        "backend/tests/simulation_data", "backend/tests/simulation_signal",
+        "backend/tests/simulation_execution",
+    )
+    assert args[2] == ("-q", "-p", "no:cacheprovider") and options == {"workers": 4}
+    assert args[3] == {"AISTOCK_TEST_PLAN": "simulation_core_l2"}
+    assert direct[0][0][:3] == ("python", "-m", "compileall")
+    tail = direct[1][0]
+    assert tail[:3] == ("python", "-m", "pytest")
+    assert "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py" in tail
+    assert "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py" in tail
+    assert len(direct) == 2
+
+
 def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeypatch):
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
     monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
@@ -152,7 +178,7 @@ def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeyp
         def run(self, *args, **kwargs):
             subprocess.run(args, cwd=tmp_path, env=kwargs["env"], check=True, capture_output=True, text=True, timeout=60)
     env = {**os.environ, "AISTOCK_TEST_PLAN": "hmm_risk_backend", "PYTHONPATH": str(tmp_path)}
-    assert noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch", "-q"), env,
+    assert noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch", "-q", "-p", "no:cacheprovider"), env,
                                               coverage_file=tmp_path / ".coverage")
     assert (tmp_path / "coverage.xml").is_file() and (tmp_path / "junit.xml").is_file()
 
