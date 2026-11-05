@@ -1,6 +1,6 @@
 # 择时跨月价格计划与期间分析 F1 设计
 
-日期：2026-11-06。状态：IMPLEMENTING。Owner：position_timing。仅离线新增能力，不是新择时策略。
+日期：2026-11-06。状态：IMPLEMENTED_VERIFIED（择时软件及价集，不表示LocalSIM期间回放或经济效果完成）。Owner：position_timing。仅离线新增能力，不是新择时策略。
 
 ## Background
 
@@ -43,6 +43,8 @@ facts字段：`preflight`、`price_templates`、`producer_source_commit`、`sour
 
 source_inspection还须携带`cost_policy_file_sha256`，等于preflight.inputs.cost_policy.sha256；`execution_contract_sha256`等于preparation_request.execution_contract的canonical摘要，防止不同费用或执行参数借用同一来源验收。
 
+这里的source_inspection是供结果消费者使用的**最终来源/结果绑定收据**，允许LocalSIM在回放完成后由原始source检查收据封装并加入account-day摘要。它不是开跑前的准入文件，不要求producer在生成结果前预知结果哈希；原始完整source检查仍必须先于producer读取收益。不能为等待最终绑定收据而阻止账户回放，也不能在结果生成后才首次进行原始source检查。
+
 逐日账户事实复用既有LocalSIM day语义：`account_id`、`rule`、`delay_seconds`、`operation`、`trade_date`、`terminal_as_of`、`terminal_nav_cny`、`fees_cny`和完整`nav_observations=[{as_of,nav_cny}]`。账户日、费用、NAV由LocalSIM生产，本分析只消费；不以日终近似冒充分钟MDD。必须同日时区明确、严格递增且不超过14:57，末条等于共同终点和terminal NAV。JSON单文件上限32MiB，日期最多512日，逐账户日流式处理；13户完整，不能缺失后删行或补零。
 
 每户期间PnL=`terminal-opening_nav`；期间收益=`terminal/opening_nav-1`；累计收益=`terminal/origin_initial_cash-1`；期间费用只累计新day；累计费用=父累计费用+期间费用。期间MDD从各自opening NAV起算；累计MDD接父高水位和父MDD，再顺序消费新期间完整NAV观察。不能补充值拉平不同账户。
@@ -82,9 +84,9 @@ LocalSIM尚未交付新runner/结果；本次公开合同使其可接入，不�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-301 | intraday/period_context.py；price_plan_campaign.py | backend/tests/position_timing/test_intraday_period_continuation.py | PENDING | 实施中 |
-| F-302 | intraday/price_plan_campaign.py | backend/tests/position_timing/test_intraday_period_continuation.py | PENDING | 实施中 |
-| F-303 | intraday/price_plan_campaign.py | backend/tests/position_timing/test_intraday_price_plans.py；artifact: docs/analysis/position_timing_period_continuation_delivery_20261106.md | PENDING | 实施中 |
-| F-304 | intraday/continuous_results.py | backend/tests/position_timing/test_intraday_period_continuation.py | PENDING | 实施中 |
-| F-305 | intraday/continuous_results.py | backend/tests/position_timing/test_intraday_period_continuation.py | PENDING | 实施中 |
-| F-306 | 本设计与交付文档 | artifact: docs/analysis/position_timing_period_continuation_delivery_20261106.md | PENDING | 实施中 |
+| F-301 | intraday/period_context.py；price_plan_campaign.py | backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
+| F-302 | intraday/price_plan_campaign.py | backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
+| F-303 | intraday/price_plan_campaign.py | backend/tests/position_timing/test_intraday_price_plans.py；artifact: docs/analysis/position_timing_period_continuation_delivery_20261106.md | VERIFIED | none |
+| F-304 | intraday/continuous_results.py | backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
+| F-305 | intraday/continuous_results.py | backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
+| F-306 | 本设计与交付文档 | artifact: docs/analysis/position_timing_period_continuation_delivery_20261106.md | VERIFIED | none |
