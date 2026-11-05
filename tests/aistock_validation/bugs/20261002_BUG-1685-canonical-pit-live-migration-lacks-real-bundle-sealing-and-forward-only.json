@@ -220,7 +220,8 @@
   "fix_branch": null,
   "fix_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
   "fix_verification": {
-    "activation": "BLOCKED：v15 manifest 仅绑定三字段执行股票池，未绑定正式五字段 FrozenPitSnapshot；投影为 5449 spans，与 DEV canonical 同截止 5658 spans 不同，97 frozen-only / 306 rolling-only。投影差异不冒充完整 PIT authority 差异；未签发独立 W8 PASS 或 READY_TO_ACTIVATE。",
+    "activation": "已完成后继统一发布及正式全局激活。2026-11-06只读调用正式resolver返回ACTIVE_CANONICAL、activation_generation=1、rule=shsz_a_252td_st_delist_asof_v2，coverage=2018-08-01..2026-11-06。当前10月统一operation为ACTIVATED_VERIFIED；本轮未执行激活或写库。",
+    "initial_activation_20261002": "当时BLOCKED：v15 manifest仅绑定三字段执行股票池，未绑定正式五字段FrozenPitSnapshot；投影5449 spans与DEV canonical 5658 spans存在97 frozen-only / 306 rolling-only差异。当时未签发W8 PASS，未将投影冒充完整PIT authority。该历史结论保留，不代表当前状态。",
     "active_profile_write": false,
     "actual_frozen_projection_analysis": "197 个缺少策略股票池身份的 symbol 中，131 个已经具备 day features 且已在 provider catalog；66 个无 day feature 目录。物理目录存在不是全历史数据完整的证明，不能把 197 个全部称为行情缺失。97 个区间差异仍需正式资格与行情边界来源核验，不裁剪或倒填。",
     "candidate_write": false,
@@ -251,7 +252,7 @@
     "root_cause": "既有 W6 producer 仅支持 fixture；DEV owning API 对旧配置补入有效默认字段，旧纯函数计划未绑定规范化后的目标 hash，真实演练正确回滚。",
     "runtime_action": false,
     "scope_expansion_20261002": "用户已授权下一步：核清真实 frozen PIT 身份并修复运行角色/验证登记。新增精确 catalog 文件仅登记四个 CLI-only operator 模块；不改其他 backend 角色，不引入生产 API 或重启。",
-    "source_delivery_status": "SOURCE_MERGED_BUSINESS_BLOCKED：PR #5293 已获授权合入，merge=2b7250e3467c1419e6faca41c5df2c702724a0ec；CI SUCCESS，main已fast-forward。精确离线运行角色已生效，不要求后端重启。实际冻结PIT迁移仍BLOCKED，Issue保持开放，不将源码交付当成数据激活。",
+    "source_delivery_status": "SOURCE_MERGED_MIGRATION_VERIFIED：PR #5293 merge=2b7250e3467c1419e6faca41c5df2c702724a0ec，CI SUCCESS。原DEV迁移验证与本轮正式生产resolver独立读回共同确认该迁移已完成；Selection原生lease观察属于BUG-1683的独立消费者验收，不冒称其通过。不要求后端重启。",
     "source_merge_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
     "source_pr": "https://github.com/licong01-cloud/AIstock/pull/5293",
     "successor_scope": "接入既存9月唯一任务dmr_63a313d97fd046a38d5a876265565014；cutoff=2026-09-30。仅构建一个完整共享候选，保留v15，不伪装为8月历史候选。正式五字段PIT、六池、历史代码、消费者观测/预热、行情与共享行业权威均需闭合；从SOURCE实际证据推导组件动作，禁止只补JSON身份或扩池不验行情。"
