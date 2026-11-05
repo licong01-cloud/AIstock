@@ -209,6 +209,10 @@
     ]
   },
   "runtime_followup": {
+    "followup_source_pr": "https://github.com/licong01-cloud/AIstock/pull/7036",
+    "followup_source_merge": "c03dcf1730a38787faccd777949daf5c65e813ec",
+    "followup_ci": "passed - 42081060586",
+    "receipt_lineage": "保留primary source_merge_receipt原始不可变身份；后继修复在本字段明确追加，不覆盖原回执。最终运行态必须同时包含后继修复并实际读回旧行业卡片恢复。",
     "predecessor_source_merge": "36ee6a882d798406eecd0dbb358d8a9387e8c638",
     "predecessor_source_pr": "https://github.com/licong01-cloud/AIstock/pull/7032",
     "production_readonly_projection": "原sector_data卡片在最终跨日判据下可恢复；实际生产元数据只读SELECT及EXPLAIN ANALYZE返回1条，6.375ms；未执行UPDATE或采集。",
@@ -254,7 +258,8 @@
   "validation_evidence": [
     "python -m nox -s l0 --no-venv -> passed",
     "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_daily_data_integrity.py backend/tests/test_data_sync_targets.py -q -> 291 passed, 2 skipped",
-    "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures -q -> 2 passed in existing DEV"
+    "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures -q -> 2 passed in existing DEV",
+    "python -m pytest backend/tests/test_daily_data_integrity_dev.py::test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures backend/tests/test_daily_data_integrity_dev.py::test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata -q -> 3 passed including existing DEV cross-day metadata cases"
   ],
   "verification_budget": {
     "budget": "light",
