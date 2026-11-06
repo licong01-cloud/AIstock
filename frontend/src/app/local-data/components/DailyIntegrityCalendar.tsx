@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import styles from "./dailyIntegrity.module.css";
+import { datasetLabel } from "../datasetLabels";
 
 type State = "NOT_TRADING" | "UNVERIFIED" | "IN_PROGRESS" | "PARTIAL" | "ERROR" | "COMPLETE";
 type Count = { unit: string; expected: number | null; valid: number | null; legal_na: number | null;
@@ -143,14 +144,14 @@ export function DailyIntegrityCalendar({ backendBase }: { backendBase: string })
           {detail.release_read_error && <p role="alert">活动发布身份暂不可读，不能确认是否包含本次源修订；源完整性结论不因此改变。</p>}
           <div className={styles.tableScroll}><table><thead><tr><th>数据集/状态</th><th>应到时间</th><th>已验/当前修订</th><th>检查计数（未知不填0）</th><th>缺口</th></tr></thead>
             <tbody>{detail.partitions?.map(partition => <tr key={partition.dataset}>
-              <td>{partition.dataset}<br />{partition.state}<br />{partition.metadata?.validation?.reason || ""}
+              <td><span>{datasetLabel(partition.dataset)}</span><br />{partition.state}<br />{partition.metadata?.validation?.reason || ""}
                 {partition.next_retry_at && <small>下次重试：{partition.next_retry_at}</small>}</td><td>{partition.due_at || "待确认日历"}</td>
               <td>{partition.validated_revision ?? "未知"} / {partition.data_revision ?? "未知"}</td>
               <td>{partition.metadata?.validation?.counts?.map((count, index) => <div key={index}>{count.unit}：应有 {count.expected ?? "未知"}，有效 {count.valid ?? "未知"}，合法NA {count.legal_na ?? "未知"}，缺失 {count.missing ?? "未知"}，无效 {count.invalid ?? "未知"}，未验 {count.unverified ?? "未知"}</div>) || "尚未验收"}</td>
               <td><Button variant="outline" size="sm" onClick={() => void loadGaps(partition.dataset)}>查看缺口</Button></td>
             </tr>)}</tbody></table></div>
           {gapError && <p role="alert">{gapError}</p>}
-          {gaps && <section aria-label="分页缺口"><h4>{gaps.dataset}：共 {gaps.group_count} 个缺口组</h4>
+          {gaps && <section aria-label="分页缺口"><h4>{datasetLabel(gaps.dataset)}：共 {gaps.group_count} 个缺口组</h4>
             <pre className={styles.gaps}>{JSON.stringify(gaps.groups, null, 2)}</pre>
             {gaps.next_cursor && <Button variant="outline" onClick={() => void loadGaps(gaps.dataset, gaps.next_cursor || undefined)}>下一页缺口</Button>}
           </section>}

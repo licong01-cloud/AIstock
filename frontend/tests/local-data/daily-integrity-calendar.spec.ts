@@ -1,4 +1,19 @@
 import { expect, test } from "@playwright/test";
+import { datasetLabel } from "../../src/app/local-data/datasetLabels";
+
+test("dataset labels include Chinese names without replacing technical keys", () => {
+  for (const [key, name] of Object.entries({
+    daily_basic: "股票每日指标", stk_shock: "个股异常波动",
+    stk_high_shock: "个股严重异常波动", stk_alert: "个股重点提示",
+    idx_anns: "指数公司公告", stk_seasoned: "增发进程",
+    stock_daily_afterhours: "股票盘后成交量额", vix_index: "VIX美国日频指数",
+    _stk_alert_morning: "个股重点提示·晨间补采",
+    _vix_index_midday: "VIX美国日频指数·午间补采",
+  })) expect(datasetLabel(key)).toBe(`${name}（${key}）`);
+  expect(datasetLabel("not_registered")).toBe("未知数据集（not_registered）");
+  expect(datasetLabel("vendor_key", "供应商数据")).toBe("供应商数据（vendor_key）");
+  expect(datasetLabel(undefined)).toBe("未指定数据集");
+});
 
 const states = ["NOT_TRADING", "UNVERIFIED", "IN_PROGRESS", "PARTIAL", "ERROR", "COMPLETE"];
 const calendar = {
@@ -31,6 +46,7 @@ test("calendar exposes real states, null counts, release boundary and revision p
   await expect(card.getByRole("button", { name: "2026-10-06 完整 补齐" })).toBeVisible();
   await card.getByRole("button", { name: "2026-10-06 完整 补齐" }).focus();
   await page.keyboard.press("Enter");
+  await expect(card.getByText("股票每日指标（daily_basic）", { exact: true })).toBeVisible();
   await expect(card.getByText("security_date：应有 未知", { exact: false })).toBeVisible();
   await expect(card.getByText("已包含于活动发布：未覆盖", { exact: false })).toBeVisible();
   await card.getByRole("button", { name: "查看缺口" }).click();
