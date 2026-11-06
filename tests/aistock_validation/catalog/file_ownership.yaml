@@ -1444,6 +1444,8 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - backend/data_service/shared_tushare_inputs.py
+      - scripts/export_tushare_shared_inputs.py
       - backend/services/tushare_supplemental_inputs.py
       - backend/services/tushare_event_inputs.py
       - docs/design/tushare_phase1_inputs_20261106.md

@@ -34,6 +34,11 @@ BUG-2187 已合入并通过重启验收；不重复实现 HTTP 兼容修复。
 - F-008：指数公告50/min、1000/day约束、分段续采与稀疏空日查询。
 - F-009：完整增发原文、30自然日尾窗、已知项目查询范围的月度有界复查。
 - F-010：五项新采集的原生作业/统计/UI/调度/验证接入，不影响旧模块。
+- F-011：七类输入通过共享数据服务提供有界、只读、保留全部原始版本的统一读取。
+- F-012：显式记录来源代码、单位、覆盖、查询完成与历史可知性，不把事实可读等同股票池资格。
+- F-013：同一只读快照导出不可变Parquet与manifest，保留原始JSON和扁平字段，不覆盖已有发布。
+- F-014：独立文件读取验证内容身份及原文一致性；不依赖数据库或网络。
+- F-015：交付本次已初始化的历史文件、最小读取示例及限制；不修改业务模块或全局PIT。
 
 ## 数据合同
 
@@ -132,8 +137,10 @@ market.index_announcements_raw、market.stock_seasoned_raw。五项DatasetSpec�
   原始JSON不改算、不合并NULL。无稳定项目ID，source_record_key=UNKNOWN；代码+首次公告日只用于查询范围。
 - 全部published_at=NULL、publication_time_quality=UNKNOWN、vintage_quality=NON_VINTAGE；
   captured_at和last_observed_at为真实采集时刻。原始内容SHA幂等；不同修订保留，空响应不删除旧版本。
-- 三类风险初始下界2026-01-01（不宣称此前无事件）；指数公告2018-06-01（恒生2020起）；增发2018-08-01。
-  不因本次开发自动全量采集。init必须显式指定范围，incremental首次从各自下界有界续采。
+- 三类风险默认游标下界2018-08-01（不宣称源历史覆盖）；指数公告2018-06-01（恒生2020起）；增发2018-08-01。
+  BUG-2197修正默认游标及显式初始化范围，显式范围不再被默认起点裁切。
+  不以默认起点宣称真实历史可得；本次用户另行批准的初始化按2018-08-01或当前来源最早事实执行。
+  init必须显式指定范围，incremental首次从各自下界有界续采。
 - 自然日运行，三类风险21:10/15/20及次早08:10/12/14，指数21:30/次早08:20，增发21:40/次早09:20。
   三类风险及指数复查最近7自然日，增发最近30自然日；尾窗外既有失败目标仍精确补采。
 - 请求窗口不超过90自然日，1000/3000行上限先二分日期，单日满额按正式股票目录或指数来源分片；
@@ -168,6 +175,78 @@ DEV原生SQL故障注入证明原文/revision/审计整体回滚；修订产生�
 三轮审核依次覆盖来源/日期/单位、限流/空值/原子性、跨API游标/项目冲突/界面查询语义，并修正发现问题。
 DESIGN-COMPLIANCE-001四项逐项通过：无简化冒充完整、无静默失败、无业务规则改动、无新增业务门禁。
 本地L0/changed-file Ruff/模块映射/TSX语法通过；宽域回归和正式前端验证由本PR既有CI执行。
-自动调度运行态仍为pending_user_restart；源码和DEV通过不代表生产运行时已加载，不提前关闭Issue #7082。
+该阶段交付时自动调度运行态为pending_user_restart；源码和DEV通过不代表生产运行时已加载，不提前关闭Issue #7082。
 第二、三批migration初始新增计划disabled；DEV验证及源码合入后可先落表，后端加载新目录并只读确认后，
 使用既有schedule upsert仅启用本次新增计划，无需用户重复授权。源功能与计划运行验收分开报告。
+
+## 2026-11-07 共享读取与冻结交付（F1追加范围）
+
+用户授权接续“一套共享事实＋独立版本化PIT＋全局默认绑定”。本轮仅本地数据管理与共享数据准备，
+继续跟踪Issue #7082；不修改QE/HMM/Advisory/LocalSIM/因子库，不替业务实现as-of信号或发起训练。
+允许修改文件仅：本设计、backend/data_service/shared_tushare_inputs.py、backend/data_service/api.py、
+scripts/export_tushare_shared_inputs.py、backend/tests/test_tushare_event_inputs.py。
+CI首轮发现新CLI未登记所属模块；范围补充tests/aistock_validation/catalog/file_ownership.yaml，
+仅将本批新reader及CLI登记到既有local_data计划，不修改公共流水线、验证引擎或触发逻辑。
+不新增数据库对象、HTTP路由、依赖、调度、审批或每日必需数据集；生产库仅SELECT。
+
+### 读取合同与时间语义
+
+- 七项范围为vix_index、stock_daily_afterhours、stk_shock、stk_high_shock、stk_alert、idx_anns、stk_seasoned。
+  原有DatasetSpec是来源字段权威，不复制采集或注册逻辑。
+- 共享Python入口`backend.data_service.api.get_shared_input_history`返回DataFrame及元数据，必传起止日期。
+  仅读取原始观察版本；不按买入PIT裁剪，不汇总去重同日多事件，不用当前投影掩盖NULL或修订。
+- 股票字段保留供应商原始代码，明确`PROVIDER_SOURCE_CODE_NOT_ALIAS_NORMALIZED`，不私造历史alias。
+  显式代码参数只用于缩小读取，不改变全局股票池；VIX和指数公告不是个股面板，禁止套用股票代码过滤。
+- 事实日期、真实captured_at、last_observed_at分开；published_at和publication_time_quality未知仍未知。
+  `observed_by`仅允许带时区的实际捕获截止，过滤captured_at，不证明历史首次公开或当时供应商版本。
+  未提供observed_by时明确返回当前保存的全部版本，不默认回填或选择“最新事件状态”。
+- VIX为美国session date；盘后量/额分别手、千元人民币；事件字段保留DatasetSpec原始文本类型及原文，
+  不悄悄转为股/元或从其他行情推算。原始JSON与SHA保留；扁平字段为读取便利，不是新事实。
+- 使用既有`capture_read_snapshot`的REPEATABLE READ READ ONLY事务；服务端分批游标读取，
+  不查询上游、不做全库完整性扫描、不新增人工门禁。
+- 覆盖区分请求范围、实际事实起止、成功查询日期及失败日期。稀疏事件无行不等于漏采，
+  查询成功也不证明供应商历史全集。VIX美国交易日历完整性仍NOT_EVALUATED。
+
+### 文件交付与验证
+
+- 复用既有Parquet/JSON/SHA方式，以全新版本目录导出；每数据集一份Parquet，包含原始JSON、原始内容SHA、
+  真实捕获时间及显式来源字段；manifest钉住文件SHA/字节/行数/schema/单位/覆盖和时间限制。
+- 同一数据库只读快照完成七项读取；manifest最后写入。已有目标目录拒绝覆盖，失败保留可诊断的未完成产物，
+  不把部分文件宣称READY。不修改Qlib/H5、active profile、旧任务绑定及全局PIT。
+- 原始来源异常使用已有初始化质量回执作为本批source notes交付；不把异常源日期猜成可用事实，
+  不因可选研究输入异常阻塞原有每日核心数据。
+- 独立文件reader只读manifest指定的普通文件，检查路径边界、文件身份/行数/schema及原文内容SHA与投影一致性。
+  只按需验证请求文件；完整CLI验收一次校验全部七项。不要求每次业务读取重哈希全数据集。
+  冻结字段类型及顺序以本包manifest为准，未来实时DatasetSpec新增字段不能使旧文件不可读。
+- 随包提供README最小读取示例；按现有2018-08-01..2026-11-06初始化范围实际导出并独立进程读回。
+  “原始历史研究可读”与“严格历史PIT可用/已进入业务模型”分别报告。
+
+### 验收矩阵（追加）
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-011 | backend/data_service/shared_tushare_inputs.py; backend/data_service/api.py | backend/tests/test_tushare_event_inputs.py | verified | - |
+| F-012 | backend/data_service/shared_tushare_inputs.py | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/shared-tushare-delivery-20261107/delivery-readback.json | verified | - |
+| F-013 | backend/data_service/shared_tushare_inputs.py; scripts/export_tushare_shared_inputs.py | artifact:X:/AIstock_shared_inputs/tushare/20261107-history-v1/manifest.json | verified | - |
+| F-014 | backend/data_service/shared_tushare_inputs.py | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/shared-tushare-delivery-20261107/delivery-readback.json | verified | - |
+| F-015 | scripts/export_tushare_shared_inputs.py | artifact:X:/AIstock_shared_inputs/tushare/20261107-history-v1/README.md; artifact:X:/AIstock_temp/DATA_PREPARATION/shared-tushare-delivery-20261107/delivery-readback.json | verified | - |
+
+### 本轮实际交付与设计符合性
+
+- 定向相关矩阵113 passed，新增共享读取/文件合同35项通过；changed-file Ruff与L0通过。
+- DEV只读导出及独立进程读回10471行，重复文件读取不访问数据库或上游；无DEV/生产DDL/DML。
+- X盘正式研究文件根：`X:/AIstock_shared_inputs/tushare/20261107-history-v1`。
+  七项共453401个原始内容版本，文件合计29455369字节；生产数据库样例使用官方公共入口读回，
+  事务实测`transaction_read_only=on`、`repeatable read`。完整流式文件验证用时25.063秒。
+- manifest文件SHA256：`48f7f1ec4eb6054b645a019b0454ca69b75dd393e1e0e498cd11f2b11ffa0d68`。
+  canonical digest：`ecb490b70d8d335cd478f4363b50facfa3ccc9fcb2f5de2f8db8271c55bbe2d1`。
+- 原始版本数量：VIX2059、盘后437316、异常3423、严重异常115、重点提示187、指数公告4000、增发6301。
+  VIX2059版本对应2058个事实日期，11月5日有两份实际捕获的来源版本，不静默选最新或冒充两日。
+- 指数公告仍有1条异常源日期未入库，原始限制随source_quality.json及manifest交付，读者能直接看到；
+  历史事件仍为NON_VINTAGE/UNKNOWN，不能宣称严格历史PIT或业务模型已接入。
+- 三轮审核：①原文/版本/单位及时间语义，修复元数据合同校验遗漏；②空文件及JSON字段排序，
+  修复空批次并保证冻结schema独立于实时字段扩展；③性能、权限与真实DEV/生产只读消费，验证流式内存边界。
+- DESIGN-COMPLIANCE-001：F-011..015全部有实现及实际证据，不以部分实现冒充完成；错误不吞掉、
+  NULL不补造、历史PIT不伪称；无业务/PIT规则变更；无新增审批、全局完整率门禁或日常同步工作量。
+- 本轮只新增可独立进程使用的Python接口、CLI和文件，不新增服务路由或启动钩子。
+  已有采集修复的重启验收与本批文件可读性分开，本次不操作服务或active profile。

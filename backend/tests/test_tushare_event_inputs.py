@@ -302,3 +302,249 @@ def test_event_incremental_without_cursor_uses_training_floor():
     start, details = incremental_start(engine, conn, DATASET_REGISTRY['stk_alert'], dt.date(2026, 11, 6))
     assert start == dt.date(2018, 8, 1)
     assert details['safe_audit_cursor_date'] is None
+
+
+def shared_row(dataset='stk_alert', *, revision=0):
+    from backend.data_service import shared_tushare_inputs as shared
+    day = dt.date(2026, 10, 30)
+    stamp = dt.datetime(2026, 11, 7, 1, 0, tzinfo=dt.timezone.utc)
+    if dataset == 'stk_alert':
+        raw = dict(ts_code='000001.SZ', name='test', start_date='20261030', end_date=None, type=str(revision))
+    elif dataset == 'vix_index':
+        raw = dict(trade_date='20261030', close='19.25', pct_change='-1.3')
+    elif dataset == 'stock_daily_afterhours':
+        raw = dict(trade_date='20261030', ts_code='000001.SZ', ah_vol=None, ah_amount='0')
+    else:
+        raise AssertionError('unexpected test dataset')
+    import hashlib
+    return dict(source_api=DATASET_REGISTRY[dataset].tushare_api, event_date=day,
+                ts_code=raw.get('ts_code'), raw_payload=raw,
+                source_row_sha256=hashlib.sha256(shared.payload_bytes(raw)).hexdigest(),
+                captured_at=stamp, last_observed_at=stamp, published_at=None,
+                publication_time_quality='UNKNOWN', vintage_quality='NON_VINTAGE', source_record_key='UNKNOWN')
+
+
+def mock_shared_snapshot(monkeypatch, rows=None):
+    from contextlib import contextmanager
+    from backend.data_service import shared_tushare_inputs as shared
+    import pyarrow as pa
+    entries = rows if rows is not None else [shared_row(), shared_row(revision=1)]
+    conn = Mock()
+
+    @contextmanager
+    def snapshot():
+        yield conn
+
+    monkeypatch.setattr(shared, 'capture_read_snapshot', snapshot)
+
+    def batches(actual, dataset, *_args, **_kwargs):
+        assert actual is conn
+        values = [shared._flatten(dataset, x) for x in entries]
+        yield pa.Table.from_pylist(values, schema=shared._schema(dataset))
+
+    monkeypatch.setattr(shared, '_batches', batches)
+    monkeypatch.setattr(shared, '_coverage', lambda *_a: {'successful_query_days': 1,
+                                                       'semantics': 'CURRENT_LEDGER_NOT_HISTORICAL_PIT'})
+    return shared
+
+
+@pytest.mark.parametrize('dataset', ('vix_index', 'stock_daily_afterhours', 'stk_alert'))
+def test_shared_source_contract_and_raw_projection_preserve_values(dataset):
+    from backend.data_service import shared_tushare_inputs as shared
+    row = shared_row(dataset)
+    result = shared._flatten(dataset, row)
+    assert result['source_row_sha256'] == row['source_row_sha256']
+    assert result['published_at'] is None and result['source_record_key'] == 'UNKNOWN'
+    assert shared.input_contract(dataset)['historical_PIT_proven'] is False
+    assert shared.input_contract(dataset)['pit_filter_applied'] is False
+    if dataset == 'stock_daily_afterhours':
+        assert result['ah_vol'] is None and result['ah_amount'] == 0
+        assert shared.input_contract(dataset)['units']['ah_amount'] == 'CNY_1000'
+
+
+@pytest.mark.parametrize('change', ('hash', 'date', 'symbol', 'publication', 'capture', 'payload'))
+def test_shared_source_projection_rejects_real_identity_or_clock_errors(change):
+    from backend.data_service import shared_tushare_inputs as shared
+    row = shared_row()
+    if change == 'hash':
+        row['source_row_sha256'] = '0'*64
+    elif change == 'date':
+        row['event_date'] = dt.date(2026, 10, 29)
+    elif change == 'symbol':
+        row['ts_code'] = '000002.SZ'
+    elif change == 'publication':
+        row['published_at'] = row['captured_at']
+    elif change == 'capture':
+        row['captured_at'] = row['captured_at'].replace(tzinfo=None)
+    else:
+        row['raw_payload']['invented'] = 'x'
+    with pytest.raises(ValueError):
+        shared._flatten('stk_alert', row)
+
+
+@pytest.mark.parametrize('args', [
+    ('unknown', '2026-10-30', '2026-10-30', None, None),
+    ('stk_alert', '2026103', '2026-10-30', None, None),
+    ('stk_alert', '2026-10-31', '2026-10-30', None, None),
+    ('vix_index', '2026-10-30', '2026-10-30', ['000001.SZ'], None),
+    ('idx_anns', '2026-10-30', '2026-10-30', [], None),
+    ('stk_alert', '2026-10-30', '2026-10-30', ['920305.BJ'], None),
+    ('stk_alert', '2026-10-30', '2026-10-30', '000001.SZ', None),
+    ('stk_alert', '2026-10-30', '2026-10-30', None, dt.datetime(2026, 11, 7)),
+])
+def test_shared_requests_reject_ambiguous_scope_or_time(args):
+    from backend.data_service import shared_tushare_inputs as shared
+    with pytest.raises(ValueError):
+        shared._request(*args)
+
+
+def test_shared_read_preserves_all_revisions_not_business_dedup(monkeypatch):
+    shared = mock_shared_snapshot(monkeypatch)
+    result = shared.read_history('stk_alert', '2026-10-30', '2026-10-30')
+    assert len(result.data) == result.metadata['rows'] == 2
+    assert result.data['ts_code'].nunique() == 1
+    assert result.metadata['vintage_quality'] == 'NON_VINTAGE'
+
+
+def test_shared_source_sql_preserves_empty_code_filter_and_capture_cutoff():
+    from backend.data_service import shared_tushare_inputs as shared
+    conn, cur = Mock(), Mock()
+    conn.cursor.return_value.__enter__ = Mock(return_value=cur)
+    conn.cursor.return_value.__exit__ = Mock(return_value=False)
+    cur.fetchmany.return_value = []
+    stamp = dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc)
+    day = dt.date(2026, 10, 30)
+    assert list(shared._batches(conn, 'stk_alert', day, day, [], stamp)) == []
+    statement, params = cur.execute.call_args[0]
+    assert 'captured_at<=%s' in str(statement) and 'ts_code=ANY(%s)' in str(statement)
+    assert params == ['stk_alert', day, day, [], stamp]
+
+
+def test_shared_bundle_roundtrip_uses_same_snapshot_and_keeps_source_warning(monkeypatch, tmp_path):
+    import json
+    shared = mock_shared_snapshot(monkeypatch)
+    source = tmp_path/'quality.json'
+    source.write_text(json.dumps({'status': 'WITH_WARNING', 'unknown_upstream_records': [{'ann_date': '2024928 '}]}))
+    root = tmp_path/'v1'
+    result = shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'], quality_report=source)
+    read = shared.read_bundle(root, 'stk_alert', expected_manifest_sha256=result['manifest_sha256'])
+    assert len(read.data) == 2 and result['source_warning_count'] == 1
+    assert result['database_write'] is False and result['active_profile_write'] is False
+    assert shared.verify_bundle(root)['datasets'] == {'stk_alert': 2}
+    with pytest.raises(FileExistsError):
+        shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'])
+    with pytest.raises(ValueError):
+        shared.read_bundle(root, 'stk_alert', expected_manifest_sha256='0'*64)
+
+
+@pytest.mark.parametrize('damage', ('file', 'manifest', 'missing', 'traversal', 'schema_metadata'))
+def test_shared_bundle_rejects_file_or_manifest_drift(monkeypatch, tmp_path, damage):
+    import json
+    shared = mock_shared_snapshot(monkeypatch)
+    root = tmp_path/'v1'
+    shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'])
+    if damage == 'file':
+        with (root/'stk_alert.parquet').open('ab') as stream:
+            stream.write(b'tamper')
+    elif damage == 'missing':
+        (root/'stk_alert.parquet').unlink()
+    else:
+        path = root/'manifest.json'
+        manifest = json.loads(path.read_text())
+        if damage == 'manifest':
+            manifest['created_at'] = 'fake'
+        elif damage == 'traversal':
+            manifest['datasets']['stk_alert']['file'] = '../outside.parquet'
+            manifest['manifest_digest'] = shared._digest({k: v for k, v in manifest.items() if k != 'manifest_digest'})
+        else:
+            manifest['datasets']['stk_alert']['units'] = {'provider_fields': 'invented_units'}
+            manifest['manifest_digest'] = shared._digest({k: v for k, v in manifest.items() if k != 'manifest_digest'})
+        path.write_text(json.dumps(manifest))
+    with pytest.raises((ValueError, FileNotFoundError)):
+        shared.read_bundle(root, 'stk_alert')
+
+
+def test_shared_api_is_a_lazy_data_service_entry(monkeypatch):
+    from backend.data_service import api, shared_tushare_inputs as shared
+    expected = object()
+    reader = Mock(return_value=expected)
+    monkeypatch.setattr(shared, 'read_history', reader)
+    assert api.get_shared_input_history('vix_index', '2018-08-01', '2018-08-03') is expected
+    reader.assert_called_once_with('vix_index', '2018-08-01', '2018-08-03', symbols=None, observed_by=None)
+
+
+def test_shared_all_seven_empty_files_keep_explicit_schema_and_no_fake_events(monkeypatch, tmp_path):
+    shared = mock_shared_snapshot(monkeypatch, rows=[])
+    root = tmp_path/'empty'
+    result = shared.export_bundle(root, '2018-08-01', '2018-08-01')
+    assert set(result['datasets']) == set(shared.DATASETS)
+    assert set(result['datasets'].values()) == {0}
+    assert shared.verify_bundle(root)['datasets'] == result['datasets']
+    for dataset in shared.DATASETS:
+        read = shared.read_bundle(root, dataset)
+        assert read.data.empty and read.data.columns.tolist() == shared._schema(dataset).names
+
+
+def test_shared_verify_detects_raw_projection_tamper_even_after_file_rehash(monkeypatch, tmp_path):
+    import json
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    shared = mock_shared_snapshot(monkeypatch)
+    root = tmp_path/'v1'
+    shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'])
+    file = root/'stk_alert.parquet'
+    table = pq.read_table(file)
+    index = table.column_names.index('type')
+    pq.write_table(table.set_column(index, table.schema.field(index), pa.array(['invented', '1'])), file)
+    manifest = json.loads((root/'manifest.json').read_text())
+    manifest['files'][file.name] = {'sha256': shared._sha(file), 'bytes': file.stat().st_size}
+    manifest['manifest_digest'] = shared._digest({k: v for k, v in manifest.items() if k != 'manifest_digest'})
+    (root/'manifest.json').write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match='raw payload differ'):
+        shared.verify_bundle(root)
+
+
+def test_shared_partial_export_retains_failure_without_ready_manifest(monkeypatch, tmp_path):
+    shared = mock_shared_snapshot(monkeypatch)
+
+    def failed(*_a, **_kw):
+        raise RuntimeError('real SQL failure')
+        yield
+
+    monkeypatch.setattr(shared, '_batches', failed)
+    root = tmp_path/'partial'
+    with pytest.raises(RuntimeError, match='real SQL failure'):
+        shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'])
+    assert not (root/'manifest.json').exists()
+    with pytest.raises(FileNotFoundError):
+        shared.read_bundle(root, 'stk_alert')
+
+
+def test_shared_file_reader_does_not_open_database_or_network(monkeypatch, tmp_path):
+    shared = mock_shared_snapshot(monkeypatch)
+    root = tmp_path/'v1'
+    shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'])
+    monkeypatch.setattr(shared, 'capture_read_snapshot', Mock(side_effect=AssertionError('DB accessed')))
+    assert shared.read_bundle(root, 'stk_alert').metadata['historical_PIT_proven'] is False
+    assert shared.verify_bundle(root)['database_access'] is False
+
+
+def test_shared_frozen_field_contract_survives_later_live_registry_extension(monkeypatch, tmp_path):
+    shared = mock_shared_snapshot(monkeypatch)
+    root = tmp_path/'v1'
+    shared.export_bundle(root, '2026-10-30', '2026-10-30', datasets=['stk_alert'])
+    old = DATASET_REGISTRY['stk_alert']
+    monkeypatch.setitem(DATASET_REGISTRY, 'stk_alert', replace(old, columns={**old.columns, 'later_field': 'text'}))
+    result = shared.read_bundle(root, 'stk_alert')
+    assert 'later_field' not in result.data.columns
+    assert shared.verify_bundle(root)['datasets'] == {'stk_alert': 2}
+
+
+def test_shared_files_reject_reparse_points_without_following_target():
+    from types import SimpleNamespace
+    from backend.data_service import shared_tushare_inputs as shared
+    path = Mock()
+    path.lstat.return_value = SimpleNamespace(st_file_attributes=1024)
+    path.is_symlink.return_value = False
+    with pytest.raises(ValueError, match='reparse'):
+        shared._plain(path)
