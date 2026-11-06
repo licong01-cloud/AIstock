@@ -606,7 +606,8 @@ def _validate_in_tree_codex_skill(session: nox.Session, skill_path: str) -> None
     """Validate the checked-in skill even when hosted CI lacks Codex system skills."""
     quick_validate = _codex_quick_validate_script()
     if quick_validate.exists():
-        session.run("python", str(quick_validate), skill_path, external=True)
+        # The external validator uses read_text() without an explicit encoding.
+        session.run("python", str(quick_validate), skill_path, env={"PYTHONUTF8": "1"}, external=True)
         return
 
     root = ROOT / skill_path
