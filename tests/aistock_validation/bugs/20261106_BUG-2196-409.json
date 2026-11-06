@@ -41,7 +41,9 @@
     "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh-source-readback.json",
     "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fix-matrix.xml",
     "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/semantic-tests.xml",
-    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/workflow-smoke.json"
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/workflow-smoke.json",
+    "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-roundtrip.json",
+    "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-ui.json"
   ],
   "expected": "相同业务目标日及未变化的数据应共享快照；默认摘要传给显式目标日分页应成功，真实日历或watermark变化仍返回409。",
   "file_scope_contract": {
@@ -304,5 +306,29 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "post_restart_additional_acceptance": {
+    "schema_version": "advisory_runtime_roundtrip_summary_v1",
+    "status": "passed",
+    "observed_identity": "0344c1f9b371398465ef59f364106e361654871a",
+    "program_count": 5,
+    "default_explicit_roundtrip": "passed",
+    "pagination_duplicates": 0,
+    "browser_default_entry": "passed",
+    "mouse_pagination": "passed",
+    "published_program_count": 4,
+    "real_asset_blocked_program_count": 1,
+    "V2_economic_files_read": 0,
+    "database_writes": 0,
+    "evidence": [
+      {
+        "path": "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-roundtrip.json",
+        "sha256": "91119687388b27feb14463c606043a80d3e1ebeeb74fe1fef93d289d8a290b41"
+      },
+      {
+        "path": "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-ui.json",
+        "sha256": "2b6c3bb5166d8e9df9700292a4a3c9eda4b4fa0be563c981ee0bfef9d2a26ec8"
+      }
+    ]
   }
 }
