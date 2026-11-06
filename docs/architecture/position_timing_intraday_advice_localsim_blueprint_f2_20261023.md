@@ -281,4 +281,4 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 
 择时跨月价集/分析能力#7054、LocalSIM输入#7048及期间runner#7072均已合入。10月13户×17日实际回放、inspect及producer经济exact retry已交付；择时已完成294项来源预检、221账户日/52,598条NAV的期间与累计分析及报告exact retry。证据唯一入口为`X:/AIstock_temp/position-timing-october-account-analysis-20261106/verification-receipt.json`。离线功能、账户可重复性和经济确认仍分开，经济结果保持描述性，不能把旧报告缺省NOT_SUPPLIED解释为producer未执行。
 
-下一项研究是[同等待预算对照F1设计](position_timing_wait_budget_control_f1_20261106.md)：B0、固定15交易分钟W15、原C2从同一份B0-60秒9月末opening起跑，固定60秒主反应延迟和原作业合同，先做51账户日机制诊断，不扫描阈值。设计已闭合但W15、三户接入与新实验尚未实现；LocalSIM最小需求见该设计Contracts-4，由其owner执行。现有同延迟比较包含排队/暴露与父期持仓差异，不能宣称纯执行alpha；本轮不增加线上规则、模型或跨模块融合。
+下一项研究是[同等待预算对照F1设计](position_timing_wait_budget_control_f1_20261106.md)：B0、固定15交易分钟W15、原C2从同一份B0-60秒9月末opening起跑，固定60秒主反应延迟和原作业合同，先做51账户日机制诊断，不扫描阈值。择时侧研究专用W15封装、真实plan冻结和独立三户统计合同已实现，原13户分析与线上三规则不变；LocalSIM三户接入与新51账户日实验尚未完成，最小需求和精确消费合同见该设计Contracts-4/6，由其owner执行。现有同延迟比较包含排队/暴露与父期持仓差异，不能宣称纯执行alpha；本轮不增加线上规则、模型或跨模块融合。
