@@ -49,6 +49,9 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
     _validate_markets(markets, day, start)
     if backend._records or backend._ledger.fills or backend._ledger.cash_entries:
         raise ValueError("LOCALSIM_HUMAN_FRESH_DAY_REQUIRED")
+    # This file-only research driver also uses the native intent compiler's
+    # backend, so explicitly bind its fill-event clock before opening orders.
+    backend._historical_execution_events = True
     backend._ledger.settle_trade_date(day)
     required = set(backend._ledger.positions) | {e.plan.symbol for e in events}
     if not required.issubset(markets) or any(s not in initial_marks or initial_marks[s] <= 0 for s in required):
