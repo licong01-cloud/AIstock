@@ -263,11 +263,11 @@ STOCK_ST = DatasetSpec(
     columns={
         "ann_date": "date",
         "ts_code": "text",
-        "start_date": "date",
-        "end_date": "date",
-        "market": "text",
-        "exchange": "text",
     },
+    # The current API publishes daily ST snapshot membership, not dated ST
+    # intervals or exchange metadata. Retain legacy DB columns untouched; do
+    # not invent NULLs for fields omitted by the provider. Event effective
+    # dates continue to come from the separate stock_st_events authority.
     api_field_map={"ann_date": "trade_date"},  # Tushare returns "trade_date", DB column is "ann_date"
     date_column="ann_date",
     batch_sleep=0.3,
