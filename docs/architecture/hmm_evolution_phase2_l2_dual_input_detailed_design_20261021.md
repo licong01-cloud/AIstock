@@ -21,7 +21,7 @@
 - scripts/hmm_risk/run_risk_l2_date_inference.py：在原薄 CLI 增加显式 source-mode；文件默认行为不变，数据库只在 parent 读取一次。
 - backend/tests/hmm_risk/test_risk_l2_date_inference.py、test_risk_l2_database_inference.py：直接回归与反例。
 - 本设计及父蓝图必要当前状态。
-- 2026-11-06源侧扩展：backend/services/hmm_risk/observed_industry_authority.py；scripts/hmm_risk/observed_industry_source.py、build_observed_industry_authority.py；backend/tests/hmm_risk/test_observed_industry_authority.py。联网及文件缓存仅在离线工具层，不由后端请求处理线程导入。
+- 2026-11-06源侧扩展：backend/services/hmm_risk/observed_industry_authority.py；scripts/hmm_risk/observed_industry_source.py、build_observed_industry_authority.py；backend/tests/hmm_risk/test_observed_industry_authority.py、test_observed_industry_source.py。联网及文件缓存仅在离线工具层，不由后端请求处理线程导入；两个测试文件按既有直接邻居命名映射覆盖service/CLI和来源工具，不修改nox或test plan。
 
 不改 QE、Selection、Advisory、Paper、调度器、数据生产、旧系数 producer、CI、nox、test plan、规范或候选数据。测试复用现有 fixture/内核，不复制业务实现。无需新增表、通知平台、依赖或过程环境变量。
 
@@ -117,7 +117,7 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 | F-011 | §3/§5；risk_l2_date_inference.py；risk_l2_database_inference.py | backend/tests/hmm_risk/test_risk_l2_database_inference.py：相同20D/冻结参数预测一致、完整目录及合法NA；最终文件+DB相关矩阵61 passed | PASS_SOURCE_CONTRACT | - |
 | F-012 | §4/§7；risk_l2_database_inference.py；run_risk_l2_date_inference.py | backend/tests/hmm_risk/test_risk_l2_database_inference.py：readonly/PIT/完成水位/来源前收盘价/两child隔离；fresh-process import PASS；真实有界读回见§11 | PASS_SOURCE_CONTRACT | - |
 | F-013 | §6/§8；父蓝图§1.21 | backend/tests/hmm_risk/test_risk_l2_database_inference.py::test_cli_database_dispatch_preserves_file_default_and_children_cannot_read_db；§6完整service/CLI交接及§11真实pending边界 | PASS_HMM_HANDOFF_CONTRACT | - |
-| HMM-OBSERVE-D1-D6 | §4.2；scripts/hmm_risk/observed_industry_source.py；observed_industry_authority.py；build_observed_industry_authority.py | backend/tests/hmm_risk/test_observed_industry_authority.py：39 passed；去重/知识时间/变更回归/失败不推进/并发/明确投影/旧入口；§4.2的因果pending不是源码缺项 | PASS_SOURCE_CONTRACT | - |
+| HMM-OBSERVE-D1-D6 | §4.2；scripts/hmm_risk/observed_industry_source.py；observed_industry_authority.py；build_observed_industry_authority.py | backend/tests/hmm_risk/test_observed_industry_authority.py、test_observed_industry_source.py合计39项；去重/知识时间/变更回归/失败不推进/并发/明确投影/旧入口；§4.2的因果pending不是源码缺项 | PASS_SOURCE_CONTRACT | - |
 
 以上仅为本包HMM源码/交接合同验收，不是父蓝图全部F-011/F-012/F-013、生产运行或外部业务验收。未提交源下的受控读回不冒充 clean committed CLI 正式acceptance；正式CLI仍要求最终已提交源码及干净工作树。
 
@@ -134,6 +134,8 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 源码第二轮作者审修：补齐provider pre_close与除权口径对齐、PIT预热NA不造值、缺失/重复/非有限反例；补冻结参数parent读回，防止两child共同错误；7项最终修复点通过，最终同一相关矩阵61 passed。Ruff/format/py_compile、scope/ownership、registry 8 passed、L0 blocking=0及fresh import通过；两份设计F2 PASS。受控真实读回与运行态分开；没有改变模型、20D定义、训练窗口、seed或阈值。
 
 2026-11-06持续观察扩展两轮作者审修（非外部独立审核）：第一轮补A→B→A重新计知识时间、来源失败/时钟回退不推进指针、原始观察证据链校验；第二轮核对正式CLI的新旧模式、未来观察pending不写authority、离线工具层与后台推断隔离。定向文件39 passed；工具归属调整后重验受影响22项通过，fresh import、Ruff/compile、6文件ownership（无未知/歧义）、L0（blocking=0）及两份F2通过。真实HTTPS读取12,933行、1,166,848字节、SHA 677943bdbc022c31a4959bf5ef23f91bd802ecccec9d33f9ed4d629df6f2dd1b，与10月12日来源不同；这只证明当次可获取和schema可读，不冒充标准authority、完整输入或模型采用。正式capture/build回执在外部HMM运行目录保存，不通过修改环境变量记录状态。
+
+首次PR CI在执行测试前正确阻断：新增source工具缺少同名直接邻居测试文件。已将原文件中20项source测试原样移至test_observed_industry_source.py，保留authority/CLI的19项，断言与覆盖未删减；生产实现、nox、test plan均未改变。最终交付须以新HEAD正式CI为准，初始CI失败不能作为通过证据。
 
 ## 11. 实际读回、输入差异与剩余边界
 
