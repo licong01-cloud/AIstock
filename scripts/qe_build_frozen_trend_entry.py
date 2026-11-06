@@ -8,10 +8,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-try:
+if __package__:
+    from .qe_trend_entry_admission import panel_index_sha, require, sha256, symbol_key
+else:
     from qe_trend_entry_admission import panel_index_sha, require, sha256, symbol_key
-except ImportError:
-    from scripts.qe_trend_entry_admission import panel_index_sha, require, sha256, symbol_key
 
 
 def build_panel(index, r20, r60, links, resolved, calendar, output):

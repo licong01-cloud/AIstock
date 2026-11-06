@@ -1,10 +1,27 @@
 """The eligibility input is a side asset: it must retain every frozen score key."""
+from pathlib import Path
+import subprocess
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from scripts.qe_build_frozen_trend_entry import build_panel
 from scripts.qe_trend_entry_admission import TrendEntryContractError, TrendEntryInputs, panel_index_sha
+
+
+def test_package_builder_exception_identity_with_flat_worker_module_already_imported():
+    root = Path(__file__).resolve().parents[3]
+    code = """import sys
+sys.path.insert(0, 'scripts')
+import qe_trend_entry_admission
+from scripts import qe_build_frozen_trend_entry as builder
+from scripts import qe_trend_entry_admission as admission
+assert builder.require is admission.require
+assert builder.require is not qe_trend_entry_admission.require
+"""
+    subprocess.run([sys.executable, "-B", "-c", code], cwd=root, check=True, capture_output=True, text=True)
 
 
 def source_data():
