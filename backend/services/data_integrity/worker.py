@@ -7,7 +7,7 @@ import time
 
 from psycopg2.extras import RealDictCursor
 
-from .catalog import CN, RULE_VERSION, SCOPE_VERSION, obligations
+from .catalog import CN, RULE_VERSION, SCOPE_VERSION, obligations, optional_input_contract
 from .contracts import PartitionState, ValidationResult, completion_kind
 from .repository import IntegrityRepository, IntegrityRevisionChanged, enqueue_validation, schema_installed
 from .service import DailyIntegrityService
@@ -76,7 +76,7 @@ class DailyIntegrityWorker:
                     calendar, schedules, summaries, partitions = self.service._read(conn, day, day)
                     historical = (summaries.get(day, {}).get("summary") or {}).get("obligations", [])
                     catalogue = {o.dataset: o for o in obligations(schedules, historical)[0]}
-                    obligation = catalogue.get(dataset)
+                    obligation = catalogue.get(dataset) or optional_input_contract(dataset)
                     if obligation is None:
                         # Change tracking also covers on-demand facts. They do
                         # not silently become a new daily obligation.

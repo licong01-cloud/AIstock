@@ -398,6 +398,17 @@ class PhysicalValidator:
             complete_scan = CheckCounts("completed_provider_scan", 1, 1, 0, 0, 0, 0)
             checks = {"provider": source["data_source"], "scan_sha256": scan["scan_sha256"],
                       "physical_rows": len(actual), "as_of_policy": "CURRENT_SOURCE_NOT_HISTORICAL_VINTAGE"}
+            if dataset in {"vix_index", "stock_daily_afterhours"}:
+                from ..tushare_supplemental_inputs import normalize_rows
+                try:
+                    normalize_rows(spec, actual)
+                except ValueError as exc:
+                    return ValidationResult(PartitionState.INCOMPLETE, (check,), checks, reason=str(exc))
+                checks.update(required_for_daily_complete=False,
+                              nullable_value_count=sum(value is None for row in actual for value in row.values()))
+                if dataset == "vix_index":
+                    checks["session_calendar_completeness"] = "NOT_EVALUATED"
+                    checks["scope"] = "completed_provider_query_returned_facts_only"
             if dataset == "index_daily":
                 quotes = index_quote_result({entry["key"][0] for entry in scan["entries"]},
                     {str(r["ts_code"]).strip(): r for r in actual})
