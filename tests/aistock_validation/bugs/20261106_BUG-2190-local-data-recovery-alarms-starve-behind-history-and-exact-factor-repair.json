@@ -9,21 +9,49 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2190",
-  "closed_at": null,
+  "closed_at": "2026-11-06T12:55:58.917878Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "code_review": {
+    "design_compliance_001": {
+      "no_new_approval_or_release_gate": "PASS",
+      "no_partial_claim": "PASS",
+      "no_silent_success": "PASS",
+      "unchanged_business_semantics": "PASS"
+    },
     "executor": "active_agent",
     "independent_review": false,
     "rounds": [
-      {"perspective": "correctness", "findings_resolved": ["125真实未完整分区保持INCOMPLETE", "reconciled目标不能代替当前canonical验证", "无本地历史的精确修复退避且不伪造数据"]},
-      {"perspective": "completeness_and_regression", "findings_resolved": ["按数据集公平选择恢复目标", "已恢复分区及尚未投影的报警优先", "成功重试清除活动错误但保留历史日志", "子进程保留调度目标身份"]},
-      {"perspective": "performance_and_final", "findings_resolved": ["text因子代码与character(9)行情代码分别匹配索引类型", "仅命名缺口查询", "每10分钟最多100目标", "DEV原生SQL回滚及生产只读耗时验证通过"]}
+      {
+        "findings_resolved": [
+          "125真实未完整分区保持INCOMPLETE",
+          "reconciled目标不能代替当前canonical验证",
+          "无本地历史的精确修复退避且不伪造数据"
+        ],
+        "perspective": "correctness"
+      },
+      {
+        "findings_resolved": [
+          "按数据集公平选择恢复目标",
+          "已恢复分区及尚未投影的报警优先",
+          "成功重试清除活动错误但保留历史日志",
+          "子进程保留调度目标身份"
+        ],
+        "perspective": "completeness_and_regression"
+      },
+      {
+        "findings_resolved": [
+          "text因子代码与character(9)行情代码分别匹配索引类型",
+          "仅命名缺口查询",
+          "每10分钟最多100目标",
+          "DEV原生SQL回滚及生产只读耗时验证通过"
+        ],
+        "perspective": "performance_and_final"
+      }
     ],
-    "design_compliance_001": {"no_partial_claim": "PASS", "no_silent_success": "PASS", "unchanged_business_semantics": "PASS", "no_new_approval_or_release_gate": "PASS"},
     "unresolved_blockers": []
   },
   "created_at": "2026-11-06T10:49:30.595958Z",
@@ -40,19 +68,19 @@
   "expected": "当前验证通过的分区可有界消退旧报警；不可执行的历史修复明确保留缺口并退避；真实失败可见，恢复成功不保留活动错误。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261106_BUG-2190-local-data-recovery-alarms-starve-behind-history-and-exact-factor-repair.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2190-local-data-recovery-alarms-starve-behind-history-and-exact-factor-repair.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261106_BUG-2190-local-data-recovery-alarms-starve-behind-history-and-exact-factor-repair.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2190-local-data-recovery-alarms-starve-behind-history-and-exact-factor-repair.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -144,8 +172,8 @@
   },
   "first_seen_at": "2026-11-06T10:49:30.595958Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a1d236f7a73f35e25d8ce3ccaabbb3acc085a5c2",
+  "fixed_at": "2026-11-06T11:04:46Z",
   "github_issue_number": 7086,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7086",
   "last_seen_at": "2026-11-06T10:49:30.595958Z",
@@ -153,6 +181,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7087",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -179,9 +208,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/BUG-2190-sync-alarm-20261106/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2190",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "a1d236f7a73f35e25d8ce3ccaabbb3acc085a5c2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T12:52:33.003335Z",
+      "mode": "read_only",
+      "observed_identity": "200dc5d5f98dc553ecae3c24f74ad74210845b20",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0565c17ccd39c1f7f69b48f1d08fb367d2c260db6f469cfda22556aa8d118ef8",
+      "receipt_sha256": "666806858d07bf667784c9999c9e4c75e8c35096c36559d0cf0e234e4dc402f2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8a19797e1f85b474bff0b8f696170b7e8226b5bec70fe8130c1b4bd059204959",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -191,7 +243,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2190",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c0cd5d3ef05c5c16",
+    "recorded_at": "2026-11-06T11:05:40.772435Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a729bf5db1737a1ef973b87f8b902e95ae71c60f",
+    "source_merge_commit": "a1d236f7a73f35e25d8ce3ccaabbb3acc085a5c2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7087",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -200,6 +273,9 @@
     "fingerprint": "1ff6238affe0801ff2026e6f",
     "source_event_id": "FE-20261106-1ff6238affe0"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
