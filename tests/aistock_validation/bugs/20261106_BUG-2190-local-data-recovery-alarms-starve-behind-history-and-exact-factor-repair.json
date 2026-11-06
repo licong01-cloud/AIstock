@@ -15,6 +15,17 @@
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
+  "code_review": {
+    "executor": "active_agent",
+    "independent_review": false,
+    "rounds": [
+      {"perspective": "correctness", "findings_resolved": ["125真实未完整分区保持INCOMPLETE", "reconciled目标不能代替当前canonical验证", "无本地历史的精确修复退避且不伪造数据"]},
+      {"perspective": "completeness_and_regression", "findings_resolved": ["按数据集公平选择恢复目标", "已恢复分区及尚未投影的报警优先", "成功重试清除活动错误但保留历史日志", "子进程保留调度目标身份"]},
+      {"perspective": "performance_and_final", "findings_resolved": ["text因子代码与character(9)行情代码分别匹配索引类型", "仅命名缺口查询", "每10分钟最多100目标", "DEV原生SQL回滚及生产只读耗时验证通过"]}
+    ],
+    "design_compliance_001": {"no_partial_claim": "PASS", "no_silent_success": "PASS", "unchanged_business_semantics": "PASS", "no_new_approval_or_release_gate": "PASS"},
+    "unresolved_blockers": []
+  },
   "created_at": "2026-11-06T10:49:30.595958Z",
   "description": "2026-11-06只读核对128条未确认报警：124 bak_basic、1 cyq_perf保留真实INCOMPLETE；index_daily/10-28当前VALID仍报警，final恢复SQL前100条全为bak_basic；2 afterhours目标已reconciled仍报警。adj_factor历史精确修复782次失败，000787/000805无任何本地价格或因子事实且脚本覆盖调度元数据；sector_data同一作业成功重试后summary保留旧error。仅修复报警恢复调度、公平性、精确修复执行口径及状态摘要；不补造事实、不改业务合同或生产数据。",
   "events": [
@@ -28,14 +39,22 @@
   "evidence_uris": [],
   "expected": "当前验证通过的分区可有界消退旧报警；不可执行的历史修复明确保留缺口并退避；真实失败可见，恢复成功不保留活动错误。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261106_BUG-2190-local-data-recovery-alarms-starve-behind-history-and-exact-factor-repair.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "scripts/ingest_tushare_adj_factor.py"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261106_BUG-2190-local-data-recovery-alarms-starve-behind-history-and-exact-factor-repair.json",
       "backend/ingestion/tdx_scheduler.py",
-      "scripts/ingest_tushare_adj_factor.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "scripts/ingest_tushare_adj_factor.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -146,11 +165,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python loaded tracked scheduler and collector; direct RED=5 failures/1 pass, GREEN related matrix=210 passed/1 skipped; later exact changes=4 passed and 2 passed. Existing DEV native SQL rollback verifies fair selection, recovered alarm selection and job identity preservation. Production READ ONLY recovery query=16ms for100 targets, named2-code history lookup=1500ms; production_write=false,runtime_action=false. X:/AIstock_temp/DATA_PREPARATION/BUG-2190-sync-alarm-20261106/verification.json"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
