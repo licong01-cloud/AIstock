@@ -199,6 +199,47 @@ STOCK_DAILY_AFTERHOURS = DatasetSpec(
     create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
 )
 
+# Raw event storage is handled by the same engine's bounded event producer.
+# These are provider fields only; locally captured identities are never sent
+# to Tushare as requested fields.
+_SEASONED_FIELDS = (
+    'ts_code ann_date first_ann_date proj_info_source board_approval_dt sh_approval_dt '
+    'sasac_approval_dt csrc_approval_dt fo_type fo_stock_type cur_stage valid_st_dt valid_end_dt '
+    'plan_chg_type plan_chg_ann_dt pricing_method pricing_base_dt price_basis fo_vol_high fo_vol_low '
+    'fo_price_high fo_price_low fo_price_ratio fo_raise_total fo_purpose fo_investor sub_method '
+    'fo_price_act fo_vol_act fo_raise_total_act fo_raise_net_act fo_exp_total uw_fee fo_exp_audit '
+    'fo_exp_legal fo_exp_inst fo_exp_pub fo_exp_reg fo_exp_other fo_exp_per_share issue_obj_type '
+    'pe_issue pub_plac_qty onl_pch_vol onl_pch_num onl_pch_excess onl_winning_rate inst_plac_qty '
+    'inst_sub_eff_total inst_sub_eff_cnt inst_oversub_times a_inv_plac_qty b_inv_plac_qty '
+    'old_sh_pre_plac_qty old_sh_pre_plac_ratio clw_between_inst_pub prospectus_pub_dt '
+    'offer_intent_pub_dt apply_date old_sh_pre_plac_dt onl_issue_date uw_start_dt uw_end_dt '
+    'uw_mode new_share_list_dt list_circ_qty right_reg_dt ex_right_dt update_flag'
+).split()
+
+
+def _event_spec(name, table, fields, floor, *, cap=1000, rate=60, date_param='trade_date'):
+    return DatasetSpec(
+        name=name, tushare_api=name, target_table=f'market.{table}',
+        primary_keys=['source_api', 'source_row_sha256'], query_mode=QueryMode.BY_DATE,
+        columns={field: 'text' for field in fields}, date_column='request_date',
+        date_param_name=date_param, incremental_cursor_from_audit=True,
+        initial_start_date=floor, required_for_daily_complete=False,
+        row_limit=cap, rate_per_minute=rate, batch_sleep=60/rate,
+        create_table_script='backend/db/migrations/add_tushare_event_inputs_v1.sql',
+    )
+
+
+STK_SHOCK = _event_spec('stk_shock', 'tushare_risk_event_raw',
+    'ts_code trade_date name trade_market reason period'.split(), '2026-01-01')
+STK_HIGH_SHOCK = _event_spec('stk_high_shock', 'tushare_risk_event_raw',
+    'ts_code trade_date name trade_market reason period'.split(), '2026-01-01')
+STK_ALERT = _event_spec('stk_alert', 'tushare_risk_event_raw',
+    'ts_code name start_date end_date type'.split(), '2026-01-01')
+IDX_ANNS = _event_spec('idx_anns', 'index_announcements_raw',
+    'ann_date title url source type'.split(), '2018-06-01', rate=50, date_param='ann_date')
+STK_SEASONED = _event_spec('stk_seasoned', 'stock_seasoned_raw', _SEASONED_FIELDS,
+    '2018-08-01', cap=3000, date_param='ann_date')
+
 ADJ_FACTOR = DatasetSpec(
     name="adj_factor",
     tushare_api="adj_factor",
@@ -727,6 +768,11 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
     for s in [
         VIX_INDEX,
         STOCK_DAILY_AFTERHOURS,
+        STK_SHOCK,
+        STK_HIGH_SHOCK,
+        STK_ALERT,
+        IDX_ANNS,
+        STK_SEASONED,
         DAILY_BASIC,
         ADJ_FACTOR,
         INDEX_DAILY,

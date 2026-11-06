@@ -16,6 +16,17 @@ from .pg_pool import get_conn
 
 
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
+    {"dataset": "stk_shock", "mode": "incremental", "frequency": "daily", "at": "21:10", "skip_auto_range": True},
+    {"dataset": "stk_high_shock", "mode": "incremental", "frequency": "daily", "at": "21:15", "skip_auto_range": True},
+    {"dataset": "stk_alert", "mode": "incremental", "frequency": "daily", "at": "21:20", "skip_auto_range": True},
+    {"dataset": "idx_anns", "mode": "incremental", "frequency": "daily", "at": "21:30", "skip_auto_range": True},
+    {"dataset": "stk_seasoned", "mode": "incremental", "frequency": "daily", "at": "21:40", "skip_auto_range": True},
+    {"dataset": "_stk_shock_morning", "mode": "incremental", "frequency": "daily", "at": "08:10", "skip_auto_range": True},
+    {"dataset": "_stk_high_shock_morning", "mode": "incremental", "frequency": "daily", "at": "08:12", "skip_auto_range": True},
+    {"dataset": "_stk_alert_morning", "mode": "incremental", "frequency": "daily", "at": "08:14", "skip_auto_range": True},
+    {"dataset": "_idx_anns_morning", "mode": "incremental", "frequency": "daily", "at": "08:20", "skip_auto_range": True},
+    {"dataset": "_stk_seasoned_morning", "mode": "incremental", "frequency": "daily", "at": "09:20", "skip_auto_range": True},
+    {"dataset": "_stk_seasoned_project_review", "mode": "incremental", "frequency": "1h", "skip_auto_range": True},
     {"dataset": "vix_index", "mode": "incremental", "frequency": "daily", "at": "08:00",
      "skip_auto_range": True},
     {"dataset": "_vix_index_midday", "mode": "incremental", "frequency": "daily", "at": "12:00",
@@ -83,8 +94,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v5"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "7eb7191f2b4b31bd548039ca24dbfeb35c1cae77b971d6664320d56d66f92428"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v6"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "aa595b4d1839e97817819e204831b835ce6ca17d6cf72459fdb7d09ae5b9556c"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 

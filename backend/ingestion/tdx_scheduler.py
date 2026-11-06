@@ -2127,6 +2127,14 @@ class TDXScheduler:
     ) -> None:
         if dataset == "_vix_index_midday":
             dataset = "vix_index"  # same job/overlap owner; only the schedule clock differs
+        event_aliases = {'_stk_shock_morning': 'stk_shock', '_stk_high_shock_morning': 'stk_high_shock',
+                         '_stk_alert_morning': 'stk_alert', '_idx_anns_morning': 'idx_anns',
+                         '_stk_seasoned_morning': 'stk_seasoned', '_stk_seasoned_project_review': 'stk_seasoned'}
+        if dataset in event_aliases:
+            options = dict(options)
+            if dataset == '_stk_seasoned_project_review':
+                options['review_open_projects'] = True
+            dataset = event_aliases[dataset]
         if (dataset or "").strip().lower() == "_weekend_compensation" and not self._weekend_compensation_due():
             if schedule_id:
                 self._update_ingestion_schedule(
@@ -5255,6 +5263,7 @@ class TDXScheduler:
                 spec=spec, mode=mode,
                 start_date=start_date, end_date=end_date,
                 job_id=job_id,
+                **({'review_open_projects': True} if options.get('review_open_projects') else {}),
             )
             status = "success" if result.ok else "failed"
             if not result.ok:

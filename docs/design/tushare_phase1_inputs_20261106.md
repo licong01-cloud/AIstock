@@ -1,9 +1,9 @@
-# Tushare 第一批共享输入接入（F1）
+# Tushare 新增共享数据采集接入（F1，分批实施）
 
 ## 背景
 
-用户批准现有 Tushare 兼容整改后的新增输入实施。本批仅接入 VIX、
-daily_basic.limit_status、股票盘后成交量额，复用现有同步引擎、调度、统计和 UI。
+用户批准现有 Tushare 兼容整改后的新增输入实施。首批接入 VIX、
+daily_basic.limit_status、股票盘后成交量额，后续接入五项事件采集，复用现有同步引擎、调度、统计和 UI。
 BUG-2187 已合入并通过重启验收；不重复实现 HTTP 兼容修复。
 跟踪 Issue：#7082；基线 main：75f93692d。
 
@@ -18,7 +18,8 @@ BUG-2187 已合入并通过重启验收；不重复实现 HTTP 兼容修复。
 ## 非目标
 
 不修改 QE/HMM/Advisory、PIT 规则、旧数据集、账户、因子和训练。风险事件、指数公告、
-增发及可选因子库属于后续批次。本批不采全历史、不执行生产迁移或重启服务。
+增发为第二、三批的本地数据采集功能，以下补充其合同。最新用户明确排除因子库及其他业务模块；
+不实施 factor_list/factor_value 或任何业务消费。首批短窗已完成，不在本轮自动采全历史或重启服务。
 不新增全局完整率阈值、审批、队列或调度器，不把新增可选输入变成全市场每日硬依赖。
 
 ## Design Acceptance Index
@@ -29,6 +30,10 @@ BUG-2187 已合入并通过重启验收；不重复实现 HTTP 兼容修复。
 - F-004：本地管理 API、看板、手工补齐及默认自动调度。
 - F-005：可选输入与 A 股全局每日完成标识独立；VIX 不冒充美国日历完整。
 - F-006：DEV 迁移及真实来源写入、独立读回；生产操作独立授权。
+- F-007：三类风险事件原始版本及准确日期语义，不按买入PIT裁剪。
+- F-008：指数公告50/min、1000/day约束、分段续采与稀疏空日查询。
+- F-009：完整增发原文、30自然日尾窗、已知项目查询范围的月度有界复查。
+- F-010：五项新采集的原生作业/统计/UI/调度/验证接入，不影响旧模块。
 
 ## 数据合同
 
@@ -100,13 +105,69 @@ VIX 没有正式日历时不能宣称预期 session 全覆盖；这不影响 A �
 17:00 America/New_York 只是晚于常规计算结束的保守查询上界，不是供应商发布承诺，
 依据：https://www.cboe.com/tradable_products/vix/faqs 。正式 Cboe 节假日日历尚未登记。
 生产 daily_basic 新列必须先显式迁移，再部署请求新增字段的代码；不能先重启造成入库失败。
-默认调度启用必须与对应迁移同次部署；新表缺失沿用清晰报错，不在启动阶段创建。
+新表缺失沿用清晰报错，不在启动阶段创建。旧后端未加载新DatasetSpec时，新增调度先保持待启用，
+避免旧进程把未知接口当成目录错误。用户重启后，通过既有本地管理入口仅启用本次新增计划并验收；
+不覆盖既有自定义计划、不新增审批或独立调度器。
 
 ## Production gates（既有生产权限边界）
 
 DEV 验证、源码交付、生产授权、生产迁移及读回、重启调度验收分别报告。
-本批未获特定生产 DDL/DML 授权，不自动调用生产同步、不安装依赖、不重启服务。
+用户2026-11-06已授权本设计新增表及迁移；仍按DEV验证、审核合入、精确生产执行和读回分别报告。
+不安装依赖、不重启服务，不将本地采集授权扩大为业务模块修改、数据集激活或训练。
 
 生产迁移精确文件：`backend/db/migrations/add_tushare_phase1_inputs_v1.sql`，
 SHA256=`1703f53a89ddaff50dfa6921074c83d644855df38254659b6cdfdffbb2af678c`。
 对象仅为 daily_basic 新增一列、两个新事实表、一个原始观察表、对应元数据和三条默认调度。
+
+## 第二、三批原始事件采集合同
+
+仅新增三张来源表：market.tushare_risk_event_raw（stk_shock/high_shock/alert共享）、
+market.index_announcements_raw、market.stock_seasoned_raw。五项DatasetSpec独立作业、状态和统计；
+共享表用按API过滤的统计视图，不把其他API的记录当作本API覆盖。
+
+- shock/high_shock.trade_date为公告日期，reason/period原文保留，同股同日多原因不互相覆盖。
+- alert输入trade_date为开始日，输出start_date/end_date原样保留；end_date仅参考截止，不推断真实解除。
+- idx_anns保留ann_date/title/url/source/type；不是申万公告，不修改申万分类或停发authority。
+- stk_seasoned完整保留69个正式字段（价格元、数量股、金额人民币元、比率按供应商原单位），
+  原始JSON不改算、不合并NULL。无稳定项目ID，source_record_key=UNKNOWN；代码+首次公告日只用于查询范围。
+- 全部published_at=NULL、publication_time_quality=UNKNOWN、vintage_quality=NON_VINTAGE；
+  captured_at和last_observed_at为真实采集时刻。原始内容SHA幂等；不同修订保留，空响应不删除旧版本。
+- 三类风险初始下界2026-01-01（不宣称此前无事件）；指数公告2018-06-01（恒生2020起）；增发2018-08-01。
+  不因本次开发自动全量采集。init必须显式指定范围，incremental首次从各自下界有界续采。
+- 自然日运行，三类风险21:10/15/20及次早08:10/12/14，指数21:30/次早08:20，增发21:40/次早09:20。
+  三类风险及指数复查最近7自然日，增发最近30自然日；尾窗外既有失败目标仍精确补采。
+- 请求窗口不超过90自然日，1000/3000行上限先二分日期，单日满额按正式股票目录或指数来源分片；
+  任一满额未完成、权限/HTTP/字段错误保留失败，已提交窗口不重抓，不把失败当合法零事件。
+- idx_anns每分钟最多50请求，每日1000请求；在现有ingestion_logs计数所有尝试并事务认领，单作业最多800次。
+  不声称控制账户的外部客户端；额外provider限流仍明确失败等待。
+- 增发每小时至多20个既存未终止查询范围，每个范围当月成功后不重复；定向重查捕获尾窗外修订。
+  同代码/首次公告日不是项目ID：仅范围内所有已知原文均明确“终止”时跳过；多版本/冲突保守复查，不因一条终止漏掉另一项目。
+  失败不标已复查；缺首次公告日期保留未知，不制造项目ID、终止时间或历史可知性。
+- row_count为分区已保留原始版本数；written_rows为本次新增版本数；当前响应数量另存event_scan。
+  revision仅随新内容变化，原文/revision/成功查询审计同事务提交；正常稀疏零日不制造行情缺口。
+- 五项均独立可选，不纳入A股全局日完成必需集合；本地检查验证实际查询、原文与当前revision，
+  不把查询完整误述成供应商历史全集或业务可交易性。没有额外消费者、审批平台或全历史日检。
+
+正式来源：https://tushare.pro/document/2?doc_id=451 、452、453、460、494。
+短窗真实探测五项均可返回原文；开发验收还需DEV原生同步、独立读回、重复写入和故障/上限回归。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-007 | backend/services/tushare_event_inputs.py; backend/services/tushare_dataset_specs.py | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/tushare-event-inputs-20261106/final-dev-readback.json | verified | - |
+| F-008 | backend/services/tushare_event_inputs.py | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/tushare-event-inputs-20261106/dev-contracts.json | verified | - |
+| F-009 | backend/services/tushare_event_inputs.py; backend/ingestion/tdx_scheduler.py | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/tushare-event-inputs-20261106/dev-contracts.json | verified | - |
+| F-010 | backend/db/migrations/add_tushare_event_inputs_v1.sql; frontend/src/app/local-data/page.tsx | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/tushare-event-inputs-20261106/final-dev-readback.json | verified | - |
+
+第二、三批直接相关小矩阵71 passed；新增RED阶段13个缺实现失败，后续38个直接合同通过。
+既存DEV三表迁移重复两次通过，10月30..31十个分区PhysicalValidator均VALID，原文哈希不一致0。
+真实采集：异常17、严重异常2、重点提示5、指数公告2、增发8条（另有定向复查发现的旧公告原文保留）。
+重复相同内容written_rows=0而row_count保留覆盖；空日revision=0仍按真实完整查询验证，不制造事件。
+原文保留表的物理row_count不随最新响应为空而归零，所有该日期保留版本独立核验，真实损坏仍明确失败。
+DEV原生SQL故障注入证明原文/revision/审计整体回滚；修订产生新版本，旧revision无法冒充当前验证。
+已知增发查询范围实际复查、重复为0及原完整日期查询保留通过；不把查询范围当项目实体。
+三轮审核依次覆盖来源/日期/单位、限流/空值/原子性、跨API游标/项目冲突/界面查询语义，并修正发现问题。
+DESIGN-COMPLIANCE-001四项逐项通过：无简化冒充完整、无静默失败、无业务规则改动、无新增业务门禁。
+本地L0/changed-file Ruff/模块映射/TSX语法通过；宽域回归和正式前端验证由本PR既有CI执行。
+自动调度运行态仍为pending_user_restart；源码和DEV通过不代表生产运行时已加载，不提前关闭Issue #7082。
+第二、三批migration初始新增计划disabled；DEV验证及源码合入后可先落表，后端加载新目录并只读确认后，
+使用既有schedule upsert仅启用本次新增计划，无需用户重复授权。源功能与计划运行验收分开报告。
