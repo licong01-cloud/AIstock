@@ -170,3 +170,19 @@ DESIGN_VERIFIED仅表示设计闭合；择时软件验证、LocalSIM接入和新
 | F-406 | intraday/wait_control.py::evaluate_wait_control | backend/tests/position_timing/test_intraday_wait_control.py | VERIFIED | none |
 | F-407 | intraday/wait_control_results.py::prepare/source_preflight | backend/tests/position_timing/test_intraday_wait_control.py | VERIFIED | none |
 | F-408 | intraday/continuous_results.py::period_account_rows；intraday/wait_control_results.py::analyze | backend/tests/position_timing/test_intraday_wait_control.py；backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
+
+## 当前离线软件交付证据
+
+择时实现来源commit：`54e4181988ba34d2b787eae48062a970888df2a9`（后续仅补交付文档；plan另绑定12份共享实现LF哈希）。
+本轮唯一交付research_plan为
+`X:/AIstock_temp/position-timing-wait-budget-implementation-20261106/artifacts/intraday_v1/wait_budget_plans/4c1c785fcc823072e72343bca5be764b72e4b007ae4a7aa3bf41363624d0141c.json`，
+完整文件SHA256：`dd1d4890e7835c49949eb428191ce675acb781402db7a5404109a9d4d60463a5`。
+WSL路径将`X:/`替换为`/mnt/x/`。共同经济opening摘要为`1cc6971f686552b2d897692780b158deab7455ec806b71e0ecf34b504047e266`。
+开发中间plan保留为不可变历史，不是本次消费输入，不覆盖或删除。
+
+真实WSL文件prepare→inspect→同输入prepare通过；inspect=VERIFIED，exact retry=ALREADY_MATERIALIZED且FileRef完全一致。
+51为计划账户日数，不是已计算数量；本轮实际新账户回放0日、新三户收益读取false，database/network/runtime/process均false。
+另以重构后的共享归约函数消费原冻结13户221账户日，与原报告所有13账户及24比较逐项完全一致，未覆盖旧报告、未重新撮合。
+功能夹具证据：42项相关小矩阵通过；最终新接口16项通过，后续只读inspect/依赖指纹的受影响路径定向复核通过。夹具不证明真实新三户收益。
+变更范围L0/ruff、F1 8项/F2 12项通过；classifier为targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。提交前测试债务生产48,546/测试12,655有效行，26.07%，没有调整归属或分类。
+CI、源码合入和本窗口状态以本次PR为准；LocalSIM接入、51日经济结果与线上激活仍分开报告，无需等待后端重启交付这些离线接口。
