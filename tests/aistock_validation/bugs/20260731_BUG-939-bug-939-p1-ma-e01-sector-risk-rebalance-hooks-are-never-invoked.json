@@ -79,6 +79,24 @@
   "fixed_at": "2026-08-01T06:16:15Z",
   "github_issue_number": 2997,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2997",
+  "historical_local_evidence": {
+    "runtime_acceptance_changed": false,
+    "schema_version": "aistock_preserved_local_evidence_v1",
+    "source": {
+      "archive_path": "F:\\Dev\\AIstock_worktrees\\.cleanup-receipts\\metadata-cleanup-r2-20261107\\metadata-snapshots.json",
+      "archive_sha256": "c6f216cfc94f6d1f4ea6bf6472bba6b726886503a6fba3f1529a722349677c31",
+      "recovered_at": "2026-11-06T18:36:10.619030+00:00",
+      "source_branch": "bug/BUG-939-runtime-template-asset-precedence-20260801",
+      "source_file_sha256": "76ef5261fee577ad5fa59bf85e2d3261f2b1c2b673e641749d87a6767829047c",
+      "source_head": "f090a80e5189a0dfb80059cd7126a63dfc0afd71",
+      "source_path": "tests/aistock_validation/bugs/20260731_BUG-939-bug-939-p1-ma-e01-sector-risk-rebalance-hooks-are-never-invoked.json",
+      "source_worktree": "F:\\Dev\\AIstock_worktrees\\BUG-939-runtime-template-asset-precedence-20260801"
+    },
+    "status": "NOT_EVALUATED",
+    "unconfirmed_notes": [
+      "post-copy test proves frozen stale wrapper is replaced by current centralized helper set and both dedicated V2 parent modules"
+    ]
+  },
   "last_seen_at": "2026-07-31T18:52:19.935074Z",
   "module": "quantevolver",
   "non_goals": [

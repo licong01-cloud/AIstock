@@ -20,7 +20,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-403",
-  "closed_at": null,
+  "closed_at": "2026-06-18T06:24:56Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -107,17 +107,47 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-17T09:02:01.650047Z",
-  "fix_branch": null,
-  "fix_commit": "af8ca42fc81e",
-  "fixed_at": "2026-07-06T18:29:20.014705Z",
+  "fix_branch": "bug/BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-dom-20260617",
+  "fix_commit": "4793d2ccbb9fef11972de0dd24947db66569c875",
+  "fixed_at": "2026-06-18T06:24:56Z",
   "github_issue_number": 1208,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1208",
   "last_seen_at": "2026-06-17T09:02:01.650047Z",
+  "metadata_correction": {
+    "corrected_at": "2026-11-06T18:36:10.619030+00:00",
+    "historical_only": true,
+    "local_snapshot": {
+      "archive_path": "F:\\Dev\\AIstock_worktrees\\.cleanup-receipts\\metadata-cleanup-r2-20261107\\metadata-snapshots.json",
+      "archive_sha256": "c6f216cfc94f6d1f4ea6bf6472bba6b726886503a6fba3f1529a722349677c31",
+      "recovered_at": "2026-11-06T18:36:10.619030+00:00",
+      "source_branch": "bug/BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-dom-20260618",
+      "source_file_sha256": "6f65361308dbac69a0a741ccb725fd785adc007405ca3a6787fe4789edcc2d65",
+      "source_head": "c8cb3793bca6a1644e8b9bd4b3a1e81c8963ab4d",
+      "source_path": "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+      "source_worktree": "F:\\Dev\\AIstock_worktrees\\BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-dom-20260618"
+    },
+    "previous_values": {
+      "closed_at": null,
+      "fix_branch": null,
+      "fix_commit": "af8ca42fc81e",
+      "fixed_at": "2026-07-06T18:29:20.014705Z",
+      "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
+      "validation_evidence": [
+        "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+      ]
+    },
+    "reason": "原台账错连到无关的 BUG-596 / PR #1887；按 GitHub Issue 关闭事件与真实合入 PR 恢复源码和历史验证归属。",
+    "schema_version": "aistock_historical_source_link_correction_v1",
+    "source_pr_body_sha256": "08daaba9ddffce91e6e253fbb0b3eee641094b2a7296de02cb2e4fc8a6833f60",
+    "source_pr_head": "1752db5773d890a9c7b69f06df3314f93ea1e66c",
+    "tests_rerun": false,
+    "unconfirmed_local_claims": "NOT_EVALUATED; retained verbatim in external archive"
+  },
   "module": "research_assistant",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1233",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -168,7 +198,10 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_stock_analysis_mcp.py backend/tests/research_assistant/test_tool_catalog_gate.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_phase0_blueprint_baseline.py -q -> 80 passed",
+    "rtk proxy python -m nox --no-error-on-missing-interpreters -s l0 validation_module_registry_l0 research_assistant_backend research_assistant_mcp_contract ra_phase0_baseline ra_phase5_agent_teams ra_phase7_full_accept -> all 7 sessions passed",
+    "rtk git diff --check -> passed",
+    "rtk ruff check changed Python files -> passed"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
