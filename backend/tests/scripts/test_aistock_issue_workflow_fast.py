@@ -16,6 +16,208 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.fixture
+def disposal_repository(tmp_path, monkeypatch):
+    """Real Git history, an unmerged worktree and a cold-restored, self-contained bundle."""
+    root, task, evidence = (tmp_path / name for name in ("repo", "task", "evidence"))
+    root.mkdir()
+    evidence.mkdir()
+
+    def git(*args, cwd=root):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-b", "main")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Cleanup contract test")
+    (root / ".gitignore").write_text("tmp/\n", encoding="utf-8")
+    git("add", ".gitignore")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    branch = "feature/obsolete"
+    git("worktree", "add", "-b", branch, str(task))
+    (task / "unique.py").write_text("historical_value = 7\n", encoding="utf-8")
+    git("add", "unique.py", cwd=task)
+    git("commit", "-m", "unique historical source", cwd=task)
+    head = git("rev-parse", "HEAD", cwd=task)
+    target = {"branch": branch, "head": head, "worktree": str(task.resolve())}
+
+    def write(name, value):
+        path = evidence / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    authorization = write("authorization.json", {"schema_version": "aistock_cleanup_authorization_v1",
+        "user_instruction": "Archive and remove these reviewed obsolete branches.",
+        "actions": ["discard_reviewed_unmerged_branch"], "targets": [target]})
+    reference = write("reference-review.json", {"schema_version": "aistock_disposal_reference_review_v1",
+        "target": target, "remaining_dependencies": [], "reviewed_roots": [str(tmp_path)],
+        "status": "NO_REMAINING_DEPENDENCIES", "protected_files": []})
+    bundle = evidence / "source.bundle"
+    git("bundle", "create", "--version=2", str(bundle), f"refs/heads/{branch}")
+    bundle_ref = {"path": str(bundle), "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+    restored = evidence / "restore.git"
+    git("clone", "--bare", str(bundle), str(restored))
+    git("fsck", "--full", cwd=restored)
+    assert git("show", f"{head}:unique.py", cwd=restored) == "historical_value = 7"
+    recovery = write("recovery.json", {"schema_version": "aistock_bundle_restore_receipt_v1",
+        "bundle_sha256": bundle_ref["sha256"], "independent_object_store": True, "fsck_passed": True,
+        "restored_targets": [{"branch": branch, "head": head, "tree": git("rev-parse", f"{head}^{{tree}}", cwd=restored)}]})
+    manifest = {"schema_version": "aistock_reviewed_disposal_v1", "repository": workflow.GITHUB_REPO,
+        "target": target, "authorization": authorization, "recovery_bundle": bundle_ref,
+        "recovery_receipt": recovery, "review": {"decision": "DISCARD_AFTER_ARCHIVE",
+        "reason": "Replaced implementation; retain historical source in verified recovery.",
+        "successor_commits": [base], "reference_evidence": reference}}
+    manifest_ref = write("manifest.json", manifest)
+    monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *a, **kw: None)
+    return SimpleNamespace(root=root, task=task, evidence=evidence, git=git, write=write, target=target,
+        manifest=manifest, manifest_ref=manifest_ref, branch=branch, head=head, base=base)
+
+
+def _disposal_verification(case, **overrides):
+    args = {"branch": case.branch, "bug_id": None, "expected_head": case.head,
+        "worktree": str(case.task), "mode": "reviewed_disposal",
+        "authority_ref": case.manifest["authorization"]["path"], "reason": "Reviewed obsolete source after recovery.",
+        "replacement_pr_url": None, "supersession_comment_url": None, "remote_ref": "", "root": case.root,
+        "disposal_manifest": case.manifest_ref["path"], "disposal_manifest_sha256": case.manifest_ref["sha256"]}
+    args.update(overrides)
+    return workflow._cleanup_supersession_verification(**args)
+
+
+def test_reviewed_disposal_accepts_cold_recoverable_unique_source(disposal_repository):
+    case = disposal_repository
+    assert case.git("cherry", "origin/main", case.branch).startswith("+")
+    result = _disposal_verification(case)
+    assert result["verified"], result
+    assert result["authority"]["source_merged"] is False
+    assert case.task.exists()  # Verification itself never deletes.
+
+
+@pytest.mark.parametrize("fault", ["manifest_hash", "authorization_scope", "bundle_hash", "recovery_head",
+    "frozen_reference", "successor", "worktree", "prerequisite_bundle", "missing_file", "symlink_ancestor"])
+def test_reviewed_disposal_rejects_incomplete_or_mismatched_evidence(disposal_repository, monkeypatch, fault):
+    case = disposal_repository
+    if fault == "manifest_hash":
+        case.manifest_ref["sha256"] = "0" * 64
+    elif fault == "authorization_scope":
+        case.manifest["authorization"] = case.write("authorization.json", {
+            "schema_version": "aistock_cleanup_authorization_v1", "user_instruction": "merge only",
+            "actions": ["merge_source"], "targets": [case.target]})
+    elif fault == "bundle_hash":
+        case.manifest["recovery_bundle"]["sha256"] = "0" * 64
+    elif fault == "recovery_head":
+        p = Path(case.manifest["recovery_receipt"]["path"])
+        value = json.loads(p.read_text())
+        value["restored_targets"][0]["head"] = case.base
+        case.manifest["recovery_receipt"] = case.write(p.name, value)
+    elif fault == "frozen_reference":
+        p = Path(case.manifest["review"]["reference_evidence"]["path"])
+        value = json.loads(p.read_text())
+        value["remaining_dependencies"] = ["frozen model imports unique.py"]
+        case.manifest["review"]["reference_evidence"] = case.write(p.name, value)
+    elif fault == "successor":
+        case.manifest["review"]["successor_commits"] = [case.head]
+    elif fault == "worktree":
+        case.manifest["target"]["worktree"] = str(case.root)
+    elif fault == "prerequisite_bundle":
+        bundle = case.evidence / "partial.bundle"
+        case.git("bundle", "create", "--version=2", str(bundle), case.branch, f"^{case.base}")
+        case.manifest["recovery_bundle"] = {"path": str(bundle), "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+    elif fault == "missing_file":
+        case.manifest["authorization"]["path"] = str(case.evidence / "missing.json")
+    else:
+        original = workflow._is_reparse_or_symlink
+        monkeypatch.setattr(workflow, "_is_reparse_or_symlink", lambda p: p == case.evidence or original(p))
+    if fault != "manifest_hash":
+        case.manifest_ref = case.write("manifest.json", case.manifest)
+    result = _disposal_verification(case)
+    assert not result["verified"], result
+    assert case.task.exists() and case.git("rev-parse", case.branch) == case.head
+
+
+@pytest.mark.parametrize("fault", ["open_pr", "local_head", "remote_head", "wrong_registered_worktree", "mode"])
+def test_reviewed_disposal_keeps_existing_identity_and_authority_guards(disposal_repository, monkeypatch, fault):
+    case = disposal_repository
+    overrides = {}
+    if fault == "open_pr":
+        monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *a, **kw: {"url": "https://example/pr/1"})
+    elif fault == "local_head":
+        overrides["expected_head"] = case.base
+    elif fault == "remote_head":
+        overrides["remote_ref"] = f"{case.base}\trefs/heads/{case.branch}"
+    elif fault == "wrong_registered_worktree":
+        overrides["worktree"] = str(case.root)
+    else:
+        overrides["mode"] = "patch_equivalent"
+    assert not _disposal_verification(case, **overrides)["verified"]
+    assert case.task.exists()
+
+
+@pytest.mark.parametrize("fault", ["none", "evidence_drift", "active", "dirty", "unknown", "late_head_drift"])
+def test_reviewed_disposal_canonical_apply_and_predelete_recheck(disposal_repository, monkeypatch, fault):
+    case = disposal_repository
+    monkeypatch.setattr(workflow, "REPO_ROOT", case.root)
+    monkeypatch.setenv("AISTOCK_CLEANUP_RECEIPT_ROOT", str(case.evidence / "receipts"))
+    monkeypatch.setattr(workflow, "_run_read_command_with_retry", lambda *a, **kw: _result())
+    monkeypatch.setattr(workflow, "_worktree_active_process_profile", lambda *a: {
+        "scan_status": "complete", "reference_count": int(fault == "active"), "references": []})
+    if fault == "dirty":
+        (case.task / "unique.py").write_text("uncommitted work\n", encoding="utf-8")
+    if fault == "unknown":
+        monkeypatch.setattr(workflow, "_worktree_ignored_artifact_profile", lambda *a, **kw: {
+            "scan_status": "complete", "unknown_count": 1, "protected_count": 0,
+            "unknown_samples": ["unknown-model.bin"], "transient_count": 0})
+    if fault == "evidence_drift":
+        original = workflow._git_snapshot
+
+        def change_after_preflight(root):
+            Path(case.manifest_ref["path"]).write_text("{}", encoding="utf-8")
+            return original(root)
+
+        monkeypatch.setattr(workflow, "_git_snapshot", change_after_preflight)
+    if fault == "late_head_drift":
+        remove = workflow._remove_worktree_with_reparse_fallback
+
+        def advance_before_remove(**kwargs):
+            (case.task / "unique.py").write_text("new_unarchived_work = 11\n", encoding="utf-8")
+            case.git("add", "unique.py", cwd=case.task)
+            case.git("commit", "-m", "concurrent source change", cwd=case.task)
+            return remove(**kwargs)
+
+        monkeypatch.setattr(workflow, "_remove_worktree_with_reparse_fallback", advance_before_remove)
+    supersession = {"expected_head": case.head, "mode": "reviewed_disposal",
+        "authority_ref": case.manifest["authorization"]["path"], "reason": "Reviewed obsolete source after recovery.",
+        "replacement_pr_url": None, "supersession_comment_url": None,
+        "disposal_manifest": case.manifest_ref["path"], "disposal_manifest_sha256": case.manifest_ref["sha256"]}
+
+    def apply():
+        return workflow.build_cleanup_after_merge_plan(branch=case.branch, worktree=str(case.task),
+            canonical_root=str(case.root), apply=True, supersession=supersession,
+            preflight_fetch={"status": "fetched", "result": {"ok": True}})
+
+    if fault == "evidence_drift":
+        with pytest.raises(workflow.WorkflowError, match="changed before deletion"):
+            apply()
+        assert case.task.exists() and case.git("rev-parse", case.branch) == case.head
+    elif fault == "late_head_drift":
+        with pytest.raises(workflow.WorkflowError):
+            apply()
+        assert case.git("show", f"{case.branch}:unique.py") == "new_unarchived_work = 11"
+    elif fault in {"active", "dirty", "unknown"}:
+        message = {"active": "active processes", "dirty": "worktree is dirty", "unknown": "unknown ignored artifacts"}[fault]
+        with pytest.raises(workflow.CleanupBlockedError, match=message):
+            apply()
+        assert case.task.exists() and case.git("rev-parse", case.branch) == case.head
+    else:
+        result = apply()
+        assert result["workflow_gate"] == "cleanup_done", result.get("blocking")
+        assert result["cleanup_verification"]["all_clear"]
+        assert not case.task.exists()
+        assert Path(case.manifest["recovery_bundle"]["path"]).is_file()
+        durable = json.loads(Path(result["superseded_cleanup_receipt"]["path"]).read_text())
+        assert durable["authority"]["recovery_bundle"] == case.manifest["recovery_bundle"]
+
+
 @pytest.mark.parametrize("restriction,expected", [
     (None, {"commit", "push", "create_or_update_pr", "merge_source", "metadata_sync", "root_sync"}),
     ("no_merge", {"commit", "push", "create_or_update_pr", "metadata_sync", "root_sync"}),
