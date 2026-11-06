@@ -52,17 +52,17 @@
   "expected": "精确核对任务、源预测、当前recorder、完整账户日期及上传失败收据后，允许正式results_only仅补登记和入仓；其他失败仍拒绝。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/results_only_retry.py",
-      "backend/tests/unified_engine/test_qe_results_only_retry.py"
+      "backend/tests/unified_engine/test_qe_results_only_retry.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/results_only_retry.py",
-      "backend/tests/unified_engine/test_qe_results_only_retry.py"
+      "backend/tests/unified_engine/test_qe_results_only_retry.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -144,8 +144,8 @@
   },
   "first_seen_at": "2026-11-06T03:47:52.005308Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "99c2c71ee2379f403dbdc8468a061c87748b3094",
+  "fixed_at": "2026-11-06T04:05:17Z",
   "github_issue_number": 7064,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7064",
   "last_seen_at": "2026-11-06T03:47:52.005308Z",
@@ -153,6 +153,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7066",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -194,6 +195,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -205,7 +207,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2184",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2ada19f00e93f5aa",
+    "recorded_at": "2026-11-06T04:06:00.309831Z",
+    "runtime_contract_digest": "49a2feeecf2a0d1eae41e29428711d4572035e1941cc02afa747577be7fe3948",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "20ecf78a933bab940ef66e6628d7b18ff430b1f5",
+    "source_merge_commit": "99c2c71ee2379f403dbdc8468a061c87748b3094",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7066",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/quantevolver/qe_evolution_service.py backend/services/quantevolver/results_only_retry.py backend/tests/unified_engine/test_qe_results_only_retry.py tests/aistock_validation/bugs/20261106_BUG-2184-qe.json -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "ed011d147c859ce48540ea5aef48da978b11ec78f70b7ce45bf28cf6009fca33"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -218,7 +242,8 @@
     "python -B -m pytest backend/tests/unified_engine/test_qe_results_only_retry.py -q --disable-warnings --maxfail=1 -> 47 passed",
     "python -B -m ruff check changed Python files -> passed",
     "git diff --check -> passed",
-    "real-artifact-preflight.json -> READ_ONLY_REAL_ARTIFACT_GATE_PASSED, Loop9/10, 549 days each"
+    "real-artifact-preflight.json -> READ_ONLY_REAL_ARTIFACT_GATE_PASSED, Loop9/10, 549 days each",
+    "python -m nox -s l0 -- backend/services/quantevolver/qe_evolution_service.py backend/services/quantevolver/results_only_retry.py backend/tests/unified_engine/test_qe_results_only_retry.py tests/aistock_validation/bugs/20261106_BUG-2184-qe.json -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
