@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-01T16:22:41.624570Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4b317ab5f31a9c1cbe1d8085ad0240946c34c2f3",
+  "fixed_at": "2026-10-01T16:49:30Z",
   "github_issue_number": 5205,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5205",
   "last_seen_at": "2026-10-01T16:22:41.624570Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5210",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -115,17 +116,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/factor-transformation/stats",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python loaded the tracked transformer from this task worktree; four synthetic helper/entry cases execute with the expected frame and H5 writes explicitly forbidden. No database or runtime process was used."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/factor-transformation/stats",
-    "database_readback_ref": "not_required",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -135,7 +138,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1658",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b6bacc348ea05bc5",
+    "recorded_at": "2026-10-01T16:51:05.059974Z",
+    "runtime_contract_digest": "346f855031c2e39326307d609ec3cc98510a40af9e6366ed962a6ca94b7b291d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1a4b9efb197b855ff3a4312c88489503271201be",
+    "source_merge_commit": "4b317ab5f31a9c1cbe1d8085ad0240946c34c2f3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5210",
+    "validation_evidence": [
+      "python -m pytest backend/tests/quantevolver/test_official_runtime_validation.py -q -> passed",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "8c3f872efde2dd53b05b5695371b39d2f6a5e2e95a1dc583cddc3c905767787a"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.core"
   ],
@@ -144,6 +169,10 @@
     "fingerprint": "fe6dd77de719a2ef59bc9530",
     "source_event_id": "FE-20261001-fe6dd77de719"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_official_runtime_validation.py -q -> passed",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
