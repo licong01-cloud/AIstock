@@ -2,7 +2,7 @@
 
 ## 背景
 
-用户要求执行主线后的B0/C两臂三seed验证，并解决QE侧接线阻断。原125日C已完整交付，但尚无匹配772数据身份及Q4的后继。旧consumer明确拒绝新schema；复用旧准入或改写载体会破坏冻结身份。本设计现覆盖完整独立消费源码入口，真实准入、匹配资产完整Composer和六账户须另行验收；源码和fixture通过不代表实验就绪。
+用户要求执行主线后的B0/C两臂三seed验证，并解决QE侧接线阻断。同772的Q2/Q3/Q4完整142日×131行业资产已交付；Q2/Q3保留旧训练身份而在772重推，Q4使用新发布协议。旧consumer明确拒绝新schema；复用旧准入或改写载体会破坏冻结身份。本设计覆盖独立消费源码入口和显式分区适配，真实准入、匹配资产完整Composer和六账户须另行验收；源码和fixture通过不代表实验就绪。
 
 本次沿用户2026-11-05“开始执行规划的实验和任务”推进已返回的精确兼容方案，保持原秩预算公式，未新增收益寻优参数或审批门槛。
 
@@ -24,10 +24,13 @@
 - F-008：Composer显式选项默认关闭且与旧overlay互斥；复用原源码SHA预算钩子，保持1亿元/Top50/C1原交易参数与费用，末日9/30和10/29不缩窗，打包全部worker并在运行前实读验证。
 - F-009：BacktestExecutor只允许同SHA的prediction replay消费；禁止训练、隐式重新预测、替换AF或多层风险同时生效。
 - F-010：独立worker策略保留原自然买卖/已有持仓和强制退出，提供完整131行业原字段审计；用真实Qlib订单Oracle核对B0恒等、风险组预算及已有持仓无额外订单，实际新资产full Composer另列待验收。
+- F-011：显式支持Q2/Q3旧训练模型的772重推分区及Q4新协议，分别核对原文件字节、receipt、合同、训练身份、模型参数和生效区间；合并仅发生在QE内存视图，不修改HMM预测或将旧训练身份冒充772。
 
 ## 实施方案
 
 新增scripts/qe_l2_member_loss_consumer.py。纯解析函数接收预测对象、预检binding和日历；期望binding精确冻结预测SHA、发布合同SHA、release_binding、131行业和逐季度模型/receipt/vintage。CLI先校验实文件字节，禁止由预检binding自动产生正式准入记录。
+
+分区模式使用独立版本的QE运输包和binding：逐季度包含预测及模型原文件的base64字节和SHA，Q4模型从原sealed文件的model字段解析，保留整个原文件。仅接受明确列出的两种发布schema，分别验证旧模型receipt引用和新Q4 acceptance引用。三份inference_identity必须完全相同且绑定772，三个训练身份分别钉住原release，不要求历史模型伪造新训练身份。日历、行业、季度生效范围、raw/发布值及142/141边界沿原校验，无任意schema兼容或默认安全值。运输包不授予准入，正式注册继续等待AF/映射闭合。
 
 发布值用于完整行业平均秩；内部短暂转换为既有预算核接受的expected_loss参数，返回审计恢复原expected_member_loss/raw及availability/reason，明确字段来源。此为函数参数适配，不改写或重标预测文件、不把C冒充旧资产。纯预算入口不生成订单；正式MemberEntryMixin核对已有持仓与J、经济日历及前一交易日，原策略继续生成订单、正常和强制退出。B0不打开风险文件。
 
@@ -51,18 +54,23 @@
 | F-004 | scripts/qe_l2_member_loss_consumer.py | backend/tests/quantevolver/test_qe_l2_member_loss_consumer.py::test_member_budget_preserves_groups_and_original_audit_field | PASS | 无 |
 | F-005 | scripts/qe_l2_member_loss_consumer.py | backend/tests/quantevolver/test_qe_l2_member_loss_consumer.py；validation-receipt: tmp/handoff/qe-member-loss-consumer-20261105/node_checks_final.json | PASS | 无 |
 | F-006 | scripts/qe_l2_member_loss_admission.py | backend/tests/quantevolver/test_qe_l2_member_loss_composer.py | PASS | 无 |
-| F-007 | scripts/qe_l2_member_loss_consumer.py | backend/tests/quantevolver/test_qe_l2_member_loss_composer.py | PASS | 无 |
+| F-007 | scripts/qe_l2_member_loss_consumer.py | backend/tests/quantevolver/test_qe_l2_member_loss_composer.py；run_v3/af_bridge_readback.json | PENDING | 同772新AF版本桥接与扩展分类映射尚未验收；保持正式准入拒收，不报告完整消费就绪 |
 | F-008 | backend/services/quantevolver/l2_member_loss_consumer.py；backend/services/quantevolver/config_composer.py | backend/tests/quantevolver/test_qe_l2_member_loss_composer.py | PASS | 无 |
 | F-009 | backend/services/quantevolver/executors/backtest.py | backend/tests/quantevolver/test_qe_l2_member_loss_composer.py | PASS | 无 |
 | F-010 | scripts/qe_l2_member_loss_strategy.py | backend/tests/unified_engine/test_qe_l2_member_loss_strategy.py；validation-receipt: tmp/handoff/qe-member-loss-consumer-20261105/run_v2/native_order_receipts.json | PASS | 无 |
+| F-011 | scripts/qe_l2_member_loss_consumer.py::_validate_partition_bundle | backend/tests/quantevolver/test_qe_l2_member_loss_consumer.py::test_partitioned_release_preserves_training_lineage_and_complete_rows；run_v3/validation.json | PASS | 无 |
 
 2026-11-05本阶段验证：26个针对性测试及审核后2个类型错误回归、Ruff、git diff --check通过；真实旧C完整16,375行CLI按预期返回QE_L2_MEMBER_DATASET_IDENTITY，原SHA未变。两节点fresh-process预算Oracle通过，结果3074999.9999999995/925000/2000000元，相对事前金额Oracle误差小于1e-8元，未改业务容差；B0恒等、131行原字段保持。该验证是纯预算和拒收，不是完整Composer或新资产成功消费。
 
 作者第一轮检查数值/原公式/字段、原订单路径和窗口；第二轮检查准入、实际字节、失败路径、默认行为及状态措辞，修复原生Series消费及运行前test窗口篡改缺口。针对性测试另覆盖AF非等价、处理器/权重漂移、资金费用不变和回放模式；双节点真实Qlib四种场景各核对B0/C订单，Windows无Qlib的测试明确skip，不冒充原生订单通过。
 
-原三个C1源AF双节点解析已核对；本轮三seed各一次冻结推理已保存候选，但新数据历史输入有修订，原参考面板少934行且共同样本有预测变化，严格回执未通过。不得把候选声明为已验收、重复推理或放宽旧参考校验。QE仍需闭合新旧数据差异的来源与版本桥接，才可完成映射和真实准入；匹配C/Q4由HMM交付。旧九账户及旧HMM不重跑。
+原三个C1源AF双节点解析已核对；本轮三seed各一次冻结推理已保存候选，但新数据历史输入有修订，原参考面板少934行且共同样本有预测变化，严格回执未通过。不得把候选声明为已验收、重复推理或放宽旧参考校验。QE仍需闭合新旧数据差异的来源与版本桥接，才可完成映射和真实准入。匹配C/Q4现已交付，不再请求HMM补预测或重训。旧九账户及旧HMM不重跑。
 
-DESIGN-COMPLIANCE-001：源码逐项覆盖F-001—010，未用预检替代正式入口；真实资产、准入、CAS、完整Composer和经济实验仍明确未验收，没有空白可通行登记、默认安全值或假成功。原预算公式及默认策略不变，未降低历史等价条件、缩窗或新增未经批准公式。新C/Q4交原owner，不由QE代训或重标；源码、CI、合入、运行加载和经济结论分别报告。
+2026-11-06不重启期间接续：分区协议13项针对性验证及消费/Composer合计60项测试通过；Windows及双节点fresh-process均读取真实142×131资产，原六份预测/模型载体SHA不变。三轮自审重点为发布schema、训练与推理身份分离、完整行业/时序/NA、同日旧overlay互斥及不伪造准入；未称外部审核。源码已同步最新main并保留L7与member-loss各自显式入口。
+
+run_v3/af_bridge_readback.json只证明三个候选各970,074行、原模型/预处理/代码和候选文件字节完整，不能追补原进程的运行态指纹。三份原严格验收回执均未生成：原失败发生于finish之前，推理后的处理器/权重指纹未持久化。数据侧仍需解释941条cp_his_high新NA和67,471条历史close/high修订；已读发布lineage/source-readiness/source-quality没有这些差异的逐项依据。QE负责明确新版本AF的证据合同以及同release扩展分类映射，原严格等价失败不改true，不自动追加推理。实际新版本AF准入未闭合前，PR保持草稿，不把解析通过称作正式消费完成。
+
+DESIGN-COMPLIANCE-001：F-001—011逐项复核。新协议分区读取已通过，F-007明确保持PENDING，完整feature尚未达到合入就绪；不以旧fixture覆盖新AF/扩展分类映射的缺口。真实准入、完整Composer和经济实验未验收，没有空白可通行登记、默认安全值或假成功。原预算公式及默认策略不变，未降低历史等价条件、缩窗或新增未经批准公式。C/Q4完整交付已接收，不由QE代训或重标；源码、CI、合入、运行加载和经济结论分别报告。
 
 ## 风险与失败模式
 
@@ -74,11 +82,11 @@ DESIGN-COMPLIANCE-001：源码逐项覆盖F-001—010，未用预检替代正式
 
 | 运行交付条件 | 当前状态 | 责任及证据 |
 |---|---|---|
-| 匹配772、142日完整C及Q4模型 | BLOCKED | HMM交付；旧590不改绑 |
+| 匹配772、142日完整C及Q4模型 | PASS_READER | 真实分区/模型原SHA及双节点fresh-process通过；HMM交付完整 |
 | 三seed新AF冻结回执和版本差异闭合 | BLOCKED | QE；现有候选不等价，不伪造verified |
 | 全AF映射、真实版本化准入、DEV验证 | BLOCKED | QE；当前注册表为空，未知版本全部拒绝 |
 | 双节点CAS及真实资产fresh-process完整Composer | BLOCKED | QE；fixture及订单Oracle不替代此项 |
-| 后端实际加载及节点可用 | BLOCKED | 用户控制重启；源码不代表运行已加载 |
+| 后端实际加载及节点可用 | PENDING_LOAD | 双节点读取可用；8001尚未加载新消费代码，用户暂时不能重启 |
 | 六账户及经济结论 | NOT_EVALUATED | 仅在前置齐备后执行，不重复旧实验 |
 
 DDL/DML、生产目录/准入登记、部署/激活、数据集、服务控制均noop。离线脚本不需服务重启，正式后端接线合入后的运行加载须另行核验；后端重启仍由用户执行。WSL不可用时只暂停依赖动作，其他开发/远端核验继续，不绕过节点规则或重复提交。

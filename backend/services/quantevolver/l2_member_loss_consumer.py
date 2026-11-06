@@ -16,6 +16,7 @@ PARAM = "qe_l2_member_loss_manifest"
 MANIFEST = "qe_l2_member_loss_manifest.json"
 WORKERS = (*NATURAL_WORKERS, "qe_l2_member_loss_admission.py", "qe_l2_member_loss_consumer.py", "qe_l2_member_loss_strategy.py")
 OTHER_OVERLAYS = (
+    "qe_trend_entry_manifest",
     "qe_l2_natural_entry_manifest", "qe_terminal_replay", "qe_l2_relative_manifest", "qe_l2_continuous_manifest",
     "qe_l2_study_manifest", "qe_stock_probability_study", "qe_l2_risk_enabled", "enable_sector_hmm",
     "enable_hmm_risk_gate", "sector_risk_overlay_enabled",

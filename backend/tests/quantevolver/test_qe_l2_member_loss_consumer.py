@@ -2,6 +2,7 @@
 
 # ruff: noqa: E402 -- isolated workers import from scripts directly.
 from copy import deepcopy
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -232,3 +233,106 @@ def test_malformed_vintage_fails_with_a_contract_reason(sample):
     prediction["model_bundles"][0] = seal(prediction["model_bundles"][0])
     with pytest.raises(c.MemberLossError, match="MODEL_VINTAGE"):
         c.validate_predictions(seal(prediction), binding, calendar)
+
+
+def encoded(value):
+    raw = json.dumps(value, sort_keys=True, allow_nan=False).encode()
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "base64": base64.b64encode(raw).decode()}
+
+
+@pytest.fixture(scope="module")
+def partitions(sample):
+    original, old_binding, calendar = deepcopy(sample)
+    release = {**old_binding["release_binding"], "generation": "fixture", "manifest_file_sha256": "f" * 64}
+    inference = {"release_identity": {"dataset_manifest_sha256": c.MANIFEST, "release_id": c.RELEASE,
+                  "cutoff": c.SIGNAL_END, "frozen_release_generation": "fixture",
+                  "metadata_sha256": {"dataset_manifest": "f" * 64}}, "calendar_sha256": "b" * 64}
+    bundle = {"schema_version": c.PARTITION_BUNDLE, "partitions": {}}
+    binding = {"schema_version": c.PARTITION_PREFLIGHT, "release_binding": release, "prediction_sha256": "a" * 64,
+               "calendar_sha256": "b" * 64, "industry_catalog": old_binding["industry_catalog"],
+               "inference_identity_sha256": c.canonical_sha(inference), "partitions": {}}
+    for source in original["model_bundles"]:
+        quarter = source["vintage"]["id"]
+        current = quarter == "2026Q4"
+        contract = {**source["contract"], "historical_as_known": False, "untouched_holdout": False,
+                    "policy_applied": False, "version": "hmm_risk_l2_member_release_v1" if current else "hmm_risk_l2_member_loss_study_v1"}
+        contract["vintage" if current else "vintages"] = source["vintage"] if current else [source["vintage"]]
+        producer = "hmm_risk_l2_member_release_v1" if current else c.PRODUCER
+        model = seal({**source, "contract": contract, "schema_version": producer + "_model",
+                      "release_binding": release if current else {"manifest_sha256": "5" * 64, "original_training": True}})
+        rows = [r for r in original["predictions"] if r["vintage_id"] == quarter]
+        pred = {"schema_version": producer + "_prediction", "contract": contract, "predictions": rows,
+                "inference_identity": inference, "fits": 0, "policy_applied": False}
+        if current:
+            pred.update(arm="C", acceptance_sha256="c" * 64)
+            model_file = seal({"model": model, "predictions": rows, "fits": 1})
+        else:
+            pred.update(model_bundle_sha256=model["receipt_sha256"], labels_read=False, outcomes_read=False,
+                        forward_confirmed=False, historical_as_known=False)
+            model_file = model
+        pred = seal(pred)
+        part = {"prediction": encoded(pred), "model": encoded(model_file)}
+        bundle["partitions"][quarter] = part
+        binding["partitions"][quarter] = {
+            "prediction_sha256": part["prediction"]["sha256"], "model_file_sha256": part["model"]["sha256"],
+            "model_receipt_sha256": model["receipt_sha256"], "model_sha256": model["model_sha256"],
+            "producer_contract_sha256": c.canonical_sha(contract), "training_release_binding_sha256": c.canonical_sha(model["release_binding"]),
+            "vintage": model["vintage"], "acceptance_sha256": "c" * 64 if current else None,
+        }
+    return bundle, binding, calendar
+
+
+def test_partitioned_release_preserves_training_lineage_and_complete_rows(partitions):
+    bundle, binding, calendar = partitions
+    before = deepcopy(bundle)
+    result = c.validate_predictions(bundle, binding, calendar)
+    assert len(result.rows) == 18602 and len(result.as_of) == 142
+    assert result.receipt["economic_days"] == 141 and result.receipt["experiment_ready"] is False
+    assert set(result.receipt["source_receipts"]) == {"2026Q2", "2026Q3", "2026Q4"}
+    assert result.as_of["2026-10-08"] == "2026-09-30"
+    assert result.rows[c.SIGNAL_END, binding["industry_catalog"][0]]["target_last_return_date"] is None
+    assert bundle == before
+
+
+@pytest.mark.parametrize("fault,reason", [
+    ("source_bytes", "PARTITION_FILE_HASH"), ("old_inference", "PARTITION_INFERENCE_IDENTITY"),
+    ("unknown_protocol", "PRODUCER_IDENTITY"), ("model_receipt", "MODEL_PIN"),
+    ("training_relabel", "MODEL_PIN"), ("Q4_acceptance", "Q4_MODEL_LINK"),
+    ("drop_industry", "FULL_GRID"), ("extra_lag", "EXTRA_LAG_OR_CLOCK"),
+    ("q4_substitute_values", "Q4_MODEL_LINK"), ("no_q4", "Q4_MODELS_REQUIRED"),
+    ("probability", "PRODUCER_CONTRACT"), ("bad_reason", "RISK_UNAVAILABLE"),
+])
+def test_partitioned_release_rejects_semantic_drift_even_with_resealed_bytes(partitions, fault, reason):
+    bundle, binding, calendar = deepcopy(partitions)
+    key = "2026Q4" if fault in ("Q4_acceptance", "q4_substitute_values") else "2026Q2"
+    part, pin = bundle["partitions"][key], binding["partitions"][key]
+    pred = json.loads(base64.b64decode(part["prediction"]["base64"]))
+    if fault == "source_bytes":
+        part["prediction"]["base64"] = base64.b64encode(b"different bytes").decode()
+    elif fault == "model_receipt":
+        pin["model_receipt_sha256"] = "0" * 64
+    elif fault == "training_relabel":
+        pin["training_release_binding_sha256"] = c.canonical_sha(binding["release_binding"])
+    elif fault == "no_q4":
+        binding["partitions"].pop("2026Q4")
+    else:
+        if fault == "old_inference":
+            pred["inference_identity"]["release_identity"]["dataset_manifest_sha256"] = "5" * 64
+        elif fault == "unknown_protocol":
+            pred["schema_version"] += "_unknown"
+        elif fault == "Q4_acceptance":
+            pred["acceptance_sha256"] = "0" * 64
+        elif fault == "drop_industry":
+            pred["predictions"].pop()
+        elif fault == "extra_lag":
+            pred["predictions"][0]["as_of_date"] = "2026-03-30"
+        elif fault == "q4_substitute_values":
+            pred["predictions"][0][c.FIELD] = 0.3
+        elif fault == "probability":
+            pred["contract"]["target"]["C"] = "probability"
+        elif fault == "bad_reason":
+            pred["predictions"][0].update(availability="unavailable", reason_code="MISSING", expected_member_loss=None)
+        part["prediction"] = encoded(seal(pred))
+        pin["prediction_sha256"] = part["prediction"]["sha256"]
+    with pytest.raises(c.MemberLossError, match=reason):
+        c.validate_predictions(bundle, binding, calendar)

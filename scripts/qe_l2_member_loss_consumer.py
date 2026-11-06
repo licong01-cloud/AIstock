@@ -6,6 +6,8 @@ No admission registration, model fitting, inference, network IO or order creatio
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date
@@ -20,6 +22,8 @@ from qe_l2_risk_admission import canonical_sha
 
 CONTRACT = "QE-L2-MEMBER-LOSS-NATURAL-ENTRY-V1"
 PREFLIGHT = "qe_l2_member_loss_preflight_binding_v1"
+PARTITION_PREFLIGHT = "qe_l2_member_loss_partition_binding_v1"
+PARTITION_BUNDLE = "qe_l2_member_loss_partition_bundle_v1"
 PRODUCER = "hmm_risk_l2_member_terminal_loss_ridge_v1"
 RELEASE = "qe_hmm_full_v2_20261030"
 MANIFEST = "772112c58f959748787b939e33ec874fb0766ca921d88eddbd49c131c3b3c43d"
@@ -56,11 +60,15 @@ def _object(pairs):
     return result
 
 
-def read_json(path):
+def _read_json_text(text):
     def nonfinite(value):
         raise MemberLossError("QE_L2_MEMBER_JSON_NONFINITE", value)
 
-    return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_object, parse_constant=nonfinite)
+    return json.loads(text, object_pairs_hook=_object, parse_constant=nonfinite)
+
+
+def read_json(path):
+    return _read_json_text(Path(path).read_text(encoding="utf-8"))
 
 
 def _sha(value):
@@ -106,6 +114,8 @@ class ValidatedMemberLoss:
 
 def validate_predictions(prediction, binding, calendar):
     """Validate an explicitly pinned file; this never grants formal admission."""
+    if isinstance(binding, dict) and binding.get("schema_version") == PARTITION_PREFLIGHT:
+        return _validate_partition_bundle(prediction, binding, calendar)
     require(
         isinstance(binding, dict)
         and set(binding) == {
@@ -210,6 +220,159 @@ def validate_predictions(prediction, binding, calendar):
         "status": "PRE_ADMISSION_VALIDATED", "contract": CONTRACT, "risk_field": FIELD,
         "signal_days": 142, "economic_days": 141, "original_days": 125, "october_economic_days": 16,
         "rows": len(rows), "industries": 131, "producer_receipt_sha256": prediction["receipt_sha256"],
+        "historical_as_known": False, "untouched_holdout": False,
+        "formal_admission": "NOT_EVALUATED", "AF_mapping_Composer": "NOT_EVALUATED", "experiment_ready": False,
+    })
+
+
+def _partition_document(part, key, expected_sha):
+    """Decode bounded, exact publisher bytes; never rewrite a producer receipt."""
+    ref = part.get(key)
+    require(
+        isinstance(ref, dict) and set(ref) == {"sha256", "base64"}
+        and _sha(expected_sha) and ref["sha256"] == expected_sha
+        and isinstance(ref["base64"], str) and len(ref["base64"]) <= 16 * 1024 * 1024,
+        "PARTITION_ASSET", key,
+    )
+    try:
+        raw = base64.b64decode(ref["base64"], validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise MemberLossError("QE_L2_MEMBER_PARTITION_ENCODING", key) from error
+    require(hashlib.sha256(raw).hexdigest() == expected_sha, "PARTITION_FILE_HASH", key)
+    value = _read_json_text(raw.decode("utf-8"))
+    _seal(value)
+    return value
+
+
+def _validate_partition_bundle(bundle, binding, calendar):
+    require(
+        set(binding) == {"schema_version", "release_binding", "prediction_sha256", "calendar_sha256",
+                         "industry_catalog", "inference_identity_sha256", "partitions"}, "PARTITION_BINDING",
+    )
+    release = binding["release_binding"]
+    require(
+        isinstance(release, dict) and release.get("manifest_sha256") == MANIFEST
+        and release.get("release_id") == RELEASE and release.get("cutoff") == SIGNAL_END, "DATASET_IDENTITY",
+    )
+    require(all(_sha(binding[k]) for k in ("prediction_sha256", "calendar_sha256", "inference_identity_sha256")), "PIN")
+    require(isinstance(calendar, list) and calendar == sorted(set(calendar)), "CALENDAR")
+    require(all(isinstance(d, str) and date.fromisoformat(d).isoformat() == d for d in calendar), "CALENDAR")
+    days = [d for d in calendar if START <= d <= SIGNAL_END]
+    require(
+        len(days) == 142 and days[0] == START and days[-1] == SIGNAL_END
+        and len([d for d in days if d <= ECONOMIC_END]) == 141
+        and sum(d <= "2026-09-30" for d in days) == 125 and calendar.index(START) > 0,
+        "SIGNAL_ECONOMIC_WINDOW",
+    )
+    positions = {d: i for i, d in enumerate(calendar)}
+    as_of = {d: calendar[positions[d] - 1] for d in days}
+    catalog = binding["industry_catalog"]
+    require(
+        isinstance(catalog, list) and len(catalog) == 131 and catalog == sorted(set(catalog))
+        and all(isinstance(s, str) and re.fullmatch(r"\d{6}\.SI", s) for s in catalog), "FULL_CATALOG",
+    )
+    quarters = ("2026Q2", "2026Q3", "2026Q4")
+    pins = binding["partitions"]
+    require(isinstance(pins, dict) and set(pins) == set(quarters), "Q4_MODELS_REQUIRED")
+    require(
+        isinstance(bundle, dict) and set(bundle) == {"schema_version", "partitions"}
+        and bundle["schema_version"] == PARTITION_BUNDLE
+        and isinstance(bundle["partitions"], dict) and set(bundle["partitions"]) == set(quarters), "PARTITION_BUNDLE",
+    )
+    rows, source_receipts = {}, {}
+    for quarter in quarters:
+        pin, part = pins[quarter], bundle["partitions"][quarter]
+        require(
+            isinstance(pin, dict) and set(pin) == {"prediction_sha256", "model_file_sha256", "model_receipt_sha256",
+                "model_sha256", "producer_contract_sha256", "training_release_binding_sha256", "vintage", "acceptance_sha256"}
+            and isinstance(part, dict) and set(part) == {"prediction", "model"}, "PARTITION_PIN", quarter,
+        )
+        prediction = _partition_document(part, "prediction", pin["prediction_sha256"])
+        source_model = _partition_document(part, "model", pin["model_file_sha256"])
+        current = quarter == "2026Q4"
+        model = source_model.get("model") if current else source_model
+        _seal(model)
+        producer = "hmm_risk_l2_member_release_v1" if current else PRODUCER
+        version = "hmm_risk_l2_member_release_v1" if current else "hmm_risk_l2_member_loss_study_v1"
+        contract = prediction.get("contract")
+        require(
+            isinstance(contract, dict) and contract.get("version") == version and contract.get("target") == TARGET
+            and canonical_sha(contract) == pin["producer_contract_sha256"]
+            and all(contract.get(k) is False for k in ("historical_as_known", "untouched_holdout", "policy_applied")),
+            "PRODUCER_CONTRACT", quarter,
+        )
+        require(
+            prediction.get("schema_version") == producer + "_prediction"
+            and type(prediction.get("fits")) is int and prediction["fits"] == 0
+            and prediction.get("policy_applied") is False, "PRODUCER_IDENTITY", quarter,
+        )
+        inference = prediction.get("inference_identity")
+        require(
+            isinstance(inference, dict) and canonical_sha(inference) == binding["inference_identity_sha256"]
+            and inference.get("calendar_sha256") == binding["calendar_sha256"], "PARTITION_INFERENCE_IDENTITY", quarter,
+        )
+        identity = inference.get("release_identity", {})
+        require(
+            identity.get("dataset_manifest_sha256") == release["manifest_sha256"]
+            and identity.get("release_id") == release["release_id"] and identity.get("cutoff") == SIGNAL_END
+            and identity.get("frozen_release_generation") == release.get("generation")
+            and identity.get("metadata_sha256", {}).get("dataset_manifest") == release.get("manifest_file_sha256"),
+            "DATASET_IDENTITY", quarter,
+        )
+        require(
+            model.get("schema_version") == producer + "_model" and model.get("arm") == "C"
+            and model.get("catalog") == catalog and model.get("contract") == contract
+            and model["receipt_sha256"] == pin["model_receipt_sha256"]
+            and _sha(pin["model_sha256"]) and model.get("model_sha256") == pin["model_sha256"]
+            == canonical_sha(model.get("parameters"))
+            and canonical_sha(model.get("release_binding")) == pin["training_release_binding_sha256"],
+            "MODEL_PIN", quarter,
+        )
+        vintage = model.get("vintage")
+        require(isinstance(vintage, dict) and vintage == pin["vintage"] and vintage.get("id") == quarter, "MODEL_VINTAGE")
+        bounds = [vintage.get(k) for k in ("train_start", "train_end", "effective_start", "effective_end")]
+        require(all(isinstance(d, str) and date.fromisoformat(d).isoformat() == d for d in bounds), "MODEL_DATES")
+        require(bounds[0] <= bounds[1] < bounds[2] <= bounds[3], "MODEL_CLOCK")
+        if current:
+            require(
+                prediction.get("arm") == "C" and contract.get("vintage") == vintage
+                and model.get("release_binding") == release
+                and _sha(pin["acceptance_sha256"]) and prediction.get("acceptance_sha256") == pin["acceptance_sha256"]
+                and source_model.get("predictions") == prediction.get("predictions"), "Q4_MODEL_LINK",
+            )
+        else:
+            require(
+                prediction.get("model_bundle_sha256") == model["receipt_sha256"]
+                and vintage in contract.get("vintages", []) and pin["acceptance_sha256"] is None
+                and all(prediction.get(k) is False for k in ("labels_read", "outcomes_read", "forward_confirmed", "historical_as_known")),
+                "HISTORICAL_MODEL_LINK",
+            )
+        expected_days = {d for d in days if bounds[2] <= d <= bounds[3]}
+        require(bool(expected_days), "MODEL_DAY_COVERAGE", quarter)
+        predictions = prediction.get("predictions")
+        require(isinstance(predictions, list) and len(predictions) == len(expected_days) * 131, "FULL_GRID", quarter)
+        for row in predictions:
+            require(isinstance(row, dict), "ROW_SCHEMA")
+            day, sector = row.get("trade_date"), row.get("sector_code")
+            require(day in expected_days and sector in catalog and (day, sector) not in rows, "ROW_KEY")
+            require(row.get("as_of_date") == as_of[day], "EXTRA_LAG_OR_CLOCK")
+            require(row.get("vintage_id") == quarter and row.get("model_sha256") == pin["model_sha256"], "ROW_MODEL")
+            future = calendar[positions[day] + 1:positions[day] + 11]
+            require(
+                "target_first_return_date" in row and "target_last_return_date" in row
+                and row["target_first_return_date"] == (future[0] if future else None)
+                and row["target_last_return_date"] == (future[-1] if len(future) == 10 else None), "TARGET_CALENDAR",
+            )
+            _published(row)
+            rows[day, sector] = deepcopy(row)
+        source_receipts[quarter] = {"prediction_sha256": pin["prediction_sha256"],
+                                    "producer_receipt_sha256": prediction["receipt_sha256"],
+                                    "model_receipt_sha256": model["receipt_sha256"]}
+    require(set(rows) == {(d, s) for d in days for s in catalog}, "FULL_GRID")
+    return ValidatedMemberLoss(rows, as_of, {
+        "status": "PRE_ADMISSION_VALIDATED", "contract": CONTRACT, "risk_field": FIELD,
+        "signal_days": 142, "economic_days": 141, "original_days": 125, "october_economic_days": 16,
+        "rows": len(rows), "industries": 131, "source_receipts": source_receipts,
         "historical_as_known": False, "untouched_holdout": False,
         "formal_admission": "NOT_EVALUATED", "AF_mapping_Composer": "NOT_EVALUATED", "experiment_ready": False,
     })
