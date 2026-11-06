@@ -31,5 +31,8 @@
 .tableScroll { overflow-x: auto; }
 .tableScroll table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .tableScroll td, .tableScroll th { text-align: left; padding: 8px; border-bottom: 1px solid var(--integrity-muted); vertical-align: top; }
+.gapRow { background: color-mix(in srgb, var(--integrity-error) 9%, var(--integrity-surface)); }
+.gapRow > td:first-child { border-inline-start: 4px solid var(--integrity-error); }
+.gapLabel { display: block; color: var(--integrity-error); font-weight: 600; }
 .gaps { max-height: 260px; overflow: auto; font-size: 12px; }
 @media (max-width: 650px) { .day { min-height: 62px; padding: 4px; } .day span:last-of-type { font-size: 10px; } }

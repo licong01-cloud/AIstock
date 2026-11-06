@@ -55,7 +55,7 @@ const names: Record<string, string> = {
   _stk_seasoned_project_review: "增发项目定期复查",
 };
 
-export function datasetLabel(value: unknown, fallbackName?: string): string {
+export function datasetName(value: unknown, fallbackName?: string): string {
   const key = String(value ?? "").trim();
   if (!key || key === "—") return fallbackName || "未指定数据集";
   const lower = key.toLowerCase();
@@ -63,5 +63,11 @@ export function datasetLabel(value: unknown, fallbackName?: string): string {
   const morning = /^_(.+)_morning$/.exec(lower);
   if (!name && morning && names[morning[1]]) name = `${names[morning[1]]}·晨间补采`;
   if (!name && lower === "_vix_index_midday") name = "VIX美国日频指数·午间补采";
-  return `${name || (fallbackName && /[\u3400-\u9fff]/.test(fallbackName) ? fallbackName : "未知数据集")}（${key}）`;
+  return name || (fallbackName && /[\u3400-\u9fff]/.test(fallbackName) ? fallbackName : "未知数据集");
+}
+
+export function datasetLabel(value: unknown, fallbackName?: string): string {
+  const key = String(value ?? "").trim();
+  const name = datasetName(value, fallbackName);
+  return !key || key === "—" ? name : `${name}（${key}）`;
 }
