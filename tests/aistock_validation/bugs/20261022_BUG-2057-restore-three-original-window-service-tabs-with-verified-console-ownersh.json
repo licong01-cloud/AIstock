@@ -29,14 +29,26 @@
   "evidence_uris": [],
   "expected": "start_backend.bat requests one AIstock Backend tab, uses the absolute AIstock interpreter and UTF-8, refuses occupied port 8001 and never starts/stops TDX/frontend or terminates any process.",
   "file_scope_contract": {
-    "added_files": ["start_backend.bat"],
-    "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "docs/standards/aistock_runtime_targets_v1.yaml",
+    "actual_changed_files": [
       "backend/tests/platform_api/test_windows_launcher.py",
-      "docs/operations/windows_runtime_startup.md"
+      "docs/operations/windows_runtime_startup.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "start_backend.bat",
+      "tests/aistock_validation/bugs/20261022_BUG-2057-restore-three-original-window-service-tabs-with-verified-console-ownersh.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "start_backend.bat"
+    ],
+    "changed_files": [
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "start_backend.bat",
+      "tests/aistock_validation/bugs/20261022_BUG-2057-restore-three-original-window-service-tabs-with-verified-console-ownersh.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/start_ai_stock.py",
@@ -102,8 +114,8 @@
   },
   "first_seen_at": "2026-10-22T03:40:47.764193Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0e7f0f0d2ea9fd282cd18fb78c455c41f8787877",
+  "fixed_at": "2026-10-22T03:50:39Z",
   "github_issue_number": 6564,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6564",
   "last_seen_at": "2026-10-22T03:40:47.764193Z",
@@ -111,6 +123,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6565",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,7 +147,9 @@
     "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -144,7 +159,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2057",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8bffcc73a74fee88",
+    "recorded_at": "2026-10-22T03:51:18.661069Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ef9164adcef1b14cb8b9df4ea3f713b4b99c2b5c",
+    "source_merge_commit": "0e7f0f0d2ea9fd282cd18fb78c455c41f8787877",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6565",
+    "validation_evidence": [
+      "python -m pytest backend/tests/platform_api/test_windows_launcher.py -q --no-cov -> 23 passed",
+      "python -m nox -s validation_module_registry_l0 guardrail_changed_files -> passed; 8 tests; 6/6 changed files mapped; blocking=0"
+    ],
+    "validation_evidence_digest": "887bf4fdde4408753bc510c0393a19ab596e5a731888335a95b083797fac985b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api"
   ],
@@ -153,6 +190,10 @@
     "fingerprint": "b39669c30e6245010af513db",
     "source_event_id": "FE-20261022-b39669c30e62"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/platform_api/test_windows_launcher.py -q --no-cov -> 23 passed",
+    "python -m nox -s validation_module_registry_l0 guardrail_changed_files -> passed; 8 tests; 6/6 changed files mapped; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
