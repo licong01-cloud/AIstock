@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./localData.module.css";
 import { DailyIntegrityCalendar } from "./components/DailyIntegrityCalendar";
+import { datasetLabel as formatDatasetLabel } from "./datasetLabels";
 
 const TDX_BASE =
   process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
@@ -75,13 +76,13 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     sw_index_member: "申万行业成分股PIT映射（Tushare index_member_all）",
     sw_daily: "申万行业指数日线（Tushare sw_daily）",
     sector_data: "申万L2行业展开到个股（22列，后处理）",
-    suspend_d: "Tushare suspend_d daily suspend/resume info",
+    suspend_d: "每日停复牌信息（Tushare）",
     stk_limit: "每日涨跌停价格（Tushare stk_limit）",
     margin_detail: "融资融券明细（Tushare margin_detail）",
     anns_metadata: "公告元数据（Eastmoney/Cninfo，滚动两天）",
-    tushare_forecast_raw: "Performance forecast raw (Tushare forecast_vip)",
-    tushare_express_raw: "Performance express raw (Tushare express_vip)",
-    tushare_fina_indicator_raw: "Financial indicator raw (Tushare fina_indicator_vip)",
+    tushare_forecast_raw: "业绩预告原始数据（Tushare forecast_vip）",
+    tushare_express_raw: "业绩快报原始数据（Tushare express_vip）",
+    tushare_fina_indicator_raw: "财务指标原始数据（Tushare fina_indicator_vip）",
     stock_st_events: "ST 风险警示事件（Tushare st）",
     stock_universe_pit_events: "ST PIT 派生事件（本地规则）",
     stock_universe_pit_spans: "ST PIT 可选区间（本地规则）",
@@ -3224,7 +3225,7 @@ function JobsTab() {
                 {qmtTasks.map((task: any, idx: number) => (
                   <tr key={task.task_id || task.job_id || idx} style={{ borderBottom: "1px solid #f3f4f6" }}>
                     <td style={{ padding: 8, fontSize: 11 }}>{(task.task_id || task.job_id || "—").slice(0, 8)}...</td>
-                    <td style={{ padding: 8 }}>{task.dataset_name || task.dataset_id || task.summary?.dataset || "—"}</td>
+                    <td style={{ padding: 8 }}>{formatDatasetLabel(task.dataset_id || task.summary?.dataset, task.dataset_name)}</td>
                     <td style={{ padding: 8 }}>{task.type || task.job_type || "—"}</td>
                     <td style={{ padding: 8 }}>
                       <span style={{
@@ -3305,7 +3306,7 @@ function JobsTab() {
             boxShadow: "0 4px 20px rgba(0, 0, 0, 0.15)"
           }}>
             <h3 style={{ margin: 0, fontSize: 16, marginBottom: 16 }}>
-              📝 任务日志 - {selectedQmtTask.dataset_name || selectedQmtTask.dataset_id}
+              📝 任务日志 - {formatDatasetLabel(selectedQmtTask.dataset_id, selectedQmtTask.dataset_name)}
             </h3>
             
             <div style={{ marginBottom: 16 }}>
@@ -3632,10 +3633,7 @@ function JobsTab() {
             const rangeText =
               extraParts.length > 0 ? extraParts.join(" · ") : "—";
 
-            const datasetLabel =
-              dataset && INGESTION_DATASETS[String(dataset)]
-                ? `${dataset} · ${INGESTION_DATASETS[String(dataset)]}`
-                : dataset || "—";
+            const datasetLabel = formatDatasetLabel(dataset, INGESTION_DATASETS[String(dataset)]);
 
             const typeText =
               mode === "init"
@@ -3941,7 +3939,7 @@ function JobsTab() {
                 logItems.map((it: any, idx: number) => {
                   const ts = it?.timestamp || "";
                   const level = it?.level || "";
-                  const datasetLabel = it?.dataset || "";
+                  const datasetLabel = formatDatasetLabel(it?.dataset);
                   const modeLabel = it?.mode || "";
                   const payload = it?.payload ?? {};
                   const text = JSON.stringify(payload, null, 2);
@@ -4533,7 +4531,7 @@ function DataStatsTab({
                     rows.push(
                       <tr key={`${catKey}-${idx}`}>
                         <td className={styles.statsCell}>
-                          {it.data_kind || it.kind || "—"}
+                          {formatDatasetLabel(kind, description)}
                         </td>
                         <td className={styles.statsCell}>
                           <div>{description}</div>
@@ -4612,7 +4610,7 @@ function DataStatsTab({
           {gapResult && (
             <div className={`${styles.cardSoft} ${styles.note}`}>
               <div className={styles.rowBetween}>
-                <span>检查结果 (Kind: {gapResult.data_kind})</span>
+                <span>检查结果：{formatDatasetLabel(gapResult.data_kind)}</span>
                 <button
                   type="button"
                   onClick={() => handleCheckGapsClick(gapResult.data_kind, true)}
@@ -4836,7 +4834,7 @@ function IngestionLogsTable({
     rows.push({
       key,
       raw: item,
-      task: mode ? `${dataset || "—"} · ${mode}` : dataset || "—",
+      task: mode ? `${formatDatasetLabel(dataset)} · ${mode}` : formatDatasetLabel(dataset),
       run_id: item.run_id || null,
       ts: item.timestamp || null,
       level: item.level || null,
@@ -4939,7 +4937,7 @@ function IngestionLogsTable({
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
                 >
-                  {r.dataset}
+                  {formatDatasetLabel(r.dataset)}
                 </td>
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
@@ -5377,11 +5375,11 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   { dataset: "stock_st_events", label: "ST 风险警示事件", source: "Tushare", defaultAt: "20:40" },
   { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "17:36" },
   { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
-  { dataset: "suspend_d", label: "Daily suspend/resume info", source: "Tushare", defaultAt: "", frequency: "1h" },
+  { dataset: "suspend_d", label: "每日停复牌信息", source: "Tushare", defaultAt: "", frequency: "1h" },
   { dataset: "anns_metadata", label: "公告元数据（滚动两天）", source: "Eastmoney", defaultAt: "", frequency: "1h" },
-  { dataset: "tushare_forecast_raw", label: "Performance forecast raw", source: "Tushare", defaultAt: "20:45" },
-  { dataset: "tushare_express_raw", label: "Performance express raw", source: "Tushare", defaultAt: "20:50" },
-  { dataset: "tushare_fina_indicator_raw", label: "Financial indicator raw", source: "Tushare", defaultAt: "21:00" },
+  { dataset: "tushare_forecast_raw", label: "业绩预告原始数据", source: "Tushare", defaultAt: "20:45" },
+  { dataset: "tushare_express_raw", label: "业绩快报原始数据", source: "Tushare", defaultAt: "20:50" },
+  { dataset: "tushare_fina_indicator_raw", label: "财务指标原始数据", source: "Tushare", defaultAt: "21:00" },
 ];
 
 /** 数据健康检查报告组件 — 在 _auto_retry_stale 调度卡片内展开 */
@@ -5511,7 +5509,7 @@ function HealthCheckReport({ summary }: { summary: any }) {
                 return (
                   <tr key={d.dataset} style={{ background: rowBg }}>
                     <td style={tdStyle}>
-                      <span style={{ fontWeight: 500 }}>{d.dataset}</span>
+                      <span style={{ fontWeight: 500 }}>{formatDatasetLabel(d.dataset)}</span>
                     </td>
                     <td style={tdStyle}>{d.data_max_date || "-"}</td>
                     <td style={tdStyle}>
@@ -5552,7 +5550,7 @@ function HealthCheckReport({ summary }: { summary: any }) {
             <ul style={{ margin: "2px 0", paddingLeft: 16 }}>
               {errors.map((e, i) => (
                 <li key={`${e?.dataset || e?.name || ""}-${i}`} style={{ color: "#dc2626" }}>
-                  {e?.dataset || e?.name || "unknown"}: {e?.error || e?.message || JSON.stringify(e)}
+                  {formatDatasetLabel(e?.dataset || e?.name)}: {e?.error || e?.message || JSON.stringify(e)}
                 </li>
               ))}
             </ul>
@@ -6218,7 +6216,7 @@ function IngestionSchedulesTab() {
                   : baseLabel;
 
               const isHealthCheck = schedDataset === "_auto_retry_stale";
-              const displayName = isHealthCheck ? "数据健康检查" : schedDataset;
+              const displayName = formatDatasetLabel(schedDataset);
               const displayMode = isHealthCheck ? "check_and_retry" : mode;
 
               return (

@@ -1,0 +1,415 @@
+{
+  "actual": "2026-11-06重启后idx_anns/stk_alert/stk_high_shock/stk_seasoned的2026-10-30原文事实已独立验证有效，但旧后端non_daily_dataset_contract的UNVERIFIED目标沿用退避至11月7日06:51；程序升级没有唤醒现已具备正式合同的目标。stk_shock首轮自动尾窗采集已触发真实复验VALID，证明不是数据缺失。另本地数据管理日历、统计、任务/计划和状态表多处仅显示英文技术编号。按既有10项/45秒worker预算唤醒精确旧待验目标并正式验证；中文名+技术编号统一显示，不修改事实或业务规则。",
+  "allowed_write_scope": [
+    "backend/services/data_integrity/worker.py",
+    "backend/services/data_integrity/repository.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/tests/test_daily_data_integrity_dev.py",
+    "frontend/src/app/local-data/page.tsx",
+    "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+    "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+    "frontend/src/app/local-data/datasetLabels.ts",
+    "tests/aistock_validation/bugs/20261106_BUG-2192-local-data-newly-supported-partitions-remain-in-obsolete-validation-back.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2192",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-06T13:13:23.318427Z",
+  "description": "2026-11-06重启后idx_anns/stk_alert/stk_high_shock/stk_seasoned的2026-10-30原文事实已独立验证有效，但旧后端non_daily_dataset_contract的UNVERIFIED目标沿用退避至11月7日06:51；程序升级没有唤醒现已具备正式合同的目标。stk_shock首轮自动尾窗采集已触发真实复验VALID，证明不是数据缺失。另本地数据管理日历、统计、任务/计划和状态表多处仅显示英文技术编号。按既有10项/45秒worker预算唤醒精确旧待验目标并正式验证；中文名+技术编号统一显示，不修改事实或业务规则。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261106-86674a456fd5",
+      "timestamp": "2026-11-06T13:13:23.318427Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "合同变为可用时自动唤醒旧待验目标，真实验证后发布版本匹配VALID；缺失/错误仍如实保留。全部本地数据集状态显示中文名称与技术编号，API请求代码不变。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2192-local-data-newly-supported-partitions-remain-in-obsolete-validation-back.json"
+    ],
+    "added_files": [
+      "frontend/src/app/local-data/datasetLabels.ts"
+    ],
+    "changed_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2192-local-data-newly-supported-partitions-remain-in-obsolete-validation-back.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/data_integrity/worker.py",
+        "backend/services/data_integrity/repository.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_daily_data_integrity_dev.py",
+        "frontend/src/app/local-data/page.tsx",
+        "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+        "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+        "frontend/src/app/local-data/datasetLabels.ts"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/data_integrity/worker.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/repository.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity_dev.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/src/app/local-data/page.tsx",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/src/app/local-data/datasetLabels.ts",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/data_integrity/worker.py",
+        "backend/services/data_integrity/repository.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_daily_data_integrity_dev.py",
+        "frontend/src/app/local-data/page.tsx",
+        "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+        "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+        "frontend/src/app/local-data/datasetLabels.ts"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "frontend/src/app/local-data/datasetLabels.ts"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "frontend/src/app/local-data/datasetLabels.ts"
+    ]
+  },
+  "first_seen_at": "2026-11-06T13:13:23.318427Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7092,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7092",
+  "last_seen_at": "2026-11-06T13:13:23.318427Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "review_results": {
+    "completeness_and_regression": "PASS：中文名称覆盖日历详情、缺口、统计、任务、日志、健康检查及计划；保留技术ID与API参数。末轮复审补齐四个旧英文计划标签及可持续运行的名称单测；实际候选日历Chromium读回与截图通过。",
+    "correctness": "PASS：仅唤醒当前合同已可用、revision匹配的旧non_daily_dataset_contract/UNVERIFIED等待；不修改事实、验证结论或租约，仍由原生claim/validate/publish生成VALID。DEV原生SQL覆盖重复执行、活跃租约、revision变化、真实失败和未来日期。",
+    "design_compliance_001": [
+      "禁止简化交付：程序唤醒+正式验证及各本地状态视图均实现；164passed/1skipped、DEV原生测试与候选浏览器检查通过，线上生效待用户重启，未冒充运行态验收。",
+      "禁止静默错误：真实INCOMPLETE/ERROR保持原状态；未知名称明确显示未知并保留编号，不将缺失判为VALID。",
+      "禁止改变业务逻辑：可选数据不变成强制日频义务，不改变股票池、数据源、API键、版本和租约检查。",
+      "禁止私增门禁审批：复用现有10项/45秒worker预算、正式验证及既有L0/CI；无全历史事实扫描、无新服务或人工审批。"
+    ]
+  },
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python RED2->GREEN; related164passed1skipped. Existing DEV native SQL contract wakeup proves the budget, lease protection, revision-race rejection and no verdict mutation. Actual candidate calendar compiled and rendered in Chromium with Chinese names and unchanged daily_basic request key. No application/service started; production_write=false,runtime_action=false. Browser screenshot X:/AIstock_temp/DATA_PREPARATION/BUG-2192-contract-labels-20261106/calendar-chinese.png"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "local-data newly supported partitions remain in obsolete validation backoff and status views omit Chinese dataset names",
+  "trigger_condition": {
+    "fingerprint": "86674a456fd5cf32cc270c1f",
+    "source_event_id": "FE-20261106-86674a456fd5"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:local_data",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/data_integrity/worker.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "frontend/src/app/local-data/datasetLabels.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/local-data",
+    "ui_routes": [
+      "/local-data"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

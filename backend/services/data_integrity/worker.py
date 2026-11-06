@@ -7,6 +7,7 @@ import time
 
 from psycopg2.extras import RealDictCursor
 
+from backend.services.tushare_dataset_specs import DATASET_REGISTRY
 from .catalog import CN, RULE_VERSION, SCOPE_VERSION, obligations, optional_input_contract
 from .contracts import PartitionState, ValidationResult, completion_kind
 from .repository import IntegrityRepository, IntegrityRevisionChanged, enqueue_validation, schema_installed
@@ -21,6 +22,38 @@ class DailyIntegrityWorker:
         self.repository = repository or IntegrityRepository()
         self.validator = validator or PhysicalValidator()
         self.service = DailyIntegrityService(self.repository)
+
+    @staticmethod
+    def _wake_supported_contracts(conn, datasets, *, today, limit):
+        """A newly available validator supersedes only the old no-contract wait.
+
+        Touch queue metadata, not facts/verdicts. The normal fenced claim and
+        physical validator remain the only path to publishing VALID.
+        """
+        if not datasets:
+            return []
+        if not 1 <= limit <= 50:
+            raise ValueError("contract wakeup must share the bounded worker batch")
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""WITH wake AS (
+                SELECT t.target_id FROM market.data_sync_targets t
+                JOIN market.dataset_date_refresh_audit p ON p.dataset=t.dataset
+                  AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                WHERE t.data_source='canonical_db' AND t.target_scope->>'operation'='VALIDATE_ONLY'
+                  AND t.dataset=ANY(%s::text[]) AND t.target_date<=%s
+                  AND t.target_status IN ('pending','retry') AND t.next_retry_at>clock_timestamp()
+                  AND p.validation_status='UNVERIFIED'
+                  AND p.metadata#>>'{validation,reason}'='non_daily_dataset_contract'
+                  AND p.data_revision=(t.metadata->>'desired_revision')::bigint
+                  AND (t.metadata->>'lease_until' IS NULL
+                       OR (t.metadata->>'lease_until')::timestamptz<=clock_timestamp())
+                ORDER BY t.target_date DESC,t.dataset,t.target_id LIMIT %s
+                FOR UPDATE OF t SKIP LOCKED)
+                UPDATE market.data_sync_targets t SET target_status='pending',
+                    next_retry_at=clock_timestamp(),updated_at=clock_timestamp()
+                FROM wake WHERE t.target_id=wake.target_id
+                RETURNING t.dataset,t.target_date""", (sorted(set(datasets)), today, limit))
+            return [dict(row) for row in cur.fetchall()]
 
     def run_once(self, *, limit=10, budget_seconds=45):
         """No history bootstrap: current day plus exact durable changed targets."""
@@ -43,6 +76,9 @@ class DailyIntegrityWorker:
                     due = obligation.due_at(seed_day, calendar)
                     if due is not None and due <= datetime.now(CN):
                         enqueue_validation(conn, obligation.dataset, seed_day)
+            supported = {o.dataset for o in required} | {
+                name for name in DATASET_REGISTRY if optional_input_contract(name) is not None}
+            woken = self._wake_supported_contracts(conn, supported, today=today, limit=limit)
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""WITH due AS (
                     SELECT dataset,target_date,priority,target_status,next_retry_at,created_at,
@@ -59,6 +95,11 @@ class DailyIntegrityWorker:
                         COALESCE(next_retry_at,created_at),dataset LIMIT %s""",
                     (today, [o.dataset for o in required], limit))
                 candidates = [dict(r) for r in cur.fetchall()]
+            # Contract-upgrade work gets a slot in THIS batch, not an extra
+            # batch or an unbounded history scan behind ordinary retry traffic.
+            keys = {(r["dataset"], r["target_date"]) for r in woken}
+            candidates = woken + [r for r in candidates
+                if (r["dataset"], r["target_date"]) not in keys][:limit - len(woken)]
         validated = stale = 0
         for candidate in candidates:
             if time.monotonic()-start >= budget_seconds:

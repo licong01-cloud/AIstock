@@ -13,6 +13,34 @@ from backend.services.data_integrity.provider import provider_scan, verify_scan
 from backend.services.tushare_dataset_specs import DAILY_BASIC, DIVIDEND
 
 
+def test_newly_supported_contract_wakes_validation_not_facts_or_a_valid_verdict():
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    queries = []
+    cursor = SimpleNamespace(execute=lambda query, params: queries.append((query, params)),
+        fetchall=lambda: [{"dataset": "idx_anns", "target_date": date(2026, 10, 30)}])
+    conn = SimpleNamespace(cursor=lambda **_: nullcontext(cursor))
+    result = DailyIntegrityWorker._wake_supported_contracts(conn, ["idx_anns"], today=date(2026, 11, 6), limit=10)
+    assert result == [{"dataset": "idx_anns", "target_date": date(2026, 10, 30)}]
+    query, params = queries[0]
+    assert "non_daily_dataset_contract" in query and "UNVERIFIED" in query
+    assert "SKIP LOCKED" in query and "lease_until" in query and "LIMIT %s" in query
+    assert "UPDATE market.data_sync_targets" in query
+    assert "UPDATE market.dataset_date_refresh_audit" not in query
+    assert "VALID'" not in query and "market.kline" not in query
+    assert params == (["idx_anns"], date(2026, 11, 6), 10)
+
+
+def test_rearmed_contract_validation_gets_a_slot_without_increasing_worker_budget():
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    import inspect
+    source = inspect.getsource(DailyIntegrityWorker.run_once)
+    assert "_wake_supported_contracts" in source and "optional_input_contract" in source
+    assert "woken" in source and "limit - len(woken)" in source
+    assert inspect.signature(DailyIntegrityWorker.run_once).parameters["limit"].default == 10
+
+
 @pytest.mark.parametrize("missing", [False, True])
 @pytest.mark.parametrize("bad_price", [None, float("nan"), 0, -1, float("inf"), 10])
 def test_stk_limit_validation_retains_physical_count_without_hiding_price_gaps(monkeypatch, bad_price, missing):
