@@ -31,21 +31,21 @@
   "expected": "Fresh studies explicitly freeze the repaired candidate after full source equivalence inspection; existing requests and strict drift rejection remain unchanged.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json",
       "backend/services/simulation_execution/localsim/dual_mode_research.py",
       "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md",
       "docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md",
-      "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md"
+      "tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json"
     ],
     "added_files": [
       "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json",
       "backend/services/simulation_execution/localsim/dual_mode_research.py",
       "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
+      "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md",
       "docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md",
-      "docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md"
+      "tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -137,8 +137,8 @@
   },
   "first_seen_at": "2026-10-27T05:41:35.742612Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ff41587e8f665bf48b4bdb6d0700e4a8225688e8",
+  "fixed_at": "2026-10-27T06:09:48Z",
   "github_issue_number": 6770,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6770",
   "last_seen_at": "2026-10-27T05:41:35.742612Z",
@@ -146,6 +146,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6771",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -174,6 +175,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -186,7 +188,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2107",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f2d1a1cf16966a6c",
+    "recorded_at": "2026-10-27T06:10:32.272681Z",
+    "runtime_contract_digest": "6f819b92b471446dc4c4d23cc2c66acc56f14f573ef713b277d69c0b89dfe515",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "57251d231be4424d5a79c6ec30fcd4350d07293c",
+    "source_merge_commit": "ff41587e8f665bf48b4bdb6d0700e4a8225688e8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6771",
+    "validation_evidence": [
+      "python -m pytest backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py backend/tests/simulation_execution/test_localsim_native_nonregression.py backend/tests/simulation_execution/test_localsim_timing_campaign.py backend/tests/simulation_runtime/test_localsim_dual_mode_query.py -q -> 78 passed; X:/AIstock_temp/localsim-human-continuous-20261027/input-binding-related.xml",
+      "python -m nox -s l0 -- backend/services/simulation_execution/localsim/dual_mode_research.py backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json -> passed; X:/AIstock_temp/localsim-human-continuous-20261027/logs/nox-l0.log"
+    ],
+    "validation_evidence_digest": "6079e0c62127bf343b3e50e8f3fca57e03098bdbdc1a64ac85af3b98a81287ba"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -195,6 +219,10 @@
     "fingerprint": "75f6153b770fd70e36484ae5",
     "source_event_id": "FE-20261027-75f6153b770f"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py backend/tests/simulation_execution/test_localsim_native_nonregression.py backend/tests/simulation_execution/test_localsim_timing_campaign.py backend/tests/simulation_runtime/test_localsim_dual_mode_query.py -q -> 78 passed; X:/AIstock_temp/localsim-human-continuous-20261027/input-binding-related.xml",
+    "python -m nox -s l0 -- backend/services/simulation_execution/localsim/dual_mode_research.py backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py docs/architecture/localsim_human_operation_dual_mode_f2_detailed_design_20261026.md docs/analysis/localsim_human_continuous_input_binding_fix_20261027.md tests/aistock_validation/bugs/20261027_BUG-2107-localsim-fresh-dual-mode-study-cannot-explicitly-bind-an-authorized-repa.json -> passed; X:/AIstock_temp/localsim-human-continuous-20261027/logs/nox-l0.log"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
