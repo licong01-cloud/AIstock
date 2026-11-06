@@ -170,7 +170,7 @@ def run_native_portfolio_day(*, backend, markets, intents, initial_marks, run_id
                 nav = valuation.account_snapshot(prices={s: float(p) for s, p in marks.items()}, snapshot_time=clock).nav
             navs.append({"as_of": clock.isoformat(), "nav_cny": str(nav)})
     for execution in executions:
-        execution.cancel("COMMON_TERMINAL_1457")
+        execution.cancel("COMMON_TERMINAL_1457", confirmed_at=terminal)
         execution.waits = [(f.quantity, Decimal(str((f.trade_time - start).total_seconds()))) for f in execution.fills]
     result = portfolio_day_result(backend=backend, sessions=executions, initial=initial, marks=marks,
                                   navs=navs, day=day, terminal=terminal, initial_nav=initial_nav)
