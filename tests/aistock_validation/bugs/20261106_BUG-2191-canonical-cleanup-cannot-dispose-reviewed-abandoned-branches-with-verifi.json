@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2191",
-  "closed_at": null,
+  "closed_at": "2026-11-06T14:08:54Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -171,9 +171,9 @@
   },
   "first_seen_at": "2026-11-06T13:02:43.255214Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "a0a5aef064fcf3059f14dd707a5629d13cb829bd",
   "fix_summary": "新增独立 reviewed_disposal 处置合同，绑定用户授权、精确注册工作树/HEAD、后继 main commit、引用评审及自包含归档和独立恢复证据；删除前复核全部证据，本地分支按 expected HEAD 原子删除，保留原有安全检查。同步唯一规范、派生目录及 Codex/Claude aftercare。",
-  "fixed_at": null,
+  "fixed_at": "2026-11-06T14:08:54Z",
   "github_issue_number": 7090,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7090",
   "last_seen_at": "2026-11-06T13:02:43.255214Z",
@@ -181,6 +181,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7093",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -198,6 +199,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "client",
@@ -207,7 +209,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2191",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "01fc52d3d335cf56",
+    "recorded_at": "2026-11-06T14:10:02.288614Z",
+    "runtime_contract_digest": "35343b440d535d28f7adbce288e2e1d37ea1e1f424e81752b78268fe3eac22d5",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5eb7316a2d370a6077318a48fecca9cdc52434d5",
+    "source_merge_commit": "a0a5aef064fcf3059f14dd707a5629d13cb829bd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7093",
+    "validation_evidence": [
+      "validation-receipt: id=d9703a5a92e1b2d2 commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'reviewed_disposal or cleanup or canonical_cli or post_restart_scope or merge_aftercare_publishes or finalizer_stops_before_close_sync' -q --tb=short` result=`passed (44 tests)`",
+      "validation-receipt: id=683ba3766878c85f commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_reviewed_disposal_keeps_existing_identity_and_authority_guards -q --tb=short` result=`passed (5 tests)`",
+      "validation-receipt: id=2141ca1a5f1703c9 commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q --tb=short` result=`passed`",
+      "validation-receipt: id=99a7dc4d74094472 commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=d5afdac9c412a8de commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+      "validation-receipt: id=7c5548c88403e34e commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2191 --module validation --changed-file scripts/aistock_issue_workflow.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "1029fd74f4433baaa8c72024b465fd4faf5998836703afbfb51480ed352722c6"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -216,6 +244,14 @@
     "fingerprint": "7d0c4bd71547e524f74926f9",
     "source_event_id": "FE-20261106-7d0c4bd71547"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d9703a5a92e1b2d2 commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'reviewed_disposal or cleanup or canonical_cli or post_restart_scope or merge_aftercare_publishes or finalizer_stops_before_close_sync' -q --tb=short` result=`passed (44 tests)`",
+    "validation-receipt: id=683ba3766878c85f commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_reviewed_disposal_keeps_existing_identity_and_authority_guards -q --tb=short` result=`passed (5 tests)`",
+    "validation-receipt: id=2141ca1a5f1703c9 commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q --tb=short` result=`passed`",
+    "validation-receipt: id=99a7dc4d74094472 commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=d5afdac9c412a8de commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+    "validation-receipt: id=7c5548c88403e34e commit=5eb7316a2d370a6077318a48fecca9cdc52434d5 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2191 --module validation --changed-file scripts/aistock_issue_workflow.py` result=`passed`"
+  ],
   "validation_results": [
     {
       "command": "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'reviewed_disposal or cleanup' -q --tb=short",
