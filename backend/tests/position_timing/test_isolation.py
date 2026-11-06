@@ -8,6 +8,17 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
     if not path.is_relative_to(Path("backend/services/simulation_execution/localsim")):
         return False
     sdk = "backend.services.position_timing.intraday"
+    # Approved period continuation seams are file-and-symbol specific. In
+    # particular, permitting the typed error does not expose IntradayStore.
+    period_seams = {
+        ("period_continuation.py", sdk + ".store"): {"IntradayError"},
+        ("period_research.py", sdk + ".continuous_results"): {"PeriodAnalysisSpec", "period_source_preflight"},
+        ("period_research.py", sdk + ".period_context"): {"load_period_context"},
+        ("period_research.py", sdk + ".price_plan_campaign"): {"inspect"},
+    }
+    relative = path.relative_to(Path("backend/services/simulation_execution/localsim")).as_posix()
+    if (relative, module) in period_seams:
+        return bool(names) and set(names) <= period_seams[(relative, module)]
     if module == sdk:
         return bool(names) and set(names) <= {"evaluate", "research"}
     return module in {sdk + "." + suffix for suffix in (
@@ -82,6 +93,15 @@ def test_sdk_consumer_exception_does_not_open_other_consumers_or_internal_module
     assert not _approved_localsim_sdk_import(consumer, "backend.services.position_timing.service", ["Service"])
     assert not _approved_localsim_sdk_import(consumer, sdk + ".store", ["IntradayStore"])
     assert not _approved_localsim_sdk_import(consumer, sdk, ["store"])
+    period = consumer.with_name("period_research.py")
+    assert _approved_localsim_sdk_import(period, sdk + ".continuous_results", ["period_source_preflight"])
+    assert not _approved_localsim_sdk_import(period, sdk + ".continuous_results", ["analyze_period"])
+    assert not _approved_localsim_sdk_import(consumer, sdk + ".continuous_results", ["period_source_preflight"])
+    continuation = consumer.with_name("period_continuation.py")
+    assert _approved_localsim_sdk_import(continuation, sdk + ".store", ["IntradayError"])
+    assert not _approved_localsim_sdk_import(continuation, sdk + ".store", ["IntradayStore"])
+    assert not _approved_localsim_sdk_import(continuation, sdk + ".store", ["*"])
+    assert not _approved_localsim_sdk_import(period.parent/"other"/period.name, sdk + ".period_context", ["load_period_context"])
 
 
 def test_composition_root_has_only_thin_position_timing_router_wiring() -> None:
