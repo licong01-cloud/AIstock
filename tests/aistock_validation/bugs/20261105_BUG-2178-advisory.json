@@ -1,0 +1,343 @@
+{
+  "actual": "49个不同的普通股票线性分数被中心化压成相同float值；按父rank打破伪同分，压力该日退回原生Top10",
+  "allowed_write_scope": [
+    "scripts/ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/advisory_lstm_linear_rank_replay.py",
+    "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+    "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md",
+    "tests/aistock_validation/bugs/20261105_BUG-2178-advisory.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2178",
+  "closed_at": "2026-11-05T18:56:17Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-05T18:25:06.635474Z",
+  "description": "49个不同的普通股票线性分数被中心化压成相同float值；按父rank打破伪同分，压力该日退回原生Top10",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261105-1db0a73ffd22",
+      "timestamp": "2026-11-05T18:25:06.635461Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/lstm-pool-relation-20261106/numerical_diagnostic.json"
+  ],
+  "expected": "相同线性系数下保留可分辨的股票排序；完整原Top50、原10槽与缺失不变；旧研究入口可重现",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+      "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md",
+      "scripts/advisory_lstm_linear_rank_replay.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2178-advisory.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "scripts/advisory_lstm_linear_rank_replay.py",
+      "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+      "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md"
+    ],
+    "changed_files": [
+      "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+      "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md",
+      "scripts/advisory_lstm_linear_rank_replay.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2178-advisory.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/advisory_lstm_linear_rank_replay.py",
+        "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+        "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "validation.module_quality",
+        "tests.validation_history",
+        "scripts",
+        "advisory.model_first",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "scripts/advisory_lstm_linear_rank_replay.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "suggested_scope": [
+        "scripts/ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/advisory_lstm_linear_rank_replay.py",
+        "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+        "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/advisory_lstm_linear_rank_replay.py",
+      "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+      "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/advisory_lstm_linear_rank_replay.py",
+      "backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py",
+      "docs/analysis/advisory_lstm_linear_rank_stability_20261106.md"
+    ]
+  },
+  "first_seen_at": "2026-11-05T18:25:06.635474Z",
+  "fix_branch": null,
+  "fix_commit": "138fe6a0e002087cbee212f4c3aa5610abca5cc4",
+  "fixed_at": "2026-11-05T18:56:17Z",
+  "github_issue_number": 7038,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7038",
+  "last_seen_at": "2026-11-05T18:25:06.635474Z",
+  "module": "advisory.model_first",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7046",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "只读002856.SZ在2026-04-29的旧两臂预测与冻结模型，比较中心化结果和未中心化线性运算的49个分数",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2178",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "55585ed946ca239a",
+    "recorded_at": "2026-11-05T18:56:59.317237Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b547ec2881f6c3a72e76b47952fe1498f93c6315",
+    "source_merge_commit": "138fe6a0e002087cbee212f4c3aa5610abca5cc4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7046",
+    "validation_evidence": [
+      "validation-receipt: id=f8bcd0a71d82d62c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=pytest plan=direct status=passed command=`python -m pytest -q -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/test-final-r1 backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py` result=`10 passed; actual interpreter included -B; exact command in validation_receipt.json`",
+      "validation-receipt: id=e6c70755b45bbd94 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+      "validation-receipt: id=d79bccf8a9d934e2 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+      "validation-receipt: id=903c6d99deeaaf1c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+      "validation-receipt: id=032f0521a20efd53 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed; independent Decimal2200 audit of 24400 rows also PASS; source and replay reuse PASS; see X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/validation_receipt.json`"
+    ],
+    "validation_evidence_digest": "a61c317d0963f3ea88e8ca98c6ed3c9d3b94ad827cacf16373675c7f0dea4772"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory.model_first"
+  ],
+  "title": "Advisory线性重排序中心化丢失普通股票分数差异",
+  "trigger_condition": {
+    "fingerprint": "1db0a73ffd226ca6c1ed4fe6",
+    "source_event_id": "FE-20261105-1db0a73ffd22"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=f8bcd0a71d82d62c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=pytest plan=direct status=passed command=`python -m pytest -q -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/test-final-r1 backend/tests/advisory_model_first/test_lstm_linear_rank_replay.py` result=`10 passed; actual interpreter included -B; exact command in validation_receipt.json`",
+    "validation-receipt: id=e6c70755b45bbd94 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+    "validation-receipt: id=d79bccf8a9d934e2 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+    "validation-receipt: id=903c6d99deeaaf1c commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 validation_module_registry_l0 guardrail_changed_files -- --changed-only` result=`passed; actual interpreter included -B; registry 8 passed; six-file guardrail PASS; explicit six-path l0 rerun PASS; details in validation_receipt.json`",
+    "validation-receipt: id=032f0521a20efd53 commit=b547ec2881f6c3a72e76b47952fe1498f93c6315 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed; independent Decimal2200 audit of 24400 rows also PASS; source and replay reuse PASS; see X:/AIstock_temp/ADVISORY/linear-rank-stability-20261106/validation_receipt.json`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.model_first",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.model_first",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

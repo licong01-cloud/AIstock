@@ -1,0 +1,397 @@
+{
+  "actual": "Nine loops have one Apr1 action, no portfolio report, FAILED recorder, and erroneous completed status; owner step7 correctly stops before X append.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/l2_continuous_consumer.py",
+    "scripts/qe_l2_continuous_consumer.py",
+    "backend/services/quantevolver/templates/read_exp_res.py",
+    "backend/tests/quantevolver/test_qe_l2_continuous.py",
+    "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py",
+    "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json"
+  ],
+  "assigned_agent": null,
+  "backend_restart_required": true,
+  "bug_id": "BUG-2116",
+  "closed_at": "2026-10-28T07:07:34.991282Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-28T05:59:05.297288Z",
+  "description": "Nine loops have one Apr1 action, no portfolio report, FAILED recorder, and erroneous completed status; owner step7 correctly stops before X append.",
+  "design_compliance_review": [
+    {
+      "conclusion": "Source repair complete and native/fresh-process validated. Runtime activation and fifteen-account economics remain explicitly incomplete.",
+      "requirement": "DESIGN-COMPLIANCE-001.1"
+    },
+    {
+      "conclusion": "FAILED/RUNNING/missing recorder states fail before result export; missing target hooks fail before account use. Nine previous invalid accounts retained as evidence, not used for economics.",
+      "requirement": "DESIGN-COMPLIANCE-001.2"
+    },
+    {
+      "conclusion": "Selected legacy AF AST preserved except two no-op extension hooks. Existing strategy orders and backups unchanged without consumer. All nine real composer economic configurations and frozen input hashes unchanged.",
+      "requirement": "DESIGN-COMPLIANCE-001.3"
+    },
+    {
+      "conclusion": "No new approval gate. User retains backend restart ownership. Recovery uses existing same-task append entry with explicit original-to-retry mapping; no result deletion, duplicate task or competing observer.",
+      "requirement": "DESIGN-COMPLIANCE-001.4"
+    }
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261028-d79128b35f00",
+      "timestamp": "2026-10-28T05:59:05.297269Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/nine_account_failure_audit.json"
+  ],
+  "expected": "All five optional continuous arms consume original AF targets every decision day; B remains behavior-equivalent; failed native recorders cannot yield completed results; preserve original frozen inputs and full 125-day window.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/l2_continuous_consumer.py",
+      "backend/services/quantevolver/templates/read_exp_res.py",
+      "backend/tests/quantevolver/test_qe_l2_continuous.py",
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py",
+      "scripts/qe_l2_continuous_consumer.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json"
+    ],
+    "added_files": [
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+    ],
+    "changed_files": [
+      "backend/services/quantevolver/l2_continuous_consumer.py",
+      "backend/services/quantevolver/templates/read_exp_res.py",
+      "backend/tests/quantevolver/test_qe_l2_continuous.py",
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py",
+      "scripts/qe_l2_continuous_consumer.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2116-qe-l2-continuous-legacy-strategy-bypasses-target-hooks-and-failed-replay.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/l2_continuous_consumer.py",
+        "scripts/qe_l2_continuous_consumer.py",
+        "backend/services/quantevolver/templates/read_exp_res.py",
+        "backend/tests/quantevolver/test_qe_l2_continuous.py",
+        "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.archive",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/l2_continuous_consumer.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.archive"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_l2_continuous_risk_consumer"
+        },
+        {
+          "file": "scripts/qe_l2_continuous_consumer.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.archive"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_l2_continuous_risk_consumer"
+        },
+        {
+          "file": "backend/services/quantevolver/templates/read_exp_res.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_l2_continuous.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.archive"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_l2_continuous_risk_consumer"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/l2_continuous_consumer.py",
+        "scripts/qe_l2_continuous_consumer.py",
+        "backend/services/quantevolver/templates/read_exp_res.py",
+        "backend/tests/quantevolver/test_qe_l2_continuous.py",
+        "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/l2_continuous_consumer.py",
+      "scripts/qe_l2_continuous_consumer.py",
+      "backend/services/quantevolver/templates/read_exp_res.py",
+      "backend/tests/quantevolver/test_qe_l2_continuous.py",
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/l2_continuous_consumer.py",
+      "scripts/qe_l2_continuous_consumer.py",
+      "backend/services/quantevolver/templates/read_exp_res.py",
+      "backend/tests/quantevolver/test_qe_l2_continuous.py",
+      "backend/tests/quantevolver/test_read_exp_res_recorder_completion.py"
+    ]
+  },
+  "first_seen_at": "2026-10-28T05:59:05.297288Z",
+  "fix_branch": null,
+  "fix_commit": "8d7b53156f6ce6eebe66bf338cf7e9d6ad3abaa6",
+  "fixed_at": "2026-10-28T06:23:52Z",
+  "github_issue_number": 6809,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6809",
+  "last_seen_at": "2026-10-28T05:59:05.297288Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6812",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "recovery_boundary": "Keep original failed Loop1-9 immutable. After user activates merged Composer, append one frozen equivalent retry per failed logical account as Loop10-18 to the original task; collect real 125-day ledgers before X0/X1 Loop19-24. No generic retry, destructive rerun, training, HMM substitution or automatic second retry.",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261028_133301_9d39/custom-evo-config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/rdagent-node1.native_validation_v1.json",
+      "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.native_validation_v1.json",
+      "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/rdagent-node1.actual_failed_recorder_guard_v1.json",
+      "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.actual_failed_recorder_guard_v1.json",
+      "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/fixed_formal_composer_v1/completion.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-adaptive-24h-20261028\\run_v1\\H_user_restart_recovery_v1\\post_restart_source_merge_receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2116",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "af2c8a97863d209314d8c0ac6ec62086caec57032ced40411e61b0a0a48ac088",
+      "contract_digest": "0747cb95d73aa9512f63b456e61cc04b9e2592fdf1c79bfa7b69527c1c8ab15b",
+      "expected_identity": "8d7b53156f6ce6eebe66bf338cf7e9d6ad3abaa6",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-28T07:05:03.360848Z",
+      "mode": "read_only",
+      "observed_identity": "79a9d2952eee739f9194ab6f518355a560284a94",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3633a849dee0dda393fd4219dc6f21c06e126f1496a5672081659f042eb89c97",
+      "receipt_sha256": "34771a65e8ab91784332d99db8a0690106718c4066d8cf9b9c6da637ae56c820",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d6372a319c4ad5947cab884d51692a647ef5482be961977e89e4d32341933d76",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2116",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1f04e61f5ce3923b",
+    "recorded_at": "2026-10-28T06:24:55.177539Z",
+    "runtime_contract_digest": "0747cb95d73aa9512f63b456e61cc04b9e2592fdf1c79bfa7b69527c1c8ab15b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c9cb340960f31e221cf379075955592d3eb69e67",
+    "source_merge_commit": "8d7b53156f6ce6eebe66bf338cf7e9d6ad3abaa6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6812",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/quantevolver/l2_continuous_consumer.py scripts/qe_l2_continuous_consumer.py backend/services/quantevolver/templates/read_exp_res.py backend/tests/quantevolver/test_qe_l2_continuous.py backend/tests/quantevolver/test_read_exp_res_recorder_completion.py -> passed"
+    ],
+    "validation_evidence_digest": "b0103dbb58d5eae82c304edf0bc48ac0e8f597f9319c26bc0ed1bb62e8573b08"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE L2 continuous legacy strategy bypasses target hooks and failed replay is reported completed",
+  "trigger_condition": {
+    "fingerprint": "d79128b35f00fc7205124d2a",
+    "source_event_id": "FE-20261028-d79128b35f00"
+  },
+  "validation_evidence": [
+    "Changed-file Ruff and L0 passed; targeted matrix 50 passed, 1 failed, 1 skipped; failed validation-order node fixed and rerun passed. Native Qlib held-position paths for all five arms passed on both nodes with actual selected legacy AF source. Actual FAILED recorders on both nodes rejected before any output changed.",
+    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/rdagent-node1.native_validation_v1.json",
+    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.native_validation_v1.json",
+    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/rdagent-node1.actual_failed_recorder_guard_v1.json",
+    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/wsl2-5080.actual_failed_recorder_guard_v1.json",
+    "F:/Dev/AIstock/tmp/handoff/qe-adaptive-24h-20261028/run_v1/H_execution_reconciliation_v1/fixed_formal_composer_v1/completion.json",
+    "python -m nox -s l0 -- backend/services/quantevolver/l2_continuous_consumer.py scripts/qe_l2_continuous_consumer.py backend/services/quantevolver/templates/read_exp_res.py backend/tests/quantevolver/test_qe_l2_continuous.py backend/tests/quantevolver/test_read_exp_res_recorder_completion.py -> passed",
+    "python -B tmp/handoff/qe-adaptive-24h-20261028/run_v1/hmm_qe_recovery_activate_v2.py -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

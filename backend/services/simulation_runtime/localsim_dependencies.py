@@ -62,6 +62,12 @@ def build_localsim_profile_service() -> LocalSimRuntimeProfileService:
     return LocalSimRuntimeProfileService(repository=profile_repository, authority=authority)
 
 
+def build_localsim_pit_migration_service():
+    from .localsim_pit_migration import LocalSimPitMigrationService
+
+    return LocalSimPitMigrationService()
+
+
 def build_localsim_query_service() -> LocalSimQueryService:
     successor_repository, profile_repository, _, _ = _dependencies()
     return LocalSimQueryService(repository=successor_repository, profile_repository=profile_repository)

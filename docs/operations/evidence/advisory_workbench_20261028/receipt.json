@@ -1,0 +1,295 @@
+{
+  "observed_at": "2026-10-28T02:35:10.571920+08:00",
+  "database_mode": "READ_ONLY",
+  "status": "PASS",
+  "overview_seconds": 0.977,
+  "captured_responses": 95,
+  "cross_program_episode": "404",
+  "invalid_snapshot": "409",
+  "database_writes": 0,
+  "inference_calls": 0,
+  "evidence_kind": "ASGI_TESTCLIENT_REAL_DATABASE_READ_AND_CAPTURED_RESPONSE_BROWSER_NOT_PRODUCTION_ACTIVATION",
+  "design_pr": "https://github.com/licong01-cloud/AIstock/pull/6776",
+  "validation": {
+    "backend_direct_and_canonical_performance": "41 passed",
+    "projection_final_revision": "12 passed",
+    "workbench_browser": "9 passed (8 synthetic contract cases, 1 real capture)",
+    "legacy_management_browser": "4 passed",
+    "ruff": "PASS",
+    "typescript_direct_compiler": "PASS",
+    "eslint": "PASS",
+    "ddl": "noop",
+    "dml": "not_requested",
+    "backend_restart": "user_owned_pending",
+    "feature_validator": "PASS: F2 14 items, 14 rows, 0 warnings",
+    "ci_mapping": "2 direct contracts PASS; isolated config collected 9 workbench cases"
+  },
+  "programs": [
+    {
+      "program_id": "advp_3126dd77f9774d94850f37ad012f640f",
+      "name": "每日 Top20 荐股任务",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-09",
+      "first": "2026-08-14",
+      "runtime": {
+        "state": "ASSET_BLOCKED",
+        "reason": "multi_alpha_parent_leg_runtime_assets_incomplete",
+        "settlement": "NOT_DUE",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "AFTER_CLOSE_PUBLISH",
+        "configured": "ENABLED",
+        "attempt_count": 64,
+        "updated_at": "2026-10-27T23:59:30.558427+08:00"
+      },
+      "membership": null,
+      "raw_membership_count": null,
+      "episodes": 164,
+      "source_counts": {
+        "FORWARD": 164
+      },
+      "readiness": "AVAILABLE",
+      "shadow_status": "NOT_APPLICABLE",
+      "summary_seconds": 0.315,
+      "metrics": {
+        "metric_evaluable_count": 148,
+        "active_count": 16,
+        "win_rate": 0.31756756756756754,
+        "avg_return_bps": -218.27198246963385,
+        "metric_mark_trade_date": "2026-10-27"
+      }
+    },
+    {
+      "program_id": "advp_be042d9519e74775b7aaa08627ea7b9d",
+      "name": "日频荐股 LGB 新策略包 20261023",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "first": "2026-10-26",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 1,
+        "updated_at": "2026-10-28T02:35:04.834838+08:00"
+      },
+      "membership": {
+        "in_scope": 25,
+        "new": 6,
+        "continuing": 19,
+        "removed": 9,
+        "unknown_change": 0,
+        "observation": 15,
+        "outside_pending": 7,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 28,
+        "comparison_known": true
+      },
+      "raw_membership_count": 25,
+      "episodes": 20,
+      "source_counts": {
+        "FORWARD": 20
+      },
+      "readiness": "AVAILABLE",
+      "shadow_status": "NOT_APPLICABLE",
+      "summary_seconds": 0.098,
+      "metrics": {
+        "metric_evaluable_count": 0,
+        "active_count": 20,
+        "win_rate": null,
+        "avg_return_bps": null,
+        "metric_mark_trade_date": "2026-10-27"
+      }
+    },
+    {
+      "program_id": "advp_ed918504a02f4b15892f0dba65da139b",
+      "name": "日频荐股 LSTM 新策略包 20261009",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "first": "2026-10-12",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 1,
+        "updated_at": "2026-10-28T02:35:04.958221+08:00"
+      },
+      "membership": {
+        "in_scope": 21,
+        "new": 7,
+        "continuing": 14,
+        "removed": 7,
+        "unknown_change": 0,
+        "observation": 19,
+        "outside_pending": 13,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 21,
+        "comparison_known": true
+      },
+      "raw_membership_count": 21,
+      "episodes": 71,
+      "source_counts": {
+        "FORWARD": 71
+      },
+      "readiness": "AVAILABLE",
+      "shadow_status": "SHADOW_ONLY",
+      "summary_seconds": 0.178,
+      "metrics": {
+        "metric_evaluable_count": 52,
+        "active_count": 19,
+        "win_rate": 0.3076923076923077,
+        "avg_return_bps": -224.38370056800798,
+        "metric_mark_trade_date": "2026-10-27"
+      }
+    },
+    {
+      "program_id": "advp_5c2b7a817cfa46f8b8708e9886082e7e",
+      "name": "日频荐股 TCN 新策略包 20261009",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "first": "2026-10-12",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 1,
+        "updated_at": "2026-10-28T02:35:04.718116+08:00"
+      },
+      "membership": {
+        "in_scope": 24,
+        "new": 12,
+        "continuing": 12,
+        "removed": 10,
+        "unknown_change": 0,
+        "observation": 16,
+        "outside_pending": 14,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 22,
+        "comparison_known": true
+      },
+      "raw_membership_count": 24,
+      "episodes": 69,
+      "source_counts": {
+        "FORWARD": 69
+      },
+      "readiness": "AVAILABLE",
+      "shadow_status": "NOT_APPLICABLE",
+      "summary_seconds": 0.172,
+      "metrics": {
+        "metric_evaluable_count": 49,
+        "active_count": 20,
+        "win_rate": 0.24489795918367346,
+        "avg_return_bps": -322.9024056461599,
+        "metric_mark_trade_date": "2026-10-27"
+      }
+    },
+    {
+      "program_id": "advp_5a46150a7e9541d2a8887541781c9dfc",
+      "name": "荐股但alpha测试包",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "first": "2026-08-14",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 25,
+        "updated_at": "2026-10-28T02:35:04.039968+08:00"
+      },
+      "membership": {
+        "in_scope": 20,
+        "new": 19,
+        "continuing": 1,
+        "removed": 20,
+        "unknown_change": 0,
+        "observation": 20,
+        "outside_pending": 25,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 21,
+        "comparison_known": true
+      },
+      "raw_membership_count": 20,
+      "episodes": 230,
+      "source_counts": {
+        "FORWARD": 230
+      },
+      "readiness": "AVAILABLE",
+      "shadow_status": "NOT_APPLICABLE",
+      "summary_seconds": 0.458,
+      "metrics": {
+        "metric_evaluable_count": 218,
+        "active_count": 12,
+        "win_rate": 0.38990825688073394,
+        "avg_return_bps": -51.474469278088115,
+        "metric_mark_trade_date": "2026-10-27"
+      }
+    }
+  ],
+  "real_response_capture_sha256": "4956165c31239d9f9221263c19f649b715d035b3871387c2be55339755d4ee7d",
+  "source_file_sha256": {
+    "backend/routers/advisory.py": "2fe9a1616bfc0d52a6a44539d20505e9273abee4e06edc7fd809df775aa72f43",
+    "backend/routers/advisory_workbench.py": "7cae87baf48641780a16fa7a88562a88ae89678bd046b3ef7fb949f90cfd9abd",
+    "backend/services/advisory_workbench/__init__.py": "9ac2f046f4559fb7f5856b8664fa6437c736c949be80ca803252443d215fc5a3",
+    "backend/services/advisory_workbench/projection.py": "471dc2d2c9ebf3fe1a6ada2332c4fad5a283788a40a121b1478e65a9e32c2b35",
+    "backend/services/advisory_workbench/repository.py": "4263f44f26f583096aa27f18b752a97bd161914300e364c03027de7daebac689",
+    "backend/services/advisory_workbench/service.py": "05c675a4dc7eaf7f2667cd4a1f4367a1c7d354a6dc4e7d10f13571335a6fadba",
+    "backend/tests/advisory_workbench/test_api.py": "5e0a9335a4cd9e5bc189b2a1f3c5d3349d8ec5bbf1a3d846c26b87c5cb2282a2",
+    "backend/tests/advisory_workbench/test_projection.py": "5ab6eb1ff54900e7a26eb312b81c6e4b04188ee8adef7dd8baeb966c4a7c23a1",
+    "backend/tests/advisory_workbench/test_repository.py": "bf26dfe8da24c629bd5c84d49b4dad762d472b5d58f51a644d1d82e3d987b7e8",
+    "backend/tests/advisory_workbench/test_service.py": "ca55574df5a8c73f8c8aaf5e465d84c35fa95dc61d28cd0216895158d08e0a68",
+    "frontend/src/app/paper-v2/advisory/manage/page.tsx": "1683936550c51fdf0493f1b5c7cb7eb3d7cc802e9e28b1b3817c347c5611c6f3",
+    "frontend/src/app/paper-v2/advisory/page.tsx": "1955fa804799adf5ebe367e5ee544c52dd91c1642eea4477780053800355e131",
+    "frontend/src/app/paper-v2/layout.tsx": "2a315f3f87a5d4b1c0b776821d48b862249823a522be5ce31e1718191552ba53",
+    "frontend/src/app/Sidebar.tsx": "b442be0cf24a657994a0005f259f61940dfd431f94053e908bcce4ea00eba004",
+    "frontend/src/components/advisory/AdvisoryManagement.tsx": "84bade04f11583eedf31ef6e73939f3d60e2743b788ce70c002fee44dfe54da8",
+    "frontend/src/components/advisory/workbench/DailyList.tsx": "77b3a9b58d41b898252b314469e46428b9d1e2971d3e12c595ccd722a80c6474",
+    "frontend/src/components/advisory/workbench/EpisodeTable.tsx": "f2f43e041c44fa1c72bad4237678f5bd04cccb1b127b015eb6522d9e47faa314",
+    "frontend/src/components/advisory/workbench/ModelObservation.tsx": "fa07e82576eaac723263cedaadb770dd5329c4d632468704937fbe8ef2648c0e",
+    "frontend/src/components/advisory/workbench/Overview.tsx": "7db9a6c268cb9a89e93c5140a7bf01d76c5490a93d08ea2f01ea9a2c6c7d6603",
+    "frontend/src/components/advisory/workbench/Performance.tsx": "40a4f5267f6b14c750cecadf3832488db37b684e2e9ff8143403e1f76680ec61",
+    "frontend/src/components/advisory/workbench/ProgramDetail.tsx": "d1c4662a280f71b8ee1aba92e424c7555561fe940a0517dd4af52a299c65bab5",
+    "frontend/src/components/advisory/workbench/shared.tsx": "b6e3b84928e1fe81503c45a6344e599ee06aa8b0477e4ceaa1f5e69d0baf262c",
+    "frontend/src/components/advisory/workbench/StockDrawer.tsx": "41c9f5122e1685633cd365cbd984c161728fa85b7d70e0c94a5010b94d49ef44",
+    "frontend/src/components/advisory/workbench/workbench.module.css": "b9ff80c9db5f794e8d8cfa93711a3ee6f4f519cb76ddbbd912174043c4e1d39f",
+    "frontend/src/components/advisory/workbench/Workbench.tsx": "95a908c3feddf6804d7763439f7cc9214f47cc3b8a6c1d450399bfaeb115ca9d",
+    "frontend/src/lib/api/advisoryWorkbench.ts": "2ef169fd77178e657a09d0554669a7c665c9df777b75567fabb7405ec86b7a6e",
+    "frontend/src/lib/navigation/nav-groups.ts": "bff592bf0f6ec28828a67b8289410937c2caf68512049c754164ee43569d7edb",
+    "frontend/tests/paper-v2/advisory-workbench.spec.ts": "bffeae9cc4275baf253da2cd1e4a82cddba964f92020b801035f6a985e39fcfc",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts": "8b2c895ec51958f4b77402defa930aba861dc92596a3cde08978dd58bd94ac60",
+    ".github/workflows/test.yml": "ca4beb23694f46d81ac9cda8ed67e067c2d3b753464c3041e19febbfe94de8a6",
+    "backend/services/validation/plan_catalog.py": "1379edf35596c8832ad9ff79aa4ddb157755153d16b77f95970d9227574325e0",
+    "backend/tests/scripts/test_ci_change_classifier.py": "0be0c91b9a734acf3c642e51842d0a4e7a0f2d5e4124185f239022726ae5b33b",
+    "noxfile.py": "fd61f6f28a8bc1d96560a8f144f58152ff477b4eb234110982d2b5b8055a6716",
+    "frontend/tests/advisory-mocked.config.ts": "afc5e32d3a9ec70dea6a8fe4df0f57566456bf27c6494dafcb9beb4b994322a6",
+    "tests/aistock_validation/catalog/file_ownership.yaml": "68b3ec6b0697a8168c842ab367cbcd1038f2ec55e752131e8a9d74c985a44819",
+    "tests/aistock_validation/catalog/module_registry.yaml": "c95aeae83275451c402f7475c4f00157e03b29a9eeaa5782aefec61f621eee96",
+    "tests/aistock_validation/catalog/test_plans.yaml": "abca20636a0b6cd9bc1c39130e9dbb38f97cdfd016835edcb187790f4f5463eb"
+  },
+  "source_hash_normalization": "LF",
+  "screenshots": {
+    "overview.png": "cd66be3f2db3624ee0d79081bc45fd4f3cf55356db8bc1d4c1e18e3be6a393aa",
+    "daily.png": "5113f95cbd3aabb03c323a4b470c97c8eefa2e02a219a36bd21d610538bbaa64",
+    "history-detail.png": "384c2b070dab04a6d1a4a2933731f1abfa2231c00b827b04afec7ebf7950fde3"
+  },
+  "backend_service_processes_started": 0,
+  "frontend_test_service": "Playwright-owned isolated 3012; user runtime untouched"
+}

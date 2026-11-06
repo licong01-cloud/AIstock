@@ -1,4 +1,5 @@
 "use client";
+import { QuoteCell } from "./LiveQuotes";
 
 import { useEffect, useRef, useState } from "react";
 import { advisoryApi, type AdvisoryEconomicEntryProjection, type AdvisoryEconomicEntryResearch, type AdvisoryEconomicEntryStatus } from "@/lib/api/advisory";
@@ -105,7 +106,7 @@ function validRoleStatus(value: AdvisoryEconomicEntryStatus, programId: string, 
 
 function EconomicRows({ rows }: { rows: AdvisoryEconomicEntryProjection[] }) {
   return <>{rows.map((row) => <div className="mt-2 border-t pt-2" key={row.prediction_input.instrument}>
-    <strong>{row.prediction_input.instrument} · {stateLabels[row.recommendation_status]}</strong>
+    <strong>{row.prediction_input.instrument} · {stateLabels[row.recommendation_status]}</strong><div>当前最新价 <QuoteCell symbol={row.prediction_input.instrument} /></div>
     <p className="text-sm">D {row.prediction_input.decision_date} → T {row.prediction_input.target_date}；{row.prediction_input.source_evidence}；{row.availability}；{row.reason_code || "无额外错误"}</p>
     {row.acceptable_price_intervals.map((interval, index) => <p key={index}>
       {number(interval.minimum_cny)}～{number(interval.maximum_cny)} CNY（{number(interval.grid_step_cny)} 步长 / {interval.node_count}节点）；

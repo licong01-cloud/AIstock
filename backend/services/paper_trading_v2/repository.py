@@ -323,6 +323,28 @@ def _running_summary_operability(
     }
 
 
+def _persisted_position_trade_date(row: Mapping[str, Any]) -> date:
+    """Restore the lot date, which differs from the position snapshot date."""
+    metadata = row.get("metadata")
+    if metadata is None or (isinstance(metadata, Mapping) and "position_trade_date" not in metadata):
+        return row["trade_date"]
+    try:
+        if not isinstance(metadata, Mapping):
+            raise ValueError("position metadata is not an object")
+        raw = metadata["position_trade_date"]
+        if not isinstance(raw, str):
+            raise ValueError("position trade date is not a string")
+        lot_date = date.fromisoformat(raw)
+        if raw != lot_date.isoformat() or lot_date > row["trade_date"]:
+            raise ValueError("position trade date is noncanonical or after its snapshot")
+        return lot_date
+    except (TypeError, ValueError) as exc:
+        raise DataUnavailableError(
+            "Paper v2 persisted position trade date is invalid",
+            context={"reason_code": "PAPER_V2_POSITION_TRADE_DATE_INVALID", "symbol": row["symbol"]},
+        ) from exc
+
+
 class PaperTradingV2Repository:
     def __init__(
         self,
@@ -3008,7 +3030,7 @@ class PaperTradingV2Repository:
                         LIMIT 1
                     )
                     SELECT p.portfolio_id, p.symbol, p.quantity,
-                           p.available_quantity, p.avg_cost, p.trade_date
+                           p.available_quantity, p.avg_cost, p.trade_date, p.metadata
                     FROM paper_v2.positions p
                     JOIN position_authority a ON a.run_id = p.run_id
                     ORDER BY p.symbol
@@ -3023,7 +3045,7 @@ class PaperTradingV2Repository:
                 quantity=int(row["quantity"]),
                 available_quantity=int(row["available_quantity"]),
                 avg_cost=float(row["avg_cost"]),
-                trade_date=row["trade_date"],
+                trade_date=_persisted_position_trade_date(row),
             )
             for row in rows
             if int(row["quantity"]) > 0

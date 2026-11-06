@@ -315,6 +315,60 @@ def test_wsl_submission_uses_execution_mode_not_durable_training_default(
     client.assert_not_called()
 
 
+@pytest.mark.parametrize("backtest,expected", [(False, 4), (True, 4)])
+def test_remote_cpu_fit_and_replay_preserve_four_loop_capacity(backtest, expected):
+    repository = Mock(spec=QEExecutionReservationRepository)
+    repository.reserve_execution_and_claim_source.return_value = QEExecutionReservationAcquireResult(
+        acquired=False, duplicate_replay=False, active_count=expected,
+        node_capacity=expected, reservation=None, source_claim=None,
+    )
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+    result = asyncio.run(coordinator.submit(
+        client=Mock(),
+        source=_source(node_id="rdagent-node1", source_kind="qe_evolution_loop",
+                       backtest_only=backtest, requested_node_capacity=4),
+        payload=QEWorkspaceSubmissionPayload("remote_task", 1, {}, {}, "qrun"),
+    ))
+    assert result.waiting_capacity
+    assert repository.reserve_execution_and_claim_source.call_args.kwargs["node_capacity"] == expected
+
+
+@pytest.mark.parametrize("device,capacity", [("cpu", 4), ("gpu", 2)])
+def test_wsl_actual_cpu_model_gets_four_but_gpu_override_keeps_two(monkeypatch, device, capacity):
+    monkeypatch.setattr(
+        "backend.services.quantevolver.config_composer.ConfigComposer._get_model_info",
+        lambda self, model_id: {"model_type": "LGBModel"},
+    )
+    repository = Mock(spec=QEExecutionReservationRepository)
+    repository.reserve_execution_and_claim_source.return_value = QEExecutionReservationAcquireResult(
+        acquired=False, duplicate_replay=False, active_count=capacity,
+        node_capacity=capacity, reservation=None, source_claim=None,
+    )
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+    result = asyncio.run(coordinator.submit(
+        client=Mock(),
+        source=_source(source_kind="qe_evolution_loop", parallel_training_eligible=True, requested_node_capacity=4),
+        payload=QEWorkspaceSubmissionPayload("cpu_task", 1, {"model_id": "lgb", "model_params": {"device_type": device}}, {}, "qrun"),
+    ))
+    assert result.node_capacity == capacity
+    kwargs = repository.reserve_execution_and_claim_source.call_args.kwargs
+    assert kwargs["node_capacity"] == capacity and kwargs["allow_same_task_parallel_training"]
+
+
+def test_wsl_unresolved_model_cannot_raise_capacity(monkeypatch):
+    monkeypatch.setattr(
+        "backend.services.quantevolver.config_composer.ConfigComposer._get_model_info", lambda self, model_id: None,
+    )
+    repository = Mock(spec=QEExecutionReservationRepository)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+    with pytest.raises(ValueError, match="MODEL_METADATA_REQUIRED"):
+        asyncio.run(coordinator.submit(
+            client=Mock(), source=_source(source_kind="qe_evolution_loop", parallel_training_eligible=True, requested_node_capacity=4),
+            payload=QEWorkspaceSubmissionPayload("cpu_task", 1, {"model_id": "missing"}, {}, "qrun"),
+        ))
+    repository.reserve_execution_and_claim_source.assert_not_called()
+
+
 @pytest.mark.parametrize("kind,backtest,capacity", [
     ("multi_alpha_durable_attempt", True, 4),
     ("multi_alpha_durable_attempt", False, 1),

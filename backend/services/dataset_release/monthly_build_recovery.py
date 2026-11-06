@@ -1,4 +1,4 @@
-"""Recover only unpublished quote-policy packaging; never repeat price exports.
+"""Recover unpublished quote packaging; never repeat price exports.
 
 This maintenance entry prepares the existing operation for its ordinary API
 resume. It does not run producers, replace SOURCE, publish READY or activate.
@@ -8,13 +8,14 @@ The old manifest, receipt and checkpoint remain preserved, including on crash.
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 import json
 import math
 from pathlib import Path
 
 from .canonical import digest_named_fields
 from .monthly_build_resume import _plain, _read_record, _signature
-from .monthly_unified import MonthlyOperationStore, _digest, _exclusive_lock, _file_sha256 as _sha, _write_exclusive
+from .monthly_unified import MonthlyOperationStore, _digest, _exclusive_lock, _file_sha256 as _sha, _replace_json, _write_exclusive
 from .shared_sector_context import validate_release_sw_l2_code_map, validate_sector_quote_availability
 from .sw_l2_quote_policy import quote_publication_policy_identity
 
@@ -56,15 +57,55 @@ def _source_proof(plan, cas, start):
     return ref.sha256
 
 
-def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile, apply=False):
-    """Narrow BUG-1935 recovery, fenced by the same worker and state locks."""
+def _quote_gap_proof(plan, cas, root, build, target, mapping, availability, key):
+    """Prove a quote-available hole in both the pinned output and sealed source.
+
+    This does not approve replacement facts: the existing SOURCE refresh must
+    still obtain those from the official provider and enforce additive writes.
+    """
+    from datetime import date
+    import pandas as pd
+
+    code, day = key
+    _require(code in mapping.code_to_id, "quote gap code is not in the frozen map")
+    _require(date.fromisoformat(day).isoformat() == day and day <= plan["target_cutoff"], "quote gap date is invalid")
+    entries = [entry for entry in availability["entries"] if entry["canonical_l2_code"] == code]
+    _require(len(entries) == 1 and any(span["start_date"] <= day <= span["end_date"]
+        for span in entries[0]["availability_spans"]), "quote gap is outside official publication availability")
+    source = plan.get("monthly_industry_quote_source", {}).get("quote_source", {})
+    _require(source.get("source_dataset") == "market.sw_daily", "official frozen quote source missing")
+    parts = [part for part in source["partitions"] if part["partition_key"] == day[:7]]
+    _require(len(parts) == 1, "official quote gap partition missing or ambiguous")
+    reference = cas.validate_reference_metadata(parts[0]["ref"])
+    rows = cas.get_json_bounded(reference, max_bytes=reference.size)["rows"]
+    rows = [row for row in rows if row["index_code"] == code and row["trade_date"] == day]
+    def finite(value):
+        return value is not None and math.isfinite(float(value))
+    _require(len(rows) <= 1 and (not rows or not all(finite(rows[0].get(field))
+        for field in ("pct_change", "vol", "amount"))), "sealed official quote already has finite facts")
+    path = root / "components/sector_context_candidate_v1/sector_quote_facts.h5"
+    _plain(path)
+    _pinned(root, path, build, target)
+    with pd.HDFStore(path, "r") as store:
+        observed = store.select("data", where=[f"datetime == Timestamp('{day}')", f"instrument == '{code}'"],
+                                columns=["sw2_pct_change", "sw2_vol", "sw2_amount"])
+    _require(len(observed) <= 1 and (observed.empty or not all(finite(value)
+        for value in observed.iloc[0])), "pinned quote output already has finite facts")
+    _pinned(root, path, build, target)
+    return {"canonical_l2_code": code, "trade_date": day, "official_source_partition_sha256": reference.sha256,
+            "quote_facts_sha256": _sha(path)}
+
+
+def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile, apply=False, quote_gap=None):
+    """Fenced recovery of a proven policy error or a precise frozen quote hole."""
     from datetime import date
 
     operation = store.operation_root(operation_id)
     _plain(operation)
     with _exclusive_lock(operation / ".writer.lock", blocking=False), _exclusive_lock(operation / ".operation.lock"):
         state, plan = store.read_state(operation_id), store.read_plan(operation_id)
-        _require(state.get("status") == "FAILED" and state.get("current_stage") == "DERIVE",
+        allowed_stages = {"DERIVE", "BUILD"} if quote_gap is not None else {"DERIVE"}
+        _require(state.get("status") == "FAILED" and state.get("current_stage") in allowed_stages,
                  "recovery requires an idle FAILED DERIVE operation")
         _require(not state.get("cancel_requested"), "cancelled operation cannot be recovered")
         for stage in ("DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE"):
@@ -100,12 +141,14 @@ def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile
         _require(journal["staging_relative_path"] == relative, "retained staging identity differs")
         staging = target.parent / relative
         _plain(staging)
-        intent_path = operation / "quote-policy-repack.json"
+        kind = "quote-source" if quote_gap is not None else "quote-policy"
+        intent_path = operation / (f"{kind}-repack-{state['attempt']}.json" if quote_gap is not None else "quote-policy-repack.json")
         _plain(intent_path)
         old_intent = _json(intent_path) if intent_path.exists() else None
         checkpoint = operation / "checkpoints/build.json"
-        saved_checkpoint = operation / f"checkpoints/build-before-quote-policy-{state['attempt']}.json"
+        saved_checkpoint = operation / f"checkpoints/build-before-{kind}-{state['attempt']}.json"
         _plain(saved_checkpoint)
+        _require(state["current_stage"] == "DERIVE" or old_intent is not None, "BUILD recovery intent missing")
         if old_intent is None:
             _require(target.is_dir() and not staging.exists(), "candidate/staging is not exclusively owned")
             build = store.read_checkpoint(operation_id, "BUILD")
@@ -136,8 +179,6 @@ def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile
             # BUILD refs contain the published root name, even after a move.
             _pinned(root, path, build, target)
         receipt = _json(component / "component_receipt.json")
-        _require(receipt["quote_availability"]["publication_policy_identity"] == LEGACY_POLICY_ID,
-                 "recovery is limited to the known erroneous publication policy")
         mapping = validate_release_sw_l2_code_map(_json(component / "sector_code_map.json"))
         old = _json(component / "sector_quote_availability.json")
         starts = [span["start_date"] for row in old["entries"] for span in row["availability_spans"]]
@@ -149,8 +190,15 @@ def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile
         # replacement availability. The ordinary builder now binds the full
         # frozen catalog and dated facts (BUG-1951). A single source proof is
         # not permission to extrapolate 801011 through the release cutoff.
-        _require(before.get("801011.SI") == [], "publication correction exceeds BUG-1935 scope")
-        proof_sha = _source_proof(plan, cas, start)
+        gap_proof = None
+        if quote_gap is None:
+            _require(receipt["quote_availability"]["publication_policy_identity"] == LEGACY_POLICY_ID,
+                     "recovery is limited to the known erroneous publication policy")
+            _require(before.get("801011.SI") == [], "publication correction exceeds BUG-1935 scope")
+            proof_sha = _source_proof(plan, cas, start)
+        else:
+            gap_proof = _quote_gap_proof(plan, cas, root, build, target, mapping, old, quote_gap)
+            proof_sha = gap_proof["official_source_partition_sha256"]
         for relative_file, signature in journal["files"].items():
             path = Path(relative_file)
             _require(not path.is_absolute() and not any(s in relative_file for s in ("\\", ":", "\x00"))
@@ -158,13 +206,16 @@ def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile
             _require(_signature(root / path) == signature, f"retained export changed: {relative_file}")
         _require(_sha(journals[0]) == journal_sha and _signature(active_profile) == active_signature,
                  "journal or active profile changed during recovery")
-        intent = {"schema_version": "aistock_unpublished_quote_policy_repack_v1", "operation_id": operation_id,
+        intent = {"schema_version": ("aistock_unpublished_quote_source_repack_v1" if quote_gap is not None
+                                     else "aistock_unpublished_quote_policy_repack_v1"), "operation_id": operation_id,
                   "execution_attempt": state["attempt"], "candidate_root": str(target), "staging_root": str(staging),
                   "journal_sha256": journal_sha, "manifest_file_sha256": _sha(manifest),
                   "checkpoint_signature": _signature(checkpoint if checkpoint.exists() else saved_checkpoint),
-                  "old_policy_identity": LEGACY_POLICY_ID, "new_policy_identity": quote_publication_policy_identity(),
+                  "old_policy_identity": receipt["quote_availability"]["publication_policy_identity"],
+                  "new_policy_identity": quote_publication_policy_identity(),
                   "official_source_partition_sha256": proof_sha, "retained_file_count": len(journal["files"]),
-                  "database_write": False, "active_profile_write": False, "exports_repeated": False}
+                  "database_write": False, "active_profile_write": False, "exports_repeated": False,
+                  **({"quote_gap_evidence": gap_proof} if gap_proof is not None else {})}
         _require(old_intent is None or intent == old_intent, "recovery intent changed")
         if apply:
             if old_intent is None:
@@ -175,7 +226,14 @@ def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile
             if checkpoint.exists():
                 _require(not saved_checkpoint.exists(), "preservation checkpoint already exists")
                 checkpoint.rename(saved_checkpoint)
-        return {**intent, "applied": apply, "next_action": "resume the same operation through the monthly release API"}
+            if quote_gap is not None:
+                # The operation lock is already held. update_state() would
+                # acquire it a second time and deadlock on the real store.
+                state.update(current_stage="BUILD", updated_at=datetime.now(UTC).isoformat())
+                _replace_json(operation / "state.json", state)
+        next_action = ("refresh frozen industry quotes through the monthly release API, then resume the same operation"
+                       if quote_gap is not None else "resume the same operation through the monthly release API")
+        return {**intent, "applied": apply, "next_action": next_action}
 
 
 def main(argv=None):
@@ -187,9 +245,14 @@ def main(argv=None):
     parser.add_argument("--control-root", type=Path, required=True)
     parser.add_argument("--active-profile", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--quote-gap-code")
+    parser.add_argument("--quote-gap-date")
     args = parser.parse_args(argv)
+    if bool(args.quote_gap_code) != bool(args.quote_gap_date):
+        parser.error("--quote-gap-code and --quote-gap-date must be supplied together")
     result = recover_unpublished_quote_policy(store=MonthlyOperationStore(args.state_root), operation_id=args.operation_id,
-                                             cas=CASStore(args.control_root), active_profile=args.active_profile, apply=args.apply)
+        cas=CASStore(args.control_root), active_profile=args.active_profile, apply=args.apply,
+        quote_gap=None if args.quote_gap_code is None else (args.quote_gap_code, args.quote_gap_date))
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 

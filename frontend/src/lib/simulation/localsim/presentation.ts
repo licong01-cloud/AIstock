@@ -1,4 +1,5 @@
 import type { LocalSimCutoverReadiness, LocalSimReplay, LocalSimReplayStatus } from "./types";
+import { human } from "./workbench";
 
 export function chinaTime(value: string | number | null | undefined): string {
   if (value == null) return "尚未读取";
@@ -31,7 +32,8 @@ const blockerLabels: Record<string, string> = {
 export function cutoverBlockerText(reason: string): string {
   const [code, ...values] = reason.split(":");
   const label = blockerLabels[code];
-  return label ? `${label}：${values.join(":")}` : `未识别的后端阻塞：${reason}`;
+  const count = values.length === 1 && /^\d+$/.test(values[0]) ? `：${values[0]} 项` : "";
+  return label ? `${label}${count}` : "存在尚未分类的前置条件，请按核验时间联系模拟盘维护人员";
 }
 
 const replayLabels: Record<LocalSimReplayStatus, string> = {
@@ -56,6 +58,9 @@ export function replayPresentation(replay: LocalSimReplay) {
     ? "选股正在后台计算，完成后由调度器继续。"
     : rawMessage === "LocalSim could not load minute market data"
       ? "历史分钟行情读取失败，需要核对数据及交易资格；尚未完成该交易日。"
-      : typeof rawMessage === "string" ? rawMessage : blocked ? "请查看诊断详情，核对依赖及原任务恢复条件。" : null;
+      : replay.failure_context?.reason_code === "REFERENCE_CLOSE_MISSING" ? "真实参考价缺失，需要核对合法估值依据。"
+        : blocked ? "原任务尚未完成当前交易日；请核对数据、交易资格与正式恢复条件，资产以最后合法估值为准。" : null;
   return { label, blocked, message };
 }
+
+export const readableName = human;

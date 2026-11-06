@@ -14,6 +14,7 @@ import pandas as pd
 
 from ..db.pg_pool import get_conn
 from ..services.dataset_release.a_share_limit_rule import derive_limit_prices
+from ..services.dataset_release.source_fact_history import fact_codes, is_a_share
 from .config import IPO_FILTER_DAYS
 from .quote_catalog import build_minute_quote_catalog
 
@@ -67,9 +68,8 @@ class StockUniverseConfig:
     exchanges: Sequence[str] | None = None
     exclude_st: bool = True
     exclude_delisted_or_paused: bool = True
-    # IPO listing-age is intentionally not applied to exported feature bins.
-    # It is applied only to instruments/all.txt so newly listed stocks keep
-    # their full post-listing history while remaining ineligible before T+365.
+    # Compatibility selection options never trim factual bins or all.txt.
+    # Only stock_universe.txt carries buy/selection eligibility.
     min_listed_days: int = IPO_FILTER_DAYS
     ts_codes: Sequence[str] | None = None
     universe_key: str | None = None
@@ -94,6 +94,7 @@ class CsvExportSummary:
     generated_at: str
     rule_derived_limit_rows: int = 0
     resumed_csv_files: int = 0
+    fact_population_policy: str = "all_real_shsz_a_share_facts_independent_of_pit_v1"
 
 
 STOCK_EXPORT_EXCHANGES = ("sh", "sz")
@@ -159,40 +160,31 @@ def _reject_bj_ts_codes(ts_codes: Sequence[str]) -> None:
         raise ValueError(f"BJ/BSE stocks are excluded from AIstock QE/Qlib stock exports; invalid codes: {sample}")
 
 
-def _enforce_stock_export_policy(config: StockUniverseConfig) -> None:
-    if config.universe_key:
-        return
-    if not config.exclude_st:
-        raise ValueError("authoritative QE/Qlib stock exports must exclude all stocks that have ST records")
-    if not config.exclude_delisted_or_paused:
-        raise ValueError("authoritative QE/Qlib stock exports must exclude delisted or paused listings")
+def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
+    """Resolve facts, not PIT membership: retain ST, IPO and retired A shares.
 
-
-def _resolve_explicit_stock_universe(config: StockUniverseConfig, codes: Sequence[str]) -> list[str]:
+    Explicit codes bound a selective export; universe_key and historical
+    eligibility flags only apply when writing the separate selection catalog.
+    """
+    if config.min_listed_days < 0:
+        raise ValueError("min_listed_days must be >= 0")
+    codes = _clean_ts_codes(config.ts_codes or ())
+    _reject_bj_ts_codes(codes)
+    if any(not is_a_share(code) for code in codes):
+        raise ValueError("stock fact exports require SH/SZ A-share codes, not B shares or indices")
     exchange_values = _exchange_sql_values(config.exchanges)
     conditions = [
-        "s.ts_code = ANY(%(codes)s)",
         "s.exchange = ANY(%(exchanges)s)",
         "s.list_date IS NOT NULL",
         "s.list_date <= %(end)s",
-        "s.list_status = 'L'",
     ]
     params: dict[str, Any] = {
-        "codes": list(codes),
         "exchanges": exchange_values,
         "end": config.end,
     }
-    if config.exclude_st:
-        conditions.append(
-            """
-            NOT EXISTS (
-                SELECT 1
-                FROM market.stock_st st
-                WHERE st.ts_code = s.ts_code
-                  AND st.ann_date <= %(end)s
-            )
-            """
-        )
+    if codes:
+        conditions.append("s.ts_code = ANY(%(codes)s)")
+        params['codes'] = codes
     sql = f"""
         SELECT s.ts_code
         FROM market.stock_basic s
@@ -201,68 +193,12 @@ def _resolve_explicit_stock_universe(config: StockUniverseConfig, codes: Sequenc
     """
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params=params)
-    allowed = _clean_ts_codes(df["ts_code"].tolist()) if not df.empty else []
+    allowed = list(fact_codes(df["ts_code"].tolist())) if not df.empty else []
     missing = [code for code in codes if code not in set(allowed)]
     if missing:
         sample = ", ".join(missing[:5])
-        raise ValueError(f"explicit ts_codes include stocks outside the eligible SH/SZ QE export universe: {sample}")
+        raise ValueError(f"explicit ts_codes are absent from the SH/SZ fact source at cutoff: {sample}")
     return allowed
-
-
-def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
-    """Resolve the export universe from stock_basic using explicit, reproducible filters."""
-
-    if config.min_listed_days < 0:
-        raise ValueError("min_listed_days must be >= 0")
-    _enforce_stock_export_policy(config)
-
-    if config.universe_key:
-        return resolve_stock_universe_from_pit_spans(
-            start=config.start,
-            end=config.end,
-            universe_key=config.universe_key,
-            exchanges=config.exchanges,
-            ts_codes=config.ts_codes,
-        )
-
-    if config.ts_codes:
-        codes = _clean_ts_codes(config.ts_codes)
-        _reject_bj_ts_codes(codes)
-        return _resolve_explicit_stock_universe(config, codes)
-
-    exchange_values = _exchange_sql_values(config.exchanges)
-    conditions = [
-        "s.exchange = ANY(%(exchanges)s)",
-        "s.list_date IS NOT NULL",
-        "s.list_date <= %(end)s",
-        "s.list_status = 'L'",
-    ]
-    params: dict[str, Any] = {
-        "exchanges": exchange_values,
-        "end": config.end,
-    }
-
-    if config.exclude_st:
-        conditions.append(
-            """
-            NOT EXISTS (
-                SELECT 1
-                FROM market.stock_st st
-                WHERE st.ts_code = s.ts_code
-                  AND st.ann_date <= %(end)s
-            )
-            """
-        )
-
-    sql = f"""
-        SELECT s.ts_code
-        FROM market.stock_basic s
-        WHERE {' AND '.join(conditions)}
-        ORDER BY s.ts_code
-    """
-    with get_conn() as conn:
-        df = pd.read_sql(sql, conn, params=params)
-    return _clean_ts_codes(df["ts_code"].tolist())
 
 
 def resolve_stock_universe_from_pit_spans(
@@ -273,12 +209,7 @@ def resolve_stock_universe_from_pit_spans(
     exchanges: Sequence[str] | None = None,
     ts_codes: Sequence[str] | None = None,
 ) -> list[str]:
-    """Resolve stock export codes from PIT eligibility spans.
-
-    The PIT universe controls buy/selection eligibility in instruments/all.txt.
-    Feature bins still preserve each selected stock's factual price history in
-    the requested export window.
-    """
+    """Resolve selection codes for PIT sidecars, never the factual population."""
 
     if end < start:
         raise ValueError("end must be >= start")
@@ -523,7 +454,7 @@ def _build_pit_all_txt_lines(
     start: date,
     end: date,
 ) -> tuple[list[str], list[dict[str, str]]]:
-    """Build Qlib instruments/all.txt lines from PIT spans and bin data ranges."""
+    """Build selection-sidecar lines from PIT spans and physical quote ranges."""
 
     lines: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -584,83 +515,49 @@ def rewrite_stock_all_txt_from_pit_spans(
     feature_frequency: str | None = None,
     allowed_bin_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Keep legacy daily PIT behavior; minute all is a physical quote catalog."""
-
+    """Keep all as factual quotes; put eligibility in stock_universe only."""
     if end < start:
         raise ValueError("end must be >= start")
     if not universe_key:
         raise ValueError("universe_key is required")
-
     all_txt = bin_dir / "instruments" / "all.txt"
     if not all_txt.exists():
         raise FileNotFoundError(all_txt)
-
-    if feature_frequency == MINUTE_FREQ_QLIB:
+    catalog = None
+    if feature_frequency:
         if allowed_bin_root is None or bin_dir != allowed_bin_root / bin_dir.name:
             raise ValueError("allowed_bin_root must be the physical candidate parent")
-        catalog = build_minute_quote_catalog(bin_dir, start=start.isoformat(), end=end.isoformat())
-        summary = {**catalog.receipt(), "path": str(all_txt), "start": start.isoformat(), "end": end.isoformat()}
+        catalog = build_minute_quote_catalog(bin_dir, start=start.isoformat(),
+            end=end.isoformat(), frequency=feature_frequency)
+        # Never intersect the quote catalog with selection/PIT spans.
         all_txt.write_bytes(catalog.payload)
-        (all_txt.parent / "all_pit_universe_summary.json").write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return summary
-
-    physical_range_summary: dict[str, Any] | None = None
-    if feature_frequency:
-        if allowed_bin_root is None:
-            raise ValueError("allowed_bin_root is required for physical feature range discovery")
-        existing_ranges, physical_range_summary = _load_physical_feature_ranges(
-            bin_dir=bin_dir,
-            allowed_bin_root=allowed_bin_root,
-            frequency=feature_frequency,
-        )
-    else:
-        existing_ranges = _load_existing_instrument_ranges(all_txt)
+        summary = {**catalog.receipt(), "path": str(all_txt),
+                   "start": start.isoformat(), "end": end.isoformat()}
+        if feature_frequency == MINUTE_FREQ_QLIB:
+            (all_txt.parent / "all_pit_universe_summary.json").write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            return summary
+    existing_ranges = _load_existing_instrument_ranges(all_txt)
     pit_spans = _load_pit_spans_for_all_txt(
-        universe_key=universe_key,
-        start=start,
-        end=end,
-        ts_codes=list(existing_ranges.keys()),
-    )
-    if pit_spans.empty:
-        raise RuntimeError(f"no PIT spans found for {universe_key} within {start}~{end}")
-
+        universe_key=universe_key, start=start, end=end, ts_codes=list(existing_ranges))
     kept_lines, skipped = _build_pit_all_txt_lines(
-        existing_ranges=existing_ranges,
-        pit_spans=pit_spans,
-        start=start,
-        end=end,
-    )
-    if not kept_lines:
-        raise RuntimeError("PIT all.txt rewrite would remove every stock; refusing to write empty universe")
-
-    all_txt.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
-    line_instruments = [_instrument_symbol_to_ts_code(line.split("\t", 1)[0]) for line in kept_lines]
-    unique_instruments = sorted(set(line_instruments))
-    counts = pd.Series(line_instruments).value_counts()
-    input_range_count = sum(len(ranges) for ranges in existing_ranges.values())
+        existing_ranges=existing_ranges, pit_spans=pit_spans, start=start, end=end)
+    selection = all_txt.with_name("stock_universe.txt")
+    selection.write_text("".join(line + "\n" for line in kept_lines), encoding="utf-8")
     summary = {
-        "path": str(all_txt),
-        "mode": "pit_universe_spans",
-        "universe_key": universe_key,
-        "start": start.isoformat(),
-        "end": end.isoformat(),
+        **(catalog.receipt() if catalog is not None else {}),
+        "path": str(all_txt), "selection_path": str(selection),
+        "mode": "physical_quotes_separate_pit_selection_v1", "universe_key": universe_key,
+        "start": start.isoformat(), "end": end.isoformat(),
         "input_feature_instruments": len(existing_ranges),
-        "input_feature_ranges": input_range_count,
-        "pit_span_rows": int(len(pit_spans)),
-        "output_rows": len(kept_lines),
-        "output_instruments": len(unique_instruments),
-        "multi_span_instruments": int((counts > 1).sum()) if not counts.empty else 0,
-        "skipped_rows": len(skipped),
-        "sample_skipped": skipped[:20],
+        "pit_span_rows": len(pit_spans), "output_rows": len(kept_lines),
+        "output_instruments": len({line.split("\t")[0] for line in kept_lines}),
+        "skipped_rows": len(skipped), "sample_skipped": skipped[:20],
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "quote_catalog_pit_clipped": False,
     }
-    if physical_range_summary is not None:
-        summary["physical_range_summary"] = physical_range_summary
-        summary["range_authority"] = physical_range_summary["range_authority"]
-    summary_path = all_txt.parent / "all_pit_universe_summary.json"
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (all_txt.parent / "all_pit_universe_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 
 
@@ -696,13 +593,10 @@ def rewrite_stock_all_txt_for_ipo_filter(
     bin_dir: Path,
     min_listed_days: int = IPO_FILTER_DAYS,
 ) -> dict[str, Any]:
-    """Apply IPO eligibility to instruments/all.txt without deleting feature bins.
+    """Write the legacy IPO selection sidecar without changing factual all.txt.
 
-    Exported bin files retain the full post-listing history for every eligible
-    SH/SZ non-ST active stock. Qlib's tradable universe is controlled by
-    instruments/all.txt, where each stock starts at max(data_start,
-    list_date + min_listed_days). Stocks still younger than the threshold by
-    the dataset end are omitted from all.txt, while their feature bins remain.
+    The compatibility policy stays unchanged; canonical PIT uses its separately
+    versioned authority. Neither policy may hide an existing holding's quotes.
     """
 
     if min_listed_days < 0:
@@ -745,13 +639,13 @@ def rewrite_stock_all_txt_for_ipo_filter(
             continue
         kept_lines.append(f"{symbol}\t{_format_instrument_start(start_value, effective_start)}\t{end_value}")
 
-    if not kept_lines:
-        raise RuntimeError("IPO all.txt rewrite would remove every stock; refusing to write empty universe")
-
-    all_txt.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+    selection = all_txt.with_name('stock_universe.txt')
+    selection.write_text(''.join(line + '\n' for line in kept_lines), encoding='utf-8')
     summary = {
         "path": str(all_txt),
-        "mode": "instruments_all_txt",
+        "mode": "separate_ipo_selection_catalog_v1",
+        "selection_path": str(selection),
+        "quote_catalog_pit_clipped": False,
         "min_listed_days": int(min_listed_days),
         "input_rows": len(raw_lines),
         "output_rows": len(kept_lines),
@@ -1051,6 +945,8 @@ def _load_minute_raw(
 ) -> pd.DataFrame:
     start_ts = f"{start.isoformat()} 00:00:00+08"
     end_exclusive = f"{(end + timedelta(days=1)).isoformat()} 00:00:00+08"
+    # bpchar is the native character(n) type of ts_code. Cast the parameter,
+    # not the indexed column; omit a typmod to avoid truncating invalid codes.
     sql = """
         SELECT m.trade_time AT TIME ZONE 'Asia/Shanghai' AS trade_time,
                m.ts_code,
@@ -1062,7 +958,7 @@ def _load_minute_raw(
                m.amount_li
         FROM market.kline_minute_raw m
         JOIN market.stock_basic s ON s.ts_code = m.ts_code
-        WHERE m.ts_code = %(code)s
+        WHERE m.ts_code = %(code)s::bpchar
           AND m.freq = %(freq)s
           AND m.trade_time >= %(start_ts)s::timestamptz
           AND m.trade_time < %(end_exclusive)s::timestamptz
@@ -1779,7 +1675,7 @@ def export_stock_minute_csv_chunked(
                            m.amount_li
                     FROM market.kline_minute_raw m
                     JOIN market.stock_basic s ON s.ts_code = m.ts_code
-                    WHERE m.ts_code = ANY(%(codes)s)
+                    WHERE m.ts_code = ANY(%(codes)s::bpchar[])
                       AND m.freq = %(freq)s
                       AND m.trade_time >= %(start_ts)s::timestamptz
                       AND m.trade_time < %(end_ts)s::timestamptz
@@ -2008,11 +1904,13 @@ def write_bin_meta(
         "start": start.isoformat() if start else None,
         "end": end.isoformat(),
         "exchanges": _normalize_exchanges(exchanges),
-        "exclude_st": bool(exclude_st),
-        "exclude_delisted_or_paused": bool(exclude_delisted_or_paused),
+        "exclude_st": False,
+        "exclude_delisted_or_paused": False,
+        "fact_population_policy": "all_real_shsz_a_share_facts_independent_of_pit_v1",
+        "quote_catalog_pit_clipped": False,
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
-        "ipo_filter_mode": "instruments_all_txt",
+        "ipo_filter_mode": "separate_ipo_selection",
         "bin_contains_pre_ipo_filter_data": True,
         "stock_universe_min_listed_days_prefilter": False,
         "freq_types": list(freq_types),
@@ -2258,7 +2156,7 @@ def validate_minute_bin_against_db(
                count(*)::int AS db_rows
         FROM market.kline_minute_raw m
         JOIN market.stock_basic s ON s.ts_code = m.ts_code
-        WHERE m.ts_code = ANY(%(codes)s)
+        WHERE m.ts_code = ANY(%(codes)s::bpchar[])
           AND m.freq = %(freq)s
           AND m.trade_time >= %(start_ts)s::timestamptz
           AND m.trade_time < %(end_exclusive)s::timestamptz

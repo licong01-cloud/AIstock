@@ -120,6 +120,7 @@ async def collect_results_only_artifacts(
     node_id: str | None = None,
     expected_prediction_panel_sha256: str | None = None,
     expected_prediction_rows: int | None = None,
+    failed_upload_config: Mapping[str, Any] | None = None,
 ) -> ResultsOnlyArtifacts:
     """Validate existing QE loop artifacts without launching qrun/backtest."""
 
@@ -209,6 +210,15 @@ async def collect_results_only_artifacts(
         node_id=node_id,
     )
     report_stats = _validate_portfolio_report(report_obj, task_id=task_id, loop_id=loop_id, node_id=node_id)
+    upload_recovery = None
+    if failed_upload_config is not None:
+        upload_recovery = await _validate_failed_prediction_upload(
+            client=client, task_id=task_id, loop_id=loop_id, node_id=node_id,
+            config=failed_upload_config, recorder_ref=recorder_ref,
+            prediction=prediction, report=report_obj,
+            report_sha256=hashlib.sha256(report_bytes).hexdigest(),
+            pred_sha256=hashlib.sha256(pred_bytes).hexdigest(),
+        )
 
     label_bytes, label_errors = await _download_first_optional_bytes(
         client,
@@ -280,6 +290,9 @@ async def collect_results_only_artifacts(
             "params": params_errors,
         },
     }
+    if upload_recovery is not None:
+        metrics["results_only_upload_recovery"] = upload_recovery
+        enhanced_metrics["results_only_upload_recovery"] = upload_recovery
     metrics["enhanced_metrics"] = enhanced_metrics
 
     return ResultsOnlyArtifacts(
@@ -294,6 +307,110 @@ async def collect_results_only_artifacts(
         report_stats=report_stats,
         metrics_source=metrics_source,
     )
+
+
+async def _validate_failed_prediction_upload(
+    *, client: Any, task_id: str, loop_id: str, node_id: str | None,
+    config: Mapping[str, Any], recorder_ref: Mapping[str, Any],
+    prediction: PredictionGateResult, report: Any,
+    report_sha256: str, pred_sha256: str,
+) -> dict[str, Any]:
+    """Prove an upload-only failure; retain the original failed node evidence.
+
+    Recovery is deliberately limited to replays declaring their complete economic
+    window. The pinned executable prediction dates must equal every report date;
+    endpoints alone cannot prove that an account has no missing interior dates.
+    """
+    import numpy as np
+    import pandas as pd
+
+    def reject(reason: str, artifact: str) -> None:
+        raise ResultsOnlyGateError(
+            reason_code=reason, artifact=artifact, task_id=task_id,
+            loop_id=loop_id, node_id=node_id,
+        )
+
+    marker = await client.get_workspace_file(task_id, loop_id, "qe_prediction_store_upload.json")
+    metadata = marker.get("metadata") if isinstance(marker, dict) else None
+    expected_metadata = {
+        "producer": "qrun_prediction_store_client", "mode": "pred_backtest",
+        "task_id": task_id, "loop_id": loop_id, "source_node_id": node_id,
+        "recorder_id": recorder_ref.get("recorder_id"),
+        "recorder_experiment_id": recorder_ref.get("experiment_id"),
+    }
+    if (
+        not isinstance(marker, dict)
+        or marker.get("schema_version") != "qe_prediction_store_upload_v1"
+        or marker.get("status") != "failed" or marker.get("upload_enabled") is not True
+        or marker.get("mode") != "pred_backtest"
+        or not re.fullmatch(r"Loop[1-9][0-9]*", loop_id)
+        or marker.get("run_key") != f"{task_id}_L{loop_id[4:]}"
+        or not isinstance(marker.get("error"), str) or not marker["error"].strip()
+        or recorder_ref.get("mode") != "pred_backtest"
+        or recorder_ref.get("runner") != "qrun_limit_minute.py"
+        or not isinstance(metadata, dict)
+        or any(value is None or metadata.get(key) != value for key, value in expected_metadata.items())
+        or str(metadata.get("loop_index")) != loop_id[4:]
+    ):
+        reject("prediction_upload_failure_identity_mismatch", "qe_prediction_store_upload.json")
+    embedded_ref = metadata.get("recorder_ref")
+    if not isinstance(embedded_ref, dict) or any(
+        recorder_ref.get(key) is None or embedded_ref.get(key) != recorder_ref[key]
+        for key in ("recorder_id", "experiment_id", "mode", "runner", "cwd", "written_at")
+    ):
+        reject("prediction_upload_recorder_mismatch", "qe_current_recorder.json")
+    try:
+        uploaded_at, started_at = pd.Timestamp(marker["written_at"]), pd.Timestamp(recorder_ref["written_at"])
+        if pd.isna(uploaded_at) or pd.isna(started_at) or uploaded_at.tz is None or started_at.tz is None or uploaded_at < started_at:
+            raise ValueError("invalid upload ordering")
+    except (KeyError, TypeError, ValueError):
+        reject("prediction_upload_timestamp_invalid", "qe_prediction_store_upload.json")
+
+    flags, split = config.get("runtime_flags"), config.get("data_split")
+    if not isinstance(flags, dict) or not isinstance(split, dict):
+        reject("prediction_upload_window_missing", "config_json")
+    start, end, count = (flags.get(key) for key in (
+        "final_evaluation_start", "final_evaluation_end", "final_economic_days",
+    ))
+    if (
+        not isinstance(count, int) or isinstance(count, bool) or count <= 0
+        or not all(isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) for value in (start, end))
+        or split.get("test_start") != start or split.get("backtest_end") != end
+    ):
+        reject("prediction_upload_window_mismatch", "config_json")
+    try:
+        first, last = pd.Timestamp(start), pd.Timestamp(end)
+    except (TypeError, ValueError):
+        reject("prediction_upload_window_mismatch", "config_json")
+    columns = ("account", "return", "bench", "cost", "cash", "turnover", "value", "total_cost", "total_turnover")
+    if (
+        not isinstance(report, pd.DataFrame) or not isinstance(report.index, pd.DatetimeIndex)
+        or report.index.tz is not None or report.index.hasnans or not report.index.is_unique
+        or not report.index.is_monotonic_increasing or len(report) != count
+        or report.index[0] != first or report.index[-1] != last
+        or any(column not in report for column in columns)
+    ):
+        reject("prediction_upload_account_incomplete", "portfolio_analysis/report_normal_1day.pkl")
+    try:
+        finite = bool(np.isfinite(report[list(columns)].to_numpy(dtype=float)).all())
+    except (TypeError, ValueError):
+        finite = False
+    if not finite or (report["account"] <= 0).any() or (report[["cost", "turnover", "total_cost", "total_turnover"]] < 0).any().any():
+        reject("prediction_upload_account_invalid", "portfolio_analysis/report_normal_1day.pkl")
+    dates = pd.DatetimeIndex(prediction.score_series.index.get_level_values("datetime").unique()).sort_values()
+    dates = dates[(dates >= first) & (dates <= last)]
+    if not report.index.equals(dates):
+        reject("prediction_upload_account_dates_mismatch", "pred.pkl|portfolio_analysis/report_normal_1day.pkl")
+
+    return {
+        "schema_version": "qe_results_only_upload_recovery_v1",
+        "original_node_status": "failed", "original_upload": marker,
+        "recorder_id": recorder_ref["recorder_id"], "experiment_id": recorder_ref["experiment_id"],
+        "portfolio_report_sha256": report_sha256, "prediction_sha256": pred_sha256,
+        "account_start": start, "account_end": end, "account_days": count,
+        "prediction_dates_equal_account_dates": True,
+        "training_submissions": 0, "backtest_submissions": 0,
+    }
 
 
 def upload_results_only_prediction_store(

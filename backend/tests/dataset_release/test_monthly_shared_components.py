@@ -11,6 +11,13 @@ import pandas as pd
 import pytest
 
 from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH
+from backend.data_service.suspension_day_authority import digest, load_authority
+from backend.services.dataset_release.canonical import canonical_json_bytes
+from backend.services.dataset_release.monthly_late_publication import file_pin
+from backend.services.dataset_release.monthly_suspension_adoption import (
+    META, PARQUET, REPORT, SOURCE, SCHEMA, READBACK, amend_suspension_component,
+    correction_values, validate_suspension_adoption,
+)
 from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
@@ -39,6 +46,159 @@ from backend.services.dataset_release.monthly_sector_quote_facts import (
     QUOTE_FACTS_PATH, QUOTE_FACTS_SCHEMA, SectorQuoteFactsError,
     build_sector_quote_facts,
 )
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(canonical_json_bytes(value) + b"\n")
+
+
+def signed_manifest(value):
+    value.pop("dataset_manifest_sha256", None)
+    value["dataset_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    return value
+
+
+def test_suspension_adoption_route_marks_only_suspension_changed_and_is_idempotent(tmp_path, monkeypatch):
+    from backend.tests.dataset_release.test_monthly_unified_v2 import Pipeline, _adoptable_successor, _service
+    from backend.services.dataset_release import monthly_suspension_adoption
+
+    service = _service(tmp_path, Pipeline())
+    args = _adoptable_successor(tmp_path, service)
+    before = service.active_profile.read_bytes()
+    seen = []
+    monkeypatch.setattr(monthly_suspension_adoption, "validate_suspension_adoption", lambda **kw: seen.append(kw))
+    args["evidence_refs"] = []
+    for name, schema in (("repair", SCHEMA), ("readback", READBACK)):
+        relative = "reports/suspension-" + name + ".json"
+        path = args["candidate_root"] / relative
+        write(path, {"schema_version": schema, "status": "PASS"})
+        args["evidence_refs"].append({"relative_path": relative, "sha256": file_pin(path)["sha256"], "schema_version": schema})
+    result = service.adopt_existing_successor(**args)
+    assert result["status"] == "READY_TO_ACTIVATE" and len(seen) == 1
+    actions = service.store.read_plan(result["operation_id"])["actions"]
+    assert actions["suspend"] == "SELECTIVE_REBUILD"
+    assert set(v for k, v in actions.items() if k != "suspend") == {"REUSE"}
+    assert service.adopt_existing_successor(**args)["operation_id"] == result["operation_id"]
+    assert service.active_profile.read_bytes() == before
+
+
+@pytest.fixture
+def correction(tmp_path, request):
+    old, new = tmp_path / "old", tmp_path / "new"
+    raw = [{"ts_code": "603056.SH", "trade_date": "2026-01-09", "suspend_type": "S", "suspend_timing": "13:00-9:30"}]
+    frame = pd.DataFrame(raw).assign(trade_date=lambda f: pd.to_datetime(f.trade_date))
+    (old / Path(PARQUET).parent).mkdir(parents=True)
+    frame.to_parquet(old / PARQUET, index=False)
+    empty = {**load_authority(), "entries": []}
+    meta = {"start": "2018-08-01", "end": "2026-09-30", "row_count": 1,
+        "daily_row_counts": {"2026-01-09": 1, "2026-07-06": 0}, "suspension_day_authority": empty,
+        "raw_provider_events": raw, "raw_provider_events_sha256": digest(raw), "day_resolutions": []}
+    write(old / META, meta)
+    cal = "components/daily_bin_candidate/calendars/day.txt"
+    (old / cal).parent.mkdir(parents=True)
+    (old / cal).write_text("2026-01-09\n2026-07-06\n", encoding="utf-8")
+    pins = {p: {"path": p, **file_pin(old / p)} for p in (PARQUET, META, cal)}
+    manifest = signed_manifest({"components": pins, "cutoff_trade_date": "2026-09-30", "release_id": "release",
+        "revision": "base", "source_contract": {"original": True}})
+    if getattr(request, "param", False):
+        for relative in (SOURCE, REPORT):
+            write(old / relative, {"previous": True})
+            pins[relative] = {"path": relative, **file_pin(old / relative)}
+        manifest["source_contract"]["suspension_amendment"] = {
+            "predecessor_manifest_sha256": "f" * 64, "receipt_sha256": pins[REPORT]["sha256"]}
+        signed_manifest(manifest)
+    write(old / "qe_dataset_manifest.json", manifest)
+    source = {"captured_at": "2026-10-24T03:00:00+08:00", "authority": load_authority(),
+        "authority_sha256": digest(load_authority()), "raw_provider_events": raw, "database_write": False}
+    report = amend_suspension_component(predecessor_root=old, output_root=new, source=source,
+        calendar=[date(2026, 1, 9), date(2026, 7, 6)], predecessor_manifest_sha256=manifest["dataset_manifest_sha256"])
+    (new / cal).parent.mkdir(parents=True)
+    (new / cal).write_bytes((old / cal).read_bytes())
+    import copy
+    successor = copy.deepcopy(manifest)
+    successor["revision"] = "correction"
+    successor["components"].update({p: {"path": p, **file_pin(new / p)} for p in (PARQUET, META, SOURCE, REPORT)})
+    successor["source_contract"]["suspension_amendment"] = {
+        "predecessor_manifest_sha256": manifest["dataset_manifest_sha256"], "receipt_sha256": file_pin(new / REPORT)["sha256"]}
+    signed_manifest(successor)
+    write(new / "qe_dataset_manifest.json", successor)
+    profile = {"generation": "base", "cutoff": "2026-09-30", "policy": "unchanged",
+        "controller_paths": {"candidate_root": str(old), "data": str(old / "unchanged")},
+        "node_bindings": {"wsl2-5080": {"candidate_root": "/old", "data": "/old/unchanged"}},
+        "components": {"dataset_manifest_sha256": manifest["dataset_manifest_sha256"],
+            "dataset_manifest_file_sha256": file_pin(old / "qe_dataset_manifest.json")["sha256"],
+            "other": "same", "suspend_pins": {"parquet_sha256": pins[PARQUET]["sha256"], "metadata_sha256": pins[META]["sha256"]}}}
+    target_profile = copy.deepcopy(profile)
+    target_profile["generation"] = "correction"
+    target_profile["controller_paths"] = {"candidate_root": str(new), "data": str(new / "unchanged")}
+    target_profile["node_bindings"] = {"wsl2-5080": {"candidate_root": "/new", "data": "/new/unchanged"}}
+    target_profile["components"].update(dataset_manifest_sha256=successor["dataset_manifest_sha256"],
+        dataset_manifest_file_sha256=file_pin(new / "qe_dataset_manifest.json")["sha256"],
+        suspend_pins={"parquet_sha256": file_pin(new / PARQUET)["sha256"], "metadata_sha256": file_pin(new / META)["sha256"]})
+    proof = {"schema_version": READBACK, "status": "PASS", "dataset_manifest_sha256": successor["dataset_manifest_sha256"],
+        "nodes": {node: {"status": "PASS", "dataset_identity_complete": True, "manifest": successor["dataset_manifest_sha256"],
+            "manifest_file_sha256": file_pin(new / "qe_dataset_manifest.json")["sha256"], "files": report["files"],
+            "checked_keys": report["affected_keys"], "unresolved": 0} for node in ("controller", "wsl2-5080", "rdagent-node1")},
+        "database_write": False, "active_profile_write": False, "runtime_action": False, "price_export_performed": False}
+    return dict(predecessor_root=old, predecessor_profile=profile, candidate=new, profile=target_profile, manifest=successor,
+        evidence={SCHEMA: report, READBACK: proof}, required_nodes=("controller", "wsl2-5080", "rdagent-node1"))
+
+
+@pytest.mark.parametrize("correction", [True], indirect=True)
+def test_suspension_amendment_can_follow_an_immutable_suspension_amendment(correction):
+    before = (correction["predecessor_root"] / "qe_dataset_manifest.json").read_bytes()
+    validate_suspension_adoption(**correction)
+    assert (correction["predecessor_root"] / "qe_dataset_manifest.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("corruption", [None, "source", "bytes", "unrelated", "profile", "node", "missing_node", "policy", "proof_keys", "controller_path", "node_path"])
+def test_suspension_only_adoption_keeps_exact_source_and_unrelated_components(correction, corruption):
+    args = correction
+    if corruption == "source":
+        value = json.loads((args["candidate"] / SOURCE).read_bytes())
+        value["raw_provider_events"][0]["suspend_timing"] = "12:30-9:30"
+        write(args["candidate"] / SOURCE, value)
+    elif corruption == "bytes":
+        (args["candidate"] / PARQUET).write_bytes(b"bad")
+    elif corruption == "unrelated":
+        args["manifest"]["components"]["components/daily_bin_candidate/calendars/day.txt"]["sha256"] = "c" * 64
+        signed_manifest(args["manifest"])
+    elif corruption == "profile":
+        args["profile"]["components"]["other"] = "changed"
+    elif corruption == "node":
+        args["evidence"][READBACK]["nodes"]["wsl2-5080"]["unresolved"] = 1
+    elif corruption == "missing_node":
+        args["evidence"][READBACK]["nodes"].pop("rdagent-node1")
+    elif corruption == "policy":
+        args["profile"]["policy"] = "other"
+    elif corruption == "proof_keys":
+        args["evidence"][READBACK]["nodes"]["controller"]["checked_keys"] = []
+    elif corruption == "controller_path":
+        args["profile"]["controller_paths"]["data"] = "another release"
+    elif corruption == "node_path":
+        args["profile"]["node_bindings"]["wsl2-5080"]["data"] = "/old/unchanged"
+    if corruption is not None:
+        with pytest.raises((ValueError, AssertionError)):
+            validate_suspension_adoption(**args)
+        return
+    validate_suspension_adoption(**args)
+    frame = pd.read_parquet(args["candidate"] / PARQUET)
+    assert set(frame.ts_code) == {"603056.SH", "002731.SZ"}
+    assert frame[frame.ts_code.eq("603056.SH")].iloc[0].suspend_timing == "13:00-9:30"
+    with pytest.raises(FileExistsError):
+        amend_suspension_component(predecessor_root=args["predecessor_root"], output_root=args["candidate"],
+            source={}, calendar=[], predecessor_manifest_sha256="a" * 64)
+
+
+@pytest.mark.parametrize("timing", ["13:00-9:30", "09:30-09:30"])
+def test_unknown_stock_clock_is_not_exempted_by_another_stock_disclosure(correction, timing):
+    old = correction["predecessor_root"]
+    source = json.loads((correction["candidate"] / SOURCE).read_bytes())
+    source["raw_provider_events"] = [{"ts_code": "000001.SZ", "trade_date": "2026-01-09", "suspend_type": "S", "suspend_timing": timing}]
+    with pytest.raises(ValueError, match="unresolved"):
+        correction_values(pd.read_parquet(old / PARQUET), json.loads((old / META).read_bytes()),
+            source=source, calendar=[date(2026, 1, 9)], predecessor_manifest_sha256="a" * 64)
 
 
 def _snapshot():  # type: ignore[no-untyped-def]
@@ -96,15 +256,16 @@ def test_native_builder_reads_full_market_inventory_above_small_control_cap(tmp_
                 "component_artifact_manifest_ref": reference.as_dict(), "verified_output_files": files})
 
 
+@pytest.mark.parametrize("outside_selection", [False, True])
 @pytest.mark.parametrize("symbol,day,verified", [
     ("603616.SH", date(2026, 1, 22), True),
     ("000001.SZ", date(2026, 9, 1), False),
 ])
-def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified):
+def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified, outside_selection):
     import json
     from backend.services.dataset_release.monthly_shared_components import MonthlySharedComponentsError
     kwargs = dict(root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind,
-                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[(symbol, day, day)],
+                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[] if outside_selection else [(symbol, day, day)],
                   calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
     if not verified:
         with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
@@ -113,12 +274,23 @@ def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, s
         return
     parquet, meta, keys, _count = _build_suspend(**kwargs)
     frame = pd.read_parquet(parquet)
-    evidence = json.loads(meta.read_text())
+    evidence = json.loads(meta.read_text(encoding="utf-8"))
     assert len(frame) == 1 and keys == {(symbol, day)}
     assert frame["suspend_timing"].isna().all()
     assert len(evidence["raw_provider_events"]) == 2
     assert evidence["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
     assert evidence["historical_publication_time_proven"] is False
+
+
+@pytest.mark.parametrize("kind,expected", [("S", 1), ("R", 0)])
+def test_suspension_facts_are_not_selection_eligibility(tmp_path, kind, expected):
+    day, symbol = date(2026, 9, 30), "000698.SZ"
+    parquet, metadata, keys, count = _build_suspend(
+        root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind, suspend_timing=None)],
+        pit_rows=[], calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    assert len(pd.read_parquet(parquet)) == len(keys) == expected
+    assert count == 1
+    assert json.loads(metadata.read_bytes())["fact_population_contract"] == "all_frozen_shsz_suspension_facts_v1"
 
 
 @pytest.mark.parametrize("timing", ["9:34-9:44", "13:13-13:23,13:23-13:33"])
@@ -136,9 +308,10 @@ def test_suspend_export_preserves_explicit_intraday_ranges_with_resume(tmp_path,
     assert evidence["day_resolutions"][0]["state"] == "INTRADAY_SUSPENDED"
 
 
-@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "binding", "authority", "conflict"])
+@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "operation", "binding", "authority", "conflict"])
 def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback(tmp_path, corruption):
-    from backend.data_service.suspension_day_authority import digest, load_authority, SCHEMA, POLICY
+    from backend.data_service.suspension_day_authority import load_authority, SCHEMA, POLICY
+    from backend.services.dataset_release.monthly_unified import _canonical_payload, _write_exclusive
     from backend.services.dataset_release.monthly_suspension_repair import BINDING, SCHEMA as BINDING_SCHEMA, build_authority
     cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
     snapshot = SimpleNamespace(source_manifest_ref=cas.put_json({}))
@@ -154,7 +327,9 @@ def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallba
     binding = {"schema_version": BINDING_SCHEMA, "operation_id": "test", "source_bundle_sha256": "a" * 64,
         "target_cutoff": "2026-09-30", "predecessor_manifest_sha256": "b" * 64,
         "authority_ref": cas.put_json(approved).as_dict()}
-    plan = {BINDING: binding, BINDING + "_ref": {"sha256": digest(binding)},
+    binding_path = tmp_path / "binding.json"
+    _write_exclusive(binding_path, binding)
+    plan = {BINDING: binding, BINDING + "_ref": {"sha256": hashlib.sha256(binding_path.read_bytes()).hexdigest()},
         "target_cutoff": "2026-09-30", "predecessor": {"dataset_manifest_sha256": "b" * 64}}
     if corruption == "source":
         binding["source_bundle_sha256"] = "c" * 64
@@ -162,6 +337,8 @@ def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallba
         binding["target_cutoff"] = "2026-10-31"
     elif corruption == "predecessor":
         binding["predecessor_manifest_sha256"] = "c" * 64
+    elif corruption == "operation":
+        binding["operation_id"] = "another-operation"
     elif corruption == "binding":
         plan[BINDING + "_ref"]["sha256"] = "c" * 64
     elif corruption == "authority":
@@ -172,13 +349,13 @@ def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallba
         original["entries"][0]["announcement_id"] += "-other"
         snapshot.source_manifest_ref = cas.put_json({"suspension_day_authority": original})
     if corruption != "binding":
-        plan[BINDING + "_ref"]["sha256"] = digest(binding)
+        plan[BINDING + "_ref"]["sha256"] = hashlib.sha256(_canonical_payload(binding)).hexdigest()
     if corruption is not None:
         with pytest.raises((ValueError, RuntimeError), match="suspension|CAS|blob"):
             build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
         return
     authority, provenance = build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
-    assert [(r["ts_code"], r["trade_date"]) for r in authority["entries"]] == [(symbol, day.isoformat())]
+    assert authority["entries"] == [r for r in approved["entries"] if r["trade_date"] <= "2026-09-30"]
     parquet, meta, keys, _ = _build_suspend(root=tmp_path / "after", suspension_authority=authority,
         suspension_binding=provenance, **kwargs)
     assert keys == {(symbol, day)} and len(pd.read_parquet(parquet)) == 1
@@ -220,6 +397,88 @@ def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     assert readback["row_count"] == 2
     assert readback["daily_row_counts"] == {"2026-08-31": 1, "2026-09-01": 1}
     assert hashlib.sha256((old_root / "suspend.parquet").read_bytes()).hexdigest() == prefix.manifest["components"]["suspend_data"]["sha256"]
+
+
+@pytest.mark.parametrize("kind,expected", [("S", 1), ("R", 0), ("mixed", None)])
+def test_suspend_month_materializes_missing_historical_facts_outside_buy_pit(tmp_path, kind, expected):
+    old_root = tmp_path / "august"
+    old_root.mkdir()
+    old = pd.DataFrame([{"trade_date": pd.Timestamp("2026-05-08"), "ts_code": "000005.SZ",
+                         "suspend_type": "S", "suspend_timing": None}])
+    old.to_parquet(old_root / "suspend.parquet", index=False)
+    (old_root / "meta.json").write_text(json.dumps({"end": "2026-08-31", "row_count": 1,
+        "daily_row_counts": {"2026-05-08": 1, "2026-08-31": 0}}), encoding="utf-8")
+    def pin(name):
+        path = old_root / name
+        return {"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    prefix = SimpleNamespace(root=old_root, cutoff=date(2026, 8, 31), manifest_sha256="a" * 64,
+        manifest={"components": {"suspend_data": pin("suspend.parquet"), "suspend_meta": pin("meta.json")}})
+    day = date(2026, 5, 8)
+    symbol = "000005.SZ" if kind == "R" else "601010.SH"
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type=k, suspend_timing=None)
+            for k in (("S", "R") if kind == "mixed" else (kind,))]
+    kwargs = dict(root=tmp_path / "september", rows=rows, pit_rows=[],
+        calendar=(day, date(2026, 8, 31), date(2026, 9, 1)),
+        profile=SimpleNamespace(start_date=date(2018, 8, 1), universe_key="pit"),
+        cutoff=date(2026, 9, 1), prefix=prefix)
+    if expected is None:
+        with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+            _build_suspend(**kwargs)
+        assert not (kwargs["root"] / "components").exists()
+        return
+    parquet, meta, _keys, count = _build_suspend(**kwargs)
+    frame = pd.read_parquet(parquet)
+    assert len(frame[frame.ts_code.eq(symbol)]) == expected
+    assert count == 1
+    readback = json.loads(meta.read_bytes())
+    assert readback["raw_provider_events"] == [dict(r, trade_date=day.isoformat()) for r in rows]
+    assert readback["daily_row_counts"][day.isoformat()] == len(frame)
+    assert hashlib.sha256((old_root / "suspend.parquet").read_bytes()).hexdigest() == prefix.manifest["components"]["suspend_data"]["sha256"]
+
+
+def test_suspend_prefix_retains_raw_lineage_and_reprojects_reviewed_history_only(tmp_path):
+    from backend.data_service.suspension_day_authority import load_authority, digest
+
+    old_root = tmp_path / "august"
+    old_root.mkdir()
+    raw = [{"trade_date": "2026-01-09", "ts_code": "603056.SH", "suspend_type": "S",
+            "suspend_timing": "13:00-9:30"},
+           {"trade_date": "2026-08-31", "ts_code": "000005.SZ", "suspend_type": "S", "suspend_timing": None}]
+    old = pd.DataFrame(raw).assign(trade_date=lambda f: pd.to_datetime(f.trade_date))
+    old.to_parquet(old_root / "suspend.parquet", index=False)
+    approved = load_authority()
+    empty = {**approved, "entries": []}
+    old_meta = {"end": "2026-08-31", "row_count": 2,
+        "daily_row_counts": {"2026-01-09": 1, "2026-07-06": 0, "2026-08-31": 1},
+        "suspension_day_authority": empty, "suspension_day_authority_sha256": digest(empty),
+        "raw_provider_events": raw, "raw_provider_events_sha256": digest(raw),
+        "day_resolutions": [{"ts_code": "000005.SZ", "trade_date": "2026-08-31", "state": "FULL_DAY_SUSPENDED"}]}
+    (old_root / "meta.json").write_text(json.dumps(old_meta), encoding="utf-8")
+    def pin(name):
+        path = old_root / name
+        return {"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    prefix = SimpleNamespace(root=old_root, cutoff=date(2026, 8, 31), manifest_sha256="a" * 64,
+        manifest={"components": {"suspend_data": pin("suspend.parquet"), "suspend_meta": pin("meta.json")}})
+    root = tmp_path / "september"
+    root.mkdir()
+    calendar = tuple(date.fromisoformat(d) for d in ("2026-01-09", "2026-07-06", "2026-08-31", "2026-09-01"))
+    parquet, meta, _keys, _ = _build_suspend(root=root, rows=[], pit_rows=[], calendar=calendar,
+        profile=SimpleNamespace(start_date=calendar[0], universe_key="pit"), cutoff=date(2026, 9, 1),
+        prefix=prefix, suspension_authority=approved)
+    frame = pd.read_parquet(parquet)
+    readback = json.loads(meta.read_bytes())
+    assert len(frame[(frame.ts_code == "002731.SZ") & frame.trade_date.eq(pd.Timestamp("2026-07-06"))]) == 1
+    assert frame[frame.ts_code.eq("603056.SH")].iloc[0].suspend_timing == "13:00-9:30"
+    assert readback["raw_provider_events"] == raw
+    states = {(r["ts_code"], r["trade_date"]): r["state"] for r in readback["day_resolutions"]}
+    assert states[("603056.SH", "2026-01-09")] == "INTRADAY_SUSPENDED"
+    assert states[("000005.SZ", "2026-08-31")] == "FULL_DAY_SUSPENDED"
+    assert readback["daily_row_counts"]["2026-07-06"] == 1
+    assert readback["historical_values_validated"] == 0
+    assert readback["historical_authority_reprojected_keys"] == [
+        {"ts_code": "002731.SZ", "trade_date": "2026-07-06"},
+        {"ts_code": "603056.SH", "trade_date": "2026-01-09"}]
+    pd.testing.assert_frame_equal(frame[frame.ts_code.eq("000005.SZ")].reset_index(drop=True), old.iloc[1:].reset_index(drop=True))
 
 
 def test_sector_month_reads_only_physical_tail(tmp_path, monkeypatch):

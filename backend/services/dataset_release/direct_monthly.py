@@ -1287,7 +1287,6 @@ def build_suspend_d_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
 
     calendar_days = _direct_daily_calendar(layout)
     calendar_index = set(calendar_days)
-    spans = _load_pit_spans(DIRECT_UNIVERSE_KEY, DIRECT_START_DATE, layout.cutoff)
     with get_conn() as connection:
         source = pd.read_sql(
             """
@@ -1307,18 +1306,16 @@ def build_suspend_d_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
     source["suspend_type"] = source["suspend_type"].astype(str).str.strip().str.upper()
     source = source.loc[
         source["trade_date"].dt.date.isin(calendar_index)
-        & source["ts_code"].str.fullmatch(r"\d{6}\.(?:SH|SZ)")
+        & source["ts_code"].str.fullmatch(r"[036]\d{5}\.(?:SH|SZ)")
         & source["suspend_type"].eq("S")
     ]
-    source = source.merge(spans, on="ts_code", how="inner", validate="many_to_many")
-    source = source.loc[
-        (source["trade_date"] >= source["eligible_start"]) & (source["trade_date"] <= source["eligible_end"])
-    ]
+    # Suspension is a market fact, not buy eligibility. Held positions still
+    # need this fact after ST/index/universe exit.
     source = source.loc[:, ["trade_date", "ts_code", "suspend_type", "suspend_timing"]].sort_values(
         ["trade_date", "ts_code"]
     )
     if source.empty:
-        raise DirectMonthlyError("suspend_d has no rows inside the canonical-v2 PIT universe")
+        raise DirectMonthlyError("suspend_d has no SH/SZ facts inside the release calendar")
     if source.duplicated(["trade_date", "ts_code"]).any():
         raise DirectMonthlyError("suspend_d contains duplicate stock-date keys")
     source = source.reset_index(drop=True)
@@ -1336,6 +1333,7 @@ def build_suspend_d_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
             "end": layout.cutoff.isoformat(),
             "universe_key": DIRECT_UNIVERSE_KEY,
             "source_table": "market.suspend_d",
+            "fact_population_contract": "all_frozen_shsz_suspension_facts_v1",
             "suspend_type": "S",
             "row_count": int(len(source)),
             "stock_count": int(source["ts_code"].nunique()) if not source.empty else 0,

@@ -9,17 +9,22 @@ import json
 import os
 import tempfile
 from collections import OrderedDict
+from hashlib import sha256
 from typing import Any
 
 import psycopg2.extras
 
 from .artifact_store import HistoricalRangeArtifactStore
-from .canonical import canonical_json_sha256
+from .canonical import canonical_json_sha256, canonical_json_text
 from .models import (
     HistoricalRangeArtifactRefV1,
     HistoricalRangeArtifactKind,
+    HistoricalRangeArtifactEnvelopeV1,
+    HistoricalRangeContractError,
     HistoricalRangeCandidateArtifactPayloadV2,
     HistoricalRangeDayReceiptPayloadV2,
+    REASON_ARTIFACT_TAMPERED,
+    sealed_json_view,
 )
 from .outcome_evaluator import PostgresHistoricalRangeOutcomeSubjectInputProvider
 from .retrospective_projection import PostgresHistoricalRangeCandidateProjectionLoader
@@ -33,36 +38,85 @@ class HistoricalRangeOutcomeReadCache(HistoricalRangeArtifactStore):
     silently refreshed, and every caller still checks its own run/day/payload
     and upstream contracts. This is not exported to shared selection or LocalSIM.
     """
-    def __init__(self, *, root, max_bytes=32 * 1024 * 1024):
+    def __init__(self, *, root, max_bytes=128 * 1024 * 1024, max_entries=4096,
+                 max_verified_bytes=16 * 1024 * 1024, max_verified_entries=4096):
         super().__init__(root=root)
+        if min(max_bytes, max_entries, max_verified_bytes, max_verified_entries) < 1:
+            raise ValueError("artifact cache bounds must be positive")
         self._cache = OrderedDict()
         self._cached_bytes = 0
         self._max_bytes = max_bytes
+        self._max_entries = max_entries
+        self._verified_headers = OrderedDict()
+        self._verified_bytes = 0
+        self._max_verified_bytes = max_verified_bytes
+        self._max_verified_entries = max_verified_entries
 
     def load(self, ref):
+        return self.load_readonly(ref).model_copy(deep=True)
+
+    def load_readonly(self, ref):
         key = canonical_json_sha256(ref.model_dump(mode="json"))
         path = (self.root / ref.relative_path).resolve()
         if not path.is_relative_to(self.root):
             raise ValueError("outcome artifact escapes its registered root")
-        stat = path.stat()
-        stamp = (stat.st_size, stat.st_mtime_ns)
+        stamp = self._file_stamp(path)
         cached = self._cache.get(key)
         if cached is not None:
             if cached[0] != stamp:
                 raise ValueError("sealed outcome input changed after verification")
             self._cache.move_to_end(key)
-            return cached[1].model_copy(deep=True)
-        envelope = super().load(ref)
-        after = path.stat()
-        if stamp != (after.st_size, after.st_mtime_ns):
+            return cached[1]
+        verified = self._verified_headers.get(key)
+        if verified is None:
+            envelope = super().load(ref)
+        else:
+            if verified[0] != stamp:
+                raise ValueError("sealed outcome input changed after verification")
+            # The first native load validated canonical bytes, envelope and the
+            # complete ref. Even after payload eviction, reuse that proof only
+            # for identical bytes; file timestamps alone never authorize this.
+            raw = self._read_bytes(self.root / ref.relative_path)
+            if sha256(raw).hexdigest() != ref.file_sha256:
+                raise HistoricalRangeContractError(REASON_ARTIFACT_TAMPERED,
+                    "artifact raw file hash differs from its exact ref")
+            envelope = HistoricalRangeArtifactEnvelopeV1.model_construct(
+                **verified[1], payload=json.loads(raw)["payload"])
+            self._verified_headers.move_to_end(key)
+        if stamp != self._file_stamp(path):
             raise ValueError("sealed outcome input changed during verification")
-        if stat.st_size <= self._max_bytes:
-            while self._cache and (self._cached_bytes + stat.st_size > self._max_bytes or len(self._cache) >= 256):
+        envelope = envelope.model_copy(update={"payload": sealed_json_view(envelope.payload)})
+        if verified is None:
+            self._remember_verified_header(key, stamp, envelope)
+        if stamp[0] <= self._max_bytes:
+            while self._cache and (self._cached_bytes + stamp[0] > self._max_bytes or len(self._cache) >= self._max_entries):
                 _, (old_stamp, _) = self._cache.popitem(last=False)
                 self._cached_bytes -= old_stamp[0]
             self._cache[key] = (stamp, envelope)
-            self._cached_bytes += stat.st_size
-        return envelope.model_copy(deep=True)
+            self._cached_bytes += stamp[0]
+        return envelope
+
+
+    @staticmethod
+    def _file_stamp(path):
+        stat = path.stat()
+        return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev, str(path))
+
+    def _remember_verified_header(self, key, stamp, envelope):
+        size = len(canonical_json_text(envelope.model_dump(mode="json", exclude={"payload"})).encode("utf-8"))
+        if size > self._max_verified_bytes:
+            return
+        # Header values are already typed/frozen. Do not retain the large
+        # payload or create an incomplete envelope pretending to be valid.
+        header = {name: getattr(envelope, name) for name in type(envelope).model_fields if name != "payload"}
+        while self._verified_headers and (
+            self._verified_bytes + size > self._max_verified_bytes
+            or len(self._verified_headers) >= self._max_verified_entries
+        ):
+            _, (_, _, old_size) = self._verified_headers.popitem(last=False)
+            self._verified_bytes -= old_size
+        self._verified_headers[key] = (stamp, header, size)
+        self._verified_bytes += size
 
 
 def _command_ref_path(store, batch_id, idempotency_key):
@@ -182,9 +236,9 @@ class FrozenHistoricalRangeOutcomeInputs:
 
     def _index_day(self, run_id, header, day) -> None:
         ref = HistoricalRangeArtifactRefV1.model_validate(day["candidate_artifact_ref"])
-        payload = HistoricalRangeCandidateArtifactPayloadV2.model_validate(self._store.load(ref).payload)
+        payload = HistoricalRangeCandidateArtifactPayloadV2.model_validate(self._store.load_readonly(ref).payload)
         day_ref = HistoricalRangeArtifactRefV1.model_validate(day["day_receipt_ref"])
-        receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(self._store.load(day_ref).payload)
+        receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(self._store.load_readonly(day_ref).payload)
         if (payload.range_run_id != run_id or payload.day_run_id != day["day_run_id"] or
                 payload.decision_trade_date != day["decision_trade_date"] or receipt.range_run_id != run_id or
                 receipt.day_run_id != day["day_run_id"] or receipt.candidate_artifact_ref != ref or day["day_finished_at"] is None):
@@ -256,4 +310,4 @@ class FileHistoricalRangeSummaryContextProvider(PostgresHistoricalRangeSummaryCo
         return metadata
 
     def _load_summary_industry_at_t(self, *, symbol, decision_trade_date):
-        return self._source_provider.load_industry_at_t(symbol=symbol, decision_trade_date=decision_trade_date)[0]
+        return self._source_provider.load_optional_industry_at_t(symbol=symbol, decision_trade_date=decision_trade_date)[0]

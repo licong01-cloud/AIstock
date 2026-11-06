@@ -100,6 +100,42 @@ def test_silent_rule_or_parameter_drift_is_rejected() -> None:
         require_canonical_consumer_binding(_binding(rule_parameters_digest="d" * 64), consumer="training")
 
 
+def test_policy_identity_allows_frozen_and_rolling_physical_names() -> None:
+    frozen = _binding(universe_key=f"{CANONICAL_PIT_SNAPSHOT_PREFIX}release",
+                      snapshot_digest="a" * 64, cutoff=date(2026, 8, 31), release_id="release")
+    assert pit.require_same_canonical_policy(_binding(), frozen, consumer="advisory") == frozen
+    with pytest.raises(CanonicalPitContractError):
+        pit.require_same_canonical_policy(_binding(), _binding(rule_version="legacy"), consumer="simulation")
+    with pytest.raises(CanonicalPitContractError, match="archived reproduction"):
+        pit.require_same_canonical_policy(_binding(), _binding(reproduction_mode=True), consumer="reproduction")
+
+
+def test_global_profile_policy_checks_both_providers_without_requiring_equal_cutoffs() -> None:
+    profile = {"cutoff": "2026-08-31", "components": {
+        "day_pins": {"universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION},
+        "minute_pins": {"universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION},
+    }}
+    binding = pit.CanonicalPitAuthorityResolver._binding_from_row(
+        _active_row(end_date=date(2026, 10, 19)))
+    result = pit.require_dataset_runtime_pit_policy(profile, binding)
+    assert result["rule_version"] == CANONICAL_PIT_RULE_VERSION
+    assert result["activation_generation"] == 1
+    profile["components"]["minute_pins"]["rule_version"] = "legacy"
+    with pytest.raises(CanonicalPitContractError, match="minute_pins"):
+        pit.require_dataset_runtime_pit_policy(profile, binding)
+
+
+def test_dataset_runtime_policy_rejects_missing_identity_and_uncovered_cutoff() -> None:
+    binding = pit.CanonicalPitAuthorityResolver._binding_from_row(_active_row())
+    with pytest.raises(CanonicalPitContractError, match="day_pins"):
+        pit.require_dataset_runtime_pit_policy({"cutoff": "2026-07-31", "components": {}}, binding)
+    profile = {"cutoff": "2026-08-31", "components": {
+        name: {"universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION}
+        for name in ("day_pins", "minute_pins")}}
+    with pytest.raises(CanonicalPitContractError, match="coverage"):
+        pit.require_dataset_runtime_pit_policy(profile, binding)
+
+
 def _active_row(**overrides):
     values = {
         "authority_id": pit.CANONICAL_PIT_AUTHORITY_ID,
@@ -184,6 +220,20 @@ def test_activation_target_rejects_identity_or_digest_drift() -> None:
         pit._validate_activation_target_shape(_target(candidate_bundle_digest="not-a-digest"))
 
 
+@pytest.mark.parametrize("optional_receipt", [None, {"status": "blocked", "missing_terminal_evidence_count": 2}])
+def test_canonical_ready_does_not_require_terminal_announcement_receipt(optional_receipt) -> None:
+    row = _active_row()
+    row["last_build_summary"].pop("terminal_evidence")
+    if optional_receipt is not None:
+        row["last_build_summary"]["terminal_evidence"] = optional_receipt
+    assert pit.CanonicalPitAuthorityResolver._binding_from_row(row).activation_generation == 1
+    target_state = dict(row, status="ready")
+    pit._require_canonical_ready_state(target_state, target=_target())
+    row["last_build_summary"]["st_snapshot_continuity"] = {"status": "blocked"}
+    with pytest.raises(pit.CanonicalPitContractError, match="st_snapshot_continuity"):
+        pit._require_canonical_ready_state(target_state, target=_target())
+
+
 def test_activation_default_connection_is_managed_transaction(monkeypatch) -> None:
     captured = {}
     sentinel = object()
@@ -228,6 +278,8 @@ class _ActivationCursor:
             self.rowcount = 1
         elif "pg_advisory_xact_lock" in sql:
             self.rowcount = 1
+        elif "FROM market.stock_universe_pit_spans" in sql:
+            self._fetch_rows = []
         else:
             self.rowcount = next(self.rowcounts)
 
@@ -235,6 +287,9 @@ class _ActivationCursor:
         value = self._fetch_value
         self._fetch_value = None
         return value
+
+    def fetchall(self):
+        return self._fetch_rows
 
 
 class _ActivationConnection:
@@ -298,6 +353,48 @@ def test_activation_revalidates_locked_target_state_after_preflight(monkeypatch)
             independent_receipt_digest="d" * 64,
             connection_factory=lambda: _ActivationConnection([], target_state=drifted),
         )
+
+
+def test_activation_invalidates_sector_eligibility_changes_in_same_transaction(monkeypatch):
+    from backend.services import sector_data_repair as repair
+    conn = _ActivationConnection([1, 1, 1, 1])
+    calls = []
+    previous = [{'ts_code': '000001.SZ', 'eligible_start': date(2026, 10, 8), 'eligible_end': date(2026, 10, 19)}]
+    current = [{'ts_code': '000001.SZ', 'eligible_start': date(2026, 10, 12), 'eligible_end': date(2026, 10, 19)}]
+    original = conn.cursor_value.execute
+
+    def execute(sql, params=None):
+        original(sql, params)
+        if 'FROM market.stock_universe_pit_spans' in sql:
+            conn.cursor_value._fetch_rows = previous if params[0] == pit.LEGACY_PIT_UNIVERSE_KEY else current
+        if 'UPDATE market.stock_universe_pit_authority_pointer' in sql:
+            calls.append('pointer_cas')
+
+    conn.cursor_value.execute = execute
+    monkeypatch.setattr(pit.CanonicalPitAuthorityResolver, 'require_activation_target', lambda *_: _target())
+    monkeypatch.setattr(pit.CanonicalPitAuthorityResolver, 'resolve_live_binding', lambda *_: 'final_readback')
+
+    def invalidate(actual_conn, old, new):
+        assert actual_conn is conn and calls == ['pointer_cas']
+        assert old == previous and new == current
+        assert repair.eligibility_revision_spans(old, new) == [(date(2026, 10, 8), date(2026, 10, 11))]
+        calls.append('invalidated')
+
+    monkeypatch.setattr(repair, 'mark_pit_revision', invalidate)
+    assert pit.activate_canonical_pit_authority(_target(), operator_intent='authorized',
+        independent_receipt_digest='d'*64, connection_factory=lambda: conn) == 'final_readback'
+    assert calls == ['pointer_cas', 'invalidated']
+
+
+def test_activation_does_not_ignore_failed_sector_invalidation(monkeypatch):
+    from backend.services import sector_data_repair as repair
+    monkeypatch.setattr(pit.CanonicalPitAuthorityResolver, 'require_activation_target', lambda *_: _target())
+    monkeypatch.setattr(pit.CanonicalPitAuthorityResolver, 'resolve_live_binding',
+                        lambda *_: pytest.fail('must not report activated after dependency failure'))
+    monkeypatch.setattr(repair, 'mark_pit_revision', lambda *_: (_ for _ in ()).throw(RuntimeError('queue write failed')))
+    with pytest.raises(RuntimeError, match='queue write failed'):
+        pit.activate_canonical_pit_authority(_target(), operator_intent='authorized',
+            independent_receipt_digest='d'*64, connection_factory=lambda: _ActivationConnection([1,1,1,1]))
 
 
 def test_registry_migration_installs_legacy_pointer_without_v2_activation() -> None:

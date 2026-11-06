@@ -5,13 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, date, datetime
 import ast
+import json
 from pathlib import Path
+from math import isfinite
 import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError
 
 from .models import canonical_json_sha256
 from .localsim_replay import local_sim_calendar_snapshot_sha256
@@ -25,6 +27,10 @@ ECONOMIC_TABLES = ("run", "orders", "order_events", "fills", "cash_ledger", "pos
 ROLLED_BACK_LOCAL_SIM_FAILURES = frozenset({
     ("LOCAL_SIM_PERSISTENCE_FAILED", "STK_LIMIT_PRE_CLOSE_INVALID"),
     ("LOCAL_SIM_MARK_VALIDATION_FAILED", "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"),
+})
+RECOVERABLE_DB_INPUT_FAILURES = frozenset({
+    "market.stk_limit pre_close is required and cannot be derived",
+    "historical DB returned no minute bars",
 })
 ECONOMIC_PAYLOAD_KEYS = (
     "local_sim_execution_states_v1", "local_sim_economic_receipts_v1",
@@ -54,6 +60,51 @@ class LocalSimReplayRecoveryCheckV1(BaseModel):
     trade_date: date | None = None
     economic_counts: dict[str, int]
     native_input: dict[str, Any] = Field(default_factory=dict)
+
+
+def validate_replay_recovery_check(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Pure target-owned smoke for a ready, side-effect-free historical input check."""
+    try:
+        check = LocalSimReplayRecoveryCheckV1.model_validate_json(json.dumps(payload), strict=True)
+        native = check.native_input
+        preselection = native.get("recovery_phase") == "PRESELECTION"
+        if (not check.ready or check.reason_codes or check.version < 1 or not check.replay_job_id
+                or (not check.run_id and not preselection) or check.trade_date is None
+                or re.fullmatch(r"[0-9a-f]{64}", check.snapshot_sha256) is None
+                or set(check.economic_counts) != set(ECONOMIC_TABLES)
+                or any(type(n) is not int or n != 0 for n in check.economic_counts.values())):
+            raise ValueError("ready recovery needs original identity and zero economic effects")
+        if preselection:
+            from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
+
+            if (check.run_id is not None
+                    or re.fullmatch(r"simrun_[0-9a-f]{16}", native.get("candidate_run_id", "")) is None
+                    or re.fullmatch(r"[0-9a-f]{64}", native.get("pit_runtime_config_sha256", "")) is None):
+                raise ValueError("preselection PIT recovery needs its original candidate and frozen config")
+            lease = SelectionPitRuntimeLease.from_mapping(native.get("pit_runtime_lease")).require_trade_date(check.trade_date)
+            return "passed", None, {"ready": True, "zero_economic_effects": True,
+                                    "recovery_phase": "PRESELECTION", "pit_universe_key": lease.universe_key}
+        if (native.get("trade_date") != check.trade_date.isoformat() or not native.get("symbol")
+                or native.get("source") not in {"DB_HISTORICAL", "DATASET_FILES"}):
+            raise ValueError("native input must match the failed historical day")
+        if native.get("eligibility") == "FULL_DAY_SUSPENDED":
+            from backend.services.simulation_execution.localsim.suspension import (
+                validate_suspended_native_pre_close, validate_suspension_reference,
+            )
+            if "valuation_native_pre_close" in native:
+                validate_suspended_native_pre_close(native["valuation_native_pre_close"],
+                                                   symbol=native["symbol"], trade_date=check.trade_date)
+            else:
+                validate_suspension_reference(native.get("valuation_reference", {}),
+                                              symbol=native["symbol"], trade_date=check.trade_date)
+        elif (type(native.get("bar_count")) is not int or native["bar_count"] <= 0
+              or isinstance(native.get("prev_close"), bool)
+              or not isfinite(float(native.get("prev_close"))) or float(native["prev_close"]) <= 0):
+            raise ValueError("tradable input requires native minute bars and a positive pre_close")
+        return "passed", None, {"ready": True, "zero_economic_effects": True,
+                                "native_source": native["source"]}
+    except (ValueError, TypeError, KeyError, TradingCoreError) as exc:
+        return "failed", f"LocalSIM replay recovery contract failed: {exc}", {}
 
 
 def economic_fact_counts(cur: Any, run_id: str) -> dict[str, int]:
@@ -251,7 +302,7 @@ def recovery_rebuild_receipt(run: Any) -> dict[str, Any] | None:
 
 class LocalSimReplayRecoveryService:
     def __init__(self, *, repository: Any, source_authority: Any, market_provider: Any, clock=None,
-                 suspension_provider=None, process_started_at: datetime | None = None):
+                 suspension_provider=None, process_started_at: datetime | None = None, pit_authority_resolver=None):
         self.repository, self.source_authority, self.market_provider = repository, source_authority, market_provider
         self.clock = clock or (lambda: datetime.now(UTC))
         if process_started_at is None:
@@ -260,6 +311,7 @@ class LocalSimReplayRecoveryService:
             process_started_at = datetime.fromtimestamp(psutil.Process().create_time(), UTC)
         self.process_started_at = process_started_at
         self.suspension_provider = suspension_provider
+        self.pit_authority_resolver = pit_authority_resolver
         from backend.services.simulation_data.minute_provider import SimulationMinuteMarketDataProvider
 
         if suspension_provider is None and isinstance(market_provider, SimulationMinuteMarketDataProvider):
@@ -271,6 +323,57 @@ class LocalSimReplayRecoveryService:
         return self.evaluate(self.repository.get_replay_recovery_snapshot(replay_job_id))
 
     def evaluate(self, snapshot: dict[str, Any]) -> LocalSimReplayRecoveryCheckV1:
+        from .localsim_input_source_plan import (
+            SOURCE_PLAN_ID, current_source_day, current_source_plan, frozen_source_plan, localsim_plan_inputs,
+        )
+        if snapshot["job"]["historical_source_id"] == SOURCE_PLAN_ID and current_source_plan() is not None:
+            from .models import StrategyRuntimeRelease
+            from .successor_models import LocalSimReplayJobV1
+            try:
+                job = LocalSimReplayJobV1.model_validate(snapshot["job"])
+                plan = frozen_source_plan(StrategyRuntimeRelease.model_validate(snapshot["release"]), job=job)
+                if plan != current_source_plan() or current_source_day() != job.next_trade_date:
+                    raise ValueError("LocalSIM recovery source scope differs from its frozen job/day")
+            except ValueError:
+                return self._check(snapshot, reasons=["LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
+        if snapshot["job"]["historical_source_id"] == SOURCE_PLAN_ID and current_source_plan() is None:
+            from copy import copy
+            from .models import StrategyRuntimeRelease
+            from .successor_models import LocalSimReplayJobV1
+            from .localsim_file_inputs import current_file_dataset, historical_suspension_provider
+            from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
+            try:
+                job = LocalSimReplayJobV1.model_validate(snapshot["job"])
+                release = StrategyRuntimeRelease.model_validate(snapshot["release"])
+                plan = frozen_source_plan(release, job=job)
+                with localsim_plan_inputs(plan, trade_date=job.next_trade_date) as route:
+                    bound = copy(self)
+                    if route["source"] == "DATASET_FILES":
+                        dataset = current_file_dataset(required=True)
+                        bound.market_provider = FileMinuteMarketDataProvider(dataset)
+                        bound.suspension_provider = historical_suspension_provider(dataset)
+                    return bound.evaluate(snapshot)
+            except ValueError:
+                return self._check(snapshot, reasons=["LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
+        from .localsim_file_inputs import (
+            FILE_BINDING_KEY, FILE_SOURCE_ID, current_file_dataset, historical_suspension_provider,
+            localsim_file_inputs,
+        )
+        if snapshot["job"]["historical_source_id"] == FILE_SOURCE_ID and current_file_dataset() is None:
+            from copy import copy
+            from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
+            binding = (snapshot["release"]["release_config_json"].get("metadata") or {}).get(FILE_BINDING_KEY)
+            try:
+                if not binding or binding["binding_hash"] != snapshot["job"]["historical_source_sha256"]:
+                    raise ValueError("file recovery identity mismatch")
+                with localsim_file_inputs(binding, run_id="recovery:" + snapshot["job"]["replay_job_id"]) as dataset:
+                    bound = copy(self)
+                    bound.market_provider = FileMinuteMarketDataProvider(dataset)
+                    bound.suspension_provider = historical_suspension_provider(dataset)
+                    return bound.evaluate(snapshot)
+            except ValueError as exc:
+                return self._check(snapshot, reasons=[getattr(exc, "context", {}).get("reason_code")
+                    or "LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
         job, run = snapshot["job"], snapshot.get("run")
         reasons: list[str] = []
         native: dict[str, Any] = {}
@@ -284,10 +387,20 @@ class LocalSimReplayRecoveryService:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN")
             if account_activity:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT")
-            source = self.source_authority.resolve(
-                historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
-                end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
-            )
+            file_dataset = current_file_dataset()
+            source_kwargs = {"file_binding": file_dataset.binding} if file_dataset else {}
+            if job["historical_source_id"] == SOURCE_PLAN_ID:
+                from .localsim_file_inputs import resolve_replay_source
+                from .models import StrategyRuntimeRelease
+                from .successor_models import LocalSimReplayJobV1
+                source = resolve_replay_source(self.source_authority, job=LocalSimReplayJobV1.model_validate(job),
+                    release=StrategyRuntimeRelease.model_validate(snapshot["release"]))
+            else:
+                source = self.source_authority.resolve(
+                    historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
+                    end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
+                    **source_kwargs,
+                )
             next_day = date.fromisoformat(job["next_trade_date"])
             index = source.trading_days.index(next_day)
             completed = source.trading_days[index - 1].isoformat() if index else None
@@ -336,13 +449,14 @@ class LocalSimReplayRecoveryService:
             require_no_economic_effects(operational, counts, now=self.clock())
             failure = run["run_payload_json"].get("submit_failure", {})
             context = failure.get("context", {})
-            exact_message = "market.stk_limit pre_close is required and cannot be derived"
             if not (
                 (failure.get("type") == "DataUnavailableError"
                  and (failure.get("stage"), context.get("reason_code")) in ROLLED_BACK_LOCAL_SIM_FAILURES)
                 or (failure.get("type") == "BrokerConnectivityError"
                     and failure.get("stage") == "LOCAL_SIM_SUBMIT_FAILED"
-                    and context.get("source") == "DB_HISTORICAL" and context.get("cause") == exact_message)
+                    and not file_dataset and context.get("source") == "DB_HISTORICAL"
+                    and isinstance(context.get("cause"), str)
+                    and context.get("cause") in RECOVERABLE_DB_INPUT_FAILURES)
             ) or job["failure_code"] not in {"DataUnavailableError", "BrokerConnectivityError", "_BindingRetryAttemptError"}:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
             if job["status"] == "FAILED_RETRYABLE" and (
@@ -355,6 +469,7 @@ class LocalSimReplayRecoveryService:
             if not isinstance(symbol, str) or not symbol.strip() or context.get("trade_date") != run["trade_date"]:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_IDENTITY_INVALID")
             from backend.services.simulation_data.contracts import MinuteDataSource
+            market_source = MinuteDataSource.DATASET_FILES if file_dataset else MinuteDataSource.DB_HISTORICAL
 
             status = (self.suspension_provider.load_statuses(
                 symbols=[symbol], trade_date=next_day, valuation_symbols=[symbol],
@@ -365,7 +480,7 @@ class LocalSimReplayRecoveryService:
                     NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY, validate_suspended_native_pre_close,
                     validate_suspension_reference,
                 )
-                native.update({"symbol": symbol, "trade_date": next_day.isoformat(), "source": "DB_HISTORICAL",
+                native.update({"symbol": symbol, "trade_date": next_day.isoformat(), "source": market_source.value,
                                "eligibility": "FULL_DAY_SUSPENDED"})
                 if NATIVE_PRE_CLOSE_KEY in status:
                     native["valuation_native_pre_close"] = validate_suspended_native_pre_close(
@@ -379,14 +494,14 @@ class LocalSimReplayRecoveryService:
                 if context.get("reason_code") == "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID":
                     self._invalid("LOCALSIM_REPLAY_RECOVERY_SUSPENSION_UNPROVEN")
                 market = self.market_provider.load_symbol_input(
-                    symbol=symbol, trade_date=next_day, source=MinuteDataSource.DB_HISTORICAL,
+                    symbol=symbol, trade_date=next_day, source=market_source,
                     min_bars=1, require_suspend_status=True,
                 )
                 native.update({"symbol": market.symbol, "trade_date": market.trade_date.isoformat(),
                                "source": market.source.value, "prev_close": market.market_context.get("prev_close"),
                                "bar_count": len(market.minute_bars)})
                 if (native["symbol"] != symbol or native["trade_date"] != run["trade_date"]
-                        or native["source"] != "DB_HISTORICAL" or not native["bar_count"]):
+                        or native["source"] != market_source.value or not native["bar_count"]):
                     self._invalid("LOCALSIM_REPLAY_RECOVERY_NATIVE_INPUT_CONFLICT")
         except (DataUnavailableError, InvalidStateTransitionError) as exc:
             reasons.append(str(exc.context.get("reason_code") or type(exc).__name__))
@@ -405,10 +520,13 @@ class LocalSimReplayRecoveryService:
         )
 
     def _inspect_preselection(self, snapshot: dict[str, Any]) -> dict[str, Any]:
-        """Only the precisely identified legacy, pre-node witness timeout is recoverable."""
+        """Require native identity and zero effects for supported preselection failures."""
         job, binding, release = snapshot["job"], snapshot["binding"], snapshot["release"]
         context = job.get("failure_context") or {}
-        if (job["status"] != "FAILED_TERMINAL" or job["failure_code"] != "TimeoutExpired"
+        pit_failure = (job["failure_code"] == "CanonicalPitRuntimeError"
+                       and context.get("message") == "supplied canonical PIT lease differs from live pointer")
+        if (job["status"] != "FAILED_TERMINAL"
+                or (not pit_failure and job["failure_code"] != "TimeoutExpired")
                 or context.get("trade_date") != job["next_trade_date"]):
             self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
         if (snapshot["account"].get("status") != "ACTIVE"
@@ -428,6 +546,28 @@ class LocalSimReplayRecoveryService:
                 or snapshot.get("evidence_hash") is not None):
             self._invalid("LOCALSIM_REPLAY_RECOVERY_PRESELECTION_ABSENCE_UNPROVEN")
         require_no_economic_effects({}, snapshot["economic_counts"], now=self.clock())
+        if pit_failure:
+            from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
+            from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService
+            from .localsim_native_context import frozen_localsim_profile
+            from .models import StrategyRuntimeRelease
+
+            try:
+                owner = StrategyRuntimeRelease.model_validate(release)
+                if frozen_localsim_profile(owner) is None:
+                    self._invalid("LOCALSIM_REPLAY_RECOVERY_PIT_BINDING_INVALID")
+                config = StrategyPackageSelectionService.release_selection_runtime_config(owner)
+                if CANONICAL_PIT_RUNTIME_LEASE_KEY not in config:
+                    self._invalid("LOCALSIM_REPLAY_RECOVERY_PIT_BINDING_INVALID")
+                config, lease = StrategyPackageSelectionService.resolve_pit_runtime_config(
+                    config, trade_date=date.fromisoformat(job["next_trade_date"]), runtime_release=owner,
+                    authority_resolver=self.pit_authority_resolver,
+                )
+            except (TradingCoreError, ValueError):
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_PIT_BINDING_INVALID")
+            return {"recovery_phase": "PRESELECTION", "candidate_run_id": absence["run_id"],
+                    "pit_runtime_lease": lease.as_dict(),
+                    "pit_runtime_config_sha256": canonical_json_sha256(config)}
         match = re.fullmatch(r"Command '(\[.*\])' timed out after 20 seconds", context.get("message", ""))
         try:
             command = ast.literal_eval(match[1]) if match else None

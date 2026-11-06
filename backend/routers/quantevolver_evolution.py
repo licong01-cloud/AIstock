@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -26,6 +26,7 @@ from ..services.quantevolver.qe_evolution_service import (
     normalize_long_trend_profile_id,
 )
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
+from ..services.quantevolver.frozen_inference_contract import FrozenInferenceSpec
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
 from ..services.quantevolver import correlation_compute_service as _correlation_compute_service
 from ..services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
@@ -733,6 +734,14 @@ def _task_detail_contains_full_loop_payloads(detail_data: dict) -> bool:
         isinstance(loop, dict) and any(key in loop for key in ("config_json", "metrics_json", "agent_analysis"))
         for loop in loops
     )
+
+
+@router.get("/tasks/status", summary="Read observed QE task statuses without loading history or artifacts")
+def get_evolution_task_status_batch(task_ids: list[str] = Query(..., max_length=200)):
+    ids = list(dict.fromkeys(task_ids))
+    rows = scheduler.get_task_status_batch(ids)
+    found = {row["task_id"] for row in rows}
+    return {"status": "success", "data": rows, "missing_ids": [item for item in ids if item not in found]}
 
 
 @router.get("/tasks/{task_id}", summary="获取单个演进任务的详细信息与所有 LOOP")
@@ -1496,7 +1505,7 @@ class CustomEvoLoopConfig(BaseModel):
     model_id: str = Field(..., description="模型 ID")
     model_params: Optional[Dict[str, Any]] = Field(None, description="模型训练参数，如 ltr_loss_mode/topk_train_k 等")
     feature_processing: Optional[Dict[str, Any]] = Field(
-        None, description="Request-local model input exclusions and clip_outlier; not model hyperparameters",
+        None, description="Request-local input exclusions, clip_outlier and raw_state_controls v1 diagnostics before normalization; not model hyperparameters",
     )
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
@@ -1524,14 +1533,20 @@ class CustomEvoLoopConfig(BaseModel):
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
     model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
     model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+    frozen_inference: Optional[FrozenInferenceSpec] = Field(None, description="Explicit hash-pinned frozen model and fitted-processor inference v1; no fit allowed")
     prediction_replay: StrictBool = Field(False, description="Replay one immutable completed-loop pred.pkl without training or inference")
     prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
     prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
     prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
-    node_id: Optional[str] = Field(None, description="Loop execution node; blank inherits Loop1")
+    node_id: Optional[str] = Field(None, description="CPU model: remote; GPU model: WSL; explicit placement must match model device; frozen prediction replay may use either node")
 
     @model_validator(mode="after")
     def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
+        from ..services.quantevolver.frozen_inference_contract import validate_mode
+
+        frozen = validate_mode(self.model_dump())
+        if frozen is not None:
+            self.frozen_inference = frozen
         replay = normalize_prediction_replay_contract(
             self.model_dump(),
             context="custom_evo_loop",
@@ -1546,8 +1561,11 @@ class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
     target_desc: str = Field("", description="任务描述")
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
-    node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
-    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
+    node_id: Optional[str] = Field(None, description="Preferred node for balanced placement; batch node when node_allocation=explicit")
+    node_allocation: Literal["balanced", "explicit"] = Field(
+        "balanced", description="New batches place models by CPU/GPU requirements; prediction replay balances across active nodes; explicit pins must remain compatible",
+    )
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Remote CPU models 4; WSL GPU models 2; pure backtests 4; stricter model guards and explicit reductions apply")
     phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
     resource_telemetry_enabled: bool = Field(
         False,
@@ -1633,6 +1651,12 @@ class CustomEvoRunRequest(BaseModel):
     force_full_train: bool = Field(False, description="Force full training when submitting a pending custom_evo task")
 
 
+class CustomEvoPendingNodeReassignmentRequest(BaseModel):
+    operation_id: str = Field(..., min_length=1, max_length=128)
+    loop_indexes: List[int] = Field(..., min_length=1)
+    node_id: str = Field(..., min_length=1)
+
+
 def _persisted_qe_dataset_context(loop_config: Dict[str, Any] | None) -> Dict[str, Any] | None:
     from ..services.quantevolver.qe_active_dataset_profile import (
         QE_ACTIVE_PROFILE_SUMMARY_PARAM,
@@ -1704,6 +1728,8 @@ async def _prepare_custom_evo_loop_configs(
     persisted_loop_configs: Optional[Dict[int, Dict[str, Any]]] = None,
     required_profile_identity: Optional[Dict[str, str]] = None,
     existing_legacy_task: bool = False,
+    apply_batch_policy: bool = False,
+    balanced_batch_nodes: bool = True,
 ) -> tuple[List[Dict[str, Any]], str, Dict[str, int]]:
     """Validate custom_evo loop payloads and resolve execution nodes fail-fast."""
     if assigned_loop_indexes and len(assigned_loop_indexes) != len(loops):
@@ -1721,6 +1747,14 @@ async def _prepare_custom_evo_loop_configs(
             raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
         if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
+        if loop_cfg.frozen_inference is not None:
+            try:
+                scheduler._validate_frozen_source_metadata(
+                    loop_cfg.model_source_task_id, loop_cfg.model_source_loop_index,
+                    loop_cfg.frozen_inference, model_id=loop_cfg.model_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
         if loop_cfg.backtest_only or loop_cfg.prediction_replay:
             reuse_mode = "prediction replay" if loop_cfg.prediction_replay else "backtest-only"
             source_task_id = (
@@ -1816,16 +1850,42 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
         loops_config.append(cfg_dict)
 
+    from ..services.quantevolver.qe_batch_execution_policy import (
+        POLICY_KEY, MODEL_BINDING_KEY, QE_BATCH_EXECUTION_POLICY, batch_node_parallelism,
+        bind_batch_model_nodes, verify_batch_dataset_nodes,
+    )
+    from ..services.quantevolver.qe_active_dataset_profile import load_active_qe_profile
+
+    placement_profile = load_active_qe_profile() if apply_batch_policy else None
+    if apply_batch_policy and balanced_batch_nodes and placement_profile is None:
+        raise HTTPException(
+            status_code=503,
+            detail="QE_BATCH_ACTIVE_PROFILE_REQUIRED: balanced placement requires active dataset node bindings",
+        )
+    automatic_placement = bool(placement_profile is not None and balanced_batch_nodes)
+    if automatic_placement:
+        loops_config = bind_batch_model_nodes(
+            loops_config,
+            available_nodes=list(placement_profile.raw["node_bindings"]),
+            preferred_node=request_node_id,
+            balanced=True,
+        )
     try:
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
             loops_config,
             request_node_id,
         )
+        if apply_batch_policy and not automatic_placement:
+            loops_config = bind_batch_model_nodes(
+                loops_config, available_nodes=sorted(selected_node_ids), balanced=False,
+            )
         parallelism_scope = node_parallelism_scope_node_ids or selected_node_ids
         node_parallelism = normalize_node_parallelism(
             parallelism_scope,
             node_parallelism_payload,
         )
+        if apply_batch_policy:
+            node_parallelism = batch_node_parallelism(loops_config, node_parallelism_payload)
         node_rows = await preflight_qe_nodes(selected_node_ids)
     except QENodePreflightError as e:
         raise HTTPException(status_code=400, detail=e.to_detail()) from e
@@ -1841,6 +1901,13 @@ async def _prepare_custom_evo_loop_configs(
     unresolved: List[tuple[int, Dict[str, Any]]] = []
     persisted_by_index = persisted_loop_configs or {}
     for pos, cfg_dict in enumerate(loops_config, start=1):
+        old_loop = persisted_by_index.get(int(cfg_dict["loop_index"])) or {}
+        if old_loop.get(POLICY_KEY):
+            cfg_dict[POLICY_KEY] = dict(old_loop[POLICY_KEY])
+            if old_loop.get(MODEL_BINDING_KEY):
+                cfg_dict[MODEL_BINDING_KEY] = dict(old_loop[MODEL_BINDING_KEY])
+            if old_loop[POLICY_KEY].get("version") == QE_BATCH_EXECUTION_POLICY:
+                bind_batch_model_nodes([cfg_dict], available_nodes=[cfg_dict["node_id"]], balanced=False)
         persisted = _persisted_qe_dataset_context(
             persisted_by_index.get(int(cfg_dict["loop_index"]))
         )
@@ -1871,7 +1938,7 @@ async def _prepare_custom_evo_loop_configs(
         cfg_dict["resolved_dataset"] = persisted["resolved_dataset"]
 
     try:
-        active_profile = load_active_qe_profile() if unresolved else None
+        active_profile = (placement_profile or load_active_qe_profile()) if unresolved else None
     except QEActiveDatasetProfileError as exc:
         raise HTTPException(
             status_code=503,
@@ -1881,6 +1948,10 @@ async def _prepare_custom_evo_loop_configs(
                 "context": exc.context,
             },
         ) from exc
+    batch_dataset_identity = (
+        await verify_batch_dataset_nodes(active_profile, sorted(selected_node_ids))
+        if apply_batch_policy and active_profile is not None else None
+    )
     if active_profile is not None and existing_legacy_task:
         raise HTTPException(
             status_code=409,
@@ -1983,6 +2054,16 @@ async def _prepare_custom_evo_loop_configs(
             _sync_stock_pool_to_remote(stock_pool, node)
             synced_stock_pool_keys.add(sync_key)
 
+    if apply_batch_policy:
+        receipt = {
+            "version": QE_BATCH_EXECUTION_POLICY,
+            "placement": "balanced" if automatic_placement else "explicit_or_legacy",
+            "node_parallelism": node_parallelism,
+            "requested_node_parallelism": node_parallelism_payload,
+            "dataset_identity": batch_dataset_identity,
+        }
+        for cfg_dict in loops_config:
+            cfg_dict[POLICY_KEY] = dict(receipt)
     return loops_config, loop1_node_id, node_parallelism
 
 
@@ -2024,6 +2105,54 @@ def _filter_node_parallelism_for_scope(
         )
     return filtered
 
+@router.get("/workspace-preflight/{node_id}", summary="Read-only QE node workspace preflight")
+async def get_workspace_preflight(node_id: str):
+    """Exercise the actual config reader without creating or submitting work."""
+    from ..services.quantevolver.qe_workspace_client import (
+        QE_WORKSPACE_CONFIG_READ_ATTEMPTS,
+        QE_WORKSPACE_CONFIG_READ_POLICY,
+    )
+
+    node_id = node_id.strip()
+    if not node_id:
+        raise HTTPException(status_code=400, detail="QE_NODE_ID_EMPTY")
+    try:
+        await preflight_qe_nodes([node_id])
+    except QENodePreflightError as exc:
+        raise HTTPException(status_code=503, detail=exc.to_detail()) from exc
+    return {
+        "status": "ready",
+        "node_id": node_id,
+        "workspace_config_read_policy": QE_WORKSPACE_CONFIG_READ_POLICY,
+        "max_read_attempts": QE_WORKSPACE_CONFIG_READ_ATTEMPTS,
+        "submission_performed": False,
+    }
+
+
+@router.get("/execution-policy", summary="Read the code-owned QE batch execution policy")
+def get_batch_execution_policy():
+    from ..services.quantevolver.qe_batch_execution_policy import (
+        QE_BATCH_EXECUTION_POLICY, QE_TRAINING_LOOP_CAPACITY, QE_BACKTEST_LOOP_CAPACITY,
+        QE_CPU_TRAINING_LOOP_CAPACITY, CPU_NODE, GPU_NODE, CPU_NODES,
+    )
+
+    return {
+        "version": QE_BATCH_EXECUTION_POLICY,
+        "default_node_allocation": "balanced",
+        "per_node_workload_limits": {
+            "cpu_full_fit_loop": QE_CPU_TRAINING_LOOP_CAPACITY,
+            "gpu_full_fit_loop": QE_TRAINING_LOOP_CAPACITY,
+            "pure_backtest_loop": QE_BACKTEST_LOOP_CAPACITY,
+        },
+        "model_node_affinity": {"gpu": GPU_NODE},
+        "cpu_training_nodes": list(CPU_NODES),
+        "prediction_replay_nodes": [CPU_NODE, GPU_NODE],
+        "slot_lifetime": "whole_loop",
+        "stricter_model_and_global_capacity_guards": "preserved",
+        "existing_task_bindings": "submitted_immutable_pending_explicit_cas",
+    }
+
+
 @router.post("/custom-tasks", summary="Create custom evolution task")
 async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
     """Create a custom_evo task with explicit per-loop execution nodes."""
@@ -2052,6 +2181,8 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             req.loops,
             request_node_id=req.node_id,
             node_parallelism_payload=req.node_parallelism,
+            apply_batch_policy=True,
+            balanced_batch_nodes=req.node_allocation == "balanced",
         )
 
         new_task_id = await scheduler.create_custom_evo_task(
@@ -2082,6 +2213,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             ],
             "node_parallelism": node_parallelism,
             "message": f"Custom evolution task created with {len(loops_config)} loops.",
+            "execution_policy": loops_config[0].get("_qe_batch_execution_policy"),
         }
         if not req.auto_start:
             response.update({
@@ -2295,6 +2427,9 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
             except ValueError as exc:
                 raise_http_seed_error(exc)
         if req.force_full_train:
+            frozen_loops = [loop.get("loop_index") for loop in config.get("loops") or [] if loop.get("frozen_inference") is not None]
+            if frozen_loops:
+                raise HTTPException(status_code=400, detail=f"QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN: loops={frozen_loops}")
             replay_loops = [
                 loop.get("loop_index")
                 for loop in config.get("loops") or []
@@ -2415,6 +2550,47 @@ async def rerun_custom_evo_loop(
     except Exception as e:
         logger.error(f"Failed to rerun custom_evo loop {task_id}/Loop{loop_index}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/custom-loops/reassign-pending", summary="Reassign untouched Loops without adding experiments")
+async def reassign_pending_custom_evo_loops(
+    task_id: str, req: CustomEvoPendingNodeReassignmentRequest, background_tasks: BackgroundTasks,
+):
+    try:
+        indexes = req.loop_indexes
+        if len(set(indexes)) != len(indexes) or any(index < 1 for index in indexes):
+            raise HTTPException(status_code=400, detail="loop_indexes must be unique positive indexes")
+        existing = await scheduler.get_custom_evo_editable_config(task_id)
+        old_by_index = {int(cfg["loop_index"]): cfg for cfg in existing["loops"]}
+        if not set(indexes) <= set(old_by_index):
+            raise HTTPException(status_code=409, detail="QE_PENDING_MOVE_LOOP_NOT_FOUND")
+        expected = [old_by_index[index] for index in indexes]
+        contexts = [_persisted_qe_dataset_context(cfg) for cfg in expected]
+        if any(ctx is None for ctx in contexts):
+            raise HTTPException(status_code=409, detail="QE_PENDING_MOVE_VERSIONED_BINDING_REQUIRED")
+        identities = [
+            {key: str(ctx["profile_summary"].get(key) or "") for key in ("generation", "release_id", "cutoff")}
+            for ctx in contexts
+        ]
+        if not all(identities[0].values()) or any(identity != identities[0] for identity in identities):
+            raise HTTPException(status_code=409, detail="QE_PENDING_MOVE_PROFILE_IDENTITY_INCOMPLETE")
+        public = _public_custom_evo_config({"loops": expected})["loops"]
+        prepared, _, _ = await _prepare_custom_evo_loop_configs(
+            [CustomEvoLoopConfig(**{**cfg, "node_id": req.node_id}) for cfg in public],
+            request_node_id=req.node_id, node_parallelism_payload=None,
+            assigned_loop_indexes=indexes, required_profile_identity=identities[0],
+            apply_batch_policy=True, balanced_batch_nodes=False,
+        )
+        result = await scheduler.reassign_pending_custom_evo_loops(
+            task_id=task_id, operation_id=req.operation_id,
+            expected_loop_configs=expected, prepared_loop_configs=prepared,
+        )
+        background_tasks.add_task(scheduler.submit_custom_evo_selected_loops, task_id, result["moved_loop_indexes"])
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/tasks/{task_id}/custom-loops/append", summary="Append custom_evo Loops to an existing task")
@@ -4887,6 +5063,23 @@ def list_correlation_jobs(limit: int = 20):
     return {"items": rows}
 
 
+def _read_system_log_tail(log_file: Path, tail: int, level: str, max_bytes: int = 1024 * 1024) -> dict:
+    """Bound memory/IO for a UI tail read, with explicit partial-window metadata."""
+    with log_file.open("rb") as stream:
+        stream.seek(0, 2)
+        size = stream.tell()
+        offset = max(0, size - max_bytes)
+        stream.seek(offset)
+        content = stream.read(max_bytes)
+    lines = content.decode("utf-8", errors="replace").splitlines()
+    if offset and lines:
+        lines = lines[1:]  # first record can start before the bounded read window
+    if level:
+        lines = [line for line in lines if f" {level.upper()} " in line]
+    return {"ok": True, "lines": lines[-tail:] if tail > 0 else [],
+            "exists": True, "truncated": bool(offset), "bytes_scanned": len(content)}
+
+
 @router.get("/system/logs", summary="读取后端日志文件末尾")
 def get_system_logs(
     tail: int = 100,
@@ -4901,11 +5094,7 @@ def get_system_logs(
     log_file = Path(__file__).parent.parent / "logs" / ("errors.log" if errors_only else "aistock.log")
     if not log_file.exists():
         return {"ok": True, "lines": [], "exists": False}
-    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    if level:
-        lines = [line for line in lines if f" {level.upper()} " in line]
-    return {"ok": True, "lines": [line.rstrip() for line in lines[-tail:]], "exists": True}
+    return _read_system_log_tail(log_file, tail, level)
 
 
 # ================================================================

@@ -128,6 +128,20 @@ def _write_canonical_or_identical(path: Path, value: Mapping[str, Any]) -> Path:
     return path
 
 
+def _freeze_input_evidence(source: Path, target: Path, expected_sha256: str) -> Path:
+    """Keep exact approved input bytes under the existing control artifact root."""
+    digest = hashlib.sha256()
+    with source.open("rb") as reader, target.open("xb") as writer:
+        for block in iter(lambda: reader.read(1024 * 1024), b""):
+            digest.update(block)
+            writer.write(block)
+        writer.flush()
+        os.fsync(writer.fileno())
+    if digest.hexdigest() != expected_sha256:
+        raise MonthlyHMMDeriveError("frozen HMM authority changed during execution")
+    return target
+
+
 @dataclass(frozen=True, slots=True)
 class HMMCoefficientProduct:
     asset_id: str
@@ -455,7 +469,19 @@ class MonthlyHMMCoefficientExecutor:
             or self.process.script_sha256 != self.authority.script_sha256
         ):
             raise MonthlyHMMDeriveError("frozen HMM derivation authority changed during execution")
-        config = _read_json(config_path, label="frozen HMM config")
+        # External approved sources are not release artifacts. Preserve their
+        # bytes for the adapter without registering a repository/model parent
+        # as a broad artifact root or changing stable producer/output paths.
+        script_path = _plain_file(self.process.script_path, label="frozen HMM producer")
+        frozen_inputs = tuple(
+            _freeze_input_evidence(source, attempt_root / name, expected)
+            for source, name, expected in (
+                (model, "authority-model", self.authority.model_sha256),
+                (config_path, "authority-config.json", self.authority.config_sha256),
+                (script_path, "authority-producer.py", self.authority.script_sha256),
+            )
+        )
+        config = _read_json(frozen_inputs[1], label="frozen HMM config")
         assets: list[DerivedAsset] = []
         computed_rows = 0
         for product in self.authority.products:
@@ -475,6 +501,12 @@ class MonthlyHMMCoefficientExecutor:
                 "frozen_input_bundle": bundle,
             }
             raw = self.process.run(payload)
+            if (
+                _sha256(model) != self.authority.model_sha256
+                or _sha256(config_path) != self.authority.config_sha256
+                or self.process.script_sha256 != self.authority.script_sha256
+            ):
+                raise MonthlyHMMDeriveError("frozen HMM authority changed during execution")
             try:
                 value = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -544,9 +576,7 @@ class MonthlyHMMCoefficientExecutor:
                 manifest_path,
                 calendar_path,
                 *input_paths,
-                model,
-                config_path,
-                self.process.script_path.resolve(strict=True),
+                *frozen_inputs,
                 bundle_path,
             ),
             workload=StageWorkload(computed_rows=computed_rows),

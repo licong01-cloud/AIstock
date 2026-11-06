@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 import copy
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
@@ -19,12 +20,42 @@ from .canonical import canonical_json_bytes
 from .monthly_build_resume import MonthlyBuildResumeError, _atomic, _plain, _signature, load_sealed_build_json
 from .monthly_quote_catalog import _replace
 from .qlib_bounded_update import read_calendar
+from ..tushare_dataset_specs import stk_limit_prices_valid
 
 SCHEMA = "aistock_monthly_prev_close_correction_v1"
 BINDING = "monthly_prev_close_repairs"
+DAILY_REFERENCE_PROVIDER = "tushare.daily.pre_close_with_stk_limit_bounds"
 SUPPLEMENT_KEYS = {BINDING, BINDING + "_ref", "monthly_industry_history", "monthly_industry_history_ref",
                    "monthly_industry_quote_source", "monthly_industry_quote_source_ref",
-                   "monthly_suspension_authority", "monthly_suspension_authority_ref"}
+                   "monthly_suspension_authority", "monthly_suspension_authority_ref",
+                   "monthly_minute_repairs", "monthly_minute_repairs_ref"}
+
+
+def _validate_daily_reference(source):
+    """Check frozen dual-source facts, never query DB or infer a reference."""
+    proof = source.get("reference_enrichment") or {}
+    facts = proof.get("facts")
+    if (proof.get("schema_version") != "stk_limit_daily_reference_enrichment_v1"
+            or proof.get("trade_date") != source["trade_date"] or proof.get("source_api") != "tushare.daily"
+            or proof.get("source_field") != "pre_close" or not isinstance(facts, list) or not facts
+            or proof.get("filled_reference_count") != len(facts)):
+        raise ValueError("daily reference enrichment proof differs")
+    published = {(row["ts_code"], row["trade_date"]): row for row in source["source_rows"]}
+    seen = set()
+    for fact in facts:
+        key = fact["ts_code"], fact["trade_date"]
+        try:
+            original = fact["original_pre_close"]
+            if original is not None and Decimal(str(original)).is_finite() and Decimal(str(original)) > 0:
+                raise ValueError("daily supplement cannot replace a finite primary reference")
+            if (key in seen or key[1] != source["trade_date"].replace("-", "")
+                    or key not in published or not stk_limit_prices_valid(fact)
+                    or any(Decimal(str(fact[name])) != Decimal(str(published[key][name]))
+                           for name in ("pre_close", "up_limit", "down_limit"))):
+                raise ValueError("daily reference enrichment facts differ")
+        except (InvalidOperation, KeyError, TypeError) as exc:
+            raise ValueError("invalid daily reference source fact") from exc
+        seen.add(key)
 
 
 def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
@@ -44,7 +75,8 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
                     raise ValueError("prev_close approved sources conflict")
                 facts[key] = row
         return {"schema_version": SCHEMA, "inputs": dict(inputs), "sources": sources,
-                "facts": [facts[k] for k in sorted(facts)], "provider": "tushare.stk_limit",
+                "facts": [facts[k] for k in sorted(facts)],
+                "provider": DAILY_REFERENCE_PROVIDER if any(s.get("provider") == DAILY_REFERENCE_PROVIDER for s in sources) else "tushare.stk_limit",
                 "units": "CNY_per_share", "database_write": False}
     if set(inputs) != {"plan_path", "plan_sha256", "receipt_path", "receipt_sha256"}:
         raise ValueError("prev_close repair input fields differ")
@@ -96,10 +128,12 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
         source = pinned(entry["source_plan_path"], entry["source_plan_sha256"])
         source_hash = hashlib.sha256(canonical_json_bytes(source["source_rows"])).hexdigest()
         if (source.get("schema_version") != "local_data_stk_limit_pre_close_repair_v1"
-                or source.get("provider") != "tushare.stk_limit" or source.get("units") != "CNY_per_share"
+                or source.get("provider") not in {"tushare.stk_limit", DAILY_REFERENCE_PROVIDER} or source.get("units") != "CNY_per_share"
                 or source_hash != source.get("source_rows_sha256") or source_hash != entry["source_rows_sha256"]
                 or source.get("trade_date") != entry["trade_date"] or len(source["patches"]) != entry["keys"]):
             raise ValueError("prev_close provider source identity differs")
+        if source["provider"] == DAILY_REFERENCE_PROVIDER:
+            _validate_daily_reference(source)
         by_key = {(r["ts_code"], r["trade_date"]): r for r in source["source_rows"]}
         if len(by_key) != len(source["source_rows"]):
             raise ValueError("prev_close source keys are duplicated")
@@ -119,11 +153,13 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
             facts.append({**row, "trade_date": day.isoformat()})
         sources.append({"sha256": entry["source_plan_sha256"], "source_rows_sha256": source_hash,
                         "trade_date": entry["trade_date"], "keys": entry["keys"],
+                        "provider": source["provider"],
                         "captured_at": source.get("captured_at"), "historical_publication_time_proven": False})
     if not facts or len(facts) != verified_keys:
         raise ValueError("prev_close correction key count differs from production readback")
     return {"schema_version": SCHEMA, "inputs": dict(inputs), "sources": sources, "facts": facts,
-            "provider": "tushare.stk_limit", "units": "CNY_per_share", "database_write": False}
+            "provider": DAILY_REFERENCE_PROVIDER if any(s["provider"] == DAILY_REFERENCE_PROVIDER for s in sources) else "tushare.stk_limit",
+            "units": "CNY_per_share", "database_write": False}
 
 
 def _pending(root):
@@ -135,39 +171,51 @@ def _allowed(relative):
             or re.fullmatch(r"daily_bin/qlib/features/\d{6}\.(sz|sh)/prev_close\.day\.bin|minute_bin/qlib/features/\d{6}\.(sz|sh)/prev_close\.1min\.bin", relative) is not None)
 
 
-def recover_prev_close(*, root, journal, record, cas):
-    intent = _pending(root)
+def recover_prev_close(*, root, journal, record, cas, schema=SCHEMA, intent_path=None, allowed_path=_allowed,
+                       allow_create=False):
+    intent = intent_path if intent_path is not None else _pending(root)
     _plain(intent)
     if not intent.exists():
         return record
-    if intent.stat().st_size > 8 * 1024 * 1024:
-        raise MonthlyBuildResumeError("prev_close commit intent is oversized")
     commit = json.loads(intent.read_bytes())
-    if (commit.get("schema_version") != SCHEMA or commit.get("binding_digest") != record["binding_digest"]
+    if (commit.get("schema_version") != schema or commit.get("binding_digest") != record["binding_digest"]
             or record["steps"] not in (commit["original_steps"], commit["target_steps"])
-            or not commit.get("files") or not all(_allowed(p) for p in commit["files"])):
+            or not commit.get("files") or not all(allowed_path(p) for p in commit["files"])):
         raise MonthlyBuildResumeError("prev_close commit identity differs")
-    payloads = {}
     for relative, entry in commit["files"].items():
         path = root / relative
+        _plain(path)
+        absent_source = entry.get("original_signature") is None and entry.get("original_sha256") is None
+        if absent_source and not allow_create:
+            raise MonthlyBuildResumeError("correction cannot create an unapproved file")
+        cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
+        if not path.exists() and allow_create and absent_source:
+            continue
         signature = _signature(path)
         raw = path.read_bytes()
-        target = cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
         digest = hashlib.sha256(raw).hexdigest()
         if digest != entry["target_ref"]["sha256"] and (
                 digest != entry["original_sha256"] or list(signature) != entry["original_signature"]):
             raise MonthlyBuildResumeError("prev_close commit input changed")
         if _signature(path) != signature:
             raise MonthlyBuildResumeError("prev_close input changed during read")
-        payloads[relative] = target
     result = copy.deepcopy(record)
-    for relative, payload in payloads.items():
+    # One feature file at a time; a historical repair may touch thousands of
+    # files, but must not retain all their payloads in process memory.
+    for relative, entry in commit["files"].items():
+        payload = cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
         path = root / relative
-        raw = path.read_bytes()
-        entry = commit["files"][relative]
+        _plain(path)
+        absent = not path.exists()
+        raw = None if absent else path.read_bytes()
         if raw != payload:
-            if (hashlib.sha256(raw).hexdigest() != entry["original_sha256"]
-                    or list(_signature(path)) != entry["original_signature"]):
+            if absent:
+                if not (allow_create and entry.get("original_signature") is None and entry.get("original_sha256") is None):
+                    raise MonthlyBuildResumeError("correction creation lost original identity")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _plain(path)
+            elif (hashlib.sha256(raw).hexdigest() != entry["original_sha256"]
+                  or list(_signature(path)) != entry["original_signature"]):
                 raise MonthlyBuildResumeError("prev_close target changed before replacement")
             _replace(path, payload)
         result["files"][relative] = list(_signature(path))
@@ -205,8 +253,8 @@ def apply_prev_close_corrections(resume, *, finalized, cas, plan):
             if materialization["prev_close_correction"]["authority_ref"] != binding["authority_ref"]:
                 raise MonthlyBuildResumeError("prev_close correction authority changed")
             continue
-        if resume.record.get("finalization_started") is True:
-            raise MonthlyBuildResumeError("prev_close correction cannot amend publication already started")
+        # Packaging may have failed before publication. Only the verified
+        # private staging is writable; its packaging retry marker is not a seal.
         counts, amendments = Counter(), []
         provider = root / dataset / "qlib"
         calendar = read_calendar(provider / f"calendars/{freq}.txt")
@@ -300,7 +348,8 @@ def correction_pins(materialization, *, provider, cas):
         path = provider.parent.parent / relative
         before = _signature(path)
         raw = path.read_bytes()
-        ref = entry["target_ref"]
+        from .monthly_quote_fact_correction import following_correction_ref
+        ref = following_correction_ref(materialization,relative=relative,reference=entry['target_ref'],owner='prev_close_correction')
         if hashlib.sha256(raw).hexdigest() != ref["sha256"] or len(raw) != ref["size"] or _signature(path) != before:
             raise MonthlyBuildResumeError("prev_close corrected bytes differ")
         result[path] = {"target_sha256": ref["sha256"], "target_size": ref["size"], "target_signature": list(before)}

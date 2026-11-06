@@ -1,4 +1,4 @@
-"""Frozen official quotes and PIT-cohort flows for an explicit history repair.
+"""Frozen official quotes and classified stock facts for a history repair.
 
 SOURCE freezes independent published quotes. BUILD aggregates already sealed
 stock moneyflow; it never reuses a previously aggregated industry's cohort,
@@ -17,7 +17,7 @@ import pandas as pd
 from .canonical import canonical_json_bytes
 from .errors import SourceManifestError
 
-CONTRACT = "official_quote_plus_pit_stock_flow_v1"
+CONTRACT = "official_quote_plus_classified_fact_stock_flow_v2"
 SCHEMA = "aistock_monthly_industry_quote_source_v1"
 QUOTE_FIELDS = ("open", "high", "low", "close", "pct_change", "vol", "amount", "pe", "pb", "total_mv")
 FLOW_FIELDS = {f"sw2_mf_{side}_{size}_amt": f"mf_{size}_{side}_amt"
@@ -26,10 +26,22 @@ FLOW_FIELDS.update(sw2_mf_net_amt="mf_net_amt", sw2_mf_buy_elg_vol="mf_elg_buy_v
                    sw2_mf_sell_elg_vol="mf_elg_sell_vol", sw2_mf_net_vol="mf_net_vol")
 
 
-def capture_industry_quote_source(connection, *, cas, projection):
+def capture_industry_quote_source(connection, *, cas, projection, repair_provider=None):
     """Registered read-only SOURCE query; small monthly CAS partitions only."""
+    from .monthly_quote_repair import repair_quote_partition
     partitions = []
+    audits = []
     codes = sorted({entry["canonical_l2_code"] for entry in projection.payload["entries"] if entry["taxonomy_version"] == "SW2021"})
+    from .sw_l2_quote_policy import publication_catalog, quote_publication_policy_identity
+    with connection.cursor() as cursor:
+        # SOURCE binds this release's frozen taxonomy, not later catalog entries.
+        cursor.execute("SELECT index_code,src,level,is_pub FROM market.sw_index_classify"
+            " WHERE src='SW2021' AND level='L2' AND index_code=ANY(%s) ORDER BY index_code LIMIT 132", (codes,))
+        catalog_rows = cursor.fetchall()
+    if len(catalog_rows) > 131:
+        raise SourceManifestError("official industry publication catalog exceeds its row bound")
+    catalog = publication_catalog([dict(zip(("index_code", "src", "level", "is_pub"), row, strict=True))
+                                   for row in catalog_rows], codes=codes)
     for period in pd.period_range(projection.payload["start_date"], projection.payload["end_date"], freq="M"):
         start = max(date.fromisoformat(projection.payload["start_date"]), period.start_time.date())
         end = min(date.fromisoformat(projection.payload["end_date"]), period.end_time.date())
@@ -45,13 +57,29 @@ def capture_industry_quote_source(connection, *, cas, projection):
         facts = [{"index_code": row[0], "trade_date": row[1].isoformat(),
                   **{key: None if value is None else str(value) for key, value in zip(QUOTE_FIELDS, row[2:], strict=True)}}
                  for row in rows]
+        calendar = []
+        if end >= date(2021, 7, 30):
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT cal_date FROM market.trading_calendar WHERE is_trading=TRUE"
+                    " AND cal_date BETWEEN %s AND %s ORDER BY cal_date LIMIT 32",
+                    (max(start, date(2021, 7, 30)), end))
+                calendar = [row[0] for row in cursor.fetchall()]
+            if not calendar or len(calendar) > 31 or len(calendar) != len(set(calendar)):
+                raise SourceManifestError(f"official quote source calendar is empty or invalid: {period}")
+        facts, audit = repair_quote_partition(facts, codes=codes, calendar=calendar, catalog=catalog,
+            cas=cas, provider=repair_provider)
+        audits.append({"partition_key": str(period), **audit})
         reference = cas.put_json({"schema_version": SCHEMA, "partition_key": str(period), "rows": facts})
         partitions.append({"partition_key": str(period), "row_count": len(facts), "ref": reference.as_dict()})
     return {"schema_version": SCHEMA, "projection_sha256": projection.sha256,
             "source_dataset": "market.sw_daily", "start_date": projection.payload["start_date"],
             "end_date": projection.payload["end_date"], "quote_units": "sw_daily_native_v1",
             "quote_taxonomy": "SW2021", "quote_start_date": "2021-07-30",
-            "partitions": partitions, "database_write": False}
+            "partitions": partitions, "database_write": False, "publication_catalog": catalog,
+            "publication_policy_identity": quote_publication_policy_identity(),
+            "quote_fact_audit": {"partitions": audits,
+                "unresolved_key_count": sum(item["unresolved_key_count"] for item in audits),
+                "repaired_key_count": sum(item["repaired_key_count"] for item in audits)}}
 
 
 def load_frozen_industry_quote_source(cas, *, context_plan, build_inputs, projection):
@@ -98,14 +126,12 @@ def predecessor_context_matches(prefix, projection):
 
 
 def rebuild_industry_context(frame, *, projection, quotes, moneyflow, pit):
-    """Separate published quotes from sums of the corrected strategy PIT cohort.
+    """Sum all causally classified facts, independently of selection policy.
 
     Stock moneyflow is CNY/shares; sector storage remains native 10k CNY/hands.
     Missing facts stay NaN. SQL-compatible sums ignore individual NULLs, but an
     all-NULL group is not zero. No alias inference or current-membership join.
     """
-    from .pit import filter_frame_to_pit_spans
-
     actual = projection.project(frame)
     days = frame.index.get_level_values("datetime")
     selected = ((days >= pd.Timestamp(projection.payload["start_date"])) &
@@ -117,7 +143,10 @@ def rebuild_industry_context(frame, *, projection, quotes, moneyflow, pit):
     required = [FLOW_FIELDS[name] for name in flow_columns]
     if set(required).difference(moneyflow):
         raise SourceManifestError("frozen stock moneyflow fields are incomplete")
-    cohort, _ = filter_frame_to_pit_spans(moneyflow, pit)
+    # ``pit`` remains a compatibility argument for existing callers. Industry
+    # membership comes from the versioned classification projection, never
+    # from whether a strategy could buy the security on this date.
+    cohort = moneyflow
     if required and not cohort.empty:
         if np.isinf(cohort[required].to_numpy(dtype=float)).any():
             raise SourceManifestError("frozen stock moneyflow is infinite")
@@ -157,6 +186,9 @@ class FrozenIndustryContext:
                 or source.get("database_write") is not False or source.get("quote_taxonomy") != "SW2021"
                 or source.get("quote_start_date") != "2021-07-30"):
             raise SourceManifestError("independent industry quote source identity differs")
+        # Diagnostics do not introduce a historical publication gate. The
+        # existing release validator enforces its approved consumer window.
+        # A missing historic observation remains NA, never a stop-date rule.
         self.cas, self.source, self.projection = cas, source, projection
         self.moneyflow_path, self.pit, self.identity = moneyflow_path, pit, identity
         self.parts = {part["partition_key"]: part for part in source["partitions"]}
@@ -191,7 +223,8 @@ class FrozenIndustryContext:
         with pd.HDFStore(self.moneyflow_path, "r") as store:
             moneyflow = store.select("data", where=where)
         raw = moneyflow.reset_index().rename(columns={"datetime": "trade_date", "instrument": "ts_code"})
-        canonical = self.identity.remap_source_rows(raw, canonical_codes=set(self.pit.to_frame().ts_code), source_dataset=MONEYFLOW_DATASET)
+        canonical_codes = {row["canonical_symbol"] for row in self.projection.payload["effective_intervals"]}
+        canonical = self.identity.remap_source_rows(raw, canonical_codes=canonical_codes, source_dataset=MONEYFLOW_DATASET)
         canonical = canonical.rename(columns={"trade_date": "datetime", "ts_code": "instrument"}).set_index(["datetime", "instrument"])
         return quotes, canonical
 

@@ -27,6 +27,45 @@ class _DummyConn:
         return False
 
 
+@pytest.mark.parametrize("path", ["single", "chunked", "counts"])
+def test_minute_queries_keep_stock_predicates_in_native_character_type(monkeypatch, tmp_path, path):
+    """Exercise each actual query entry, without exporting or reading real data."""
+    code, day = "000001.SZ", date(2026, 9, 30)
+    queries = []
+
+    def read(sql, *args, **kwargs):
+        if "FROM market.kline_minute_raw" in sql:
+            queries.append((sql, kwargs["params"]))
+        if "FROM market.adj_factor" in sql:
+            return pd.DataFrame([dict(ts_code=code, trade_date=day, adj_factor=1.0)])
+        if "FROM market.stk_limit" in sql:
+            return pd.DataFrame([dict(ts_code=code, trade_date=day, prev_close=10.0,
+                                      up_limit_price=11.0, down_limit_price=9.0)])
+        return pd.DataFrame()
+
+    monkeypatch.setattr(authoritative, "_read_sql", read)
+    monkeypatch.setattr(authoritative.pd, "read_sql", read)
+    monkeypatch.setattr(authoritative, "get_conn", _DummyConn)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _: [code])
+    monkeypatch.setattr(authoritative, "load_calendar", lambda *_: ["2026-09-30 09:31:00"])
+    if path == "single":
+        authoritative._load_minute_raw(code, day, day, connection=object())
+    elif path == "chunked":
+        authoritative.export_stock_minute_csv_chunked(
+            snapshot_id="sql-only", start=day, end=day, csv_root=tmp_path)
+    else:
+        with pytest.raises(RuntimeError, match="no DB minute rows"):
+            authoritative.validate_minute_bin_against_db(
+                qlib_dir=tmp_path, start=day, end=day, compare_values=False)
+    assert len(queries) == 1
+    sql, params = queries[0]
+    predicate = "m.ts_code = %(code)s::bpchar" if path == "single" else "m.ts_code = ANY(%(codes)s::bpchar[])"
+    assert predicate in sql
+    assert "m.ts_code::text" not in sql
+    assert "m.trade_time >=" in sql and "m.trade_time <" in sql
+    assert params.get("code", params.get("codes")) == (code if path == "single" else [code])
+
+
 def _daily_csv_frame(code: str, dates: list[date]) -> pd.DataFrame:
     frame = pd.DataFrame(
         {
@@ -378,7 +417,7 @@ def test_authoritative_stock_export_exchanges_are_sh_sz_only() -> None:
         authoritative.normalize_stock_export_exchanges(["hk"])
 
 
-def test_authoritative_stock_universe_sql_enforces_qe_export_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_authoritative_stock_universe_sql_keeps_facts_not_eligibility(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_read_sql(sql: str, conn: object, params: dict[str, object]) -> pd.DataFrame:
@@ -405,31 +444,24 @@ def test_authoritative_stock_universe_sql_enforces_qe_export_filters(monkeypatch
     }
     sql = str(captured["sql"])
     assert "s.exchange = ANY(%(exchanges)s)" in sql
-    assert "s.list_status = 'L'" in sql
+    assert "s.list_status = 'L'" not in sql
     assert "s.list_date <= %(end)s" in sql
     assert "min_listed_days" not in sql
-    assert "market.stock_st" in sql
+    assert "market.stock_st" not in sql
     assert "BSE" not in sql
 
 
-def test_authoritative_stock_universe_requires_st_and_listing_filters() -> None:
-    with pytest.raises(ValueError, match="exclude all stocks"):
-        authoritative.resolve_stock_universe(
-            authoritative.StockUniverseConfig(
-                start=date(2024, 1, 1),
-                end=date(2026, 4, 28),
-                exclude_st=False,
-            )
-        )
-
-    with pytest.raises(ValueError, match="exclude delisted"):
-        authoritative.resolve_stock_universe(
-            authoritative.StockUniverseConfig(
-                start=date(2024, 1, 1),
-                end=date(2026, 4, 28),
-                exclude_delisted_or_paused=False,
-            )
-        )
+@pytest.mark.parametrize('key', [None, 'selection-v2'])
+def test_authoritative_stock_facts_ignore_pit_st_and_listing_filters(monkeypatch, key):
+    def read(sql, conn, params):
+        assert 'stock_universe_pit_spans' not in sql and 'stock_st' not in sql
+        assert 'list_status' not in sql
+        return pd.DataFrame({'ts_code': ['000861.SZ', '301396.SZ', '600811.SH', '200001.SZ', '900901.SH']})
+    monkeypatch.setattr(authoritative, 'get_conn', _DummyConn)
+    monkeypatch.setattr(authoritative.pd, 'read_sql', read)
+    assert authoritative.resolve_stock_universe(authoritative.StockUniverseConfig(
+        start=date(2024,7,1), end=date(2026,9,30), universe_key=key,
+        exclude_st=False, exclude_delisted_or_paused=False)) == ['000861.SZ', '301396.SZ', '600811.SH']
 
 
 def test_authoritative_explicit_bj_codes_fail_fast() -> None:
@@ -441,6 +473,60 @@ def test_authoritative_explicit_bj_codes_fail_fast() -> None:
                 ts_codes=["430047.BJ"],
             )
         )
+
+
+@pytest.mark.parametrize('method', ['load_daily_basic_panel', 'load_moneyflow_panel', 'load_sector_data_panel'])
+def test_h5_reader_never_crops_facts_by_ipo_st_or_current_listing(monkeypatch, method):
+    import backend.qlib_exporter.db_reader as subject
+    seen = []
+    class Captured(Exception):
+        pass
+    def read(sql, *args, **kwargs):
+        seen.append(sql)
+        assert 'stock_st' not in sql and 'list_status' not in sql
+        assert 'INTERVAL' not in sql
+        assert "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'" in sql
+        raise Captured()
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        execute = staticmethod(read)
+    class Connection(Cursor):
+        def cursor(self):
+            return Cursor()
+    monkeypatch.setattr(subject, 'get_conn', Connection)
+    monkeypatch.setattr(subject.pd, 'read_sql', read)
+    with pytest.raises(Captured):
+        getattr(DBReader(), method)(start=date(2024,7,1), end=date(2026,9,30),
+            exclude_st=True, exclude_delisted_or_paused=True)
+    assert len(seen) == 1
+
+
+def test_h5_router_resolves_fact_population_while_preserving_pit_identity(monkeypatch):
+    monkeypatch.setattr(qlib_router, '_ensure_stock_pit_universe_for_export', lambda **_: {'status': 'ready'})
+    monkeypatch.setattr(qlib_router, 'resolve_stock_universe', lambda _: ['000861.SZ', '600811.SH'])
+    result = qlib_router._resolve_h5_ts_codes_for_pit(stock_universe_mode='pit_spans', universe_key='selection',
+        start=date(2024,7,1), end=date(2026,9,30), exchanges=None, ts_codes=None)
+    assert result == (['000861.SZ', '600811.SH'], {'status': 'ready'}, 'selection')
+
+
+def test_daily_catalog_is_physical_and_pit_written_separately(tmp_path, monkeypatch):
+    (tmp_path / 'instruments').mkdir()
+    (tmp_path / 'calendars').mkdir()
+    features = tmp_path / 'features/600811.sh'
+    features.mkdir(parents=True)
+    (tmp_path / 'instruments/all.txt').write_text('600811.SH\t2024-07-02\t2024-07-02\n')
+    (tmp_path / 'calendars/day.txt').write_text('2024-07-01\n2024-07-02\n2024-07-03\n')
+    np.array([0, 10, 11, np.nan], dtype='<f4').tofile(features / 'close.day.bin')
+    monkeypatch.setattr(authoritative, '_load_pit_spans_for_all_txt', lambda **_: pd.DataFrame({
+        'ts_code': ['600811.SH'], 'eligible_start': [date(2024,7,2)], 'eligible_end': [date(2024,7,2)]}))
+    summary = authoritative.rewrite_stock_all_txt_from_pit_spans(bin_dir=tmp_path,
+        start=date(2024,7,1), end=date(2024,7,3), feature_frequency='day', allowed_bin_root=tmp_path.parent)
+    assert (tmp_path / 'instruments/all.txt').read_text() == '600811.SH\t2024-07-01\t2024-07-02\n'
+    assert (tmp_path / 'instruments/stock_universe.txt').read_text() == '600811.SH\t2024-07-02\t2024-07-02\n'
+    assert summary['quote_catalog_pit_clipped'] is False
 
 
 def test_missing_stk_limit_rows_use_versioned_board_and_st_rules() -> None:
@@ -631,13 +717,15 @@ def test_rewrite_stock_all_txt_applies_ipo_filter_without_deleting_bins(
     monkeypatch.setattr(authoritative, "get_conn", lambda: _DummyConn())
     monkeypatch.setattr(authoritative.pd, "read_sql", fake_read_sql)
 
+    original = (instruments / 'all.txt').read_bytes()
     summary = authoritative.rewrite_stock_all_txt_for_ipo_filter(bin_dir=tmp_path)
 
     assert summary["input_rows"] == 2
     assert summary["output_rows"] == 1
     assert summary["skipped_ipo_rows"] == 1
     assert (features / "close.1min.bin").exists()
-    assert (instruments / "all.txt").read_text(encoding="utf-8") == (
+    assert (instruments / 'all.txt').read_bytes() == original
+    assert (instruments / "stock_universe.txt").read_text(encoding="utf-8") == (
         "000001.SZ\t2024-01-02 09:30:00\t2026-04-28 15:00:00\n"
     )
     assert (instruments / "all_ipo_filter_summary.json").exists()

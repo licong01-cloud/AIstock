@@ -801,7 +801,10 @@ class ArtifactReadySourceBuilder:
         self.fetch_tdx_rows = fetch_tdx_rows or self._fetch_tdx_rows
         self.fetch_tushare_minute_rows = fetch_tushare_minute_rows or self._fetch_tushare_minute_rows
         self.fetch_tushare_index_rows = fetch_tushare_index_rows or self._fetch_tushare_index_rows
-        self.fetch_tushare_adj_factor_rows = fetch_tushare_adj_factor_rows or self._fetch_tushare_adj_factor_rows
+        # A live, dated response is market-wide. Bind the release fact population
+        # at the call site, before its frame adapter validates row semantics.
+        # Injected/frozen providers retain their one-date callback contract.
+        self.fetch_tushare_adj_factor_rows = fetch_tushare_adj_factor_rows
         self.fetch_tushare_daily_rows = fetch_tushare_daily_rows or self._fetch_tushare_daily_rows
         self.fetch_tushare_limit_reference = (
             fetch_tushare_limit_reference or self._fetch_tushare_limit_reference
@@ -1744,6 +1747,22 @@ class ArtifactReadySourceBuilder:
         derived_refs: list[CASRef] = []
         state: Mapping[str, LimitReferencePoint] = {}
         reference_cache: dict[tuple[str, date], LimitReferencePoint] = {}
+        rule_codes = frozenset(span.ts_code for span in snapshot.pit_snapshot.spans)
+
+        def rule_rows(rows: Iterable[Mapping[str, Any]], *, source: str):
+            # SOURCE retains all factual securities. Only this optional rule
+            # overlay has a PIT-only contract; never trim the frozen sources or
+            # the ordinary fact exporters to satisfy that narrower contract.
+            previous: tuple[str, date] | None = None
+            for row in rows:
+                key = _rule_row_key(row, source=source)
+                if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", key[0]) is None:
+                    raise ArtifactReadyCoverageIncomplete(f"{source} row has an invalid stock code")
+                if previous is not None and key <= previous:
+                    raise ArtifactReadyCoverageIncomplete(f"{source} rows must be ordered and unique")
+                previous = key
+                if key[0] in rule_codes:
+                    yield row
 
         def resolve_reference(code: str, required_day: date) -> LimitReferencePoint | None:
             key = (code, required_day)
@@ -1842,15 +1861,13 @@ class ArtifactReadySourceBuilder:
                     trading_dates=trading_dates,
                     partition_start=start,
                     partition_end=end,
-                    database_limit_rows=database_limits,
-                    daily_rows=_merge_rule_overlay_rows(
-                        database_daily,
-                        daily_overlay,
+                    database_limit_rows=rule_rows(database_limits, source="stk_limit"),
+                    daily_rows=rule_rows(
+                        _merge_rule_overlay_rows(database_daily, daily_overlay, source="kline_daily_raw"),
                         source="kline_daily_raw",
                     ),
-                    adj_factor_rows=_merge_rule_overlay_rows(
-                        database_adj,
-                        adj_overlay,
+                    adj_factor_rows=rule_rows(
+                        _merge_rule_overlay_rows(database_adj, adj_overlay, source="adj_factor"),
                         source="adj_factor",
                     ),
                     reference_state=state,
@@ -1987,7 +2004,9 @@ class ArtifactReadySourceBuilder:
         )
         if not descriptors:
             raise ArtifactReadyCoverageIncomplete("sealed adj_factor partitions are missing")
-        codes = sorted({span.ts_code for span in snapshot.pit_snapshot.spans})
+        codes = sorted({span.ts_code for span in snapshot.pit_snapshot.spans}.union(
+            code for code, _ in self._monthly_quote_days(view, checkpoint=checkpoint)
+        ))
         entries: list[Mapping[str, Any]] = []
         provider_refs: list[CASRef] = []
         derived_refs: list[CASRef] = []
@@ -2012,8 +2031,10 @@ class ArtifactReadySourceBuilder:
             with _managed_partition_rows(view, seed_descriptors[0]) as rows:
                 for raw in rows:
                     row = _normalize_adj_factor_row(raw, source="database")
-                    if row["ts_code"] not in series_hashers or row["trade_date"] > snapshot.official_cutoff:
+                    if row["trade_date"] > snapshot.official_cutoff:
                         raise ArtifactReadyCoverageIncomplete("QFQ construction fact escapes PIT/cutoff")
+                    if row["ts_code"] not in series_hashers:
+                        continue
                     seed_rows.append(row)
             seen = set()
             for row in sorted(seed_rows, key=lambda value: (value["ts_code"], value["trade_date"])):
@@ -2078,7 +2099,12 @@ class ArtifactReadySourceBuilder:
                 if not missing:
                     continue
                 try:
-                    raw_provider = self._provider_call(self.fetch_tushare_adj_factor_rows, day)
+                    if self.fetch_tushare_adj_factor_rows is None:
+                        raw_provider = self._provider_call(
+                            self._fetch_tushare_adj_factor_rows, day, frozenset(codes)
+                        )
+                    else:
+                        raw_provider = self._provider_call(self.fetch_tushare_adj_factor_rows, day)
                 except Exception as exc:
                     self._raise_provider_failure(
                         exc,
@@ -2092,6 +2118,13 @@ class ArtifactReadySourceBuilder:
                     )
                 provider: dict[tuple[str, date], Decimal] = {}
                 for raw in raw_provider:
+                    # A dated provider response is market-wide, not a release
+                    # population. Recognizable unrelated instruments (including
+                    # BJ, B shares and funds) cannot impose factor requirements.
+                    # Malformed identities and every in-scope value stay strict.
+                    raw_code = str(raw.get("ts_code", "")).strip().upper() if isinstance(raw, Mapping) else ""
+                    if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", raw_code) and raw_code not in series_hashers:
+                        continue
                     row = _normalize_adj_factor_row(raw, source="tushare")
                     key = (row["ts_code"], row["trade_date"])
                     if key[1] != day or key[0] not in series_hashers:
@@ -2479,6 +2512,30 @@ class ArtifactReadySourceBuilder:
         total["pit_excluded_rows"] += excluded["pit_excluded_rows"]
         return coverage_by_key, gaps_by_code, excluded
 
+    def _monthly_quote_days(self, view: ArtifactSourceView, *, checkpoint: Callable[[], None]) -> tuple[tuple[str, date], ...]:
+        if self.month_start is None:
+            return ()
+        from .monthly_quote_population import observed_quote_days
+
+        def rows():
+            for descriptor in view.descriptors("kline_daily_raw"):
+                match = _DATE_PARTITION.fullmatch(str(descriptor.get("partition_key", "")))
+                if match is None:
+                    raise ArtifactReadyCoverageIncomplete("monthly daily partition identity is invalid")
+                if (date.fromisoformat(match.group("end")) < self.month_start
+                        or date.fromisoformat(match.group("start")) > end):
+                    continue
+                with _managed_partition_rows(view, descriptor) as values:
+                    yield from values
+                checkpoint()
+
+        # Only sealed, observed dates are added, never listing-to-cutoff spans.
+        # The trading calendar remains independently frozen/validated below.
+        end = date(self.month_start.year + self.month_start.month // 12,
+                   self.month_start.month % 12 + 1, 1) - date.resolution
+        days = tuple(self.month_start + date.resolution * i for i in range((end - self.month_start).days + 1))
+        return observed_quote_days(rows(), trading_days=days)
+
     def _minute_entries(
         self,
         view: ArtifactSourceView,
@@ -2515,6 +2572,12 @@ class ArtifactReadySourceBuilder:
             bucket_count=self.profile.minute_code_bucket_count,
         )
         frozen_trading_dates = frozenset(trading_dates)
+        quote_days = self._monthly_quote_days(view, checkpoint=checkpoint)
+        quotes_by_bucket: dict[int, list[tuple[str, date]]] = {}
+        for code, day in quote_days:
+            if day not in frozen_trading_dates:
+                raise ArtifactReadyCoverageIncomplete("observed quote date escapes frozen trading calendar")
+            quotes_by_bucket.setdefault(_minute_bucket(code, self.profile.minute_code_bucket_count), []).append((code, day))
         suspension_daily_rows = self._suspended_daily_facts(
             view, suspended=suspended, trading_dates=trading_dates, checkpoint=checkpoint,
         )
@@ -2525,13 +2588,13 @@ class ArtifactReadySourceBuilder:
             start = date.fromisoformat(match.group("start"))
             end = date.fromisoformat(match.group("end"))
             bucket = int(match.group("bucket"))
-            expected = tuple(
+            expected = tuple(sorted(set(
                 eligibility.iter_expected(
                     bucket=bucket,
                     start=start,
                     end=end,
                 )
-            )
+            ).union(key for key in quotes_by_bucket.get(bucket, ()) if start <= key[1] <= end)))
             coverage_by_key, gaps_by_code, excluded = self._scan_minute_database_partition(
                 view,
                 descriptor,
@@ -2540,7 +2603,9 @@ class ArtifactReadySourceBuilder:
                 suspension_daily_rows=suspension_daily_rows,
                 total=total,
                 derived_refs=derived_refs,
-                allowed_codes=frozenset(eligibility.bucket_codes.get(bucket, ())),
+                allowed_codes=frozenset(eligibility.bucket_codes.get(bucket, ())).union(
+                    code for code, _ in quotes_by_bucket.get(bucket, ())
+                ),
                 trading_dates=frozen_trading_dates,
                 partition_start=start,
                 partition_end=end,
@@ -3147,7 +3212,9 @@ class ArtifactReadySourceBuilder:
                 raise
             raise IndexProviderUnavailable("Tushare index request failed") from exc
 
-    def _fetch_tushare_adj_factor_rows(self, day: date) -> Sequence[Mapping[str, Any]]:
+    def _fetch_tushare_adj_factor_rows(
+        self, day: date, stock_codes: frozenset[str]
+    ) -> Sequence[Mapping[str, Any]]:
         provider = self._tushare.provider()
         try:
             frame = provider.adj_factor(
@@ -3162,6 +3229,7 @@ class ArtifactReadySourceBuilder:
                 start=day,
                 end=day,
                 max_rows=MAX_TUSHARE_ADJ_FACTOR_ROWS_PER_DAY,
+                stock_codes=stock_codes,
             )
         except Exception as exc:
             if _is_40203(exc):
@@ -3281,6 +3349,7 @@ def _bounded_tushare_records(
     start: date,
     end: date,
     max_rows: int,
+    stock_codes: frozenset[str] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     """Validate a bounded provider frame before allocating record dictionaries."""
 
@@ -3302,6 +3371,19 @@ def _bounded_tushare_records(
         raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response memory size is unavailable") from exc
     if not 0 <= frame_bytes <= MAX_TUSHARE_PROVIDER_FRAME_BYTES:
         raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response memory size exceeds bound")
+    if stock_codes is not None:
+        # Bound the full response envelope first, but do not impose economic,
+        # timestamp or JSON-value requirements on recognizable unrelated stocks.
+        # Unknown/malformed identities are retained so they still fail strictly.
+        try:
+            keep = []
+            for value in frame["ts_code"].tolist():
+                code = str(value).strip().upper()
+                keep.append(not (re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", code) and code not in stock_codes))
+            frame = frame.loc[keep]
+            row_count = len(frame)
+        except Exception as exc:
+            raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response instrument projection failed") from exc
     try:
         date_values = tuple(frame[date_column].tolist())
     except Exception as exc:

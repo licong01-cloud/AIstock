@@ -38,8 +38,8 @@ DB_CFG = dict(
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
     application_name="AIstock-ingest-full-minute",
 )
-SUPPORTED_EXCHANGES = {"sh", "sz", "bj"}
-EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
+SUPPORTED_EXCHANGES = {"sh", "sz"}
+EXCHANGE_MAP = {"sh": "SSE", "sz": "SZSE"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,10 +94,14 @@ def normalize_ts_code(code: str) -> Optional[str]:
         suffix = "BJ"
     else:
         suffix = "SZ"
-    return f"{code}.{suffix}"
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    normalized = f"{code}.{suffix}"
+    return normalized if is_supported_stock_code(normalized) else None
 
 
 def fetch_codes(exchanges: Iterable[str]) -> List[str]:
+    from backend.services.data_integrity.stock_scope import stock_exchange_selection
+    exchanges = stock_exchange_selection(exchanges)
     result: List[str] = []
     seen = set()
     for exch in exchanges:
@@ -227,10 +231,15 @@ def _to_trade_date_from_ts(value: Any) -> Optional[dt.date]:
 
 
 def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    if not is_supported_stock_code(ts_code):
+        return 0, None
     sql = (
         "INSERT INTO market.kline_minute_raw (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
         "VALUES %s ON CONFLICT (ts_code, trade_time, freq) DO UPDATE SET "
-        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li"
+        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li "
+        "WHERE ROW(market.kline_minute_raw.open_li,market.kline_minute_raw.high_li,market.kline_minute_raw.low_li,market.kline_minute_raw.close_li,market.kline_minute_raw.volume_hand,market.kline_minute_raw.amount_li) "
+        "IS DISTINCT FROM ROW(EXCLUDED.open_li,EXCLUDED.high_li,EXCLUDED.low_li,EXCLUDED.close_li,EXCLUDED.volume_hand,EXCLUDED.amount_li) RETURNING trade_time::date"
     )
     values: List[Tuple[Any, ...]] = []
     last_ts: Optional[str] = None
@@ -252,16 +261,19 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
     values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, values, dataset="kline_minute_raw", source="tdx_api")
     _commit_if_needed(conn)
     return len(values), last_ts
 
 
 def insert_minute_init(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    if not is_supported_stock_code(ts_code):
+        return 0, None
     sql = (
         "INSERT INTO market.kline_minute_raw (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
-        "VALUES %s"
+        "VALUES %s RETURNING trade_time::date"
     )
     values: List[Tuple[Any, ...]] = []
     last_ts: Optional[str] = None
@@ -283,8 +295,8 @@ def insert_minute_init(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[
     values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
+    from backend.services.data_integrity.writes import changed_values
+    changed_values(conn, sql, values, dataset="kline_minute_raw", source="tdx_api")
     _commit_if_needed(conn)
     return len(values), last_ts
 

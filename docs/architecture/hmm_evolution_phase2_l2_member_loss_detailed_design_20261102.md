@@ -1,0 +1,149 @@
+# 申万L2成员损失：单候选与配对控制详细设计
+
+> v1.2；2026-11-06状态同步；F2设计文档；父蓝图§1.26/§1.27。状态：设计#7008及源码#7013均已合入，正式8/8 fits、125日完整预测与有界双入口完成。该研究有亏损排序增量，未证明经济增益；不重跑旧8-fit。§13保留合入前实施历史，当前终态见§14。
+> 2026-11-02接续授权：用户要求“执行文档的提交合入，开始下一步的实施”，本设计进入源码实施；实际源码、fit消耗、结果与生产状态分别记录，不将授权或文档合入记成训练完成。
+
+## 1. Background / 目标和依据
+
+终极目标是申万L2信号为QE及后续荐股/模拟盘带来可检验的收益增量或可接受收益代价下的损失降低。原自然新买消费的6.96bp增量不足以推广；原loss在实际新买股票上的日均亏损IC仅0.0382。不能继续靠调κ、改禁买阈值或把持有期中位数直接当新horizon。
+
+[零fit可行性报告](../analysis/hmm_l2_member_loss_target_feasibility_20261102.md)确认：同成员/权重的组合损失B与成员损失C并不等价，96,972个可比键的平均抵消量0.804122个百分点；真实新买队列中C与个股亏损的实现关联高于A/B。这是新的可检验假设，尚不是预测或经济优势。
+
+## 2. Scope / Non-goals
+
+一个成员损失Ridge候选C和一个配对组合损失Ridge控制B，原20D、季度训练窗口、10日horizon和Ridge参数固定。旧A模型/预测/M0/M1不覆盖、不重训。研究不修改个股Alpha、股票池、QE策略、执行算法或其他模块。
+
+不增加L1/大盘模型、horizon搜索、阈值/seed搜索、校准器或新消费公式；不把新值放进probability或旧preset_A。自然停牌、合法停发、单成员行业不构成全模型失败；训练标签不可用与预测输入不可用分开。只读冻结文件，不用数据库填补文件；本包不申请生产DDL/DML、API发布或日更激活。
+
+## 3. Architecture / 复用和允许修改
+
+沿现有正式HMM frozen reader取得共享release、PIT、security、calendar及报价身份；复用整数厘/复权前缀解码和严格前置市值事实能力。按as-of冻结成员及权重，构造配对B/C标签；同一份20D、相同共同样本和scaler输入，各拟合B/C；封存模型后读评价事实，交付完整L2预测及同口径比较。
+
+拟实施文件限定为`backend/services/hmm_risk/risk_l2_member_loss.py`、`scripts/hmm_risk/run_risk_l2_member_loss.py`、`backend/tests/hmm_risk/test_risk_l2_member_loss.py`；必要的现有HMM共享输入函数扩展先列精确路径，不复制reader实现。原日期文件/数据库20D生成能力保持；研究采用已有文件输入及历史快照，不将历史验证冒充当前在线消费。
+
+## 4. Contracts D1 / L2-MEMBER-LOSS-D1：唯一目标及配对控制
+
+决策日`t`，`a=prev_open(t)`；`M[t,s]`是在a处于共享PIT股票池、正式归属L2行业s且a未被既有正式suspend reader判为全天停牌的股票集合。日内停牌不自动等于全天无行情，不据此删除当日有真实收盘价的成员。不可根据t之后是否停牌、收益或QE入选结果修改M。取截至a最新真实流通市值`v[a,i]>0`，沿原正式市值来源/无效事件语义，`w[t,i]=v[a,i]/sum(M的v)`，十日期间不再平衡。
+
+原生价格P采用C-010现有严格解码，唯一整数厘不能恢复时显式失败。`R[t,i]=P[t+10,i]/P[t,i]−1`，交易日偏移来自同一冻结calendar；不把特征as-of、执行日和标签锚点再次滞后。R是原生价格参考收益，不宣称分红或交易费用后的持仓回报。
+
+- 配对控制：`B[t,s]=max(0,−sum_i w[t,i]*R[t,i])`。
+- 唯一候选标签：`C[t,s]=sum_i w[t,i]*max(0,−R[t,i])`。
+- 诊断：`U[t,s]=sum_i w[t,i]*max(0,R[t,i])`；逐行验证`U−C=sum(wR)`与`C−B=min(C,U)`。
+
+旧A为原逐日C-010行业收益复合路径，只读保留其冻结模型和结果。A与B有成员/再平衡/旧价格精度差异，不能把C与旧A的差异全部归因为取负部顺序；B与C才是本研究的严格配对控制。复权口径仅报告敏感性，不训练第二候选或按本轮相关大小切换正式目标。
+
+## 5. Contracts D2 / L2-MEMBER-LOSS-D2：输入、窗口和合法NA
+
+显式冻结release沿原季度包：manifest canonical=`590b3b204085373ff4bd101efc50a45c6dd3844200200f987f9bc783e0c6b394`，manifest文件SHA=`321a966c55822db5777dda4ef0091422e8a1877b7bcb6c27ffb763e9a2441c73`；generation=`20260930-monthly-v2-unified-correction-4ab0b48642c3-margin1-facts1-suspend1-suspendfacts1`，cutoff=2026-09-30。不解析别的active版本。
+
+原准备包`F:/Dev/AIstock_runtime/hmm_l2_risk_rolling/20261026/repaired_20261028/prepare_v2`及其中feature canonical=`94be96e74fb906098b6c9691fccc33895989586330af94b2243af046baf96b62`保持只读。C-013/security/provider/calendar沿原request正式pins；不新建行业编号、映射或数据候选。完整131行业文本目录保留。
+
+| vintage | 训练事实窗口 | 标签必须成熟至 | 预测范围 |
+|---|---|---|---|
+| 2026Q2 | 2023-04-01..2026-03-31 | 2026-03-31 | 2026-04-01..06-30 |
+| 2026Q3 | 2023-07-01..2026-06-30 | 2026-06-30 | 2026-07-01..09-30 |
+
+共同训练mask为原该vintage成熟/有效标签键、原20D有限特征键及B/C标签有效键的交集；B/C严格同mask，不根据任一拟合结果筛样本。前期scratch零fit参考为Q2 88,930行/714日、Q3 89,570行/715日；正式reader实施后读回为88,929/714、89,569/715。各少1行的原因及精确键见§13，不据此改变训练窗口或补价；这些数量是输入事实，不是新增最低样本量门禁。
+
+在任何标签价格读取之前，先按冻结日历限定`pos(t)+10<=pos(train_end)`；不得先读取越过训练截止的outcome再过滤。Q2与Q3分别截断，不因Q3后来已知而补写Q2的未成熟标签。
+
+无成员、合法停牌端点NA、未成熟等分别记录。固定成员任一个必要端点不可定价时，整个对应B/C标签为合法NA；不补零、前填、伪造停牌报价或移除该股票后重归一化。保持成员、缺失股票及权重损失范围，披露完整案例分析的选择偏差。合法NA不阻断其他行业/日期的训练和预测，不要求每个行业历史上出现全部状态。未知缺失、重复/冲突身份、非有限必要事实与hash漂移仍fail closed，并具体定位键；不能泛化为所有缺失都合法。
+
+预测保持2026-04-01..09-30完整125日×131=16,375行/模型，保留availability/reason。标签评价止于2026-09-30内已成熟的115日，其余10日1,310个标签保持未成熟；不为补齐标签读取10月outcome。`historical_as_known=false`、`untouched_holdout=false`，这是已消费开发历史，不能恢复未使用测试资格。
+
+## 6. Contracts D3 / L2-MEMBER-LOSS-D3：算法和8-fit预算
+
+20D顺序、原train-only标准化、常数列处理及日期等权沿既有loss设计：总N行、D日期、当日n_d行的权重`N/(D*n_d)`；scaler仅在该vintage共同训练mask上计算未加权均值/std(ddof=0)，B/C共享同一scaler。截距不惩罚。
+
+唯一估计器`Ridge(alpha=1.0, fit_intercept=True, copy_X=True, max_iter=None, tol=1e-4, solver='svd', positive=False, random_state=42)`。保留raw输出，正式损失用`clip(raw,0,1)`物理投影；不以clip吞掉NaN/inf。B/C参数完全相同，不搜索更合适的alpha或窗口。
+
+沿旧loss正式acceptance的现存Conda base数值环境：Python 3.13.5、NumPy 2.3.3、SciPy 1.16.3、scikit-learn 1.8.0、threadpoolctl 3.6.0，BLAS/OpenMP线程数1。启动前只读核对，不安装/升级依赖或改AIstock服务环境；训练子进程的线程条件只用于数值复现，结果和模型身份仍保存在文件，不绑定后端环境变量或触发重启。
+
+每process拟合2个vintage×2个目标=4次，双fresh-process总上限**8 fits**。C是唯一新候选；B是相同样本/模型/窗口的控制，并非恢复退役训练链。旧A/M0/M1零fit。预算比旧单目标4-fit多4次，原因是避免把共同样本减少的效应误当标签改善；本设计不假称已经获旧预算覆盖。实际消耗从每次fit开始累计，失败不自动重试、不替换候选，最多8次。
+
+## 7. Contracts D4 / L2-MEMBER-LOSS-D4：模型、资产和消费者隔离
+
+新标识为`hmm_risk_l2_member_terminal_loss_ridge_v1`，控制为`hmm_risk_l2_fixed_cohort_portfolio_loss_ridge_v1`；独立schema输出`expected_member_loss`或`expected_fixed_cohort_portfolio_loss`、raw值、trade/as_of、availability/reason及vintage/input/model身份，不输出假概率、warning或假中性值。
+
+载体包含目标公式/价格口径、成员/权重来源、共同mask、特征/标签/训练期/scaler/参数hash、源码和数值环境；复用现有receipt，不建新的registry/数据库表。两process比较封闭参数与输出，时间戳不混进数值identity。旧loss/M0/M1和QE已接资产的字节/hash保持。
+
+推断核只接已验证的20D/scaler/参数，保持既有文件与数据库来源分离。用现有真实历史快照在2026-04-01/07-01各131行验证两入口同核行为，不查库填文件，也不把历史快照叫实时验收。没有新API/UI、环境变量、日更调度、服务重启或生产采用。该vintage不适用于11月在线荐股/模拟盘。
+
+## 8. Contracts D5 / L2-MEMBER-LOSS-D5：以股票风险识别决定是否继续
+
+先封存两process的B/C完整预测，再评价；原A只读。主研发比较在已存在的B0自然新买去重队列进行，沿已冻结股票→L2映射，将行业预测映射至实际买入股票，以原QE同release的复权close十日负收益为共同参考，不含实际成交费用。不得用未来股票亏损挑选行业、日期、股票或新消费阈值。
+
+主指标为共同可定义日期上`Delta_IC=mean_d(Spearman(C预测,个股10日亏损)−Spearman(B预测,同一批个股10日亏损))`；同一日期两臂必须同股票。少于两股、预测常数或实际损失常数时保留undefined并列出原因，不能填0/0.5。跨seed去重的日期—股票是主视图；各seed为敏感性，不当作独立市场。
+
+研发取舍建议为`Delta_IC>0`才继续讨论单次QE消费验证；否则结束本候选。它不是生产推广阈值或显著性要求，不新增每季度/每行业全部为正的AND门。报告原A同样本表现；即使C优于配对B，若未优于现有A，必须明确没有交付更好的现成版本，不能建议替换。
+
+同时报告：各季度及日期覆盖；B/C各自目标的日期等权MSE/MAE及训练均值参照；全部合法行和共同交集；旧A同股票IC；高/低预测风险对应的未来亏损和正收益；前轮实际持仓损失关系及右截尾。MSE改善不能替代股票风险识别，风险与收益兼有的股票不能直接变成禁买依据。不计算一个事后“完美策略收益”，不拟合第二上行模型，不重新提交QE账户。
+
+有限正增量、负结果、不可定义及证据不足均完整交付。无论是否继续，已消费历史和回溯分类限制保留；不能宣称收益已证实或forward-confirmed。真正账户效果由QE窗口后续按其消费合同执行。
+
+## 9. Contracts D6 / L2-MEMBER-LOSS-D6：连续交付和终止
+
+设计包已完成零fit目标对照与设计审修，并随PR #7008合入。当前实施包连续完成HMM源码/直接测试→多轮审修及必要门禁→按授权交付源码→干净固定commit上的正式8-fit→完整预测/有界双入口→结果分析与单一后续结论，不将adapter、测试、预检拆成小研发阶段。
+
+遇未知输入缺失/身份冲突在fit前停止并给精确键；正式fit失败即停止，保留真实消耗；达到8-fit上限不重试；效果无新增价值则结束，不自动换horizon、参数、模型或消费公式。合法市场缺失按D2逐标签处理，不作为全模型拒收理由。其他业务模块源码仍由对应owner修改。
+
+## 10. Implementation Plan / Verification Plan
+
+正式代码复用现有reader，scratch分析器不能直接复制成生产路径。先验证同成员/同mask标签及成熟边界，再实现一个配对执行器和独立预测schema。测试仅覆盖真实保护：PIT前置、来源alias/市值无效事件、整数厘/前缀编码、单成员恒等、停牌合法NA与未知缺失区别、完整131、train-only scaler/样本权重、8-fit计数/无重试、旧schema拒绝误用及原资产不改。
+
+两轮作者审核分别复核数学/因果边界及接口/预算/失败路径。局部使用新增直接测试、Ruff/compile、scope/ownership、HMM最小相关切片及L0；宽矩阵交CI/Nightly，不修改CI、noxfile或test plan。正式研究另用两个fresh-process，不把单元测试fit计为正式研究，也不能把正式失败伪装为测试重试。
+
+### Design Acceptance Index
+
+F-011：目标、样本、预算及风险识别评价（D1/D2/D3/D5）；F-012：身份、合法NA、双入口及新旧隔离（D2/D4）；F-013：完整交付、owner边界与停止（D6）。本索引验收设计与源码合同完整性，真实研究结果、双入口运行及生产状态另列§13，不以源码/文档PASS冒充模型成功。
+
+### Design Acceptance Matrix
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-011 | backend/services/hmm_risk/risk_l2_member_loss.py：pair_target/training_rows/fit_pair/cohort_metrics/evaluate | backend/tests/hmm_risk/test_risk_l2_member_loss.py；18 passed；同mask/因果成熟/失败前置/配对分母直接测试；§13正式文件样本读回 | VERIFIED_SOURCE | 无 |
+| F-012 | 同service：FrozenMemberSource/provider_path/validate_model/infer_prepared | backend/tests/hmm_risk/test_risk_l2_member_loss.py：alias/停牌NA/无回退/旧schema拒绝/两个carrier；§14实际131目录与有界双入口终态 | VERIFIED_SOURCE | 无 |
+| F-013 | 同service：execute_child/close_processes；scripts/hmm_risk/run_risk_l2_member_loss.py | backend/tests/hmm_risk/test_risk_l2_member_loss.py：封闭4模型、8-fit上限/失败不重试；python -m nox -s l0；§14正式8/8及结果，非生产采用 | VERIFIED_SOURCE | 无 |
+
+## 11. Risks / Rollout / Rollback / Production Gates
+
+C可能只是放大波动、无法由现有20D预测；行业级信号仍不能区分同业股票。合法停牌标签NA会产生完整案例偏差；模型不因此被宣告失败，但效果必须披露这种偏差。原生价格未包含分红费用，实际股票参考采用复权close，二者语义不同，不把代理损失当账户净损失。当前开发历史已经消费，不能用重复对照制造未使用holdout。
+
+若候选无价值，保持原资产/接口并交负结果，不增加新的候选。发布/回滚以是否显式使用新schema控制，不删除旧成果。`production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_gates=noop`、`dataset/profile_write=false`、`runtime_activation=false`、`backend_restart_required=false`（本次文档交付）。后续源码runtime分类按实际changed-files重新计算，不继承文档的none。
+
+## 12. 设计审修与DESIGN-COMPLIANCE-001
+
+第一轮：核对真实分析的成员/权重、完整NA和样本量；明确B/C须同mask拟合，将原拟议单目标4-fit改为带配对控制的8-fit，避免把样本改变归因于标签。第二轮：纠正价格口径和共同可定义日期，限定主评价为实际候选股票亏损辨别；保留旧A、上行机会、已消费历史和合法停牌边界。不是独立第三方审核。
+
+逐项符合性：完整交付指定目标对照和精确设计，未报源码/模型完成；所有NA/undefined/负面结果保留，无默认安全值；新目标/控制/预算明确列出，不改旧批准合同；只提出本研究的一个取舍规则，不加生产审批、额外显著性/覆盖门槛或全行业合取要求。设计F2验收与最终diff检查结果在交付时记录。
+
+设计交付验证：`aistock_feature_workflow.py validate --design <本文件> --tier F2 --format summary` PASS（3项/3行，warnings=0）；三份文档`git diff --check`通过；文档PR #7008已合入，merge=`c619a0a721806fcd088f6fa25e8a3fc410e510bc`。该记录仅指设计交付，不将其视为后续源码或模型验收。
+
+## 13. 实施状态与实际验证
+
+实施工作树为`feature/hmm-l2-member-loss-20261102`。新增service、CLI及直接测试均限定在§3三条HMM路径；复用现存正式reader与Ridge数值核，不修改共享reader、QE、数据集或服务。
+
+实际新买队列只读文件字节SHA=`4da038f25d37e87f407ab21bec1768eccba202164f517093782bcedb3b53da02`；旧A预测字节SHA=`75250a22ea24aef564fc40c265744855122c9f95d244d9a03416e8025e9dd267`。两者进入request固定身份；个股10日参考收益由同release Qlib重新读取，不把scratch舍入结果当正式标签。
+
+首轮真实prepare在fit前发现原包provider文件路径指向已清理工作树，记录0次attempt。新CLI要求显式`--provider-absence-manifest <绝对路径>`，只允许原canonical SHA=`494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba`；当前仓库正式文件与此一致。只改变明确的文件定位，不改变原feature/request字节、authority身份或任何数据，禁止自动寻找替代文件或回退。
+
+两轮作者审修已修正：源码request字节pin不能混用feature request canonical；评价主指标不能被episode局部变量覆盖；文件入口必须复用正确的文件hash reader；封闭回执必须包含两个vintage的全部四模型及完整预测grid，不能仅凭声明fit数量通过。另补齐undefined原因、B/C共同日期均值及旧A三方同股票同日期对照，避免不同分母的指标误比较。审核不是独立第三方背书。
+
+当前已通过18项直接测试、29项PIT/schema/security切片、Ruff、py_compile及L0。canonical实际changed-files分类为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，不能沿用文档的none。源码fresh-process import已覆盖hmm_risk/health及新依赖；本研究无runtime activation或服务操作，源码合入与任何生产运行验收分别报告。
+
+正式文件prepare已在固定源码`016c47218b5a2f861edeb893815f931f35c27750`完成，准备包为`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/prepare_v2/prepared.json`，canonical SHA=`cb889ddc486ed4ebea6e9278423bcaaa87245b9ce80a3be64829b29b6ee9b574`，实际读取10,406个已钉住文件，数据库/数据集写入为0。两季度共同mask分别88,929行/714日、89,569行/715日。额外1个合法NA键均为`2026-01-12/801178.SI`：`603056.SH`在as-of 01-09只有日内停牌且收盘有效，正式reader保留该成员；01-12及01-26的必要端点为全天停牌NaN，故整个标签NA（缺失权重约2.3715%），不移除该股重归一化。先前scratch把日内停牌也当全天排除而得到42成员，正式reader为43成员；以原正式停牌语义为准，不要求数据窗口补造报价。
+
+合入前最终审修将两个vintage完整输入/共同mask检查移至首个fit前，Q3错误不得先消耗Q2预算；之后封存4模型才读取评价结果。当时源码PR #7013已创建，正式研究消耗为0/8；以下preflight及待运行表述均保留该历史时间点，当前终态见§14。
+
+固定源码`0b963509e`的正式CLI `preflight`已通过：`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/preflight_v1.json`，两个vintage的共同mask均完成前置验证；`fits=0`、`evaluation_outcomes_read=false`、`database_access=false`、`runtime_action=false`。源码PR后续文档状态提交不改变该preflight对应的实现，正式研究尚未启动。
+
+## 14. 已完成研究终态及新release任务边界
+
+#7013合入`2866c1bd02dd0aac0627245a854605fd02f83377`后，按固定源码完成双fresh-process共8次拟合，无重试，两process字节一致。完整125日×131行业=16,375行/臂，B/C共同mask分别88,929/714日和89,569/715日，scaler相同。评价15,063个标签可用、2个合法端点NA、1,310个未成熟；旧A/M0/M1和全部原资产未覆盖。
+
+真实新买同股票/同日期99日上，A/B/C日均亏损Rank IC分别0.038217/0.032329/0.078232，C−B=+0.045903；Q2/Q3增量分别+0.042852/+0.050044。C全期目标MSE skill约4.4198%。但高预测风险组仍约50.17%上涨，不能据此禁买、套1-p或声称收益已证明。完整结果：`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/result_summary_v1.md`；acceptance canonical=`ac7da595ce37ec827255c784d462069899c05337233c46ee82133a4bcefc6cf6`。结果在本次仅只读引用，不另建历史账本。
+
+2026-04-01/07-01各131行的历史文件/数据库快照双入口已验证，最大数值差约2.838e-10/2.202e-10，未实时查库。QE_READY=NOT_EVALUATED、economic_value_confirmed=false；未执行新QE任务或生产采用。原设计8-fit预算至此耗尽。
+
+用户2026-11-06批准执行[新release/Q4连续包](hmm_evolution_phase2_l2_member_release_q4_detailed_design_20261106.md)：仅新增Q4 B/C×双process共4-fit，不改变本合同的旧训练/模型/结果身份。新release推断已真实重新读取输入，未将旧prepared/hash换绑；正式20D预检、旧季度四次零fit重推及新Q4 4/4 fits均已完成，各臂17日×131完整可用，预算耗尽。原C-013边界后的分类仅显式使用同release共享membership/code map，没有改变本研究训练分类或资产。新数据全行业125日C−B Rank IC=+0.068984，与本节原真实新买99日口径不同；Q4只有7个成熟日、C−B=−0.003366，另10日未成熟。随后零fit接续重核固定新买队列，主口径99日仍+0.045903，未把数据更新称为模型提升；142日C文件已交付，9/30和10/08两个decision完成真实DB/文件有界核验。机制诊断控制原AF后三seed增量并非全部正，经济采用仍未评估。10/29完成审计已由HMM复验PASS，当前forward分类时效仍待闭合；不把历史current-revision或文件研究分类冒充在线就绪。完整新结果及指针只引用新设计§11.1，不覆盖本节旧终态或要求重跑旧8-fit。

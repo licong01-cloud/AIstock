@@ -17,6 +17,10 @@ import datetime as dt
 import json
 import os
 import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import uuid
 from typing import Any, Dict, Optional
 
@@ -67,7 +71,8 @@ def _ensure_session_tune(conn, enabled: bool) -> None:
 
 def _get_max_week_end_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(week_end_date) FROM market.kline_weekly_qfq")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(week_end_date) FROM market.kline_weekly_qfq WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -136,14 +141,15 @@ def _aggregate_weekly(conn, start_date: dt.date, end_date: dt.date, job_id: uuid
     在查询区间内的最大复权因子（等效于以最新日期为基准的前复权）。
     """
 
+    from backend.services.data_integrity.stock_scope import stock_scope_sql
     stats = {"total_weeks": 0, "inserted_rows": 0}
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             WITH adj_latest AS (
                 SELECT ts_code, MAX(adj_factor) AS adj_max
                 FROM market.adj_factor
-                WHERE trade_date BETWEEN %s AND %s
+                WHERE trade_date BETWEEN %s AND %s {stock_scope_sql('ts_code')}
                 GROUP BY ts_code
             ),
             daily AS (
@@ -162,7 +168,7 @@ def _aggregate_weekly(conn, start_date: dt.date, end_date: dt.date, job_id: uuid
                     ON a.ts_code = r.ts_code AND a.trade_date = r.trade_date
                   LEFT JOIN adj_latest al
                     ON al.ts_code = r.ts_code
-                 WHERE r.trade_date BETWEEN %s AND %s
+                 WHERE r.trade_date BETWEEN %s AND %s {stock_scope_sql('r.ts_code')}
             ), agg AS (
                 SELECT
                     ts_code,

@@ -1,0 +1,422 @@
+{
+  "actual": "qe_20261026_130549_50d9全部9Loop绑定rdagent-node1且node_parallelism=2，local WSL空闲；代码已支持纯回测4但任务创建仍依赖手填节点及并行度。",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/tests/unified_engine/test_qe_node_execution.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+    "backend/services/quantevolver/qe_batch_execution_policy.py",
+    "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+    "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2095",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-26T07:41:59.710383Z",
+  "description": "qe_20261026_130549_50d9全部9Loop绑定rdagent-node1且node_parallelism=2，local WSL空闲；代码已支持纯回测4但任务创建仍依赖手填节点及并行度。",
+  "design_compliance_review": {
+    "DESIGN-COMPLIANCE-001.1": {
+      "evidence": "??????????????????2/???4???????????????????DEV????????????API???????",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.2": {
+      "evidence": "???manifest/calendar/instruments/PIT??????????????????????????HTTP?????????",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.3": {
+      "evidence": "?????????????????????????????????????????????????/??????",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.4": {
+      "evidence": "????????????????????????????????????????",
+      "verdict": "passed_source"
+    }
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261026-3a9ab16e1588",
+      "timestamp": "2026-10-26T07:41:59.710368Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-hmm-mainline-long-plan-20261025/plan.md:163"
+  ],
+  "expected": "新批次无需代理手填即可在已验证同一active数据身份的双节点间分配；同seed配对尽量同节点；全训练每节点最多2，纯回测最多4，已有更严格模型容量继续生效；最终分配和并行策略版本持久化并可读回，恢复和重试不得退化或绕过上限。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json"
+    ],
+    "added_files": [
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+    ],
+    "changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2095-qe.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/tests/unified_engine/test_qe_node_execution.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+        "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+        "backend/services/quantevolver/qe_batch_execution_policy.py",
+        "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "platform.db",
+        "qe.active_dataset_universe",
+        "qe.sector_risk_overlay",
+        "platform.mcp_gateway"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/routers/quantevolver_evolution.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_evolution_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_active_execution_capacity.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_node_execution.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_batch_execution_policy.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/tests/unified_engine/test_qe_node_execution.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+        "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+        "backend/services/quantevolver/qe_batch_execution_policy.py",
+        "backend/tests/quantevolver/test_qe_batch_execution_policy.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+      "backend/services/quantevolver/qe_batch_execution_policy.py",
+      "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py"
+    ]
+  },
+  "first_seen_at": "2026-10-26T07:41:59.710383Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6724,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6724",
+  "implementation_notes": [
+    "node_allocation=balanced??????????node_id??????Loop??????????????UI/???????Loop??????node_allocation=explicit???????",
+    "???whole-loop?????????????Loop?????2??????4??????????2???/?????????????????????",
+    "??????????????aistock_dev?JSON??????9/9???????????DML/DDL???????????"
+  ],
+  "last_seen_at": "2026-10-26T07:41:59.710383Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "python -X utf8 -B isolated verification -> passed; real two-node identity and existing DEV rollback 9/9 restore: tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json; ASGI HTTP policy semantic readback and source hashes: tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
+      "python -X utf8 -B isolated verification -> passed; two-node identity and DEV rollback 9/9 restore in tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json; ASGI HTTP semantic readback and source hashes in tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
+      "python isolated verification -> passed; tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json and tmp/issue_workflow/BUG-2095/fresh-policy-http-20261026_091102.json",
+      "python isolated ASGI policy validation -> passed; tmp/issue_workflow/BUG-2095/fresh-policy-http-final.json; real two-node identity and DEV rollback 9/9 in tmp/issue_workflow/BUG-2095/fresh-process-20261026_085735.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "changed_file_catalog",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_update_reason": "???QE???????????????????????????/HTTP???????????????",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE批次缺少持久化双节点分配及按工作负载生成的并行规则，依赖手工配置导致资源闲置",
+  "trigger_condition": {
+    "fingerprint": "3a9ab16e1588350ce1c486e7",
+    "source_event_id": "FE-20261026-3a9ab16e1588"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

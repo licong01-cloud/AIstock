@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
 
 from backend.core.qe_prediction_replay_contract import normalize_prediction_replay_contract
+from .frozen_inference_contract import FrozenInferenceSpec, validate_mode as validate_frozen_inference_mode
 
 from .long_trend_evaluation_contract import (
     EVALUATOR_VERSION,
@@ -453,6 +454,7 @@ class ExperimentConfig(BaseModel):
     backtest_only: bool = False
     model_source_task_id: str | None = None
     model_source_loop_index: int | None = None
+    frozen_inference: FrozenInferenceSpec | None = None
 
     # Immutable prediction replay mode.  These values are persisted as
     # control-plane identity and never enter model/strategy kwargs.
@@ -472,6 +474,7 @@ class ExperimentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_factor_names(self) -> "ExperimentConfig":
+        validate_frozen_inference_mode(self.model_dump(), allow_extra_params=True)
         if self.alpha_mode == "single" and not self.factor_names:
             raise ValueError("factor_names cannot be empty in single-alpha mode")
         if self.alpha_mode == "multi" and not self.multi_alpha_config:

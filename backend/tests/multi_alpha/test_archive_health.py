@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Mapping
 
+import pytest
+
 from backend.services.multi_alpha.durable_orchestrator import (
     DurableMultiAlphaOrchestrator,
     DurableOrchestratorConfig,
 )
+from backend.services.qe_archive.event_capture import QEArchiveEventCapture
 
 
 class _Repository:
@@ -73,7 +76,7 @@ class _Noop:
     pass
 
 
-def _orchestrator(repository: _Repository, capture: _Capture) -> DurableMultiAlphaOrchestrator:
+def _orchestrator(repository: _Repository, capture: Any = None) -> DurableMultiAlphaOrchestrator:
     return DurableMultiAlphaOrchestrator(
         repository=repository,  # type: ignore[arg-type]
         planner=_Noop(),  # type: ignore[arg-type]
@@ -90,6 +93,44 @@ def _orchestrator(repository: _Repository, capture: _Capture) -> DurableMultiAlp
         ),
         owner_id="worker",
     )
+
+
+@pytest.mark.parametrize(
+    "capture_env,realtime_env,enabled",
+    [(None, None, True), ("", " ", True), ("true", "1", True),
+     ("false", None, False), (None, "0", False), ("true", "off", False),
+     ("no", "true", False)],
+)
+def test_formal_runtime_defaults_to_archive_but_honors_explicit_disable(
+    monkeypatch, capture_env, realtime_env, enabled,
+) -> None:
+    for name, value in (("QE_ARCHIVE_EVENT_CAPTURE_ENABLED", capture_env),
+                        ("QE_ARCHIVE_REALTIME_ENABLED", realtime_env)):
+        monkeypatch.delenv(name, raising=False)
+        if value is not None:
+            monkeypatch.setenv(name, value)
+    events = {}
+
+    class Outbox:
+        def insert_outbox_event(self, event):
+            inserted = event.event_id not in events
+            events[event.event_id] = event
+            return inserted
+
+    monkeypatch.setattr("backend.services.qe_archive.event_capture.QEArchiveRepository", Outbox)
+    repository = _Repository()
+    orchestrator = _orchestrator(repository)
+    assert asyncio.run(orchestrator.archive_pass()) == int(enabled)
+    assert len(events) == int(enabled)
+    if enabled:
+        # Lost delivery acknowledgement is retried via the same outbox identity.
+        repository.events.clear()
+        assert asyncio.run(orchestrator.archive_pass()) == 1
+        assert len(events) == 1
+        assert next(iter(repository.events.values()))["phase"] == "archive_duplicate"
+    assert asyncio.run(orchestrator.archive_pass()) == 0
+    if capture_env is None:
+        assert QEArchiveEventCapture().enabled is False  # diagnostic adapter stays opt-in
 
 
 def test_archive_pass_exits_before_scanning_when_capture_disabled() -> None:

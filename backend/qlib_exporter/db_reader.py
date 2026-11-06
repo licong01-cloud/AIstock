@@ -6,6 +6,10 @@
 - $factor = 前复权因子
 - 原始价格 = $close / $factor
 
+证券人口：真实 SH/SZ A 股事实独立于 PIT；保留 ST、上市预热及退市前
+已存在的记录。兼容参数 exclude_st / exclude_delisted_or_paused 不裁剪事实；
+买入与选择资格只由独立的 PIT authority / stock_universe 控制。
+
 支持的数据类型：
 - 日线数据（股票）
 - 分钟线数据（股票）
@@ -34,7 +38,6 @@ from .config import (
     INDEX_BASIC_TABLE,
     INDEX_DAILY_TABLE,
     INDEX_DAILY_TDX_TABLE,
-    IPO_FILTER_DAYS,
     MINUTE_RAW_TABLE,
     MINUTE_QFQ_TABLE,
     MONEYFLOW_TS_TABLE,
@@ -138,14 +141,10 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -247,14 +246,10 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -302,14 +297,10 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -358,14 +349,10 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -402,13 +389,12 @@ class DBReader:
         注意：不再跨数据集（daily_basic / moneyflow / minute）求交集。
         """
 
-        conditions: list[str] = []
+        conditions: list[str] = ["ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'"]
 
         # 时间过滤规则 A：仅要求 end 之前已上市（字段可能为空，保守处理）
-        # IPO 过滤：上市满 IPO_FILTER_DAYS 天后才纳入股票池
+        # Facts include IPO warmup, ST and retired securities; PIT is separate.
         conditions.append(
-            "(list_date IS NULL OR list_date + INTERVAL '%d days' <= '%s')"
-            % (IPO_FILTER_DAYS, end.isoformat())
+            "(list_date IS NULL OR list_date <= '%s')" % end.isoformat()
         )
 
         # 按交易所过滤（基于 ts_code 后缀 .SH / .SZ / .BJ；兼容 SHxxxxxx 形式）
@@ -421,10 +407,6 @@ class DBReader:
         if exchange_conds:
             conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
-        if exclude_st:
-            conditions.append(f"ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            conditions.append("list_status NOT IN ('D','P')")
 
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
         sql = f"""
@@ -442,9 +424,11 @@ class DBReader:
         return [self._normalize_ts_code(x) for x in df["ts_code"].astype(str).tolist()]
 
     def get_all_ts_codes(self) -> List[str]:
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
         sql = f"""
             SELECT DISTINCT ts_code
             FROM {DAILY_RAW_TABLE}
+            WHERE TRUE {stock_scope_sql('ts_code')}
             ORDER BY ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -715,10 +699,12 @@ class DBReader:
         return out
 
     def get_all_ts_codes_minute(self) -> List[str]:
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
         sql = f"""
             SELECT DISTINCT ts_code
             FROM {MINUTE_QFQ_TABLE}
             WHERE freq = '1m'
+            {stock_scope_sql('ts_code')}
             ORDER BY ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -745,7 +731,8 @@ class DBReader:
         - 若 with_factor=True, 则关联获取前复权因子 $factor.
         """
 
-        codes = list(ts_codes)
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        codes = [code for code in ts_codes if not is_excluded_stock_code(code)]
         if not codes:
             return pd.DataFrame()
 
@@ -837,11 +824,12 @@ class DBReader:
         当前仅包含基础 OHLCV + amount 列。
         """
 
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
         codes = list(
             dict.fromkeys(
                 normalized
                 for code in ts_codes
-                if (normalized := self._normalize_ts_code(code))
+                if (normalized := self._normalize_ts_code(code)) and not is_excluded_stock_code(normalized)
             )
         )
         if not codes:
@@ -939,7 +927,8 @@ class DBReader:
         """
         from datetime import timedelta
 
-        codes = list(ts_codes)
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        codes = [code for code in ts_codes if not is_excluded_stock_code(code)]
         if not codes:
             return
 
@@ -975,7 +964,8 @@ class DBReader:
         end: date | None,
     ) -> int:
         """获取分钟线数据行数（用于进度估算）."""
-        conditions: list[str] = []
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        conditions: list[str] = [stock_scope_sql('ts_code').removeprefix(' AND ')]
         params: dict[str, object] = {}
 
         codes = list(ts_codes) if ts_codes else None
@@ -1042,7 +1032,8 @@ class DBReader:
         Returns:
             符合 Qlib 格式的 DataFrame
         """
-        codes = list(ts_codes)
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        codes = [code for code in ts_codes if not is_excluded_stock_code(code)]
         if not codes:
             return pd.DataFrame()
 
@@ -1295,14 +1286,10 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -1427,13 +1414,9 @@ class DBReader:
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
 
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
 
@@ -1541,6 +1524,7 @@ class DBReader:
         """按 moneyflow_ts 的覆盖范围获取股票列表（ts_code），用于对齐各导出数据集的股票池。"""
 
         conditions: list[str] = [
+            "ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"trade_date >= '{start.isoformat()}'",
             f"trade_date <= '{end.isoformat()}'",
         ]
@@ -1554,16 +1538,6 @@ class DBReader:
         if exchange_conds:
             conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
-        if exclude_st:
-            conditions.append(
-                "ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)",
-            )
-        if exclude_delisted_or_paused:
-            conditions.append(
-                "ts_code NOT IN ("
-                "SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P')"
-                ")",
-            )
 
         where_clause = " AND ".join(conditions)
         sql = f"""
@@ -1591,11 +1565,10 @@ class DBReader:
 
         约定：
         - 默认仅包含上交所 / 深交所（.SH / .SZ），不包含北交所（.BJ）。
-        - exclude_st=True 时，剔除在 stock_st 中出现过的所有股票（曾经 / 当前 ST）。
-        - exclude_delisted_or_paused=True 时，剔除 list_status IN ('D','P') 的股票。
+        - Compatibility eligibility flags do not trim facts; PIT selection is separate.
         """
 
-        conditions: list[str] = []
+        conditions: list[str] = ["ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'"]
 
         # 交易所过滤
         normalized = self._normalize_stock_export_exchanges(exchanges)
@@ -1608,13 +1581,7 @@ class DBReader:
         if exchange_conds:
             conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
-        if exclude_st:
-            conditions.append(
-                "ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)",
-            )
 
-        if exclude_delisted_or_paused:
-            conditions.append("list_status NOT IN ('D','P')")
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -1645,7 +1612,7 @@ class DBReader:
 
         股票池严格基于 stock_basic：
         - 默认只包含 SH/SZ A 股（.SH/.SZ），不含 BJ；
-        - 根据 exclude_st / exclude_delisted_or_paused 统一剔除 ST 和退市 / 暂停上市股票；
+        - ST、退市及上市预热事实不由兼容筛选参数裁剪，选股资格由独立 PIT 控制；
         - 然后在给定日期区间内从日线原始表加载数据。
         """
 
@@ -1958,15 +1925,11 @@ class DBReader:
         
         # 构建基础过滤条件（ST、退市、上市时间）
         base_conds = [
-            "s.list_status = 'L'",  # 上市状态
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",  # 已上市
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",  # 已上市
             "b.trade_date >= s.list_date",  # 只导出上市日期之后的数据
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -2108,14 +2071,10 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
         ]
         
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
         
@@ -2204,14 +2163,10 @@ class DBReader:
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
 
         base_conds = [
-            "s.list_status = 'L'",
-            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
+            f"s.list_date <= '{end.isoformat()}'",
             "m.trade_date >= s.list_date",
         ]
-        if exclude_st:
-            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
-        if exclude_delisted_or_paused:
-            base_conds.append("s.list_status NOT IN ('D', 'P')")
         if exchange_conds:
             base_conds.append("(" + " OR ".join(exchange_conds) + ")")
 

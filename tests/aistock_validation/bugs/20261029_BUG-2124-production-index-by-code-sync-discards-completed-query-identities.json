@@ -1,0 +1,312 @@
+{
+  "actual": "Whole-index sync success leaves canonical index_daily UNVERIFIED; repeated retries cannot change that.",
+  "allowed_write_scope": [
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2124",
+  "closed_at": "2026-10-30T06:10:03.852746Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T02:40:51.042923Z",
+  "description": "Whole-index sync success leaves canonical index_daily UNVERIFIED; repeated retries cannot change that.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-101028af7a44",
+      "timestamp": "2026-10-29T02:40:51.042923Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The actual production engine publishes a revision-bound completed provider scan after every requested query and commit succeeds; failures remain explicit and partial/empty catalogues cannot certify the partition.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2124-production-index-by-code-sync-discards-completed-query-identities.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ]
+  },
+  "first_seen_at": "2026-10-29T02:40:51.042923Z",
+  "fix_branch": null,
+  "fix_commit": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+  "fixed_at": "2026-10-29T02:49:58Z",
+  "github_issue_number": 6835,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6835",
+  "last_seen_at": "2026-10-29T02:40:51.042923Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6838",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "{'command': 'python X:/AIstock_temp/DATA_PREPARATION/daily-sync-20261029/validate_index_engine.py', 'result': 'PASS: real existing DEV temporary tables with four independently read production index facts; actual engine query-audit method clears the obsolete table-count-only flag, binds source scans to revision 0, and the real physical validator certifies both dates. No network, production write or service action.'}"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-readiness-20261030\\BUG-2124-postrestart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2124",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T06:02:01.148167Z",
+      "mode": "read_only",
+      "observed_identity": "4adfca6dce5a93024e2d7b0c6c50967483dec628",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0c95a25192dd55c1d436ef2d9b75125d924c3cfef29600b6b468545e5580faac",
+      "receipt_sha256": "84fbfd61b8b1a5e01ac969bfc667cece6b4964d77ffad558d4b4c48815e9ad31",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b836691b31c69bc71cda27cfb63b1721f2808011bce47226d4ec980b23b9dfb5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2124",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "64df286beeb2b34e",
+    "recorded_at": "2026-10-29T02:50:30.375501Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dc6baf31c76c022eeac52f7bce2c333484501734",
+    "source_merge_commit": "83fe106eaf946eaf9c12f5d4923a2bc29a70ace5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6838",
+    "validation_evidence": [
+      "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+      "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`"
+    ],
+    "validation_evidence_digest": "5e8e7dec6100a027a0cb526b1138fc30d6ecb84901e6668524dbfe9e970c5fce"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Production index BY_CODE sync discards completed query identities",
+  "trigger_condition": {
+    "fingerprint": "101028af7a4462bd0873e511",
+    "source_event_id": "FE-20261029-101028af7a44"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=5426940cd7dbcdc8 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed`",
+    "validation-receipt: id=32bc4b61040025a0 commit=dc6baf31c76c022eeac52f7bce2c333484501734 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py -q` result=`153 passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2124 --target backend-main -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

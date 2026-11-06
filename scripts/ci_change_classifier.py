@@ -255,6 +255,10 @@ PROMPT_EVALUATION_FILES = {
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
     "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
+    "scripts/activate_canonical_pit_default.py": ("qlib_data_backend",),
+    "scripts/manage_canonical_pit_release.py": ("qlib_data_backend",),
+    "backend/tests/test_canonical_pit_release.py": ("qlib_data_backend",),
+    "backend/tests/scripts/test_activate_canonical_pit_default.py": ("qlib_data_backend",),
     "backend/db/pg_pool.py": ("platform_api_backend",),
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
@@ -278,6 +282,16 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/advisory_financial_event_information_set_mve.py": ("advisory_modeling_backend",),
     "scripts/advisory_score_hmm_admission_mve.py": ("advisory_modeling_backend",),
     "scripts/advisory_causal_admission_v2_mve.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_rank_value_review.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_historical_engineering_replay.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_frozen_specialist_stress.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_factor_information.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_factor_nonlinear.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_pool_relation.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_frozen_representation.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_linear_rank_replay.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_prospective_confirmation.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_top10_business_review.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {

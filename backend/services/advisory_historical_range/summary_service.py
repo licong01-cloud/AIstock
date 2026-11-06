@@ -1002,7 +1002,7 @@ class PostgresHistoricalRangeSummaryContextProvider:
         self._artifact_store = artifact_store
         self._source_provider = source_provider
         self._metadata_cache: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-        self._industry_cache: dict[tuple[str, date], str] = {}
+        self._industry_cache: dict[tuple[str, date], str | None] = {}
         self._regime_cache: OrderedDict[str, tuple[str | None, tuple]] = OrderedDict()
 
     def load(
@@ -1036,7 +1036,7 @@ class PostgresHistoricalRangeSummaryContextProvider:
         if symbol is not None:
             industry_key = (symbol, decision_date)
             industry = self._industry_cache.get(industry_key)
-            if industry is None:
+            if industry_key not in self._industry_cache:
                 industry = self._load_summary_industry_at_t(
                     symbol=symbol,
                     decision_trade_date=decision_date,
@@ -1241,7 +1241,7 @@ class PostgresHistoricalRangeSummaryContextProvider:
             self._regime_cache.move_to_end(key)
             return regime
         before = self._regime_stamp(subject_ref)
-        envelope = self._artifact_store.load(subject_ref)
+        envelope = self._artifact_store.load_readonly(subject_ref)
         evidence = [(subject_ref, before)]
         payload = envelope.payload
         if subject_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT:
@@ -1325,9 +1325,9 @@ class PostgresHistoricalRangeSummaryOutcomeSetLoader:
                 != policy.outcome_policy_bundle_hash
             ):
                 continue
-            envelope = self._artifact_store.load(fact.outcome_artifact_ref)
-            artifact = HistoricalRangeOutcomeArtifactV2.model_validate(envelope.payload)
-            if canonicalize(artifact.model_dump(mode="json")) != canonicalize(fact.outcome_json):
+            envelope = self._artifact_store.load_readonly(fact.outcome_artifact_ref)
+            artifact = fact.validated_artifact
+            if envelope.payload != fact.canonical_outcome_json:
                 raise HistoricalRangeSummaryError("outcome DB/artifact payloads differ")
             calculations = tuple(
                 HistoricalRangeAggregateCalculationResultV1.model_validate(item)
@@ -1609,11 +1609,20 @@ class HistoricalRangeSummaryService:
         for key in sorted(grouped):
             key_rows = _deduplicate_economic_samples(grouped[key])
             coverage = _coverage(key_rows)
+            missing_industry_count = sum(
+                row.symbol is not None and row.industry_at_t is None for row in key_rows
+            )
+            if missing_industry_count:
+                coverage["missing_industry_context_count"] = missing_industry_count
             key_text = "|".join(map(str, key))
             coverage_by_key[key_text] = coverage
             metric, missing = _return_metrics(key=key, rows=key_rows, coverage=coverage)
             metrics.extend(metric)
             unavailable.extend(missing)
+            if missing_industry_count:
+                unavailable.append(_unavailable(
+                    f"industry_context:{key_text}", "PIT_INDUSTRY_CONTEXT_UNAVAILABLE", coverage,
+                ))
             regime_metrics, regime_missing = _regime_bucket_metrics(
                 key=key,
                 rows=key_rows,

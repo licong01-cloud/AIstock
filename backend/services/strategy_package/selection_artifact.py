@@ -243,6 +243,8 @@ def _live_input_context(
         "calendar_source": calendar_source,
         "universe_input_hash": _required_v2_hash(raw_context.get("universe_input_hash"), field_name="universe_input_hash"),
     }
+    if raw_context.get("input_capture") is not None:
+        context["input_capture"] = dict(raw_context["input_capture"])
     calendar_identity_hash = raw_context.get("calendar_identity_hash")
     if calendar_identity_hash is not None:
         context["calendar_identity_hash"] = _required_v2_hash(
@@ -1181,7 +1183,13 @@ class StrategyPackageSelectionArtifactService:
         cutoff_date: date | None = None,
         historical_read_only: bool = False,
     ) -> list[SelectionScoreArtifact]:
-        if data_source != "DB_HISTORICAL":
+        if data_source == "DATASET_FILES":
+            file_provider, _ = self._resolve_live_provider(runtime_config)
+            require_identity = getattr(file_provider, "require_frozen_file_input_identity", None)
+            if not callable(require_identity) or not require_identity():
+                raise DataUnavailableError("file inference requires an explicitly bound file-capable provider",
+                    context={"reason_code": "FROZEN_FILE_INFERENCE_PROVIDER_REQUIRED", "package_id": package_id})
+        elif data_source != "DB_HISTORICAL":
             raise DataUnavailableError(
                 "live StrategyPackage factor inference currently requires DB_HISTORICAL daily data",
                 context={"package_id": package_id, "data_source": data_source},
@@ -1349,6 +1357,15 @@ class StrategyPackageSelectionArtifactService:
                     else []
                 ),
             )
+            input_bindings = ((runtime_config or {}).get("selection_artifact_config") or
+                              (runtime_config or {}).get("selection_artifact") or {}).get("input_readiness_by_package")
+            if input_bindings is not None:
+                from backend.services.data_integrity.inputs import verify_capture, InputReadinessError
+                binding = input_bindings.get(package_id)
+                captured = provenance.artifact_input_context.get("input_capture")
+                verify_capture(binding, captured)
+                if captured.get("readiness_binding_sha256") != binding["binding_sha256"]:
+                    raise InputReadinessError("score producer did not consume the frozen readiness binding")
             artifact = SelectionScoreArtifact(
                 package_id=package_id,
                 manifest_sha256=manifest.manifest_sha256,

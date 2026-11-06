@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from datetime import date, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.advisory_program import AdvisoryProgram
+from backend.tests.test_daily_data_integrity_inputs import ready_example
+
+
+class _Ready:
+    def prepare(self, packages, decision_date):
+        return {p: ready_example(p)[1] for p in packages}
+
+    def recheck(self, bindings):
+        assert bindings
 
 
 def _program(program_id: str) -> AdvisoryProgram:
@@ -50,6 +61,12 @@ class _Calendar:
 
 
 class _Repository:
+    def cycle_lock(self):
+        return nullcontext(True)
+
+    def pending_publications(self, **_kwargs):
+        return []
+
     def __init__(self) -> None:
         self.run: dict[str, object] | None = None
         self.observation = None
@@ -94,6 +111,7 @@ class _Repository:
         return observation.payload()
 
     def mark_failure(self, **_kwargs):
+        self.failure = _kwargs
         return dict(self.run or {})
 
 
@@ -133,7 +151,8 @@ class _Programs:
             runtime_config={},
             aggregate_results=[candidate("000001.SZ", 1), candidate("000002.SZ", 2)],
         )
-        return self.program, binding, run, {}
+        return self.program, binding, run, {"selection_artifact_config": {
+            "input_readiness_by_package": _kwargs.get("input_bindings", {})}}
 
     def active_episode_objects(self, _program_id: str):
         return []
@@ -155,6 +174,7 @@ def test_publication_does_not_read_target_market_and_model_unavailable_does_not_
         repository=repository,
         program_service=_Programs(_program("advp_test")),
         model_service=SimpleNamespace(model_root=lambda: ""),
+        input_readiness=_Ready(),
         calendar=_Calendar(),
         now_provider=lambda: datetime(2026, 8, 14, 16, 31, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
@@ -183,6 +203,8 @@ def test_one_program_failure_does_not_block_another_program() -> None:
 
     service = _Service(
         repository=SimpleNamespace(
+            cycle_lock=lambda: nullcontext(True),
+            pending_publications=lambda **_kwargs: [],
             pending_settlements=lambda **_kwargs: [],
             pending_mature_model_observations=lambda **_kwargs: [],
             retryable_model_observations=lambda **_kwargs: [],
@@ -197,3 +219,43 @@ def test_one_program_failure_does_not_block_another_program() -> None:
     result = service.run_once()
 
     assert [row["status"] for row in result["results"]] == ["FAILED", "PUBLISHED"]
+
+
+def test_waiting_never_calls_selection_and_revision_drift_never_publishes():
+    from backend.services.data_integrity.inputs import InputReadinessError
+    for after_compute in (False, True):
+        calls = []
+        repo = _Repository()
+        programs = _Programs(_program("advp_test"))
+        original = programs.prepare_forward_selection
+        def prepare(*args, **kwargs):
+            calls.append("selection")
+            return original(*args, **kwargs)
+        programs.prepare_forward_selection = prepare
+        class Waiting(_Ready):
+            def prepare(self, *args):
+                if not after_compute:
+                    raise InputReadinessError("missing price partition")
+                return super().prepare(*args)
+            def recheck(self, bindings):
+                raise InputReadinessError("revised during model computation")
+        service = AdvisoryForwardService(repository=repo, program_service=programs, input_readiness=Waiting(),
+            model_service=SimpleNamespace(model_root=lambda: ""), calendar=_Calendar(),
+            now_provider=lambda: datetime(2026, 8, 14, 16, 31, tzinfo=ZoneInfo("Asia/Shanghai")))
+        result = service.run_once()
+        assert result["results"][0]["status"] == "WAITING_DATA"
+        assert repo.failure["waiting_data"] is True and repo.run["publication_status"] == "PENDING"
+        assert calls == (["selection"] if after_compute else [])
+
+
+def test_published_retry_keeps_original_and_does_not_require_current_data():
+    from dataclasses import asdict
+    program = _program("advp_test")
+    repo = _Repository()
+    repo.begin_attempt = lambda run: {**asdict(run), "publication_status": "PUBLISHED"}
+    def forbidden(*_): raise AssertionError("published retry cannot reread data")
+    service = AdvisoryForwardService(repository=repo, program_service=_Programs(program),
+        input_readiness=SimpleNamespace(prepare=forbidden), model_service=SimpleNamespace())
+    service._resume_published_observation = lambda persisted: {"status": "REUSED"}
+    assert service._publish(program.program_id, decision_date=date(2026, 8, 14),
+                            target_date=date(2026, 8, 17))["status"] == "REUSED"

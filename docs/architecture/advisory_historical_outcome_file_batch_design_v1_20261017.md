@@ -1,6 +1,6 @@
 # Advisory 历史收益文件批处理设计
 
-版本：v1.2；关联 BUG-1946 / Issue #6202、BUG-1950、BUG-1954 / Issue #6233；等级 F2；状态：后续收尾缺陷的直接源码验证通过，CI、合入、用户重启和业务完成分别登记。
+版本：v1.4；关联 BUG-1946 / Issue #6202、BUG-1950、BUG-1954 / Issue #6233、BUG-1967 / Issue #6280、BUG-1969 / Issue #6292；等级 F2；状态：BUG-1967 已合入并完成用户重启后的验证及原生 TCN 四阶段结算；BUG-1969 定向源码回归及真实完整原生只读收尾验证通过，CI、合入、用户重启和运行态性能另行登记。
 
 ## 1. 背景、目标、范围与边界
 
@@ -31,7 +31,7 @@ LocalSIM 不导入本次结算模块；它通过共享选股服务运行自己�
 - 停牌仅依据权威 suspend parquet 的全日 S 声明；不把 NaN 自动当停牌。合法停牌保留无成交价格状态，不补造停牌价格；普通可交易日缺行情/复权/涨跌停仍明确失败。
 - 日历仅用于收益观察；收益读取的未来标签不得反流到选股。原冻结候选、名单和评分不重跑。
 - 股票池仅使用 profile 的 PIT 成员区间，不用物理 provider all.txt 充当池身份。重复区间保留。
-- 行业文件是 L2，旧 SQL 优先 L3。新文件来源的行业分组显式使用 `SW_L2_FILE_V1`，不可冒称旧 L3 分组相同；收益数值不依赖行业分组。缺行业保持明确失败，不写假行业。
+- 行业文件是 L2，旧 SQL 优先 L3。新文件来源的行业分组显式使用 `SW_L2_FILE_V1`，不可冒称旧 L3 分组相同；收益数值不依赖行业分组。BUG-1967 将文件 summary 的“无可见 membership”表示为 `None`，在受影响覆盖组显示缺失计数及 `PIT_INDUSTRY_CONTEXT_UNAVAILABLE`，不阻断已可计算的收益，不写假行业。冲突 membership、未知映射、来源/hash 错配仍失败；要求行业的严格接口仍报缺失，其他消费者不随之降级。
 - 不增加新 benchmark/费用政策。只有冻结政策已有定义才消费指数；不得把缺失 benchmark 自动视为零或新增超额收益口径。
 
 ## 4. 主体与控制面批处理
@@ -62,6 +62,31 @@ REFRESH_OUTCOMES_RUN 自己持有 fenced lease，不得借父任务心跳证明�
 
 本修复不改金融计算、金融 producer/source/policy/hash、候选/排序或成熟度口径；summary 源码身份自然更新。经过完整输入身份验证的既有8,340条金融 projection可复用，不重跑 Selection，也不因 summary 优化重算金融事实。收据文件存在不等于 operation 已完成，父 RUNNING 不等于子健康，超额收益的原生 benchmark 缺失仍为 PENDING。
 
+### 5.2 BUG-1967：只读复用、显式最终汇总与独立调度
+
+瓶颈不是训练：既往 8,340 条金融事实展开为 41,700 行 summary 的无 profiler 只读计算为 467.75 秒；收据闭包仍反复加载大型候选。旧一次性客户端还把 1,800 秒汇报间隔当成下阶段分发间隔，并用整个 backend HEAD 替代实际输入兼容性判断。本次不删除首次验证，也不把源码合入直接当作经济结果通过。
+
+1. **只读产物与已验证类型复用。** 首次依旧执行完整文件 SHA、envelope/schema、payload、精确 ref、run/day/upstream 校验。随后按完整 ref 与文件指纹（设备、inode、大小、mtime、ctime）复用封存的嵌套只读对象；普通 `load` 仍返回可修改的深拷贝，不能修改缓存。缓存按序列化文件重量上限 128 MiB、最多 4,096 项淘汰；这不是进程 RSS 上限。金融 fact 首次验证后保留 typed artifact 和规范化 JSON，私有缓存不进入序列化或内容 hash；复制/替换 JSON 不得借用原校验结果。负向缺行业也缓存，但不得填零、虚构行业或修改收益。
+2. **文件验证会话。** 同一 runtime 中的 profile binding 与文件 provider 共享有界 SHA 证明（最多 512 项），每次使用重查指纹；内容或文件身份变化即失败，不重新绑定。fresh process 重新执行完整验证。OHLC 批读窗口和内存表沿用原生实现，不复制文件、不跨运行共享结果，也不把行情文件缓存误当 SQL 控制面可以移除。
+3. **三种显式汇总模式。** `REFRESH` 为兼容旧请求/hash 的默认模式；`DEFER` 只完成该批金融结算，收据显式 `summary_deferred=true`，不得宣称整体 summary 已完成；`ONLY` 仅对显式 run 的既有事实执行最终汇总，不遍历金融 planner、不调用 evaluator、不追加金融事实，且必须生成真实 SUMMARY ref。ONLY 的文件上下文只验证/读取实际消费的行业成员与映射，不建立无用 OHLC/停牌/涨跌停价格窗口；该上下文拒绝金融结算入口，金融路径仍完整验证其消费文件。中间阶段可 DEFER，所有依赖完成后执行一次 ONLY；默认及已有调用行为不变。失败、CAS/fencing、成熟度、费用、缺价和上游闭包均沿用原生合同。
+   父收据根据实际子收据聚合延迟标记，而不是根据计划假设实际已经延迟；旧收据无该字段时按旧版不支持 DEFER 的合同处理为 false。没有实际子收据不能凭空声称延迟结算完成。
+4. **身份不伪装。** summary、文件适配源码和 producer 的真实 hash 按现有计算更新；不能宣称本轮文件代码调整后金融 producer hash 未变。既存完成事实及原 producer 身份保留，ONLY 可在不重算金融事实的情况下更新 summary。需要重算的后续金融请求必须遵守原生新 producer / correction / evidence 协议；旧请求 exact retry 只能恢复原冻结计划，不能被新代码默默升级。可选 `expected_execution_identity` 精确绑定 financial producer、file binding、policy 三项；旧 API 不传时保持兼容，新 continuation 必须传入，不能用整库 HEAD 代替这三项。
+5. **通用 continuation 而非改写旧客户端。** 新清单 schema 为 `advisory_outcome_continuation_v1`，明确单 run 阶段、依赖、冻结请求与身份；不接管运行中的 legacy 清单或 checkpoint。原子 X 盘 checkpoint 绑定清单 hash，POST 前保存完整原请求，恢复逐页查询原生父/子操作，确认原 key、request hash、operation 身份、租约及结果 ref。响应丢失仅执行保存请求的官方 exact retry；未知状态或失败不能标成功。轮询默认 10 秒、汇报默认 1,800 秒，调度不等待汇报；不同 batch 可按显式资源并发预算执行，同 batch 保留原生 inflight 限制，不增加 QE 全局空闲或双包同时到齐门禁。最终完整 summary 由清单的最终 ONLY 阶段表达，DEFER 完成不等于整项业务完成。
+
+临时状态/报告仅在 X 盘（WSL 对应 `/mnt/x/AIstock_temp`），单客户端锁和原子替换只作用于自己的新状态文件。不得停止旧客户端、控制后端、修改旧 checkpoint 或自动发起生产结算。源码性能验证只读使用既存产物/事实，不发布 summary、不提交金融事实、不改数据库。
+
+### 5.3 BUG-1969：大产物淘汰后的验证复用与父收尾
+
+真实 TCN 20 日窗口的明细、列表、区间和最终汇总于 2026-10-18 03:12 完成，分别处理 4,046、160、8 项结算目标及一份最终 SUMMARY；整轮约 89 分 45 秒，其中最终汇总约 21 分 05 秒。目标数量不是独立股票数，整轮结算耗时不等于每日推理耗时。5 日推荐净收益样本均值/胜率为 LSTM 1.8136%/57.9477%（994/1,000）、TCN 2.1580%/73.9479%（499/500），是各自候选统计，不是账户累计收益或价格模型增量价值。两者候选数、冻结来源及政策身份不同；基准缺失仍为明确缺口，不能据此声称已确认超额收益。SOURCE_INCOMPLETE 和 ENTRY_UNAVAILABLE 不升级为 COMPLETE，不重写旧事实。
+
+采样约 30 MB 的原生候选产物，带 cProfile 的 4 次原生只读读取约 41.17 秒，已有对象缓存约 10.09 秒；热点主要是重复规范化和合同验证，不是读取磁盘。此为有 profiler 开销的热点对照，不能外推整轮稳定提速倍数。128 MiB 缓存淘汰后完整重验、父操作仍使用无缓存 store，是本次修复范围。
+
+- 保留原有 128 MiB/4,096 项封存对象 LRU；增加按序列化头重量最多 16 MiB/4,096 项的轻量验证头 LRU，不保留大 payload，也不创建磁盘副本。这些是缓存重量边界，不是进程 RSS 承诺。超预算时正常淘汰并退回原生完整验证，不构成新门禁。
+- 首次仍执行原生文件 SHA256、规范 JSON、完整 ref、envelope/schema/payload 校验。轻量头仅在首次验证及读前/读后指纹一致后保存，完整 key 和指纹包含文件及路径身份。对象淘汰后须重新安全读取文件并核对完整字节 SHA256，只有与已验证 ref 的原字节一致，才重建同一封存 payload 并复用已验证的 typed header，不重复 envelope 规范化；不能仅凭时间戳放行。
+- 文件变更、读中漂移、完整 ref/路径/身份错配继续失败；首次和缓存重建均保留原生消费者的 run/day/upstream、业务类型和最终快照校验。普通 `load` 仍是可变深拷贝，不得污染封存对象或验证头。fresh process 必须从首次完整验证开始。
+- R5 父操作及其 repository 使用独立的操作级读取缓存；不同 runtime 不共享缓存对象，不把缓存命中当另一运行的金融结果。子结算和汇总继续原有私有缓存边界；未修改 SelectionSignalKernel、LocalSIM、QE、HMM、数据或公共 canonical 算法。
+- 不更改收益/成熟度/费用、候选/排序/TopK、原有 summary 模式、租约/CAS 或旧断点。源码身份按现有规则真实更新；既存事实和产物不覆盖。只读源码验证不发布业务结果，运行态加载仍须用户重启后独立验证。
+
 ## 6. Design Acceptance Index / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
@@ -76,6 +101,13 @@ REFRESH_OUTCOMES_RUN 自己持有 fenced lease，不得借父任务心跳证明�
 | F-008 | summary_service.py：显式 run/subject 上下文、轻量完整 ref regime 缓存 | backend/tests/advisory_historical_range/test_r4_summary_service.py；BUG-1954 runtime_contract 中既存 outcome 原生只读 loader/calculate | PASS | none |
 | F-009 | repository.py：visited 边登记、完整 ref/时钟隔离与封存快照检查 | backend/tests/advisory_historical_range/test_r4_outcome_service.py；BUG-1954 runtime_contract 中既存失败收据原生只读闭包校验 | PASS | none |
 | F-010 | outcome_service.py / summary_service.py：子 lease 覆盖汇总和全部终态校验 | backend/tests/advisory_historical_range/test_r4_outcome_service.py：成功、失败、续租失败、CAS 回调 | PASS | none |
+| F-011 | artifact_store.py / outcome_file_inputs.py / models.py：封存只读对象、typed fact 复用、普通可变读取兼容 | backend/tests/advisory_historical_range/test_outcome_optimization.py | PASS | none |
+| F-012 | outcome_file_source.py / composition.py：指纹绑定的有界验证会话 | backend/tests/advisory_historical_range/test_outcome_optimization.py | PASS | none |
+| F-013 | api_models.py / models.py / outcome_service.py / runtime_factories.py / service.py：REFRESH/DEFER/ONLY 与原生恢复 | backend/tests/advisory_historical_range/test_outcome_optimization.py；backend/tests/advisory_historical_range/test_r4_outcome_service.py | PASS | none |
+| F-014 | outcome_file_inputs.py / summary_service.py：可选行业缺口显式化而非虚构行业 | backend/tests/advisory_historical_range/test_outcome_optimization.py | PASS | none |
+| F-015 | outcome_continuation.py：依赖分发、分页、父子 lease、精确重试及 X 盘单写者 | backend/tests/advisory_historical_range/test_outcome_optimization.py | PASS | none |
+| F-016 | 精确 diff、真实只读 loader/calculate；金融字段/hash 保持与模式隔离 | backend/tests/advisory_historical_range/test_outcome_optimization.py；BUG-1967 runtime_contract 的完整只读报告 | PASS | none |
+| F-017 | outcome_file_inputs.py / composition.py：有界轻量验证头、逐字节复验与父收尾缓存 | backend/tests/advisory_historical_range/test_outcome_optimization.py；BUG-1969 runtime_contract 引用的 bug1969-native-source-smoke-v1.json | PASS | 源码及只读验证通过；运行激活待用户重启，整轮性能待独立实测 |
 
 ## 7. 实施方案与验证方案
 
@@ -94,6 +126,26 @@ F-008～F-010 的 PASS 仅指源码与上述只读/定向合同验证。未发�
 DESIGN-COMPLIANCE-001：完整实现本设计的文件来源与批量准备，不以 mock 代替真实读取；Financial/Selection 原生内核不复制；L2 分组和新来源身份等必要差异已同步设计；没有新增研究审批、收益门槛或用户操作要求。四项源码符合性检查通过，不代表运行态激活或投资收益证明。
 
 BUG-1954 四项复审：①真实全量只读 loader/calculate 与闭包验证均完成，非 mock-only 或子集交付；②过期/续租失败、哈希错配和文件变化继续报错，不伪造原操作成功或缺失 benchmark；③仅纠正上下文和收尾实现，金融/选股/成熟度与原输出不变，差异已写入§5.1；④复用现有 lease/CAS、CI 和用户重启边界，没有新增研究、交易或人工审批门槛。
+
+### 7.1 BUG-1967 定向验收与发布状态
+
+最终一次相关矩阵覆盖 78 个场景：77 项通过，一项严格行业缺失错误文案兼容性不匹配，恢复兼容文案后仅重跑该 nodeid 通过。随后增加“诊断 ref 不能冒充完成收据”回归，受影响的 7 个客户端场景通过；最后发现私有缓存参与 Pydantic 对象相等比较，补 RED→GREEN 并重跑事实/hash 两项通过，合计覆盖 80 个不同场景，其中新增优化测试 24 项。覆盖缓存淘汰/精确 ref 篡改、JSON 替换不借用旧校验、默认请求身份不变、DEFER/ONLY、真实 SUMMARY 要求、价格窗口不被汇总消费、身份与分页/子租约/精确重试。changed-file Ruff、diff check、L0 通过；广泛回归交给 CI/Nightly，不重复执行整套本地矩阵。
+
+完整既存结果的第一轮只读 load/calculate 展开 41,700 行，装载 386.82 秒、公式计算 0.82 秒；包含当时完整价格窗口准备的总计 521.06 秒。该轮金融输入已不同于 BUG-1954，不能与旧 467.75 秒直接折算提速；它用于确认公式非瓶颈并促成 ONLY 轻量上下文改动。轻量路径完整测量为准备 145.35 秒、装载 336.65 秒、计算 0.68 秒，总计 482.69 秒（整个 20 日窗口，不是每天）；OHLC 窗口读取为 0。两次 covered-outcome、summary-input、metrics、coverage hash 完全一致，未写数据库或发布经济结果。单次测量有缓存/系统负载影响，不据此承诺稳定加速倍数；剩余成本仍在首次既存产物/事实装载与校验，真正的整任务收益还包括减少中间全量 summary 及不再等待 1,800 秒汇报。
+
+上述完整测量记录于 BUG-1967 runtime_contract 的 `bug1967-summary-final-readonly.json`，测量开始/结束四项源码指纹一致；之后只修正私有缓存的对象相等比较，不改 loader、文件价格语义、汇总公式或经济 hash。同步最新 main 时另继承已合入的 #6281：文件价格读取/原价换算调用共享 `frozen_dataset` helper，没有在本任务改写该共享模块；交点的 14 项文件来源与轻量汇总回归通过。最终源码另由 `bug1967-final-source-smoke-r2.json` 与定向测试验证精确原生产物/DB fact/typed fact、缓存读取后相等性及当前源码指纹，无需为无关对象比较和 helper 接线修正重复长时全量计算。各证据标明版本，不把前一测量冒充最终 commit 的运行激活或生产性能保证。
+
+BUG-1967 的 DESIGN-COMPLIANCE-001 四项复审：①交付全部登记优化及真实完整只读链路，不以小样本/假成功代替；②首次校验、真正缺价、冲突、CAS 与失败仍明确报错，ONLY 无 SUMMARY 不得成功；③仅显式汇总模式、可选行业缺口呈现及真实 producer 身份变化按 §5.2 同步，费用/收益/选股/成熟度不变；④无新研究审批、整库 HEAD 或 QE 空闲门禁，后端重启仍由用户执行。矩阵 PASS 只指上述源码合同，CI、源码合入和后端激活另记。
+
+首轮扩展 CI 为 497 通过、2 跳过、4 个父任务兼容场景失败（旧测试请求没有新 summary_mode）。随后将父标记改为从实际子收据聚合，四个原失败场景与真实 DEFER 父子标记场景共 5 项定向回归通过，不修改旧测试或降低验证要求。至此本地覆盖 84 个不同场景；最终 CI 以修复后的新 HEAD 独立结果为准，不重跑旧 run 冒充修复版本。
+
+### 7.2 BUG-1969 定向审核与真实原生只读验证
+
+两项核心场景在原实现 RED、修复后 GREEN；补充验证头的数量/字节上限淘汰、伪造相同指纹时仍校验字节、读中漂移、完整 ref 元数据/文件 hash 变化、可变副本与运行隔离，新增 8 个场景通过。末轮相关小矩阵覆盖缓存、文件适配、composition、原生产物、服务/模块边界和闭包 memoization，共 57 项通过；changed-file Ruff 与 diff check 通过。两轮本地审查分别核对完整 ref/字节证明、失效与有界退回，以及运行隔离、可变调用兼容和未触及金融/共享算法；不重复运行宽矩阵制造通过次数。
+
+fresh-process 对既有 TCN 最终 SUMMARY 父收据 `ahrop_ede34d946b8873c24638cdf909be8c3f` 调用原生 repository 的 attempt 和 result 校验；只读读取真实持久化 attempt，随后验证器禁止数据库访问。完整 attempt/上游闭包约 161.663 秒，结果核验约 0.818 秒；原生完整加载 5,214 个 OUTCOME（含必要旧版本依赖），20 个 CANDIDATE_ARTIFACT、20 个 DAY_RECEIPT 等，20 个大型候选各完整验证一次。额外强制淘汰真实 30,094,473 字节候选产物，冷验证约 3.537 秒，随后三次逐字节 SHA 验证的重读共 2.887 秒；payload、typed header 与原生读取逐项相等。对象/验证头缓存重量分别约 127.92 MiB/12.96 MiB，验证头数量4,096，均在上限内；这些重量不是 RSS。两项源码指纹在测量前后相同，原金融产物和任务状态不变。
+
+上述 `bug1969-native-source-smoke-v1.json` 证明当前源码可正确消费既存完整链，不是一次新结算、已激活后端或稳定整轮提速承诺。没有 evaluator、publish、状态推进、行情 SQL、数据修改、进程控制、QE 训练或 LocalSIM 操作；只读数据库事务回滚。BUG-1969 的 DESIGN-COMPLIANCE-001 四项通过：①完整原生收尾链非 mock-only；②所有首次验证、重读字节 hash、文件漂移、真缺价及原生失败保持；③收益、费用、PIT、排序/TopK、lease/CAS、接口和既有结果不改，缓存合同已同步 §5.3；④没有新增审批、研究/交易门槛或全局 QE 空闲要求。必需 CI、源码合入与用户重启后的运行态验收分开记录。
 
 ### LocalSIM 窗口提示词
 

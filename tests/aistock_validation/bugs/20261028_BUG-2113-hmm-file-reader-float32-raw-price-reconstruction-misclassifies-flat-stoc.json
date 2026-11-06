@@ -1,0 +1,275 @@
+{
+  "actual": "Two flat members become positive from float32 reconstruction; dual-input probabilities differ. Current QE assets remain sealed and the paired file study is not replaced.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+    "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
+  ],
+  "approved_precision_contract": {
+    "approval": "User approved the recommended precision normalization in this task on 2026-10-28.",
+    "invariants": "No return epsilon, formula/threshold/model changes, new fit, database write, or overwrite of delivered M0/M1 assets.",
+    "merge_authorization": "User authorized commit, push, PR and merge after at least two reviews, tests and green CI; cleanup is separately scoped.",
+    "ohlc": "Unique positive integer-li source price within independently rounded float32 price/factor intervals; reject no solution or ambiguity.",
+    "reference_prices": "Shortest decimal preserving the same float32 encoding; never force round(2) or claim recovery of arbitrary pre-encoding digits."
+  },
+  "assigned_agent": null,
+  "bug_id": "BUG-2113",
+  "closed_at": "2026-10-28T05:26:12Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-28T05:02:40.206304Z",
+  "description": "Two flat members become positive from float32 reconstruction; dual-input probabilities differ. Current QE assets remain sealed and the paired file study is not replaced.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261028-fc713b60c147",
+      "timestamp": "2026-10-28T05:02:40.206289Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime/hmm_l2_risk_rolling/20261026/repaired_20261028/dual_entry_v1/precision_diagnostic_v2.json"
+  ],
+  "expected": "Equivalent valid market facts have consistent flat/up/down and breadth semantics across file/database inputs; true price changes remain identifiable, invalid or ambiguous reconstruction fails explicitly.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261028_BUG-2113-hmm-file-reader-float32-raw-price-reconstruction-misclassifies-flat-stoc.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ]
+  },
+  "first_seen_at": "2026-10-28T05:02:40.206304Z",
+  "fix_branch": null,
+  "fix_commit": "326bdc9da363cbb61c16dd8fea58f0f0ef35b842",
+  "fixed_at": "2026-10-28T05:26:12Z",
+  "github_issue_number": 6797,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6797",
+  "last_seen_at": "2026-10-28T05:02:40.206304Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6803",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2113",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "670bcbb1b1c6061d",
+    "recorded_at": "2026-10-28T05:27:00.448797Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "05c247cb7b38adcda90ad3bb6cb648dcfaa79d44",
+    "source_merge_commit": "326bdc9da363cbb61c16dd8fea58f0f0ef35b842",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6803",
+    "validation_evidence": [
+      "python -m pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -q -k price_precision -> 9 passed",
+      "python -m nox -s l0 -> passed; 0 findings and 0 blocking"
+    ],
+    "validation_evidence_digest": "26c0d0e647a0e0d577ccea88e63e1d8d5017abac91541abc2d5d0485111d5a7c"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM file reader float32 raw price reconstruction misclassifies flat stock breadth across dual inputs",
+  "trigger_condition": {
+    "fingerprint": "fc713b60c147b6a7b750b4fd",
+    "source_event_id": "FE-20261028-fc713b60c147"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -q -k price_precision -> 9 passed",
+    "python -m nox -s l0 -> passed; 0 findings and 0 blocking"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

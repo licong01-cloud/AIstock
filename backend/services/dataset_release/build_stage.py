@@ -116,7 +116,7 @@ from .index_context_candidate_manifest import (
     validate_index_context_candidate_manifest,
 )
 from .minute_overlay import canonical_session_times
-from .monthly_legacy_prefix import read_legacy_qfq_anchors
+from .monthly_legacy_prefix import read_legacy_qfq_anchors, resolve_legacy_component_pin
 from .pit import (
     DATASET_CANDIDATE_MANIFEST_SCHEMA,
     FrozenPitSnapshot,
@@ -483,8 +483,12 @@ def _prepare(
         raise CandidateBuildStageError("action plan contains an unsupported non-bounded component action")
     staging = invocation.staging_root
     if staging.exists():
-        raise CandidateBuildStageError("new fenced prepare staging already exists")
-    staging.mkdir(parents=True, exist_ok=False)
+        if private_source is not None or not isinstance(invocation.build_inputs.get('monthly_legacy_predecessor'), Mapping):
+            raise CandidateBuildStageError("new fenced prepare staging already exists")
+        from .monthly_build_resume import validate_partial_preparation
+        validate_partial_preparation(invocation)
+    else:
+        staging.mkdir(parents=True, exist_ok=False)
     source, pit = _build_source(invocation) if private_source is None else (private_source, private_source.pit_snapshot)
     adopted = {}
     preparation_identity = invocation.plan.get("preparation_predecessor_profile_sha256")
@@ -1258,6 +1262,58 @@ def _validate(
     }
 
 
+def _validate_industry_factor_rows(invocation, *, factor_receipt, proof):
+    """Compare to the current sealed producer, not a superseded projection.
+
+    The ordinary native validator checks the actual output signatures and
+    month values. This only composes its retained industry/factor receipts;
+    it never scans historical data or grants readiness on its own.
+    """
+    from .monthly_build_resume import load_sealed_build_json
+    from .monthly_fact_correction import SCHEMA
+    from .monthly_industry_history import factor_file_receipts
+
+    entries = factor_file_receipts(factor_receipt)
+    sector = entries["sector_data.h5"]
+    if proof.get("sector_row_count") == sector["inherited_rows"] + sector["month_rows"]:
+        return
+    reference = factor_receipt.get("fact_correction_ref")
+    if reference is None:
+        raise CandidateBuildStageError("industry repair row count differs from physical factor tail")
+    authority = load_sealed_build_json(invocation.cas, reference)
+    if (authority.get("schema_version") != SCHEMA
+            or authority.get("target_cutoff") != sector["cutoff"]
+            or authority.get("database_write") is not False
+            or authority.get("active_profile_write") is not False
+            or authority.get("runtime_action") is not False):
+        raise CandidateBuildStageError("industry factor successor authority differs")
+    files = authority.get("files")
+    if not isinstance(files, list):
+        raise CandidateBuildStageError("industry factor successor files are missing")
+    selected = {}
+    for name in ("sector_data.h5", "static_factors.parquet"):
+        entry = entries[name]
+        pins = [row for row in files if isinstance(row, Mapping) and row.get("dataset") == entry["dataset"]]
+        if len(pins) != 1:
+            raise CandidateBuildStageError("industry factor successor file identity is ambiguous")
+        pin = pins[0]
+        if (pin.get("relative_path") != f"factor_bundle/{name}"
+                or pin.get("sha256") != entry["sha256"] or pin.get("size") != entry["size"]
+                or entry.get("fact_correction_ref") != reference):
+            raise CandidateBuildStageError("industry factor successor file pin differs")
+        selected[name] = pin.get("validation_payload")
+    counts = selected["sector_data.h5"]
+    static = selected["static_factors.parquet"]
+    if (not isinstance(counts, Mapping) or not isinstance(static, Mapping)
+            or type(counts.get("row_count")) is not int
+            or counts["row_count"] != sector["inherited_rows"] + sector["month_rows"]
+            or type(counts.get("september_rows")) is not int
+            or counts["september_rows"] != sector["month_rows"]
+            or static.get("input_sha256") != {entry["dataset"]: entry["sha256"]
+                for entry in entries.values() if entry["dataset"] != "static_factors"}):
+        raise CandidateBuildStageError("industry factor successor row counts or static inputs differ")
+
+
 def _validate_native_month(
     invocation: BuildStageInvocation, *, pit: FrozenPitSnapshot,
     factor_receipt: Mapping[str, Any], index_receipt: Mapping[str, Any],
@@ -1275,6 +1331,16 @@ def _validate_native_month(
     common = {"root": invocation.staging_root, "cutoff": pit.cutoff,
               "predecessor_manifest_sha256": prefix.manifest_sha256,
               "source_bundle_sha256": invocation.build_inputs["source_bundle_sha256"]}
+    history_ref = factor_receipt.get("industry_history_projection_ref")
+    expected_history = invocation.plan.get("industry_history_projection_sha256")
+    if expected_history is not None or history_ref is not None:
+        from .monthly_industry_history import IndustryHistoryProjection
+        from .monthly_build_resume import load_sealed_build_json
+        proof = load_sealed_build_json(invocation.cas, history_ref)
+        projection = IndustryHistoryProjection.read(proof["projection"])
+        if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
+            raise CandidateBuildStageError("industry repair was not verified against frozen authority")
+        _validate_industry_factor_rows(invocation, factor_receipt=factor_receipt, proof=proof)
     consumer = validate_candidate_consumer_smoke_receipt(
         _prerequisite_json(invocation, "consumer_smoke"), profile=invocation.profile.profile,
         cutoff=pit.cutoff, expected_index_codes=invocation.profile.index_codes,
@@ -1295,18 +1361,6 @@ def _validate_native_month(
             repair_inputs=invocation.build_inputs.get("monthly_repair_inputs") if component == "factor" else None)
         ledger.chunk(f"native-month-writer-QA-{component}")
     output_pins = {}
-    history_ref = factor_receipt.get("industry_history_projection_ref")
-    expected_history = invocation.plan.get("industry_history_projection_sha256")
-    if expected_history is not None or history_ref is not None:
-        from .monthly_industry_history import IndustryHistoryProjection, factor_file_receipts
-        from .monthly_build_resume import load_sealed_build_json
-        proof = load_sealed_build_json(invocation.cas, history_ref)
-        projection = IndustryHistoryProjection.read(proof["projection"])
-        if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
-            raise CandidateBuildStageError("industry repair was not verified against frozen authority")
-        sector_entry = factor_file_receipts(factor_receipt)["sector_data.h5"]
-        if proof.get("sector_row_count") != sector_entry["inherited_rows"] + sector_entry["month_rows"]:
-            raise CandidateBuildStageError("industry repair row count differs from physical factor tail")
     for report in reports.values():
         for path, pin in report["verified_output_files"].items():
             if path in output_pins:
@@ -1847,10 +1901,10 @@ def _patch_legacy_factor_component(
         repaired_prefixes, null_repairs = repair_materials(repair_inputs, predecessor=prefix)
     if prefix.cutoff != start - date.resolution:
         raise CandidateBuildStageError("legacy factor predecessor is not the preceding month")
-    codes = tuple(sorted({span.ts_code for span in pit.spans if span.eligible_start <= pit.cutoff and span.eligible_end >= start}))
+    codes = tuple(source.qfq_authority.by_code)
     # A September IPO cannot have an August rolling seed. Use the physical
     # provider catalog to avoid searching the unindexed historical H5 for it.
-    catalog = prefix.root / Path(prefix.manifest["components"]["day_meta_export"]["path"]).parent / "instruments/all.txt"
+    catalog = prefix.root / Path(resolve_legacy_component_pin(prefix, "day_meta_export")["path"]).parent / "instruments/all.txt"
     _resolve_plain_directory(catalog.parent, label="legacy factor seed provider catalog")
     _assert_plain(catalog)
     catalog_rows = [line.split("\t") for line in catalog.read_text(encoding="utf-8").splitlines()]
@@ -1901,7 +1955,7 @@ def _patch_legacy_factor_component(
             static_ordered_columns=invocation.profile.static_ordered_columns,
             row_group_rows=rows_per_chunk, max_source_partition_rows=max(250_000, invocation.profile.resource_policy.validation_read_chunk_rows),
             qfq_source_summary=source.qfq_source_summary, overlay_summary=source.factor_overlay_summary,
-            allow_partial_ranges=True, instrument_filter=codes,
+            allow_partial_ranges=True, instrument_filter=codes, fact_stock_codes=codes,
         ), reader=_FactorReader(source, instrument_filter=codes), initial_state=state, checkpoint=checkpoint,
     )
     target = invocation.staging_root / "factor_bundle"
@@ -1978,7 +2032,23 @@ def _prepare_legacy_bin_patch(
     month_start = pit.cutoff.replace(day=1)
     if prefix.cutoff >= month_start:
         raise CandidateBuildStageError("legacy month tail cutoff does not advance")
-    codes = tuple(sorted({span.ts_code for span in pit.spans if span.eligible_start <= pit.cutoff and span.eligible_end >= month_start}))
+    from .monthly_quote_population import observed_daily_fact_days, observed_quote_days
+
+    known_codes = frozenset(source.qfq_authority.by_code)
+    # Daily joins retain real zero-turnover facts; those same rows must not
+    # create required minute bars. Neither population changes PIT eligibility.
+    population = observed_daily_fact_days if dataset == "daily_bin" else observed_quote_days
+    quote_days = population(
+        _merged_rows(source, component, "kline_daily_raw", staging=invocation.staging_root,
+                     key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
+                     checkpoint=checkpoint, date_ranges=((month_start, pit.cutoff),),
+                     instruments=tuple(sorted(known_codes))),
+        known_codes=known_codes,
+        trading_days=tuple(day for day in source.trading_days() if month_start <= day <= pit.cutoff),
+    )
+    codes = tuple(sorted({span.ts_code for span in pit.spans
+                          if span.eligible_start <= pit.cutoff and span.eligible_end >= month_start}
+                         | {code for code, _ in quote_days}))
     anchors = read_legacy_qfq_anchors(prefix, dataset=dataset, instruments=codes, checkpoint=checkpoint)
     seeds: dict[str, float] = {}
     bases: dict[str, tuple[float, float]] = {}
@@ -2025,7 +2095,7 @@ def _prepare_legacy_bin_patch(
             missing = sorted(set(anchors).difference(seeds))
             raise CandidateBuildStageError("legacy QFQ anchor has no sealed raw fact", context={"missing_instruments": missing})
     input_root = invocation.staging_root / ".month-inputs" / dataset
-    input_root.mkdir(parents=True, exist_ok=False)
+    input_root.mkdir(parents=True, exist_ok=True)
     csv_root = input_root / "csv"
     benchmark_codes = tuple(invocation.profile.index_codes) if dataset == "daily_bin" else ()
     patch, metrics = _prepare_bin_patch_phase(
@@ -2033,11 +2103,11 @@ def _prepare_legacy_bin_patch(
         toolchain=toolchain, baseline_candidate_root=prefix.root, baseline_sealed={},
         date_ranges=((month_start, pit.cutoff),), stock_codes=codes,
         index_codes=benchmark_codes, output_root=csv_root,
-        seed_from_baseline=False, initial_adj_factors=seeds, checkpoint=checkpoint,
+        seed_from_baseline=False, initial_adj_factors=seeds, quote_days=quote_days, checkpoint=checkpoint,
     )
     frequency = "day" if dataset == "daily_bin" else "1min"
     key = "day_meta_export" if dataset == "daily_bin" else "minute_meta_export"
-    provider = prefix.root / Path(prefix.manifest["components"][key]["path"]).parent
+    provider = prefix.root / Path(resolve_legacy_component_pin(prefix, key)["path"]).parent
     _resolve_plain_directory(provider / "instruments", label="legacy provider catalog directory")
     _assert_plain(provider / "instruments/all.txt")
     old_calendar = read_calendar(provider / "calendars" / f"{frequency}.txt")
@@ -2046,8 +2116,7 @@ def _prepare_legacy_bin_patch(
         raise CandidateBuildStageError("legacy Bin tail calendar is not the target month")
     tail = tuple(day.isoformat() for day in tail_days) if frequency == "day" else tuple(stamp.strftime("%Y-%m-%d %H:%M:%S") for day in tail_days for stamp in canonical_session_times(day))
     calendar_path = input_root / "calendar.txt"
-    with calendar_path.open("x", encoding="utf-8", newline="\n") as writer:
-        writer.write("\n".join((*old_calendar, *tail)) + "\n")
+    _retain_month_input(calendar_path, ("\n".join((*old_calendar, *tail)) + "\n").encode('utf-8'))
     catalog: dict[str, tuple[str, str]] = {}
     for line in (provider / "instruments/all.txt").read_text(encoding="utf-8").splitlines():
         values = line.split("\t")
@@ -2064,9 +2133,15 @@ def _prepare_legacy_bin_patch(
         bounds = (str(item["start"])[:10], str(item["end"])[:10])
         old = catalog.get(code)
         catalog[code] = (min(old[0], bounds[0]), max(old[1], bounds[1])) if old else bounds
+    if dataset == "daily_bin":
+        from .monthly_index_corrections import index_correction_rows
+        for row in index_correction_rows(invocation.build_inputs.get("monthly_repair_inputs"), before=prefix.cutoff):
+            code, day = row["ts_code"], row["trade_date"].isoformat()
+            if code not in catalog:
+                raise CandidateBuildStageError("historical index correction has no monthly provider entry")
+            catalog[code] = (min(catalog[code][0], day), catalog[code][1])
     population_path = input_root / "all.txt"
-    with population_path.open("x", encoding="utf-8", newline="\n") as writer:
-        writer.writelines(f"{code}\t{start}\t{end}\n" for code, (start, end) in sorted(catalog.items()))
+    _retain_month_input(population_path, ''.join(f"{code}\t{start}\t{end}\n" for code, (start, end) in sorted(catalog.items())).encode('utf-8'))
 
     def reference(path: Path) -> Mapping[str, Any]:
         return {"id": path.relative_to(invocation.staging_root).as_posix(), "sha256": _sha256_path(path), "size": path.stat().st_size}
@@ -2642,6 +2717,16 @@ def _prepare_bin_patch(
     }
 
 
+def _retain_month_input(path: Path, payload: bytes) -> None:
+    if path.exists():
+        _assert_plain(path)
+        if path.read_bytes() != payload:
+            raise CandidateBuildStageError('retained month construction input differs')
+    else:
+        with path.open('xb') as stream:
+            stream.write(payload)
+
+
 def _prepare_bin_patch_phase(
     invocation: BuildStageInvocation,
     *,
@@ -2659,6 +2744,7 @@ def _prepare_bin_patch_phase(
     seed_from_baseline: bool,
     checkpoint: Callable[[], None],
     initial_adj_factors: Mapping[str, float] | None = None,
+    quote_days: tuple[tuple[str, date], ...] = (),
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     ranges = tuple(date_ranges)
     selected_days = tuple(
@@ -2670,6 +2756,20 @@ def _prepare_bin_patch_phase(
     if not ranges or not selected_days:
         raise CandidateBuildStageError("bounded bin phase trading days are empty")
     codes = tuple(sorted({str(value).upper() for value in stock_codes}))
+    csv_resume = None
+    if isinstance(invocation.build_inputs.get('monthly_legacy_predecessor'), Mapping):
+        from .monthly_csv_resume import MonthlyCsvResume
+        csv_resume = MonthlyCsvResume(output_root, binding={
+            'source_bundle_sha256': invocation.build_inputs['source_bundle_sha256'],
+            'dataset': dataset, 'cutoff': pit.cutoff.isoformat(),
+            'qfq_authority_digest': source.qfq_authority.digest,
+            'date_ranges': _portable_ranges(ranges),
+        }, dataset=dataset, stock_codes=codes, index_codes=index_codes,
+            cutoff=pit.cutoff, checkpoint=checkpoint)
+        completed_codes = csv_resume.completed_codes
+        codes = tuple(code for code in codes if code not in completed_codes)
+        remaining_codes = frozenset(codes)
+        quote_days = tuple(item for item in quote_days if item[0] in remaining_codes)
     seeds = dict(initial_adj_factors) if initial_adj_factors is not None else (
         _baseline_adj_factor_seeds(
             baseline_candidate_root,
@@ -2681,13 +2781,17 @@ def _prepare_bin_patch_phase(
         if seed_from_baseline and codes
         else {}
     )
+    selected_codes = frozenset(codes)
+    seeds = {code: value for code, value in seeds.items() if code in selected_codes}
     transform = CanonicalStockTransformSpec(
         cutoff=pit.cutoff,
         pit_snapshot=pit,
         trading_days=selected_days,
         qfq_denominators=source.qfq_authority,
         instrument_filter=(codes or None),
+        fact_stock_codes=tuple(source.qfq_authority.by_code),
         initial_adj_factors=seeds,
+        quote_days=quote_days,
     )
     metrics = CanonicalStockTransformMetrics(dataset)
     merge_metrics: dict[str, ExternalOrderedRowsMetrics] = {}
@@ -2734,6 +2838,7 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("stk_limit"),
+                quote_days=quote_days,
             ),
             suspend_rows=_merged_rows(
                 source,
@@ -2754,14 +2859,16 @@ def _prepare_bin_patch_phase(
             metrics=metrics,
         )
     else:
+        from .monthly_quote_population import filter_minute_support_rows
+
         rows = CanonicalStockTransformer().transform_minute(
             transform,
-            daily_rows=_merged_rows(
+            daily_rows=filter_minute_support_rows(_merged_rows(
                 source, component, "kline_daily_raw", staging=invocation.staging_root,
                 key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
                 checkpoint=checkpoint, date_ranges=ranges, instruments=codes,
                 metrics=source_metrics("kline_daily_raw"),
-            ),
+            ), pit_snapshot=pit, quote_days=quote_days),
             minute_rows=_merged_rows(
                 source,
                 component,
@@ -2798,8 +2905,9 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("stk_limit"),
+                quote_days=quote_days,
             ),
-            suspend_rows=_merged_rows(
+            suspend_rows=filter_minute_support_rows(_merged_rows(
                 source,
                 component,
                 "suspend_d",
@@ -2813,12 +2921,12 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("suspend_d"),
-            ),
+            ), pit_snapshot=pit, quote_days=quote_days),
             checkpoint=checkpoint,
             metrics=metrics,
         )
     patch = (
-        DailyMinutePatchCsvPreparer()
+        (csv_resume if csv_resume is not None else DailyMinutePatchCsvPreparer())
         .prepare(
             _bin_spec(
                 invocation,
@@ -2830,10 +2938,10 @@ def _prepare_bin_patch_phase(
                 ),
             ),
             rows=rows,
-            output_root=output_root,
+            **({} if csv_resume is not None else {'output_root': output_root}),
             index_codes=tuple(index_codes),
             index_date_ranges=(ranges if index_codes else ()),
-            checkpoint=checkpoint,
+            **({} if csv_resume is not None else {'checkpoint': checkpoint}),
         )
         .receipt
     )
@@ -2841,6 +2949,8 @@ def _prepare_bin_patch_phase(
     return patch, {
         "transform": metrics.as_dict(),
         "source_merges": {name: value.as_dict() for name, value in sorted(merge_metrics.items())},
+        **({"minute_lifecycle": dict(source.minute_lifecycle_summary)}
+           if dataset == "minute_bin" and isinstance(source, ArtifactReadyBuildSource) else {}),
     }
 
 
@@ -3309,8 +3419,10 @@ def _rewrite_private_qlib_authorities(
             raise CandidateBuildStageError(f"canonical rows do not cover frozen PIT span: {span.ts_code}")
         expected_codes.add(span.ts_code)
         lines.append(f"{span.ts_code}\t{start.isoformat()}\t{end.isoformat()}")
-    if not lines or set(ranges) != expected_codes:
+    if not lines or not expected_codes.issubset(ranges):
         raise CandidateBuildStageError("canonical stock authority differs from frozen PIT instruments")
+    lines = [f"{code}\t{start.isoformat()}\t{end.isoformat()}"
+             for code, (start, end) in sorted(ranges.items())]
     all_path = qlib_root / "instruments" / "all.txt"
     _atomic_private_bytes(all_path, ("\n".join(lines) + "\n").encode("utf-8"))
     index_path = qlib_root / "instruments" / "index.txt"
@@ -3627,7 +3739,7 @@ def _finalize_legacy_bin_patch(
     unchanged(output / "calendars" / f"{frequency}.txt", native.get("calendar_signature"))
     unchanged(output / "instruments/all.txt", native.get("instruments_signature"))
     key = "day_meta_export" if dataset == "daily_bin" else "minute_meta_export"
-    pin = prefix.manifest["components"][key]
+    pin = resolve_legacy_component_pin(prefix, key)
     metadata_path = output / "meta_export.json"
     if _sha256_path(metadata_path) != pin["sha256"]:
         raise CandidateBuildStageError("native month inherited metadata differs")
@@ -3932,13 +4044,43 @@ def _patch_index_component(
     if isinstance(invocation.build_inputs.get("monthly_legacy_predecessor"), Mapping):
         from .monthly_build_bridge import load_monthly_predecessor_prefix
         from .monthly_legacy_index import append_legacy_index_context
+        from .monthly_index_corrections import index_correction_rows
         if ComponentAction(str(_action_entry(invocation, Component.DOMESTIC_INDEX_CONTEXT)["action"])) is not ComponentAction.INCREMENTAL:
             raise CandidateBuildStageError("legacy index month append cannot apply a historical repair")
         prefix = load_monthly_predecessor_prefix(context_plan=invocation.build_inputs["monthly_legacy_predecessor"], profile=invocation.profile)
-        receipt = append_legacy_index_context(prefix, source=source,
-            output_root=invocation.staging_root / "index_context", cutoff=cutoff,
-            source_bundle_sha256=invocation.build_inputs["source_bundle_sha256"],
-            definitions=invocation.profile.indices, checkpoint=checkpoint)
+        retained = invocation.staging_root / 'index_context/index_materialization_receipt.json'
+        if retained.exists():
+            from .monthly_build_resume import _signature
+            receipt = _load_component_json(retained)
+            if (receipt.get('schema_version') != 'aistock_monthly_native_index_materialization_v1'
+                    or receipt.get('status') != 'PASS' or receipt.get('cutoff') != cutoff.isoformat()
+                    or receipt.get('predecessor_manifest_sha256') != prefix.manifest_sha256
+                    or receipt.get('source_bundle_sha256') != invocation.build_inputs['source_bundle_sha256']):
+                raise CandidateBuildStageError('retained native index identity differs')
+            for item in receipt['files']:
+                relative = normalize_root_relative_path(item['relative_path'])
+                if _signature(retained.parent / relative) != item.get('target_signature'):
+                    raise CandidateBuildStageError('retained native index file changed')
+            # Keep the producer's return contract on the reuse path too. The
+            # prepare stage serializes IndexMaterializationReceipt, not its
+            # on-disk details dictionary. Do not rerun the completed producer.
+            from .index_contract import index_contract_digest
+            receipt = IndexMaterializationReceipt(
+                root=retained.parent,
+                h5_path=retained.parent / "index_daily.h5",
+                parquet_path=retained.parent / "index_context.parquet",
+                csv_root=retained.parent / "index_csv",
+                rows=receipt["rows"],
+                provider_fill_rows=0,
+                contract_digest=index_contract_digest(),
+                details=receipt,
+            )
+        else:
+            receipt = append_legacy_index_context(prefix, source=source,
+                output_root=invocation.staging_root / "index_context", cutoff=cutoff,
+                source_bundle_sha256=invocation.build_inputs["source_bundle_sha256"],
+                definitions=invocation.profile.indices, checkpoint=checkpoint,
+                historical_corrections=index_correction_rows(invocation.build_inputs.get("monthly_repair_inputs"), before=prefix.cutoff))
         return receipt, {"schema_version": "aistock_monthly_native_index_adoption_v1",
                          "component": Component.DOMESTIC_INDEX_CONTEXT.value,
                          "action": ComponentAction.INCREMENTAL.value,
@@ -4106,6 +4248,7 @@ def _merged_rows(
     date_ranges: Sequence[tuple[date, date]] = (),
     instruments: Sequence[str] = (),
     metrics: ExternalOrderedRowsMetrics | None = None,
+    quote_days: tuple[tuple[str, date], ...] = (),
 ) -> Iterable[Mapping[str, Any]]:
     spool = staging / ".merge_spool" / component.value / dataset
     spool.mkdir(parents=True, exist_ok=False)
@@ -4116,6 +4259,7 @@ def _merged_rows(
             dataset,
             date_ranges=date_ranges,
             instruments=instruments,
+            **({"quote_days": quote_days} if quote_days else {}),
         )
         if date_ranges or instruments
         else source.ordered_partitions(component, dataset)

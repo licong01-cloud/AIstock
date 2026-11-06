@@ -1,0 +1,299 @@
+{
+  "actual": "Live effective QE workspace remains source-internal; mounted Scheduler history and env paths resolve inside release; generated env lacks QE_WORKSPACE_WSL and replaces custom entries.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2069",
+  "closed_at": "2026-10-22T19:44:50Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T18:51:25.619376Z",
+  "description": "Live effective QE workspace remains source-internal; mounted Scheduler history and env paths resolve inside release; generated env lacks QE_WORKSPACE_WSL and replaces custom entries.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-7f174ac71bf3",
+      "timestamp": "2026-10-22T18:51:25.619359Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-september-execution-20261023/node1_update_plan.md",
+    "https://github.com/licong01-cloud/RD-Agent/pull/24",
+    "tmp/handoff/qe-september-execution-20261023/node1_runtime_readback.json",
+    "tmp/handoff/qe-september-execution-20261023/node1_config_readback.json"
+  ],
+  "expected": "Use external RDAGENT_STATE_ROOT for history and service config; generated deployment env controls the actual QE workspace and preserves node-specific registry configuration; deploy only a clean merged immutable release.",
+  "external_delivery": {
+    "authorization": "User explicitly authorized the planned node1 remote API update and experiments in this QE long task.",
+    "business_readback": {
+      "migration_task": "qe_20261023_032933_601a",
+      "node_loop1_and_2_status": "Initial submission receipts running; six loops later failed before training in unchanged minute coverage validator.",
+      "one_start": "passed",
+      "six_pending_configs_and_same_dataset_binding": "passed"
+    },
+    "central_node_configuration": {
+      "after": "/home/lc999/rdagent_state/qe_workspace",
+      "before": "/home/lc999/projects/RD-Agent-main/qe_workspace",
+      "central_api_restarted": false,
+      "ddl": false,
+      "dev_database": "aistock_dev",
+      "dev_update_readback_and_rollback": "passed",
+      "production_single_field_readback": "passed",
+      "target": "production infra.compute_nodes/rdagent-node1/workspace_base"
+    },
+    "changed_source_files": [
+      "rdagent/app/scheduler/config_service.py",
+      "rdagent/app/scheduler/storage.py",
+      "test/app/test_rdagent_release.py",
+      "tools/rdagent_release.py"
+    ],
+    "dataset_identity_complete": true,
+    "dataset_manifest_sha256": "522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410",
+    "executor_file_set_unchanged": true,
+    "history_unchanged": true,
+    "old_task_bindings_unchanged": true,
+    "old_three_reports_unchanged": true,
+    "old_workspace_compatibility": true,
+    "operational_journal": "/home/lc999/rdagent_state/deployments/qe-september-runtime-20261023.json",
+    "process_restarted": true,
+    "release_built": true,
+    "release_deployed": true,
+    "release_path": "/home/lc999/rdagent_releases/e5d75965216d4e322a5be5d3766f33a08f426d01",
+    "research_execution_limit": {
+      "instruments": 4,
+      "no_experiment_retry": true,
+      "not_a_runtime_release_acceptance_claim": "API release identity and external state passed; full research data usability did not pass.",
+      "old_new_qrun_sha_identical": true,
+      "raw_source_rows_exist_for_all_98_dates": true,
+      "reason": "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH",
+      "status": "failed_before_model_training",
+      "task_id": "qe_20261023_032933_601a",
+      "uncovered_instrument_days": 98
+    },
+    "rollback_available": true,
+    "rollback_release": "/home/lc999/rdagent_releases/4008ba7732168819613fd0072203562ba98f1fad",
+    "runtime_receipt_sha256": "04a37f050ede1098655f7079c6127e80709d17453f3a4ae919ccd287a5147732",
+    "runtime_target": {
+      "host": "192.168.50.215",
+      "node_id": "rdagent-node1",
+      "pid_after": 194804,
+      "pid_before": 16516,
+      "service": "rdagent-results-api.service"
+    },
+    "runtime_verified": true,
+    "scope_note": "This AIstock change records delivery evidence only. Runtime source changes are in the RD-Agent repository and the actual node1 restart is separately disclosed here.",
+    "secret_values_recorded": false,
+    "source_merge_sha": "e5d75965216d4e322a5be5d3766f33a08f426d01",
+    "source_merged": true,
+    "source_pr": "https://github.com/licong01-cloud/RD-Agent/pull/24",
+    "source_tree": "e5036a11622fef43f57df0cda4c0b9d8ab8db159",
+    "source_validation": {
+      "changed_line_ruff": "passed",
+      "ci": "no checks reported",
+      "linux_targeted_tests": "16 passed",
+      "syntax": "passed"
+    },
+    "state_root": "/home/lc999/rdagent_state"
+  },
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-22T18:51:25.619376Z",
+  "fix_branch": null,
+  "fix_commit": "6456f09e218b0cb21dc4f4e1d0796ea9ab332b9a",
+  "fix_summary": "RD-Agent PR24 externalizes Scheduler state and emits the effective QE workspace while preserving node deployment entries; immutable node1 release, external workspace compatibility and central node path alignment are verified.",
+  "fixed_at": "2026-10-22T19:44:50Z",
+  "github_issue_number": 6609,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6609",
+  "last_seen_at": "2026-10-22T18:51:25.619376Z",
+  "module": "rdagent",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6613",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2069",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "eb58ba619ec65cfe",
+    "recorded_at": "2026-10-22T19:46:08.030876Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8027ebbc53ab3df90b2d60e4a0c3a220ca924054",
+    "source_merge_commit": "6456f09e218b0cb21dc4f4e1d0796ea9ab332b9a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6613",
+    "validation_evidence": [
+      "python -m nox -s l0 -- tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json -> passed: one file, zero findings, zero blocking",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "d1da71a856b5e376a400678940bfc6231175965b6888ff21dd356a8b7af3cf73"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "rdagent"
+  ],
+  "title": "RD-Agent release leaves Scheduler state in source and omits effective QE workspace environment",
+  "trigger_condition": {
+    "fingerprint": "7f174ac71bf3060b7f7ed9ee",
+    "source_event_id": "FE-20261022-7f174ac71bf3"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -- tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json -> passed: one file, zero findings, zero blocking",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

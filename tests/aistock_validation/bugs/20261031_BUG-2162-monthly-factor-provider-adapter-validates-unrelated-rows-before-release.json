@@ -1,0 +1,321 @@
+{
+  "actual": "A valid requested A-share plus an unrelated BJ null factor returns ArtifactReadyProviderTerminal response row is not receipt-safe; null date returns response date is invalid.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "tests/aistock_validation/bugs/20261031_BUG-2162-monthly-factor-provider-adapter-validates-unrelated-rows-before-release.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2162",
+  "closed_at": "2026-10-31T15:11:04.626708Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-31T14:27:36.574772Z",
+  "description": "Follow-up to BUG-2161: the real dated factor DataFrame adapter validates dates and serializes NaN before the inner release projection. Bind the complete release fact population at the native adapter boundary, project recognizable unrelated identities after existing envelope bounds but before row semantics, preserve strict required facts and frozen offline replay. No database, profile, dataset or process changes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261031-74f3f78e60af",
+      "timestamp": "2026-10-31T14:27:36.574772Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Project recognizable unrelated instruments before economic/date/JSON validation; required and malformed source rows remain strict. Preserve no-network isolated fresh-process tests of the real adapter.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2162-monthly-factor-provider-adapter-validates-unrelated-rows-before-release.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "tests/aistock_validation/bugs/20261031_BUG-2162-monthly-factor-provider-adapter-validates-unrelated-rows-before-release.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/artifact_ready_source.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py",
+        "backend/tests/dataset_release/test_artifact_ready_build_source.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/artifact_ready_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_artifact_ready_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/artifact_ready_source.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py",
+        "backend/tests/dataset_release/test_artifact_ready_build_source.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py"
+    ]
+  },
+  "first_seen_at": "2026-10-31T14:27:36.574772Z",
+  "fix_branch": null,
+  "fix_commit": "899824c22f1b3662c0cd8398d1c2d06066dc6d65",
+  "fixed_at": "2026-10-31T14:38:06Z",
+  "github_issue_number": 6971,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6971",
+  "last_seen_at": "2026-10-31T14:27:36.574772Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6972",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh task-worktree Python via native dated DataFrame adapter: RED 21 failed/11 passed; GREEN final related matrix 208 passed/1 skipped. No external provider calls or database access.",
+      "Native adapter regressions cover unrelated BJ/B-share/fund/nonselected SH-SZ null dates, NaN and infinity; required invalid values, missing keys, duplicates, overlap conflicts and malformed identities remain strict; IPO fact outside buy PIT retained; projected CAS replays identically without network.",
+      "Multi-round self-review: whole-response schema/size bounds still precede projection; only recognizable unrelated identities omitted; no callback scope state or PIT clipping; injected one-date provider/replay contract preserved. DESIGN-COMPLIANCE-001 all four checks passed; no new gates or approvals."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\monthly-october-release-20261030\\BUG-2162-postrestart-canonical.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2162",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "899824c22f1b3662c0cd8398d1c2d06066dc6d65",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-31T15:09:44.993965Z",
+      "mode": "read_only",
+      "observed_identity": "75802cbed159ce643ca17311c849096089b3576d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "eee93f2fdab24601edc3284cb43a21fe133ac7569ae3b0a30bca93af8d0cc74c",
+      "receipt_sha256": "10d1660fb5e81a45df52abe78a06c5e42ef166874365487e7d6057c5dc177c7d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "674aaa72dae3df42c9f8f60a4381969abbaa270c23a476b0ba8fef59079e9550",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2162",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bff81c49a3ab9f5e",
+    "recorded_at": "2026-10-31T14:39:02.400813Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fa5750625feb3f90133c796ef5fbbce91f8e4f64",
+    "source_merge_commit": "899824c22f1b3662c0cd8398d1c2d06066dc6d65",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6972",
+    "validation_evidence": [
+      "validation-receipt: id=fcfc1fb923ff0202 commit=fa5750625feb3f90133c796ef5fbbce91f8e4f64 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_build_source.py backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_source_authority.py -q` result=`208 passed, 1 skipped`",
+      "validation-receipt: id=bca0e91823f14a28 commit=fa5750625feb3f90133c796ef5fbbce91f8e4f64 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_source.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "7fee0c544cebfe03c7cdd0d9994f6f6e28f4112b067f775d1be260dcca3323b3"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "monthly factor provider adapter validates unrelated rows before release projection",
+  "trigger_condition": {
+    "fingerprint": "74f3f78e60af6e1ed01d4af2",
+    "source_event_id": "FE-20261031-74f3f78e60af"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=fcfc1fb923ff0202 commit=fa5750625feb3f90133c796ef5fbbce91f8e4f64 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_build_source.py backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_source_authority.py -q` result=`208 passed, 1 skipped`",
+    "validation-receipt: id=bca0e91823f14a28 commit=fa5750625feb3f90133c796ef5fbbce91f8e4f64 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_source.py` result=`passed`",
+    "post-restart-verify BUG-2162 worker-scheduler -> passed; backend identity and supervised child verified on 2026-10-31"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

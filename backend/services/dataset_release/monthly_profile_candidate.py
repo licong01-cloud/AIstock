@@ -14,6 +14,7 @@ import tempfile
 from typing import Any, Mapping
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .monthly_file_identity import file_sha256
 from .monthly_worker import ProducerContext
 from .profile_contract import (
     ACTIVE_PROFILE_SCHEMA_V4,
@@ -55,22 +56,87 @@ def _is_link(path: Path) -> bool:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
+
+
+def _existing_profile_payload(path: Path) -> bytes | None:
+    for part in (path, *path.parents):
+        if _is_link(part):
+            raise MonthlyProfileCandidateError("profile target path is linked")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise MonthlyProfileCandidateError("profile target is not a regular file")
+    before = path.stat()
+    raw = path.read_bytes()
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+        after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+    ):
+        raise MonthlyProfileCandidateError("profile target changed during readback")
+    _canonical_payload(raw, label="profile target")
+    return raw
 
 
 def _read_canonical(path: Path, *, label: str) -> dict[str, Any]:
     try:
         raw = path.read_bytes()
+    except OSError as exc:
+        raise MonthlyProfileCandidateError(f"{label} is unreadable") from exc
+    return _canonical_payload(raw, label=label)
+
+
+def _canonical_payload(raw: bytes, *, label: str) -> dict[str, Any]:
+    try:
         value = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MonthlyProfileCandidateError(f"{label} is unreadable") from exc
     if not isinstance(value, dict) or raw != canonical_json_bytes(value) + b"\n":
         raise MonthlyProfileCandidateError(f"{label} is not canonical JSON")
     return value
+
+
+def _predecessor_profile(
+    predecessor: Mapping[str, Any], reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Read the submitted bytes, never substitute the currently active identity."""
+    path = Path(str(predecessor.get("profile_path") or ""))
+
+    def matching_bytes(candidate: Path) -> bytes | None:
+        if not candidate.is_absolute() or any(
+            _is_link(part) for part in (candidate, *candidate.parents)
+        ):
+            return None
+        try:
+            if not candidate.is_file() or candidate.stat().st_size != reference.get("size"):
+                return None
+            raw = candidate.read_bytes()
+        except OSError:
+            return None
+        if len(raw) != reference.get("size") or hashlib.sha256(raw).hexdigest() != reference.get("sha256"):
+            return None
+        return raw
+
+    raw = matching_bytes(path)
+    if raw is not None:
+        return _canonical_payload(raw, label="predecessor profile")
+    # Pre-snapshot operations recorded the mutable active path. Recover only an
+    # already existing, byte-identical profile from its regular candidates dir.
+    # New operations pin their own input snapshot and never use this fallback.
+    if (
+        path.is_absolute()
+        and path.name == reference.get("id")
+        and path.name != "predecessor-profile.json"
+    ):
+        candidates = path.parent / "candidates"
+        if candidates.is_dir() and not any(
+            _is_link(part) for part in (candidates, *candidates.parents)
+        ):
+            for candidate in sorted(candidates.glob("*.json")):
+                raw = matching_bytes(candidate)
+                if raw is not None:
+                    return _canonical_payload(raw, label="predecessor profile")
+    raise MonthlyProfileCandidateError("predecessor profile bytes differ")
 
 
 def _plain_file(root: Path, relative: str, *, label: str) -> Path:
@@ -136,18 +202,10 @@ class SealedMonthlyProfileCandidateBuilder:
             root = candidate.resolve(strict=True)
         except OSError as exc:
             raise MonthlyProfileCandidateError("candidate root is unavailable") from exc
-        if _is_link(candidate) or not root.is_dir() or output.exists():
+        if _is_link(candidate) or not root.is_dir():
             raise MonthlyProfileCandidateError("profile target or candidate root is invalid")
-        predecessor_path = Path(str(predecessor.get("profile_path") or ""))
-        if (
-            not predecessor_path.is_absolute()
-            or _is_link(predecessor_path)
-            or not predecessor_path.is_file()
-            or _sha256(predecessor_path) != predecessor_ref.get("sha256")
-            or predecessor_path.stat().st_size != predecessor_ref.get("size")
-        ):
-            raise MonthlyProfileCandidateError("predecessor profile bytes differ")
-        base = _read_canonical(predecessor_path, label="predecessor profile")
+        _existing_profile_payload(output)
+        base = _predecessor_profile(predecessor, predecessor_ref)
 
         manifest_path = _plain_file(root, "qe_dataset_manifest.json", label="dataset manifest")
         manifest = _read_canonical(manifest_path, label="dataset manifest")
@@ -437,6 +495,25 @@ class SealedMonthlyProfileCandidateBuilder:
         }
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = canonical_json_bytes(profile) + b"\n"
+        from backend.services.quantevolver.qe_active_dataset_profile import (
+            load_qe_profile,
+            validate_controller_snapshot,
+        )
+
+        def reuse_identical() -> bool:
+            existing = _existing_profile_payload(output)
+            if existing is None:
+                return False
+            if existing != payload:
+                raise MonthlyProfileCandidateError("profile target differs from the planned candidate")
+            validated = load_qe_profile(output)
+            validate_controller_snapshot(validated)
+            if _existing_profile_payload(output) != payload:
+                raise MonthlyProfileCandidateError("profile target changed during validation")
+            return True
+
+        if reuse_identical():
+            return output
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{output.name}.", suffix=".validate", dir=output.parent
         )
@@ -446,17 +523,16 @@ class SealedMonthlyProfileCandidateBuilder:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            from backend.services.quantevolver.qe_active_dataset_profile import (
-                load_qe_profile,
-                validate_controller_snapshot,
-            )
-
             validated = load_qe_profile(temporary)
             validate_controller_snapshot(validated)
-            with output.open("xb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
+            try:
+                with output.open("xb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except FileExistsError:
+                if not reuse_identical():
+                    raise MonthlyProfileCandidateError("profile target disappeared during publication")
         finally:
             temporary.unlink(missing_ok=True)
         return output.resolve(strict=True)

@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1425",
-  "closed_at": null,
+  "closed_at": "2026-10-25T18:30:18.364130Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -40,19 +40,19 @@
   "expected": "daily_basic 增量同步成功写入审计行后，门禁能验证字段覆盖率，不产生 required_field_coverage_unproven 误报 final_blocked",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json",
       "backend/services/audit_backed_data_health.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json",
       "backend/services/audit_backed_data_health.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -154,8 +154,8 @@
     ]
   },
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4c7555f9f7949b45deb2d2f9fc1181827bd0ad32",
+  "fixed_at": "2026-09-10T17:57:09Z",
   "github_issue_number": 4515,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4515",
   "last_seen_at": "2026-09-10T17:32:34.026116Z",
@@ -163,6 +163,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4516",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -189,9 +190,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-1425-canonical-root-exact-record-r3.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1425",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b0865c04f097ba46c5cfce2db11bc15a2764c3071c4dae8db112f0908284dcfb",
+      "contract_digest": "542f44310250fbe5b8237bfa8f6a81c03fe91974d3eb84e4b8e6c708d69a826b",
+      "expected_identity": "4c7555f9f7949b45deb2d2f9fc1181827bd0ad32",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T18:30:13.988224Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1fd178542a07e27312763acbb2b27a4c22fd73ce25024f0d74ae3b1a65be1121",
+      "receipt_sha256": "c781ffd89d18572aac000d73a62b03d1a5d4dd9aebc953e0402d6798304f8f4b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ded09278a452d937d43c6e6870ace780e7de5122b527eb40c71c4c65a560a7f5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -201,7 +225,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fix_ready",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1425",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "84cc0ea2f26c0865",
+    "recorded_at": "2026-09-10T17:59:22.013995Z",
+    "runtime_contract_digest": "542f44310250fbe5b8237bfa8f6a81c03fe91974d3eb84e4b8e6c708d69a826b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4a653615aac2d85eda2d95cffd85666431c6ca87",
+    "source_merge_commit": "4c7555f9f7949b45deb2d2f9fc1181827bd0ad32",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4516",
+    "validation_evidence": [
+      "pytest backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 123 passed",
+      "nox -s data_sync_autonomy_backend -> 327 passed",
+      "nox -s validation_module_registry_l0 -> 8 passed",
+      "ruff check backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> ok",
+      "git diff --check -> ok"
+    ],
+    "validation_evidence_digest": "cef06b4ecbb1b0694007f1d3a768f37d83f8130f795f51027c5a9e4cb722950b"
+  },
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -217,7 +266,8 @@
     "nox -s validation_module_registry_l0 -> 8 passed",
     "ruff check backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> ok",
     "python -m compileall backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> ok",
-    "git diff --check -> ok"
+    "git diff --check -> ok",
+    "Original source CI/tests retained; exact refreshed-worktree runtime probe PASS; two metadata reviews and DESIGN-COMPLIANCE-001 preserve original scope without fake closure or new data/service actions."
   ],
   "verification_budget": {
     "budget": "standard",

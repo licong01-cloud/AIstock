@@ -37,6 +37,15 @@ def test_default_authority_resolves_historical_moneyflow_code_and_boundary() -> 
     ) == ["300114.SZ", "302132.SZ"]
 
 
+@pytest.mark.parametrize("dataset", ["market.cyq_perf", "market.bak_basic"])
+def test_dense_stock_panels_share_identity_without_inheriting_other_source_aliases(dataset):
+    manifest = load_default_security_source_identity_manifest()
+    resolution = manifest.resolve("302132.SZ", date(2025, 1, 2), dataset)
+    assert resolution.source_ts_code == "302132.SZ"
+    assert resolution.resolution_kind == "canonical_same_code"
+    assert manifest.resolve("302132.SZ", date(2025, 1, 2), MONEYFLOW_DATASET).source_ts_code == "300114.SZ"
+
+
 def test_source_rows_are_remapped_to_canonical_without_changing_values() -> None:
     manifest = load_default_security_source_identity_manifest()
     source = pd.DataFrame(

@@ -56,12 +56,13 @@ class MinuteQuoteCatalog:
     calendar_sha256: str
     calendar_rows: int
     feature_files: int
+    frequency: str = '1min'
 
     def receipt(self) -> dict:
         return {
             "mode": "physical_quote_catalog_v1",
             "range_authority": "finite_positive_close_boundaries_v1",
-            "frequency": "1min", "field": "close",
+            "frequency": self.frequency, "field": "close",
             "calendar_sha256": self.calendar_sha256, "calendar_rows": self.calendar_rows,
             "feature_files": self.feature_files, "output_instruments": len(self.ranges),
             "output_rows": len(self.ranges), "empty_quote_codes": list(self.empty_codes),
@@ -92,11 +93,14 @@ def _finite_edge(handle, first: int, last: int, *, reverse: bool, checkpoint: Ca
 def build_minute_quote_catalog(
     root: Path, *, start: str | None = None, end: str | None = None,
     checkpoint: Callable[[], None] = lambda: None,
+    frequency: str = '1min',
 ) -> MinuteQuoteCatalog:
     """Return catalog bytes without modifying bins, pools, or any database."""
+    if frequency not in {'day', '1min'}:
+        raise ValueError('unsupported physical feature frequency')
     root = Path(root).absolute()
     _plain(root)
-    calendar_path = root / "calendars/1min.txt"
+    calendar_path = root / f"calendars/{frequency}.txt"
     features = root / "features"
     _plain(calendar_path)
     _plain(features)
@@ -118,7 +122,7 @@ def build_minute_quote_catalog(
         if code in seen:
             raise QuoteCatalogError(f"duplicate canonical feature identity: {code}")
         seen.add(code)
-        path = directory / "close.1min.bin"
+        path = directory / f"close.{frequency}.bin"
         _plain(path)
         before = path.stat()
         if not path.is_file() or before.st_size < 8 or before.st_size % 4:
@@ -144,7 +148,7 @@ def build_minute_quote_catalog(
     if not ranges:
         raise QuoteCatalogError("no finite positive minute quotes found")
     payload = "".join(f"{code}\t{a}\t{b}\n" for code, (a, b) in sorted(ranges.items())).encode("utf-8")
-    return MinuteQuoteCatalog(payload, ranges, tuple(empty), hashlib.sha256(calendar_bytes).hexdigest(), len(calendar), len(seen))
+    return MinuteQuoteCatalog(payload, ranges, tuple(empty), hashlib.sha256(calendar_bytes).hexdigest(), len(calendar), len(seen), frequency)
 
 MINUTE = "components/minute_bin_candidate"
 CATALOG = f"{MINUTE}/instruments/all.txt"

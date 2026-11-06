@@ -74,7 +74,8 @@ class _Readiness:
 
 
 class _Authority:
-    def __init__(self) -> None:
+    def __init__(self, *, canonical: bool = True) -> None:
+        self.canonical = canonical
         self.policy = ValidatedExecutionPolicy(
             policy_id="execpol_twap",
             package_id="pkg_alpha",
@@ -107,6 +108,18 @@ class _Authority:
                 "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {},
             },
         )
+        if self.canonical:
+            from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
+            from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_POINTER_PROFILE_SCHEMA
+            from backend.services.simulation_runtime.localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
+
+            version.config_json["canonical_pit_authority_profile"] = {
+                "schema_version": CANONICAL_PIT_POINTER_PROFILE_SCHEMA, "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+            }
+            native = LocalSimRuntimeProfileConfigV1.model_validate(version.config_json)
+            version.config_json = native.model_dump(mode="json")
+            version.config_sha256 = canonical_json_sha256(version.config_json)
+            version.daily_strategy_profile_version_id = f"lsdaily_{canonical_json_sha256(native.daily_strategy.model_dump(mode='json'))[:16]}"
         return SimpleNamespace(
             package_id=package_id,
             manifest_sha256=MANIFEST,
@@ -146,15 +159,19 @@ class _FailAfterAccountBundleRepository(InMemoryLocalSimSuccessorRepository):
         raise RuntimeError("injected selection link insert failure")
 
 
-def _service(repository=None):
+def _service(repository=None, *, canonical=True):
+    from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
+
     repository = repository or InMemoryLocalSimSuccessorRepository()
     readiness = _Readiness()
-    control = LocalSimControlPlaneService(repository=repository, clock=lambda: NOW)
+    control = LocalSimControlPlaneService(
+        repository=repository, clock=lambda: NOW, pit_authority_resolver=_canonical_resolver(),
+    )
     return (
         LocalSimProductControlPlaneService(
             repository=repository,
             control=control,
-            authority=_Authority(),
+            authority=_Authority(canonical=canonical),
             readiness=readiness,
             historical_source_authority=_HistoricalAuthority(),
         ),
@@ -221,6 +238,44 @@ def test_replay_product_commits_five_entities_in_one_repository_transaction() ->
     assert len(repository.releases) == 1
     assert len(repository.bindings) == 1
     assert len(repository.replay_jobs) == 1
+
+
+def test_new_canonical_replay_freezes_binding_before_atomic_creation() -> None:
+    from backend.services.simulation_runtime.localsim_native_context import frozen_localsim_profile
+
+    service, repository, _ = _service()
+    result = service.create_replay(_replay_request(), created_by="test")
+    metadata = result.release.release_config_json["metadata"]
+    assert metadata["canonical_pit_authority"] == metadata["selection_runtime_config"]["canonical_pit_authority"]
+    assert metadata["canonical_pit_authority"]["authority_status"] == "ACTIVE_CANONICAL"
+    assert service.control.pit_authority_resolver.calls == 1
+    assert frozen_localsim_profile(repository.get_release(result.release.release_id)) is not None
+    assert repository.get_replay_job(result.replay.replay_job_id) == result.replay
+
+
+def test_new_replay_does_not_silently_migrate_a_legacy_profile() -> None:
+    from backend.services.trading_core.errors import RuntimeConfigInvalidError
+
+    service, repository, _ = _service(canonical=False)
+    with pytest.raises(RuntimeConfigInvalidError) as caught:
+        service.create_replay(_replay_request(), created_by="test")
+    assert caught.value.context["reason_code"] == "LOCALSIM_REPLAY_CANONICAL_PIT_PROFILE_REQUIRED"
+    assert not repository.accounts and not repository.ledger_scopes
+    assert not repository.releases and not repository.bindings and not repository.replay_jobs
+    assert service.control.pit_authority_resolver.calls == 0
+
+
+def test_new_replay_rejects_uncovered_end_without_partial_entities() -> None:
+    from dataclasses import replace
+    from backend.services.selection_center.canonical_pit_runtime import CanonicalPitRuntimeError
+
+    service, repository, _ = _service()
+    resolver = service.control.pit_authority_resolver
+    resolver.binding = replace(resolver.binding, coverage_end=date(2026, 8, 27))
+    with pytest.raises(CanonicalPitRuntimeError, match="cover"):
+        service.create_replay(_replay_request(), created_by="test")
+    assert not repository.accounts and not repository.ledger_scopes
+    assert not repository.releases and not repository.bindings and not repository.replay_jobs
 
 
 def test_replay_product_rolls_back_account_scope_release_and_binding_when_job_insert_fails() -> None:

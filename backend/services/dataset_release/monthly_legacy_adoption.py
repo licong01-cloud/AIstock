@@ -17,7 +17,7 @@ from typing import Any, Mapping
 from .canonical import canonical_json_bytes
 from .cas_store import CASRef, CASStore, _publish_no_replace
 from .monthly_build_resume import _identity, _plain
-from .monthly_legacy_prefix import load_legacy_prefix
+from .monthly_legacy_prefix import load_legacy_prefix, resolve_legacy_component_pin
 
 
 class LegacyAdoptionError(ValueError):
@@ -188,7 +188,7 @@ def adopt_completed_exports(*, context, compiled, release_root: Path, cas: CASSt
         for relative_path in sorted(inherited):
             dataset, _, tail = relative_path.split("/", 2)
             key = "day_provider_catalog" if dataset == "daily_bin" else "minute_provider_catalog"
-            catalog = prefix.manifest["components"][key]["path"]
+            catalog = resolve_legacy_component_pin(prefix, key)["path"]
             # all.txt pin names the exact inherited provider, not a path from
             # a receipt alone. Unknown extra files cannot become history.
             _require(isinstance(catalog, str) and not any(t in catalog for t in ("\\", ":", "\x00"))

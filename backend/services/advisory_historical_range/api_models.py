@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from .models import (
     HistoricalRangeArtifactRefV1,
@@ -50,6 +50,7 @@ class HistoricalRangeCreateRequest(R5StrictModel):
     program_specs: list[HistoricalRangeProgramInput] = Field(min_length=1)
     start_trade_date: date
     end_trade_date: date
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
 
     @model_validator(mode="after")
     def validate_dates(self) -> "HistoricalRangeCreateRequest":
@@ -70,9 +71,31 @@ class HistoricalRangeRefreshOutcomesRequest(HistoricalRangeCommandRequest):
     requested_outcome_logical_ids: list[str] = Field(default_factory=list)
     correction_reason: HistoricalRangeOutcomeRevisionReason | None = None
     correction_evidence_ref: HistoricalRangeArtifactRefV1 | None = None
+    summary_mode: Literal["REFRESH", "DEFER", "ONLY"] = "REFRESH"
+    expected_execution_identity: dict[str, str] | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_summary_identity(self, handler):
+        data = handler(self)
+        if self.summary_mode == "REFRESH":
+            data.pop("summary_mode", None)
+        if self.expected_execution_identity is None:
+            data.pop("expected_execution_identity", None)
+        return data
 
     @model_validator(mode="after")
     def validate_scope(self) -> "HistoricalRangeRefreshOutcomesRequest":
+        if self.summary_mode == "ONLY" and (
+            not self.range_run_ids or self.requested_outcome_logical_ids or self.correction_reason is not None
+        ):
+            raise ValueError("summary-only requires explicit runs and no financial selection/correction")
+        if self.expected_execution_identity is not None:
+            identity = self.expected_execution_identity
+            if set(identity) != {"producer_code_hash", "file_binding_hash", "policy_bundle_hash"} or any(
+                len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+                for value in identity.values()
+            ):
+                raise ValueError("expected execution identity requires exact producer/file/policy SHA256 values")
         if self.range_run_ids != sorted(set(self.range_run_ids)):
             raise ValueError("range_run_ids must be sorted and unique")
         if self.horizons != sorted(set(self.horizons)) or any(item < 1 for item in self.horizons):

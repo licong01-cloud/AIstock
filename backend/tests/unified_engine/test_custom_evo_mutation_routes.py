@@ -60,6 +60,10 @@ class DummyScheduler:
         self.calls.append(("selected", args, kwargs))
         return {"submitted_loop_ids": []}
 
+    async def reassign_pending_custom_evo_loops(self, **kwargs):
+        self.calls.append(("reassign", kwargs))
+        return {"task_id": kwargs["task_id"], "moved_loop_indexes": [cfg["loop_index"] for cfg in kwargs["prepared_loop_configs"]]}
+
     async def update_custom_evo_editable_config(self, **kwargs):
         self.calls.append(("update", kwargs))
         return {
@@ -78,12 +82,12 @@ class DummyScheduler:
         return {"claimed": True, "start_reason": "custom_evo task start claimed"}
 
 
-def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None, model_params=None):
+def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None, model_params=None, model_id="xgboost_v1"):
     runtime_flags = {"random_seed": random_seed} if random_seed is not None else None
     return qe.CustomEvoLoopConfig(
         label=label,
         factor_keys=["alpha_factor||catalog"],
-        model_id="xgboost_v1",
+        model_id=model_id,
         model_params=model_params,
         execution_algo="CLOSE_PRICE",
         label_horizon=5,
@@ -96,6 +100,8 @@ def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, e
 
 def _patch_non_qe_dependencies(monkeypatch):
     from backend.services.quantevolver import qe_active_dataset_profile
+    from backend.services.quantevolver.config_composer import ConfigComposer
+    monkeypatch.setattr(ConfigComposer, "_get_model_info", lambda self, mid: {"model_type": "PTNN" if mid == "gpu" else "XGBOOST"})
 
     def fake_resolve_custom_loop_nodes(loops_config, request_node_id):
         default_node = request_node_id or "local-node"
@@ -495,9 +501,10 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
 
     req = qe.CustomEvolutionCreateRequest(
         task_name="clone task",
+        node_allocation="explicit",
         target_desc="clone",
-        loops=[_loop("clone-a", node_id="node-a"), _loop("clone-b", node_id="node-b")],
-        node_parallelism={"node-a": 2, "node-b": 3},
+        loops=[_loop("clone-a", node_id="rdagent-node1"), _loop("clone-b", node_id="wsl2-5080", model_id="gpu")],
+        node_parallelism={"rdagent-node1": 2, "wsl2-5080": 1},
         clone_from_task_id="source-task",
         consumer_id="advisory",
     )
@@ -506,16 +513,132 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
     assert result["status"] == "success"
     assert result["task_id"] == "new-custom-task"
     assert result["node_assignments"] == [
-        {"loop_index": 1, "node_id": "node-a"},
-        {"loop_index": 2, "node_id": "node-b"},
+        {"loop_index": 1, "node_id": "rdagent-node1"},
+        {"loop_index": 2, "node_id": "wsl2-5080"},
     ]
-    assert result["node_parallelism"] == {"node-a": 2, "node-b": 3}
+    assert result["node_parallelism"] == {"rdagent-node1": 2, "wsl2-5080": 1}
     assert dummy.calls[0][0] == "create"
     assert dummy.calls[0][1]["clone_from_task_id"] == "source-task"
     assert dummy.calls[0][1]["consumer_id"] == "advisory"
     loops_config = dummy.calls[0][1]["loops_config"]
     assert all(loop["strategy_params"]["risk_policy"]["enabled"] is True for loop in loops_config)
     assert all("force_exit" in loop["strategy_params"]["risk_policy"]["hard_actions"] for loop in loops_config)
+
+
+@pytest.mark.parametrize("prefilled_node", [None, "rdagent-node1"])
+def test_new_batch_automatically_uses_two_active_nodes_with_versioned_policy(monkeypatch, prefilled_node):
+    from types import SimpleNamespace
+    from backend.services.quantevolver import qe_active_dataset_profile as profiles
+    from backend.services.quantevolver import qe_batch_execution_policy as policy
+
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    profile = SimpleNamespace(raw={"node_bindings": {"rdagent-node1": {}, "wsl2-5080": {}}})
+    monkeypatch.setattr(profiles, "load_active_qe_profile", lambda: profile)
+    monkeypatch.setattr(profiles, "resolve_and_apply_active_qe_dataset", lambda **kwargs: (
+        {"test_start": "2026-04-01", "test_end": "2026-09-30"}, {}, {"release_id": "same-release"},
+    ))
+    identities_checked = []
+
+    async def verify(same_profile, nodes):
+        assert same_profile is profile
+        identities_checked.extend(nodes)
+        return {"dataset_manifest_sha256": "a" * 64}
+
+    monkeypatch.setattr(policy, "verify_batch_dataset_nodes", verify)
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="automatic batch", auto_start=False,
+        node_id="rdagent-node1",
+        loops=[_loop(arm, random_seed=seed, node_id=prefilled_node, model_id="gpu" if seed == 2024 else "xgboost_v1") for seed in (42, 2024, 2026) for arm in ("B", "R8", "R7")],
+    )
+    result = asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert result["node_parallelism"] == {"rdagent-node1": 4, "wsl2-5080": 2}
+    assert {item["node_id"] for item in result["node_assignments"]} == set(identities_checked)
+    assert len(identities_checked) == 2
+    assert result["execution_policy"]["version"] == policy.QE_BATCH_EXECUTION_POLICY
+    assert result["execution_policy"]["placement"] == "balanced"
+    assert dummy.calls[0][1]["auto_start"] is False
+
+
+def test_new_gpu_full_fit_batch_rejects_four_before_creating_any_task(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="unsafe fit", loops=[_loop(node_id="wsl2-5080", model_id="gpu")],
+        node_allocation="explicit",
+        node_parallelism={"wsl2-5080": 4},
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error_code"] == "QE_BATCH_WORKLOAD_CAPACITY_EXCEEDED"
+    assert dummy.calls == []
+
+
+def test_all_cpu_new_batch_uses_both_nodes_with_four_slots(monkeypatch):
+    from types import SimpleNamespace
+    from backend.services.quantevolver import qe_active_dataset_profile as profiles
+    from backend.services.quantevolver import qe_batch_execution_policy as policy
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    profile = SimpleNamespace(raw={"node_bindings": {"rdagent-node1": {}, "wsl2-5080": {}}})
+    monkeypatch.setattr(profiles, "load_active_qe_profile", lambda: profile)
+    monkeypatch.setattr(profiles, "resolve_and_apply_active_qe_dataset", lambda **kwargs: ({}, {}, {}))
+    checked = []
+
+    async def verify(profile, nodes):
+        checked.extend(nodes)
+        return {"dataset_manifest_sha256": "a" * 64}
+
+    monkeypatch.setattr(policy, "verify_batch_dataset_nodes", verify)
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="CPU only", auto_start=False, node_id="wsl2-5080",
+        loops=[_loop(node_id="wsl2-5080") for _ in range(9)],
+    )
+    result = asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert result["node_parallelism"] == {"rdagent-node1": 4, "wsl2-5080": 4}
+    assert {r["node_id"] for r in result["node_assignments"]} == {"rdagent-node1", "wsl2-5080"}
+    assert checked == ["rdagent-node1", "wsl2-5080"]
+    assert len(dummy.calls) == 1
+
+
+def test_explicit_gpu_on_remote_fails_before_task_or_stock_pool_sync(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    monkeypatch.setattr(qe, "_sync_stock_pool_to_remote", lambda *args: pytest.fail("must reject before sync"))
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="wrong GPU node", node_allocation="explicit",
+        loops=[_loop(node_id="rdagent-node1", model_id="gpu")],
+    )
+    with pytest.raises(HTTPException, match="MODEL_NODE_MISMATCH"):
+        asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert dummy.calls == []
+
+
+def test_execution_policy_readback_is_code_owned_and_side_effect_free(monkeypatch):
+    monkeypatch.setattr(qe, "get_conn", lambda: pytest.fail("readback must not write or require DB"))
+    policy = qe.get_batch_execution_policy()
+    assert policy["version"] == "qe_model_workload_v2"
+    assert policy["default_node_allocation"] == "balanced"
+    assert policy["per_node_workload_limits"] == {"cpu_full_fit_loop": 4, "gpu_full_fit_loop": 2, "pure_backtest_loop": 4}
+    assert policy["model_node_affinity"] == {"gpu": "wsl2-5080"}
+    assert policy["cpu_training_nodes"] == ["rdagent-node1", "wsl2-5080"]
+
+
+def test_balanced_batch_rejects_missing_active_profile_instead_of_falling_back(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    req = qe.CustomEvolutionCreateRequest(task_name="no active binding", loops=[_loop(), _loop()])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    assert exc.value.status_code == 503
+    assert "QE_BATCH_ACTIVE_PROFILE_REQUIRED" in exc.value.detail
+    assert dummy.calls == []
 
 
 def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
@@ -530,16 +653,17 @@ def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
 
     req = qe.CustomEvolutionCreateRequest(
         task_name="ltr task",
+        node_allocation="explicit",
         target_desc="preserve model params",
         loops=[
             _loop(
                 "ltr",
-                node_id="node-a",
+                node_id="rdagent-node1",
                 model_params=model_params,
                 random_seed=42,
             )
         ],
-        node_parallelism={"node-a": 1},
+        node_parallelism={"rdagent-node1": 1},
         auto_start=False,
     )
     result = asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
@@ -549,3 +673,44 @@ def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
     persisted_loop = dummy.calls[0][1]["loops_config"][0]
     assert persisted_loop["model_params"] == model_params
     assert readback["data"]["loops"][0]["model_params"] == model_params
+
+
+def test_pending_node_reassignment_uses_existing_ids_and_formal_preparation(monkeypatch):
+    from backend.services.quantevolver.qe_active_dataset_profile import QE_ACTIVE_PROFILE_SUMMARY_PARAM
+    from backend.services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_DATASET_BINDING_PARAM
+    old = {**qe._model_to_dict(_loop(node_id="rdagent-node1")), "loop_index": 5,
+           "custom_params": {
+               QE_DIRECT_V2_DATASET_BINDING_PARAM: {"selection_pins": {"mode": "stock_universe", "pool_ids": []}},
+               QE_ACTIVE_PROFILE_SUMMARY_PARAM: {"generation": "g", "release_id": "r", "cutoff": "2026-09-30"},
+           }}
+    dummy = DummyScheduler({"loops": [old]})
+    monkeypatch.setattr(qe, "scheduler", dummy)
+
+    async def prepare(loops, **kwargs):
+        assert kwargs["assigned_loop_indexes"] == [5]
+        assert kwargs["required_profile_identity"] == {"generation": "g", "release_id": "r", "cutoff": "2026-09-30"}
+        assert kwargs["apply_batch_policy"] and not kwargs["balanced_batch_nodes"]
+        assert loops[0].node_id == "wsl2-5080"
+        assert loops[0].runtime_flags == old["runtime_flags"]
+        return [{**old, "node_id": "wsl2-5080"}], "wsl2-5080", {"wsl2-5080": 4}
+
+    monkeypatch.setattr(qe, "_prepare_custom_evo_loop_configs", prepare)
+    background = BackgroundTasks()
+    result = asyncio.run(qe.reassign_pending_custom_evo_loops(
+        "task-a", qe.CustomEvoPendingNodeReassignmentRequest(operation_id="once", loop_indexes=[5], node_id="wsl2-5080"), background))
+    assert result["moved_loop_indexes"] == [5]
+    assert [call[0] for call in dummy.calls] == ["config", "reassign"]
+    assert dummy.calls[1][1]["expected_loop_configs"] == [old]
+    assert background.tasks[0].args == ("task-a", [5])
+
+
+@pytest.mark.parametrize("indexes", [[1, 1], [0], [-1]])
+def test_pending_node_reassignment_rejects_bad_indexes_without_side_effects(monkeypatch, indexes):
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    background = BackgroundTasks()
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(qe.reassign_pending_custom_evo_loops(
+            "task-a", qe.CustomEvoPendingNodeReassignmentRequest(operation_id="once", loop_indexes=indexes, node_id="wsl2-5080"), background))
+    assert error.value.status_code == 400
+    assert not dummy.calls and not background.tasks

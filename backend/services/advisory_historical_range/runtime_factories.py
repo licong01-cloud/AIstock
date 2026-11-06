@@ -250,10 +250,24 @@ class HistoricalRangeR5OutcomeRequestFactory:
                     max_parallel_runs=1,
                     lease_seconds=900,
                     file_source_binding=file_binding,
+                    summary_mode=request.summary_mode,
                 )
             )
         ordered = tuple(sorted(requests, key=lambda item: item.range_run_ids))
+        self._check_execution_identity(request, ordered)
         return self._plan(batch_id, request, ordered)
+
+    @staticmethod
+    def _check_execution_identity(request, ordered):
+        expected = request.expected_execution_identity
+        if expected is None:
+            return
+        for item in ordered:
+            actual = {"producer_code_hash": item.producer_code_hash,
+                      "policy_bundle_hash": item.policy_bundle_hash,
+                      "file_binding_hash": (item.file_source_binding or {}).get("binding_hash")}
+            if actual != expected:
+                raise ValueError("outcome execution identity differs from the consumer's frozen identity")
 
     @staticmethod
     def _plan(batch_id, request, ordered):
@@ -285,9 +299,11 @@ class HistoricalRangeR5OutcomeRequestFactory:
                item.expected_batch_row_version != request.expected_row_version or item.horizons != tuple(request.horizons)
                or item.requested_outcome_logical_ids != tuple(request.requested_outcome_logical_ids)
                or item.correction_reason != request.correction_reason or item.correction_evidence_ref != request.correction_evidence_ref
+               or item.summary_mode != request.summary_mode
                for item in requests):
             raise ValueError("frozen outcome command scope differs from API request")
         self._policy_registry.register_frozen_policy_refs(tuple(item.policy_bundle_ref for item in requests))
+        self._check_execution_identity(request, requests)
         return plan
 
     def build_frozen(self, batch_id, request, *, artifact_store, resolved_request_hash):

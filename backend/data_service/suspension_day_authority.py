@@ -14,7 +14,8 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping
 
-DEFAULT_PATH = Path(__file__).with_name("suspension_day_authority_v1.json")
+# Keep the legacy payload unchanged for processes awaiting the user-owned restart.
+DEFAULT_PATH = Path(__file__).with_name("suspension_day_authority_v3.json")
 SCHEMA = "aistock_suspension_day_authority_v1"
 POLICY = "provider_events_with_disclosure_resolution_v1"
 
@@ -46,9 +47,16 @@ def load_authority(payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     for entry in value["entries"]:
         required = {"ts_code", "trade_date", "state", "announcement_id", "disclosure_date", "source_url",
                     "source_content_sha256", "source_file_size", "historical_publication_time_proven"}
+        if entry.get("state") == "INTRADAY_SUSPENDED":
+            required |= {"provider_suspend_timing", "effective_suspend_timing"}
+            if (not isinstance(entry.get("provider_suspend_timing"), str)
+                or not entry["provider_suspend_timing"].strip()
+                or not isinstance(entry.get("effective_suspend_timing"), str)
+                or not _intraday(entry["effective_suspend_timing"])):
+                raise ValueError("suspension intraday disclosure timing differs")
         if set(entry) != required or not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", entry["ts_code"]):
             raise ValueError("suspension disclosure fields differ")
-        if (entry["state"] != "FULL_DAY_SUSPENDED" or not entry["announcement_id"]
+        if (entry["state"] not in {"FULL_DAY_SUSPENDED", "INTRADAY_SUSPENDED"} or not entry["announcement_id"]
             or not re.fullmatch(r"[0-9a-f]{64}", entry["source_content_sha256"])
             or not entry["source_url"].startswith("https://")
             or type(entry["source_file_size"]) is not int or entry["source_file_size"] <= 0
@@ -106,13 +114,26 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
     for (symbol, day), raw in sorted(grouped.items()):
         entry = official.get((symbol, day))
         state, basis = "UNRESOLVED", "PROVIDER_EVENTS"
+        effective_timing = None
         valid = all(row["suspend_type"] in {"S", "R"} for row in raw)
-        # A disclosure settles an ambiguous day, not a malformed/duplicated
-        # provider response or an independent intraday event contradiction.
+        # A disclosure settles an ambiguous day or the provider's zero-length
+        # opening S marker, never a positive intraday span or duplicate event.
+        # The marker alone does NOT prove suspension (ordinary path below).
         disclosure_compatible = valid and len({row["suspend_type"] for row in raw}) == len(raw) and all(
-            row["suspend_timing"] is None or row["suspend_timing"] == "" for row in raw
+            row["suspend_timing"] is None or row["suspend_timing"] == ""
+            or (row["suspend_type"] == "S" and row["suspend_timing"] in ("09:30-09:30", "9:30-9:30"))
+            for row in raw
         )
-        if entry is not None and disclosure_compatible:
+        # A provider clock pair without dates is not, by itself, an ordered
+        # same-day interval. Only an exact-key disclosure can establish the
+        # effective session. Never swap clocks or infer a next-day resumption.
+        intraday_compatible = (entry is not None and entry["state"] == "INTRADAY_SUSPENDED"
+            and len(raw) == 1 and raw[0]["suspend_type"] == "S"
+            and raw[0]["suspend_timing"] in (entry["provider_suspend_timing"], entry["effective_suspend_timing"]))
+        if intraday_compatible:
+            state, basis = entry["state"], "OFFICIAL_DISCLOSURE"
+            effective_timing = entry["effective_suspend_timing"]
+        elif entry is not None and entry["state"] == "FULL_DAY_SUSPENDED" and disclosure_compatible:
             state, basis = entry["state"], "OFFICIAL_DISCLOSURE"
         elif entry is None and valid and len({row["suspend_type"] for row in raw}) == len(raw):
             events = {row["suspend_type"]: str(row["suspend_timing"] or "").strip() for row in raw}
@@ -126,6 +147,7 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
                 elif events == {"R": ""}:
                     state = "RESUMED"
         result.append({"ts_code": symbol, "trade_date": day.isoformat(), "state": state, "basis": basis,
+                       **({"effective_suspend_timing": effective_timing} if effective_timing else {}),
                        "raw_events_sha256": digest(sorted(raw, key=canonical_bytes)), "raw_event_count": len(raw),
                        "authority_sha256": authority_sha256, "historical_publication_time_proven": False,
                        "source_content_sha256": entry["source_content_sha256"] if entry else None,
@@ -138,6 +160,30 @@ def full_day_keys(rows: Iterable[Mapping[str, Any]], *, authority: Mapping[str, 
     return frozenset((row["ts_code"], day_value(row["trade_date"]))
                      for row in project_suspension_days(rows, authority=authority, required_dates=required_dates)
                      if row["state"] == "FULL_DAY_SUSPENDED")
+
+
+def required_minute_end_times(symbol: str, day: date, rows: Iterable[Mapping[str, Any]], *,
+                              authority: Mapping[str, Any] | None = None) -> frozenset[time] | None:
+    """Shared regular end-minute coverage; unresolved timing is NOT an excuse.
+
+    A bar ending exactly at halt start is still required. End-minutes inside
+    (halt_start, halt_end] can be absent; this never creates a price/bar or
+    removes an actual raw quote. Auction timestamps are a separate contract.
+    """
+    facts = [dict(row) for row in rows if str(row["ts_code"]).strip() == symbol and day_value(row["trade_date"]) == day]
+    projected = project_suspension_days(facts, authority=authority, required_dates=(day,))
+    state = next((row for row in projected if row["ts_code"] == symbol), None)
+    regular = frozenset(time(minute//60, minute%60) for minute in (*range(571, 691), *range(781, 901)))
+    if state is None or state["state"] == "RESUMED":
+        return regular
+    if state["state"] == "UNRESOLVED":
+        return None
+    if state["state"] == "FULL_DAY_SUSPENDED":
+        return frozenset()
+    timing = state.get("effective_suspend_timing") or next(
+        row["suspend_timing"] for row in facts if row["suspend_type"] == "S")
+    spans = [tuple(datetime.strptime(clock, "%H:%M").time() for clock in span.split("-")) for span in timing.split(",")]
+    return frozenset(clock for clock in regular if not any(start < clock <= end for start, end in spans))
 
 
 def publication_quality(rows: list[dict[str, Any]], day: date) -> tuple[dict[str, Any], dict[str, Any]]:

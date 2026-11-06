@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1725",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:50:17.056154Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "Recognize only exact registered suspend schedule and date-strategy pairs with independently closed zero-row by-date evidence strictly after source cutoff; retain unknown, historical, positive, failed and unbounded rejection.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-04T04:48:30.559422Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+  "fixed_at": "2026-10-04T04:56:12Z",
   "github_issue_number": 5439,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5439",
   "last_seen_at": "2026-10-04T04:48:30.559422Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5440",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,19 +130,63 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1725-corrected-contract-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1725",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "d5dfe9b718d3a23de3da51d528eeabf83fab50bec97eae9bfb76acd819e74c9c",
+      "expected_identity": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:50:13.249728Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "669450f6af092b4695754d3ea4952a8cd7579da828c8a388b52ebe1b63a4ea9d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "03d855a3b8857169a910962493a2f935c199cec3c46d937e5e5f165402cf6a02",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
-    "runtime_impact": "backend",
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main"
+      "worker-scheduler"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1725",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3e13d8322e3da1ad",
+    "recorded_at": "2026-10-04T04:57:23.740476Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "236e49b1c76752be2dad9567ca11e00601f1522f",
+    "source_merge_commit": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5440",
+    "validation_evidence": [
+      "gh run view 37178298588 --repo licong01-cloud/AIstock --json status,conclusion,headSha -> completed success for236e49b1c76752be2dad9567ca11e00601f1522f; local98 and DEV13 passed; production DDL/dependency/runtime actions noop"
+    ],
+    "validation_evidence_digest": "33a14406f694c8b5e0812a594e92eadcf6f8c81f60641f9670e9093f57cfdacc"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -150,6 +195,10 @@
     "fingerprint": "56bfb5ca3c88f4341dde847c",
     "source_event_id": "FE-20261004-56bfb5ca3c88"
   },
+  "validation_evidence": [
+    "gh run view 37178298588 --repo licong01-cloud/AIstock --json status,conclusion,headSha -> completed success for236e49b1c76752be2dad9567ca11e00601f1522f; local98 and DEV13 passed; production DDL/dependency/runtime actions noop",
+    "Exact merged source scope and canonical-root supervised Worker probe PASS; target metadata correction reviewed twice; original source checks retained; no data/source/gate/runtime changes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

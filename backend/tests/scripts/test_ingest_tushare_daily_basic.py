@@ -354,9 +354,10 @@ def test_upsert_normalizes_non_finite_provider_values(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_execute_values(_cursor: object, sql: str, values: list[tuple[Any, ...]]) -> None:
+    def fake_execute_values(_cursor: object, sql: str, values: list[tuple[Any, ...]], **_kwargs):
         captured["sql"] = sql
         captured["values"] = values
+        return []
 
     monkeypatch.setattr(ingestion.pgx, "execute_values", fake_execute_values)
     row = {
@@ -382,9 +383,10 @@ def test_upsert_preserves_finite_target_when_provider_value_is_invalid(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_execute_values(_cursor: object, sql: str, values: list[tuple[Any, ...]]) -> None:
+    def fake_execute_values(_cursor: object, sql: str, values: list[tuple[Any, ...]], **_kwargs):
         captured["sql"] = sql
         captured["values"] = values
+        return []
 
     monkeypatch.setattr(ingestion.pgx, "execute_values", fake_execute_values)
 
@@ -423,8 +425,9 @@ def test_upsert_normalizes_every_numeric_field_and_keeps_idempotent_sql(
 ) -> None:
     captured: list[tuple[str, list[tuple[Any, ...]]]] = []
 
-    def fake_execute_values(_cursor: object, sql: str, values: list[tuple[Any, ...]]) -> None:
+    def fake_execute_values(_cursor: object, sql: str, values: list[tuple[Any, ...]], **_kwargs):
         captured.append((sql, values))
+        return []
 
     monkeypatch.setattr(ingestion.pgx, "execute_values", fake_execute_values)
     row = {

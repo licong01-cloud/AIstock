@@ -324,6 +324,7 @@ export default React.memo(function LoopDetailPanel({
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflowY: "auto", padding: "24px", backgroundColor: "#fafaf9", display: "flex", flexDirection: "column", gap: "16px" }}>
           <EvolutionTrajectory
             taskId={activeTaskId}
+            suppliedLoops={loops}
             taskType={activeTask?.task_type || taskType}
             evolutionMode={activeTask?.evolution_mode}
             sourceType={activeTask?.source_type}

@@ -69,11 +69,29 @@ def _read_database(env_file, target, entries, *, dev_rows=()):
                             "count(*) FILTER (WHERE volume_hand>0 OR amount_li>0)::int AS positive_minute_rows "
                             "FROM market.kline_minute_raw WHERE ts_code=%s AND trade_time >= %s::date "
                             "AND trade_time < %s::date + interval '1 day'", (*key, key[1]))
-                prices.append({"ts_code": key[0], "trade_date": key[1], **daily, **dict(cur.fetchone())})
+                minute = dict(cur.fetchone())
+                if entry["state"] == "INTRADAY_SUSPENDED":
+                    during = 0
+                    for span in entry["effective_suspend_timing"].split(","):
+                        left, right = span.split("-")
+                        # End-stamped bars at the start can contain pre-halt
+                        # trades; bars ending after the start through the end
+                        # cannot contain trades during an effective halt.
+                        cur.execute("SELECT count(*)::int FROM market.kline_minute_raw "
+                                    "WHERE ts_code=%s::character(9) AND trade_time >= %s::date "
+                                    "AND trade_time < %s::date + interval '1 day' "
+                                    "AND trade_time::time > %s::time AND trade_time::time <= %s::time "
+                                    "AND (volume_hand>0 OR amount_li>0)", (*key, key[1], left, right))
+                        during += cur.fetchone()["count"]
+                    minute["positive_minutes_during_verified_halt"] = during
+                prices.append({"ts_code": key[0], "trade_date": key[1], **daily, **minute})
         states = project_suspension_days(raw)
         resolved = {(row["ts_code"], row["trade_date"]): row["state"] for row in states}
-        passed = all(resolved.get((row["ts_code"], row["trade_date"])) == "FULL_DAY_SUSPENDED"
-                     and row["positive_daily_rows"] == row["positive_minute_rows"] == 0 for row in prices)
+        expected = {(entry["ts_code"], entry["trade_date"]): entry["state"] for entry in entries}
+        passed = all(resolved.get((row["ts_code"], row["trade_date"])) == expected[(row["ts_code"], row["trade_date"])]
+                     and (row.get("positive_minutes_during_verified_halt", 0) == 0
+                          if expected[(row["ts_code"], row["trade_date"])] == "INTRADAY_SUSPENDED"
+                          else row["positive_daily_rows"] == row["positive_minute_rows"] == 0) for row in prices)
         return {"target": target, "raw_events": raw, "raw_events_sha256": digest(raw),
                 "resolutions": states, "price_readback": prices, "passed": passed,
                 "read_only": not bool(dev_rows), "dev_transactional_validation_rows": len(dev_rows),

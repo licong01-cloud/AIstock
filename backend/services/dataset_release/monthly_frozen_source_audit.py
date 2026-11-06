@@ -177,6 +177,7 @@ class MinuteSummary:
     all_turnover_zero: bool = True
     date_mismatch: bool = False
     placeholder_1300_count: int = 0
+    opening_index: int = 240
 
     def add(self, row: Mapping[str, Any]) -> None:
         stamp = row["trade_time"]
@@ -220,8 +221,16 @@ class MinuteSummary:
         except MonthlySourceAuditError:
             self.invalid = True
             return
-        if index == 0:
+        # Empty opening quotes are not executed opening prices. Track the
+        # earliest traded label independently of iteration order; keep all
+        # labels, extrema, closing quotes and turnover in the summary.
+        if index == 0 and self.opening_index == 240:
+            # Preserve the existing quote contract for a wholly untraded day;
+            # any actual trade below supersedes this quote-only opening.
             self.open = value["open"]
+        if (value["vol"] > 0 or value["amount"] > 0) and index < self.opening_index:
+            self.open = value["open"]
+            self.opening_index = index
         if index == 239:
             self.close = value["close"]
         self.high = max(self.high, value["high"])
@@ -232,13 +241,13 @@ class MinuteSummary:
     def aggregates(self) -> dict[str, float]:
         values = {key: getattr(self, key) for key in ("open", "high", "low", "close", "vol", "amount")}
         if self.auction is not None:
-            values.update(
-                open=self.auction["open"],
-                high=max(self.high, self.auction["high"]),
-                low=min(self.low, self.auction["low"]),
-                vol=self.vol + self.auction["vol"],
-                amount=self.amount + self.auction["amount"],
-            )
+            values.update(vol=self.vol + self.auction["vol"], amount=self.amount + self.auction["amount"])
+            if self.auction["vol"] > 0 or self.auction["amount"] > 0:
+                values.update(
+                    open=self.auction["open"],
+                    high=max(self.high, self.auction["high"]),
+                    low=min(self.low, self.auction["low"]),
+                )
         return values
 
 

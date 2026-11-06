@@ -86,3 +86,27 @@ test("real L2 historical risk surface without mocks requires separately authoriz
     if (day === "2024-08-01") await expect(region.getByTestId("warning-summary")).toContainText("全部报警 0");
   }
 });
+
+test("synthetic date inference uses the same surface without inventing outcomes or development metrics", async ({ page }) => {
+  const value = {
+    ...detail("2026-08-31", 28), acceptance_hash: RUN,
+    dates: ["2026-08-28", "2026-08-31"], as_of_date: "2026-08-28",
+    validation_basis: "CAUSAL_DATE_INFERENCE_NO_OUTCOMES", effect_status: "NOT_EVALUATED_FOR_INFERENCE_DATES",
+    compact_summary: {
+      prediction_coverage: 1, outcome_status_counts: { OUTCOME_NOT_EVALUATED: 262 },
+      model_identity: { model_sha256: "b".repeat(64), training_input_sha256: "e".repeat(64), training_pit_bundle_sha256: "f".repeat(64) },
+    },
+    input_identity: { release_identity: { frozen_release_generation: "fixture-v18", dataset_manifest_sha256: "c".repeat(64), cutoff: "2026-08-31" } },
+  };
+  value.rows = value.rows.map((row) => ({ ...row, as_of_date: "2026-08-28", outcome_status: "OUTCOME_NOT_EVALUATED" }));
+  await page.route("**/api/v1/hmm-risk/risk-l2/overview?*", (route) => route.fulfill({ json: { status: "ok", data: value } }));
+  await page.route("**/api/v1/hmm-risk/risk-l2?*", (route) => route.fulfill({ json: { status: "ok", data: value } }));
+  await page.goto(`/hmm-risk?view=risk-l2&risk_run_id=${RUN}`);
+  const region = page.getByRole("region", { name: "申万二级行业风险研究" });
+  await expect(region).toContainText("指定日期风险推断：本次未评价效果");
+  await expect(region).toContainText("fixture-v18");
+  await expect(region).toContainText("本次未读取标签或未来收益");
+  await expect(region).not.toContainText("precision=");
+  await expect(region.locator("article")).toHaveCount(20);
+  await expect(region.getByRole("alert")).toHaveCount(0);
+});

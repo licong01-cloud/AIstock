@@ -416,6 +416,30 @@ class UnifiedMonthlyCandidateFinalizer:
                 "monthly source contract must fail closed against fabrication"
             )
         quality_ref = _seal_source_quality(root, context, compiled)
+        # Existing sealed SOURCE/checkpoints remain immutable. Only new bundles
+        # carrying revision pins gain this small, normally inventoried receipt.
+        source_raw = compiled.source_bundle_path.read_bytes()
+        if hashlib.sha256(source_raw).hexdigest() != compiled.source_bundle_sha256:
+            raise MonthlyCandidateFinalizerError("source revision bundle identity differs")
+        source_pins = json.loads(source_raw).get("integrity_revision_pins")
+        if source_pins is not None:
+            from backend.services.data_integrity.release import PIN_PATH, pin_payload
+            predecessor = context.plan.get("predecessor", {})
+            previous_path = Path(predecessor.get("candidate_root", "")) / PIN_PATH
+            if previous_path.is_absolute() and previous_path.is_file():
+                previous_manifest_path = previous_path.parent.parent / "qe_dataset_manifest.json"
+                previous_manifest = json.loads(previous_manifest_path.read_bytes())
+                if _manifest_identity(previous_manifest) != predecessor.get("dataset_manifest_sha256"):
+                    raise MonthlyCandidateFinalizerError("predecessor revision pins manifest differs")
+                pin = next((c for c in previous_manifest["components"].values() if c.get("path") == PIN_PATH), None)
+                if previous_path.is_symlink() or not pin or _sha256(previous_path) != pin["sha256"]:
+                    raise MonthlyCandidateFinalizerError("predecessor revision pins file differs")
+                old_pins = json.loads(previous_path.read_bytes())["partition_refs"]
+                merged = {(p["dataset"], p["fact_date"]): p for p in old_pins}
+                merged.update({(p["dataset"], p["fact_date"]): p for p in source_pins})
+                source_pins = [merged[k] for k in sorted(merged)]
+            _write_exclusive(root / PIN_PATH, pin_payload(source_pins,
+                source_bundle_sha256=compiled.source_bundle_sha256))
         baseline_authority = None if native_month else build_monthly_incremental_baseline(
             release_id=str(context.plan.get("release_id") or ""),
             release_digest=str(compiled.physical_plan.get("release_digest") or ""),

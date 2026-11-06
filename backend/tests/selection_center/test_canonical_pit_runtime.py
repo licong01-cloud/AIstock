@@ -137,6 +137,13 @@ def test_selection_admission_freezes_one_pointer_generation_and_downstream_inher
     assert frozen[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease.as_dict()
 
 
+def test_new_admission_cannot_silently_inherit_legacy_migration_policy() -> None:
+    with pytest.raises(CanonicalPitRuntimeError, match="canonical"):
+        freeze_canonical_pit_runtime_binding(
+            migrate_runtime_config_to_canonical_pointer(_legacy_config()),
+            trade_date=date(2026, 7, 31), authority_resolver=_Resolver(_binding()))
+
+
 def test_external_supplied_lease_must_match_the_live_pointer() -> None:
     migrated = migrate_runtime_config_to_canonical_pointer(_legacy_config())
     stale, _lease = freeze_canonical_pit_runtime_binding(
@@ -196,6 +203,35 @@ def test_generation_drift_is_typed_and_never_silently_switches() -> None:
     assert exc_info.value.context["expected_generation"] == 1
     assert exc_info.value.context["actual_generation"] == 2
     assert exc_info.value.context["identity_changed"] is True
+
+
+def test_verified_append_only_roll_keeps_existing_lease_unchanged() -> None:
+    frozen, lease = freeze_canonical_pit_runtime_binding(
+        migrate_runtime_config_to_canonical_pointer(_legacy_config()), trade_date=date(2026, 7, 31),
+        authority_resolver=_Resolver(_binding(generation=1, active=True)),
+    )
+    class Resolver(_Resolver):
+        def verifies_rolling_predecessor(self, **kwargs):
+            assert kwargs["source_digest"] == SHA_A
+            assert kwargs["coverage_end"] == date(2026, 7, 31)
+            return True
+
+    resolver = Resolver(replace(_binding(generation=1, active=True),
+                               state_source_digest=SHA_B, coverage_end=date(2026, 8, 3)))
+    assert require_canonical_pit_generation_current(frozen, authority_resolver=resolver) == lease
+    assert lease.coverage_end == date(2026, 7, 31)
+
+
+def test_unverified_coverage_extension_still_fails_closed() -> None:
+    frozen, _ = freeze_canonical_pit_runtime_binding(
+        migrate_runtime_config_to_canonical_pointer(_legacy_config()), trade_date=date(2026, 7, 31),
+        authority_resolver=_Resolver(_binding(generation=1, active=True)),
+    )
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        require_canonical_pit_generation_current(
+            frozen, authority_resolver=_Resolver(replace(_binding(generation=1, active=True),
+                                                        coverage_end=date(2026, 8, 3))),
+        )
 
 
 @pytest.mark.parametrize(

@@ -24,63 +24,44 @@ def test_nightly_preflight_requires_distinct_general_and_security_roles() -> Non
     assert "--required-label aistock-ci" not in workflow
 
 
-def test_runner_health_blocks_when_no_matching_runner() -> None:
+@pytest.mark.parametrize("online", [False, True])
+def test_runner_health_reports_available_capacity(online) -> None:
+    runners = [_online_runner(10, "aistock-win-runner")] if online else []
     payload = health.build_runner_health_report(
-        repo="licong01-cloud/AIstock",
         required_labels=["self-hosted", "windows"],
-        runners_payload={"total_count": 0, "runners": []},
+        runners_payload={"total_count": len(runners), "runners": runners},
         runs_payload={"workflow_runs": []},
     )
-
     assert payload["schema_version"] == "aistock_runner_health_v1"
-    assert payload["workflow_gate"] == "blocked"
-    assert payload["online_matching_runners"] == []
-    assert "no online GitHub Actions runner" in payload["blocking"][0]
     assert payload["production_gates"]["production_ddl_gate"] == "noop"
+    assert payload["workflow_gate"] == ("ready" if online else "blocked")
+    if online:
+        assert payload["online_matching_runners"][0]["name"] == "aistock-win-runner"
+        assert payload["blocking"] == []
+    else:
+        assert not payload["online_matching_runners"]
+        assert "no online GitHub Actions runner" in payload["blocking"][0]
 
 
-def test_runner_health_ready_with_online_self_hosted_windows_runner() -> None:
-    payload = health.build_runner_health_report(
-        required_labels=["self-hosted", "windows"],
-        runners_payload={"total_count": 1, "runners": [_online_runner(10, "aistock-win-runner")]},
-        runs_payload={"workflow_runs": []},
-    )
-
-    assert payload["workflow_gate"] == "ready"
-    assert payload["online_matching_runners"][0]["name"] == "aistock-win-runner"
-    assert payload["blocking"] == []
-
-
-def test_runner_health_requires_distinct_fast_and_security_roles() -> None:
-    payload = health.build_runner_health_report(
-        required_roles={
-            "fast": ["self-hosted", "windows", "aistock-ci"],
-            "security": ["self-hosted", "windows", "aistock-ci-security"],
-        },
-        runners_payload={"total_count": 2, "runners": [
-            _online_runner(10, "aistock-fast", "aistock-ci"),
-            _online_runner(11, "aistock-security", "aistock-ci-security")]},
-        runs_payload={"workflow_runs": []},
-    )
-
-    assert payload["workflow_gate"] == "ready"
-    assert payload["runner_roles"]["fast"][0]["name"] == "aistock-fast"
-    assert payload["runner_roles"]["security"][0]["name"] == "aistock-security"
-
-
-def test_runner_health_rejects_one_runner_covering_both_parallel_roles() -> None:
+@pytest.mark.parametrize("combined", [False, True])
+def test_runner_health_requires_distinct_fast_and_security_roles(combined) -> None:
+    runners = ([_online_runner(10, "aistock-combined", "aistock-ci", "aistock-ci-security")] if combined else [
+        _online_runner(10, "aistock-fast", "aistock-ci"),
+        _online_runner(11, "aistock-security", "aistock-ci-security")])
     payload = health.build_runner_health_report(
         required_roles={
             "fast": ["self-hosted", "windows", "aistock-ci"],
             "security": ["self-hosted", "windows", "aistock-ci-security"],
         },
-        runners_payload={"total_count": 1, "runners": [
-            _online_runner(10, "aistock-combined", "aistock-ci", "aistock-ci-security")]},
+        runners_payload={"total_count": len(runners), "runners": runners},
         runs_payload={"workflow_runs": []},
     )
-
-    assert payload["workflow_gate"] == "blocked"
-    assert any("distinct online capacity" in item for item in payload["blocking"])
+    assert payload["workflow_gate"] == ("blocked" if combined else "ready")
+    if combined:
+        assert any("distinct online capacity" in item for item in payload["blocking"])
+    else:
+        assert payload["runner_roles"]["fast"][0]["name"] == "aistock-fast"
+        assert payload["runner_roles"]["security"][0]["name"] == "aistock-security"
 
 
 def test_runner_health_reports_stale_queued_runs() -> None:
@@ -109,7 +90,8 @@ def test_runner_health_reports_stale_queued_runs() -> None:
     assert "queued nightly.yml run" in payload["warnings"][0]
 
 
-def test_cancel_stale_scheduled_runs_revalidates_identity_and_active_jobs(monkeypatch) -> None:
+@pytest.mark.parametrize("active", [False, True])
+def test_cancel_stale_scheduled_runs_revalidates_identity_and_active_jobs(monkeypatch, active) -> None:
     posts: list[str] = []
 
     def fake_get(path: str, *, token: str | None, timeout_seconds: int = 30):
@@ -117,7 +99,7 @@ def test_cancel_stale_scheduled_runs_revalidates_identity_and_active_jobs(monkey
         if path.endswith("/runs/123"):
             return {"id": 123, "status": "queued", "event": "schedule", "head_branch": "main"}
         if path.endswith("/runs/123/jobs?per_page=100"):
-            return {"jobs": [{"id": 10, "status": "queued"}]}
+            return {"jobs": [{"id": 10, "status": "in_progress" if active else "queued"}]}
         raise AssertionError(path)
 
     monkeypatch.setattr(health, "_github_get", fake_get)
@@ -135,66 +117,16 @@ def test_cancel_stale_scheduled_runs_revalidates_identity_and_active_jobs(monkey
         expected_head_branch="main",
         token="token",
         now=datetime(2026, 9, 13, 3, 0, tzinfo=timezone.utc),
-        runs_payload={
-            "workflow_runs": [
-                {
-                    "id": 123,
-                    "status": "queued",
-                    "event": "schedule",
-                    "head_branch": "main",
-                    "created_at": "2026-09-13T01:00:00Z",
-                },
-                {
-                    "id": 124,
-                    "status": "queued",
-                    "event": "workflow_dispatch",
-                    "head_branch": "main",
-                    "created_at": "2026-09-13T01:00:00Z",
-                },
-            ]
-        },
+        runs_payload={"workflow_runs": [
+            {"id": identifier, "status": "queued", "event": event, "head_branch": "main",
+             "created_at": "2026-09-13T01:00:00Z"}
+            for identifier, event in [(123, "schedule"), (124, "workflow_dispatch")]]},
     )
-
     assert receipt["workflow_gate"] == "ready"
-    assert receipt["cancelled_run_ids"] == [123]
-    assert receipt["skipped"] == [{"run_id": 124, "reason": "identity_mismatch"}]
-    assert posts == ["/repos/licong01-cloud/AIstock/actions/runs/123/cancel"]
-
-
-def test_cancel_stale_scheduled_runs_never_cancels_active_job(monkeypatch) -> None:
-    def fake_get(path: str, *, token: str | None, timeout_seconds: int = 30):
-        if path.endswith("/runs/123"):
-            return {"id": 123, "status": "queued", "event": "schedule", "head_branch": "main"}
-        if path.endswith("/runs/123/jobs?per_page=100"):
-            return {"jobs": [{"id": 10, "status": "in_progress"}]}
-        raise AssertionError(path)
-
-    monkeypatch.setattr(health, "_github_get", fake_get)
-    monkeypatch.setattr(health, "_github_post", lambda *args, **kwargs: pytest.fail("must not cancel"))
-    receipt = health.cancel_stale_scheduled_runs(
-        repo="licong01-cloud/AIstock",
-        workflow="nightly.yml",
-        stale_queued_minutes=30,
-        current_run_id=999,
-        current_event="schedule",
-        expected_head_branch="main",
-        token="token",
-        now=datetime(2026, 9, 13, 3, 0, tzinfo=timezone.utc),
-        runs_payload={
-            "workflow_runs": [
-                {
-                    "id": 123,
-                    "status": "queued",
-                    "event": "schedule",
-                    "head_branch": "main",
-                    "created_at": "2026-09-13T01:00:00Z",
-                }
-            ]
-        },
-    )
-
-    assert receipt["cancelled_run_ids"] == []
-    assert receipt["skipped"] == [{"run_id": 123, "reason": "active_job"}]
+    assert receipt["cancelled_run_ids"] == ([] if active else [123])
+    assert receipt["skipped"] == ([{"run_id": 123, "reason": "active_job"}] if active else []) + [
+        {"run_id": 124, "reason": "identity_mismatch"}]
+    assert posts == ([] if active else ["/repos/licong01-cloud/AIstock/actions/runs/123/cancel"])
 
 
 def test_cancel_stale_scheduled_runs_returns_structured_failure_when_query_fails(monkeypatch) -> None:
@@ -580,6 +512,7 @@ def test_uncertain_dispatch_is_not_replayed_and_run_reconciliation_is_exact(monk
                      event="repository_dispatch", head_branch="main", head_sha="a" * 40, status="queued"))
     report = health.dispatch_scheduled_cycle(**kwargs)
     assert not report["blocking"] and report["workflows"][0]["run_id"] == 42
+    assert "error_type" not in report["workflows"][0] and "error_phase" not in report["workflows"][0]
     assert report["workflows"][0]["validation_status"] == "not_executed"
     assert len(posts) == 1
 
@@ -621,17 +554,60 @@ def test_dispatch_lock_has_single_owner_and_releases_on_exception(tmp_path):
         pass
 
 
-def test_dispatch_rest_route_preserves_payload_and_existing_proxy_exclusions(monkeypatch):
+@pytest.mark.parametrize("output,valid", [
+    (b"", True), (json.dumps({"title": "夜间任务 ®"}, ensure_ascii=False).encode("utf-8"), True),
+    (b"\xff", False), (b"[]", False), (b"{broken", False),
+])
+def test_dispatch_rest_route_utf8_payload_and_existing_proxy_exclusions(monkeypatch, output, valid):
     calls = []
     monkeypatch.setenv("NO_PROXY", "localhost")
     monkeypatch.setattr(health.subprocess, "run", lambda args, **kwargs:
-                        (calls.append((args, kwargs)) or subprocess.CompletedProcess(args, 0, "")))
-    health._dispatch_api("repos/example/repo/dispatches", {"event_type": "scheduled"})
+                        (calls.append((args, kwargs)) or subprocess.CompletedProcess(args, 0, output)))
+    if valid:
+        assert health._dispatch_api("repos/example/repo/dispatches", {"event_type": "scheduled"}) == (
+            {"title": "夜间任务 ®"} if output else {})
+    else:
+        with pytest.raises(ValueError):
+            health._dispatch_api("repos/example/repo/dispatches", {"event_type": "scheduled"})
     args, kwargs = calls[0]
     assert args[-3:] == ["POST", "--input", "-"]
     assert json.loads(kwargs["input"]) == {"event_type": "scheduled"}
     assert "localhost" in kwargs["env"]["NO_PROXY"] and "api.github.com" in kwargs["env"]["NO_PROXY"]
     assert kwargs["timeout"] == 30 and kwargs["capture_output"]
+    assert not kwargs.get("text") and "encoding" not in kwargs
+
+
+@pytest.mark.parametrize("failure", ["decode", "receipt", "shape"])
+def test_dispatch_failure_is_durable_and_does_not_starve_later_workflows(monkeypatch, tmp_path, failure):
+    monkeypatch.setattr(health, "SCHEDULED_WORKFLOWS", {
+        "nightly.yml": ("aistock_nightly", 3, 7, 180), "codeql.yml": ("aistock_codeql", 4, 27, 75)})
+    broken = tmp_path / "2026-10-18-nightly.yml.json"
+    if failure == "receipt":
+        broken.write_text("{broken", encoding="utf-8")
+    posts = []
+    def request(path, payload=None):
+        if payload is not None:
+            posts.append(payload)
+            return {}
+        if "nightly.yml" in path:
+            if failure == "decode":
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+            return {"workflow_runs": [None]}
+        return {"workflow_runs": []}
+    kwargs = dict(state_root=tmp_path, apply=True, now=datetime.fromisoformat("2026-10-18T04:27:00+08:00"),
+                  request=request)
+    for _ in range(2):
+        report = health.dispatch_scheduled_cycle(**kwargs)
+        assert report["blocking"] and len(report["workflows"]) == 2
+        assert report["validation_status"] == "not_executed"
+        assert json.loads((tmp_path / "last-tick.json").read_text())["blocking"] == report["blocking"]
+    assert posts == [{"event_type": "aistock_codeql", "client_payload": {"cycle_date": "2026-10-18"}}]
+    if failure == "receipt":
+        assert broken.read_text() == "{broken"
+    else:
+        assert json.loads(broken.read_text())["error_phase"] == "query"
+    monkeypatch.setattr(health, "dispatch_scheduled_cycle", lambda **_: report)
+    assert health.main(["dispatch-scheduled", "--state-root", str(tmp_path), "--apply"]) == 2
 
 
 @pytest.mark.parametrize("action", ["aistock_nightly", "unknown"])

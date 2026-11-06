@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import datetime as dt
 import hashlib
 import json
@@ -22,6 +23,16 @@ from backend.services.industry_pit.contracts import (
     TaxonomyIdentity,
     make_candidate_interval,
 )
+
+
+def test_derived_sector_paths_use_same_versioned_history_with_explicit_tail_fallback():
+    for query in (module._PREFLIGHT_DAY_SQL, module._BUILD_DAY_SQL, module._DELETE_STALE_DAY_SQL):
+        assert "market.sw_industry_classification_history_v1" in query
+        assert "taxonomy_version = 'SW2021'" in query
+        assert "effective_from <= %(trade_date)s" in query
+        assert "effective_to >= %(trade_date)s" in query
+        assert "FROM dated_members AS member" in query
+        assert "NOT EXISTS (SELECT 1 FROM historical_members h WHERE h.ts_code = m.ts_code)" in query
 
 
 class _Cursor:
@@ -100,17 +111,32 @@ def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(mon
     for _, params in cursor.executed[2:5]:
         assert params == {
             "trade_date": dt.date(2026, 7, 22),
-            "live_universe_key": module.DEFAULT_ST_PIT_UNIVERSE_KEY,
-            "qe_universe_pattern": f"{module.IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+            "authority_id": "aistock_equity_pit_canonical",
         }
-    assert "sector_dependency_revision" in cursor.executed[5][0]
-    assert cursor.executed[5][1] == (dt.date(2026, 7, 22), 7, dt.date(2026, 7, 22))
+    clear = next(item for item in cursor.executed if "sector_dependency_revision" in item[0])
+    assert clear[1] == (dt.date(2026, 7, 22), 7, dt.date(2026, 7, 22))
     assert "market.stock_universe_pit_spans" in module._BUILD_DAY_SQL
-    assert "JOIN authoritative_universes USING (universe_key)" in module._BUILD_DAY_SQL
+    assert "JOIN authoritative_universes USING (universe_key, rule_version)" in module._BUILD_DAY_SQL
     assert "market.sw_index_member" in module._BUILD_DAY_SQL
     assert "l1_code, l2_code, mapping_in_date" not in module._BUILD_DAY_SQL
     assert "mapping_in_date     = EXCLUDED.mapping_in_date" not in module._BUILD_DAY_SQL
     assert "DISTINCT ON" not in module._BUILD_DAY_SQL
+
+
+def test_all_sector_mutations_follow_one_active_pointer_without_frozen_or_legacy_union():
+    for sql in (module._PREFLIGHT_DAY_SQL, module._DELETE_STALE_DAY_SQL, module._BUILD_DAY_SQL):
+        assert sql.startswith(module._AUTHORITATIVE_UNIVERSES_SQL)
+        assert "market.stock_universe_pit_authority_pointer" in sql
+        assert "s.universe_key = p.current_rolling_key" in sql
+        assert "s.rule_version = p.current_rule_version" in sql
+        assert "v.rule_version = p.current_rule_version" in sql
+        assert "s.status = 'ready'" in sql and "s.dirty = FALSE" in sql
+        assert "s.end_date >= %(trade_date)s" in sql
+        assert "qe_universe_pattern" not in sql and "live_universe_key" not in sql
+    from scripts.repair_sw_sector_revision import params
+    assert params(dt.date(2026, 10, 23)) == {
+        "trade_date": dt.date(2026, 10, 23), "authority_id": "aistock_equity_pit_canonical",
+    }
 
 
 @pytest.mark.parametrize(
@@ -137,6 +163,19 @@ def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message
     assert [sql for sql, _ in cursor.executed][2:] == [module._PREFLIGHT_DAY_SQL]
 
 
+@pytest.mark.parametrize("preflight,pending", [((0, 0, 0, 0, 3, 0, 0), True),
+    ((0, 0, 0, 0, 0, 2, 0), True), ((0, 1, 0, 0, 3, 0, 0), False)])
+def test_source_waiting_uses_existing_single_preflight_without_hiding_pit_errors(monkeypatch, preflight, pending):
+    cursor = _Cursor(preflight=preflight)
+    connection = _Connection(cursor)
+    monkeypatch.setattr(module, "get_conn", lambda **kwargs: connection)
+    with pytest.raises(module.SectorDataBuildContractError) as raised:
+        module.SectorDataBuilder().build_date(dt.date(2026, 11, 4))
+    assert isinstance(raised.value, module.SectorDataSourcePending) is pending
+    assert [sql for sql, _ in cursor.executed].count(module._PREFLIGHT_DAY_SQL) == 1
+    assert connection.commits == 0 and connection.rollbacks == 1
+
+
 def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     sql = module._PREFLIGHT_DAY_SQL
 
@@ -151,6 +190,18 @@ def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     assert "sd.open, sd.high, sd.low, sd.close, sd.pct_change" in module._BUILD_DAY_SQL
     assert "sw2_close           = EXCLUDED.sw2_close" in module._BUILD_DAY_SQL
     assert "COALESCE(sd." not in module._BUILD_DAY_SQL
+
+
+def test_missing_provider_pe_does_not_discard_real_sector_quotes():
+    # 801952.SI: source quotes/volume are present while provider PE is NULL.
+    # Keep this nullable valuation field verbatim, not a missing-quote alarm.
+    assert "sd.pe IS NULL" not in module._PREFLIGHT_DAY_SQL
+    for field in ("open", "high", "low", "close", "pct_change", "vol", "amount"):
+        assert f"sd.{field} IS NULL" in module._PREFLIGHT_DAY_SQL
+    assert "sd.ts_code IS NULL" in module._PREFLIGHT_DAY_SQL
+    assert "sd.vol, sd.amount, sd.pe, sd.pb, sd.total_mv" in module._BUILD_DAY_SQL
+    assert "sw2_pe              = EXCLUDED.sw2_pe" in module._BUILD_DAY_SQL
+    assert "COALESCE(sd.pe" not in module._BUILD_DAY_SQL
 
 
 def test_failed_insert_rolls_back_delete_without_clearing_revision(monkeypatch):

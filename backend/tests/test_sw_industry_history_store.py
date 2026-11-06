@@ -65,6 +65,23 @@ def test_disappearing_current_member_is_not_an_inferred_end_date():
         prepare_member_refresh([member()], [member("000002.SZ")], "801783.SI")
 
 
+@pytest.mark.parametrize("symbol", ["920021.BJ", "BJ920021", "200002.SZ", "900901.SH"])
+def test_excluded_legacy_members_do_not_block_supported_refresh_or_change_history(symbol):
+    existing = [member(symbol), member()]
+    before = deepcopy(existing)
+    assert prepare_member_refresh(existing, [member()], "801783.SI") == [member()]
+    assert existing == before
+
+
+def test_excluded_incoming_members_are_not_new_source_facts():
+    assert prepare_member_refresh([], [member("920021.BJ"), member()], "801783.SI") == [member()]
+
+
+def test_excluded_rows_never_hide_a_real_supported_member_omission():
+    with pytest.raises(ValueError, match="000001.SZ"):
+        prepare_member_refresh([member("920021.BJ"), member()], [member("000002.SZ")], "801783.SI")
+
+
 def test_explicit_ended_provider_row_allows_real_transition():
     old = member()
     ended = member(end="20261012", current="N")

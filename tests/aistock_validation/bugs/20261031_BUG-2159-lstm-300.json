@@ -1,0 +1,381 @@
+{
+  "actual": "全局其他指数缺价使合法000300.SH close二十日输入等待；目前原名单绑定还需核对后续历史修订影响。",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+    "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+    "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+    "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+    "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json"
+  ],
+  "assigned_agent": null,
+  "authorization_notes": [
+    "User explicitly approved additional native/feature qualification contract with answer: agree to additional contract repair (recommended). Original list, asset and bindings retained; actual 20TD features bound separately to current revisions."
+  ],
+  "backend_restart_owner": "user",
+  "backend_restart_required": true,
+  "bug_id": "BUG-2159",
+  "closed_at": "2026-10-31T14:30:16.455710Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-31T05:42:57.565400Z",
+  "description": "Actual 000300.SH close twenty-session consumer validation, plus user-approved FROZEN_NATIVE_SCORE_AND_CURRENT_FEATURES_V1: preserve immutable original publication/score/binding provenance and live package/PIT guards; independently bind and recheck current consumed features. No re-publication.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261031-8e16326498a2",
+      "timestamp": "2026-10-31T05:42:57.565384Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+    "tmp/issue_workflow/BUG-2159/contract-readonly-20261031.json",
+    "tmp/issue_workflow/BUG-2159/fresh-readonly-20261031.json"
+  ],
+  "expected": "沪深30020TD完整有效时可捕获；自身缺行、非有限值、重复或revision变化必须阻断，全局其它指数负面保留。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+      "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json"
+    ],
+    "added_files": [
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+    ],
+    "changed_files": [
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+      "tests/aistock_validation/bugs/20261031_BUG-2159-lstm-300.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+        "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+        "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+        "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+      ],
+      "impacted_modules": [
+        "advisory.model_first",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+        "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+        "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+        "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "docs/analysis/advisory_lstm_consumed_benchmark_20261031.md"
+    ]
+  },
+  "first_seen_at": "2026-10-31T05:42:57.565400Z",
+  "fix_branch": null,
+  "fix_commit": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+  "fixed_at": "2026-10-31T06:15:26Z",
+  "github_issue_number": 6960,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6960",
+  "last_seen_at": "2026-10-31T05:42:57.565400Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "post_merge_business_acceptance": {
+    "api_captured_days": 1,
+    "api_complete_days": 0,
+    "backend_process_control": false,
+    "database_writes": 0,
+    "decision_date": "2026-10-30",
+    "global_index_negative_days": [
+      "2026-10-19",
+      "2026-10-28"
+    ],
+    "independent_numpy_pass": true,
+    "native_consumed_count": 40,
+    "native_publications": 0,
+    "observed_at": "2026-10-31T06:19:55.329964+00:00",
+    "original_candidates": 50,
+    "original_episodes_unchanged": true,
+    "original_lists_unchanged": true,
+    "original_score_count": 4918,
+    "outcomes_read": false,
+    "physical_fit_count": 0,
+    "prediction_observed_at": "2026-10-31T06:19:54.870079+00:00",
+    "prediction_sha256": "224d0203a0bb5c09db908f65b3e5fcc00845fbaff050f0865bf4bdce32ad8e14",
+    "producer_commit": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+    "receipt_path": "F:\\Dev\\AIstock_worktrees\\BUG-2159-lstm-300-20261031\\tmp\\issue_workflow\\BUG-2159\\capture-acceptance-20261031.json",
+    "receipt_sha256": "b3200ee9b2c826228abe1e2b43e168857f01df11e97d10d98a0683c972b23eba",
+    "replacements": 9,
+    "retry_prediction_unchanged": true,
+    "runtime_gate": "pending_user_restart",
+    "source_git_blob_sha256": "f453d4b349481abce8ba410544615b31eea9e38ae5ea4fa7ba8b8f4e3f07d439",
+    "status": "PASS",
+    "target_date": "2026-11-02",
+    "whole_index_partition_certified": false
+  },
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6961",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_ed918504a02f4b15892f0dba65da139b/reranking-shadow",
+    "fresh_process_evidence": [
+      "Independent fresh process loaded tracked source f5e11bf2d5ca01a0586a657934ea4861d49daf8dcda4cdbb4cfb17eb476e8459: real original4918/consumed40/Top50 and current20TD feature input+post-compute verification PASS; all eight fields known. Original cyq revision2 retained despite live revision3. Receipt tmp/issue_workflow/BUG-2159/contract-readonly-20261031.json. No fitting/outcomes/prediction/DB writes."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2159/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2159",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_lstm_shadow_capture",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "6a7cf6956e31d38ba719883189d2f435b54b0b1847f02c0f62133e41d69491e3",
+      "expected_identity": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-31T14:29:06.712000Z",
+      "mode": "read_only",
+      "observed_identity": "e9ba4a1f4f51264125466b948c0af4d5d932c8c0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a539aec09651428386f1edad38247798bbe7d10820d7a5aa8b8b10eefa6b5cfe",
+      "receipt_sha256": "9e9be95359652117192b047438f7f90382a096354cce8b473b61ca21fc0a13dc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2b5a731caaa716064b4c806de2b2f9c1cf33c0f67e555741a07dea81c06df49f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2159",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0a24cd113f3fce52",
+    "recorded_at": "2026-10-31T06:16:39.529363Z",
+    "runtime_contract_digest": "6a7cf6956e31d38ba719883189d2f435b54b0b1847f02c0f62133e41d69491e3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "70cb3531caf57021cdd9010e02e5fa1ccb5b4003",
+    "source_merge_commit": "c68121ad03c73a6177ad1b1470d470e479b9d2e7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6961",
+    "validation_evidence": [
+      "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
+      "python -m nox -s l0 -- four explicit changed paths -> passed"
+    ],
+    "validation_evidence_digest": "cded9b0ac2147afce847406551ce6fa214b3c1438b181c0a168671ad580f37da"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "LSTM影子额外输入按全指数分区误阻断沪深300收盘价",
+  "trigger_condition": {
+    "fingerprint": "8e16326498a2d41317b6abcd",
+    "source_event_id": "FE-20261031-8e16326498a2"
+  },
+  "validation": [
+    "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
+    "rtk ruff check changed Python files -> passed",
+    "python -m nox -s l0 -- four explicit changed paths -> passed",
+    "fresh process original native archive and current consumed features -> passed; real 4918/40/50 and20TD; 0fit/outcomes/DB writes",
+    "clean merged producer native shadow capture and immutable retry; independent NumPy and four original lists/episodes readback -> passed; API captured_days=1 complete_days=0; runtime main still pending user restart"
+  ],
+  "validation_evidence": [
+    "rtk pytest backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 65 passed",
+    "python -m nox -s l0 -- four explicit changed paths -> passed",
+    "Source PR 6961: 65 targeted tests, Ruff, L0 and CI verdict SUCCESS; zero-fit native capture accepted.",
+    "2026-10-31 post-restart identity, health and business smoke PASS; runtime e9ba4a1 contains source c68121ad; scheduler PREDICTION_REUSED and prediction payload digest unchanged."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -365,7 +365,7 @@ def test_hardlink_baseline_components_reuses_files_without_changing_baseline(tmp
         assert linked.stat().st_ino == source.stat().st_ino
 
 
-def test_suspend_component_uses_daily_calendar_and_canonical_pit_without_hashes(tmp_path, monkeypatch) -> None:
+def test_suspend_component_keeps_facts_after_buy_pit_exit_without_hashes(tmp_path, monkeypatch) -> None:
     layout = _layout(tmp_path)
     calendar = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
     calendar.parent.mkdir(parents=True)
@@ -411,11 +411,12 @@ def test_suspend_component_uses_daily_calendar_and_canonical_pit_without_hashes(
     meta = json.loads((layout.suspend_root / "meta.json").read_text(encoding="utf-8"))
     assert receipt["status"] == "PASS"
     assert written[["trade_date", "ts_code"]].to_dict("records") == [
-        {"trade_date": pd.Timestamp("2026-08-31"), "ts_code": "000001.SZ"}
+        {"trade_date": pd.Timestamp("2026-08-31"), "ts_code": "000001.SZ"},
+        {"trade_date": pd.Timestamp("2026-08-31"), "ts_code": "600000.SH"},
     ]
     assert meta["schema_version"] == DIRECT_SUSPEND_SCHEMA
     assert meta["end"] == "2026-08-31"
-    assert meta["daily_row_counts"] == {"2026-08-28": 0, "2026-08-31": 1}
+    assert meta["daily_row_counts"] == {"2026-08-28": 0, "2026-08-31": 2}
     assert meta["source_freeze"] is False
     assert meta["full_history_content_hash"] is False
     assert not any("sha256" in key for key in meta)

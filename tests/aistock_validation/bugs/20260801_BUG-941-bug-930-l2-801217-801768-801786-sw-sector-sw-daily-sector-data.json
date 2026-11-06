@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-941",
-  "closed_at": null,
+  "closed_at": "2026-10-25T18:03:33.974582Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,8 +27,20 @@
   "evidence_uris": [],
   "expected": "replace_by_code 空载荷守卫区分两种情形: 上游返回空且本地该代码0行(如 801217.SI/801768.SI/801786.SI 这类 SW2021 is_pub=0 且从未有成员的指数)判定为合法空指数, 记成功批次(no-op 镜像, info 日志); 上游返回空但本地有行时保持拒删并计失败批次(防上游瞬时缺口清空本地)。修复后 sw_index_member init 134/134 成功, sw_sector 复合完成, sw_daily 与 sector_data 链路恢复。合并后需对 2026-07-31 执行 sw_sector 重跑与 sector_data 补建(运行时操作, 另行授权)。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260801_BUG-941-bug-930-l2-801217-801768-801786-sw-sector-sw-daily-sector-data.json"
+    ],
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260801_BUG-941-bug-930-l2-801217-801768-801786-sw-sector-sw-daily-sector-data.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -37,6 +49,12 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
+    "planned_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260801_BUG-941-bug-930-l2-801217-801768-801786-sw-sector-sw-daily-sector-data.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -63,18 +81,40 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "local-data manual re-run of sw_sector composite for 2026-07-31 followed by sector_data build; readback market.sector_data row count for 2026-07-31",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sw_index_member/status",
     "fresh_process_evidence": [
       "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus the empty-upstream-and-local no-op mirror branch in _sync_by_code_batched -> PASS",
       "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus no-op mirror branch -> PASS"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-941-official-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-941",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "58c279b580db136070947c49e20a74a2bacfefc85f80aeea267ec32c39dd41d2",
+      "expected_identity": "1548965ead70442228a517b3d6377b7d4bc4649a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T18:02:04.129057Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "05de454c807c009c09861830d14d8a931a8dc0ac219e53382b4c1238fee420fd",
+      "receipt_sha256": "88421defd2dd289e90ab9cc6627385e33482a1ef95d0ad3e43a12c773cf09426",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b72e1c5e82cf73272c3027609610fd871f677bfaa05913e653d50d7c9500b2ac",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -82,9 +122,16 @@
       "backend-main"
     ]
   },
+  "runtime_contract_migration": {
+    "factual_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/legacy-contract-factual-readback.json",
+    "historical_target": "2026-07-31 sector_data=4903 rows and sw_daily=155 rows; no job rerun required.",
+    "limitation": "Unrelated sector_data job 8d4cff32-d8b8-4367-93cc-b3873994af83 reports universe_not_ready for 2026-10-20; it is not declared resolved by this BUG.",
+    "production_job": "sw_index_member 653a648f-5073-44fe-89ef-c7e9ff75a089 completed 134/134, failed=0; sw_daily cfd4e8f5-55ec-4f36-8490-c26fe1c0749c completed 155/155, failed=0.",
+    "scope": "Replace legacy prose probe references with executable read-only probes; retain original expected behavior and source tests."
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -98,7 +145,8 @@
     "nox -s l0 -> passed",
     "nox -s validation_module_registry_l0 -> passed",
     "nox -s data_sync_autonomy_backend -> passed",
-    "PR #3008 CI all green -> passed"
+    "PR #3008 CI all green -> passed",
+    "Original source CI and fresh-process tests retained; two metadata reviews confirmed read-only probe migration; official backend runtime PASS; exact 2026-07-31 readback sector_data=4903/sw_daily=155; actual sw_index_member 134/134 and sw_daily 155/155 jobs successful; no new data or service action"
   ],
   "verification_budget": {
     "budget": "standard",

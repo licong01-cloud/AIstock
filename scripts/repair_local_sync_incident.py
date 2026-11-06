@@ -121,6 +121,7 @@ def groups(payload):
 
 
 def repair_sql(cur, payload, database):
+    from backend.services.data_integrity.writes import sql_revision_marker
     additions, limits, boundaries, unresolved = groups(payload)
     blocks = []
     for table, columns, rows in [
@@ -136,11 +137,14 @@ def repair_sql(cur, payload, database):
         different = " OR ".join(f"(t.{c} IS NOT NULL AND t.{c} IS DISTINCT FROM s.{c})" for c in nonkeys)
         same = " AND ".join(f"t.{c} IS NOT DISTINCT FROM s.{c}" for c in nonkeys)
         src = f"WITH s({','.join(columns)}) AS (VALUES {values}) "
+        missing = " OR ".join(f"(t.{c} IS NULL AND EXCLUDED.{c} IS NOT NULL)" for c in nonkeys)
         blocks += [src + f"SELECT count(*) INTO n FROM market.{table} t JOIN s ON {identity} WHERE {different};",
                    "IF n<>0 THEN RAISE EXCEPTION 'existing finite fact differs; separate revision required'; END IF;",
-                   src + f"INSERT INTO market.{table}({','.join(columns)}) SELECT {','.join(columns)} FROM s "
+                   src + f", changed AS (INSERT INTO market.{table} AS t ({','.join(columns)}) SELECT {','.join(columns)} FROM s "
                    "ON CONFLICT(trade_date,ts_code) DO UPDATE SET " +
-                   ",".join(f"{c}=COALESCE({table}.{c},EXCLUDED.{c})" for c in nonkeys) + ";",
+                   ",".join(f"{c}=COALESCE(t.{c},EXCLUDED.{c})" for c in nonkeys) +
+                   f" WHERE {missing} RETURNING trade_date) SELECT array_agg(DISTINCT trade_date) INTO changed_dates FROM changed;",
+                   sql_revision_marker(table),
                    src + f"SELECT count(*) INTO n FROM s JOIN market.{table} t ON {identity} WHERE {same};",
                    f"IF n<>{len(rows)} THEN RAISE EXCEPTION 'typed readback differs'; END IF;"]
     # Production must still match the frozen prior normalization boundary.
@@ -151,7 +155,7 @@ def repair_sql(cur, payload, database):
                                  "RAISE EXCEPTION 'prior factor boundary drift'; END IF;",
                                  (r["ts_code"], r["trade_date"], r["adj_factor"])).decode("utf-8"))
     sql = ("BEGIN; SET LOCAL statement_timeout='120s'; SET LOCAL lock_timeout='5s';\n"
-           "DO $repair$ DECLARE n bigint; BEGIN\nIF current_database()<>" +
+           "DO $repair$ DECLARE n bigint; changed_dates date[]; BEGIN\nIF current_database()<>" +
            cur.mogrify("%s", (database,)).decode("utf-8") + " THEN RAISE EXCEPTION 'wrong target'; END IF;\n" +
            "\n".join(guards if database == "aistock" else []) + "\n" + "\n".join(blocks) + "\nEND $repair$;\nCOMMIT;\n")
     return sql, {"adj_factor_keys": len(additions), "stk_limit_keys": len(limits), "unresolved": unresolved,

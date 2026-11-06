@@ -138,6 +138,134 @@ def test_results_only_valid_artifacts_registers_without_qrun(monkeypatch):
     assert client.create_and_run_loop_calls == []
 
 
+@pytest.mark.parametrize("defect", [
+    None, "missing_upload", "foreign_recorder", "foreign_node", "foreign_run",
+    "wrong_mode", "partial_report", "wrong_report_dates", "nan_account",
+    "missing_window", "wrong_window", "missing_digest", "changed_attempt",
+    "changed_recorder", "changed_upload", "source_changed", "panel_changed",
+    "stale_upload", "cancelled",
+])
+def test_failed_replay_upload_recovers_only_complete_bound_account(monkeypatch, defect):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    pred = _valid_prediction()
+    source = {
+        "sha256": "a" * 64, "source_task_id": "source", "source_loop_index": 3,
+        "source_node_id": "node-a", "catalog_path": "mlruns/e/r/artifacts/pred.pkl", "size_bytes": 123,
+    }
+    recorder = {
+        "recorder_id": "rec-123", "experiment_id": "exp-456", "mode": "pred_backtest",
+        "runner": "qrun_limit_minute.py", "cwd": "/qe_workspace/qe_task/Loop9",
+        "written_at": "2026-11-06T02:19:16+00:00",
+    }
+    upload = {
+        "schema_version": "qe_prediction_store_upload_v1", "status": "failed",
+        "upload_enabled": True, "mode": "pred_backtest", "run_key": "qe_task_L9",
+        "error": "ConnectionError: RemoteDisconnected", "written_at": "2026-11-06T03:10:44+00:00",
+        "metadata": {
+            "producer": "qrun_prediction_store_client", "mode": "pred_backtest",
+            "task_id": "qe_task", "loop_id": "Loop9", "loop_index": "9", "source_node_id": "node-a",
+            "recorder_id": "rec-123", "recorder_experiment_id": "exp-456", "recorder_ref": dict(recorder),
+        },
+    }
+    if defect == "foreign_recorder":
+        upload["metadata"]["recorder_ref"]["recorder_id"] = "old-recorder"
+    if defect == "foreign_node":
+        upload["metadata"]["source_node_id"] = "other-node"
+    if defect == "foreign_run":
+        upload["run_key"] = "other_L9"
+    if defect == "wrong_mode":
+        upload["mode"] = "train"
+    if defect == "stale_upload":
+        upload["written_at"] = "2026-11-05T03:10:44+00:00"
+    report = _valid_report().iloc[:2].copy()
+    for col in ("account", "cash", "value", "turnover", "total_cost", "total_turnover"):
+        report[col] = 100.0
+    if defect == "partial_report":
+        report = report.iloc[:1]
+    if defect == "wrong_report_dates":
+        report.index = pd.to_datetime(["2026-01-02", "2026-01-04"])
+    if defect == "nan_account":
+        report.loc[report.index[0], "account"] = float("nan")
+
+    class Client(FakeResultsOnlyClient):
+        inspections = 0
+        recorder_reads = 0
+        upload_reads = 0
+
+        async def inspect_loop_submission(self, task_id, loop_id):
+            self.inspections += 1
+            return SimpleNamespace(
+                task_id=task_id, loop_id=loop_id, status="cancelled" if defect == "cancelled" else "failed",
+                request_digest=None if defect == "missing_digest" else "d" * 64,
+                submission_intent_hash=("f" if defect == "changed_attempt" and self.inspections > 1 else "e") * 64,
+            )
+
+        async def get_workspace_file(self, task_id, loop_id, file_path):
+            if file_path == "qe_current_recorder.json":
+                self.recorder_reads += 1
+                return {**recorder, "recorder_id": "new-recorder"} if defect == "changed_recorder" and self.recorder_reads > 1 else dict(recorder)
+            if file_path == "qe_prediction_store_upload.json":
+                self.upload_reads += 1
+                if defect == "missing_upload":
+                    raise FileNotFoundError(file_path)
+                return {**upload, "status": "success"} if defect == "changed_upload" and self.upload_reads > 1 else upload
+            if file_path == "qe_prediction_replay_source_ref.json":
+                return {**source, "schema_version": "qe_prediction_replay_source_ref_v1",
+                        "sha256": "b" * 64 if defect == "source_changed" else source["sha256"]}
+            if file_path == "qe_prediction_replay_result.json":
+                return {
+                    "schema_version": "qe_prediction_replay_result_v1", "source_prediction_sha256": source["sha256"],
+                    "executable_prediction_panel_sha256": "f" * 64 if defect == "panel_changed" else _panel_hash(pred),
+                    "source_prediction_rows": 6, "executable_prediction_rows": 6, "excluded_prediction_rows": 0,
+                }
+            return await super().get_workspace_file(task_id, loop_id, file_path)
+
+        async def download_workspace_file_bytes(self, task_id, loop_id, file_path):
+            if file_path.endswith("/portfolio_analysis/report_normal_1day.pkl"):
+                return _pickle(report)
+            return await super().download_workspace_file_bytes(task_id, loop_id, file_path)
+
+    config = {
+        "prediction_replay": True, "prediction_replay_source": source, "prediction_source_sha256": source["sha256"],
+        "data_split": {"test_start": "2026-01-02", "backtest_end": "2026-01-03"},
+        "runtime_flags": {"final_evaluation_start": "2026-01-02", "final_evaluation_end": "2026-01-03", "final_economic_days": 2},
+    }
+    if defect == "missing_window":
+        config.pop("runtime_flags")
+    if defect == "wrong_window":
+        config["data_split"]["backtest_end"] = "2026-01-02"
+    state = {"uploads": [], "registrations": [], "failures": []}
+    monkeypatch.setattr(qes, "upload_results_only_prediction_store", lambda **kw: state["uploads"].append(kw) or {"run_key": "qe_task_L9"})
+    monkeypatch.setattr(scheduler, "_register_results_only_loop", lambda **kw: state["registrations"].append(kw) or "qe_task_L9")
+    monkeypatch.setattr(scheduler, "_archive_completed_loop_best_effort", lambda *a, **kw: None)
+    monkeypatch.setattr(scheduler, "_record_research_backtest_best_effort", lambda *a, **kw: None)
+    monkeypatch.setattr(scheduler, "recompute_custom_evo_task_status", lambda task: "completed")
+    monkeypatch.setattr(scheduler, "_record_results_only_retry_failure", lambda **kw: state["failures"].append(kw))
+    client = Client(pred_bytes=_pickle(pred), metrics={"IC": .1, "Rank IC": .1})
+    call = scheduler._retry_loop_results_only(
+        task_id="qe_task", loop_index=9, task={"task_type": "custom_evo"}, client=client,
+        effective_node_id="node-a", config=config,
+    )
+    if defect:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            asyncio.run(call)
+        assert not state["uploads"] and not state["registrations"]
+        assert len(state["failures"]) == 1
+    else:
+        assert asyncio.run(call)["mode"] == "results_only"
+        proof = state["registrations"][0]["metrics"]["results_only_upload_recovery"]
+        assert proof["original_upload"]["status"] == "failed"
+        assert proof["original_node_status"] == "failed"
+        assert proof["account_days"] == 2
+        assert proof["portfolio_report_sha256"] == hashlib.sha256(_pickle(report)).hexdigest()
+        assert proof["submission_intent_hash"] == "e" * 64
+        assert proof["training_submissions"] == proof["backtest_submissions"] == 0
+        assert len(state["uploads"]) == len(state["registrations"]) == 1
+        assert client.inspections == 2
+    assert upload["status"] == "failed"
+    assert client.create_and_run_loop_calls == []
+
+
 def test_results_only_missing_pred_fails_loud_and_does_not_register(monkeypatch):
     scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
     client = FakeResultsOnlyClient(pred_bytes=None, metrics={"IC": 0.1, "Rank IC": 0.1})

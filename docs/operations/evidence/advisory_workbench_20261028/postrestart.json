@@ -1,0 +1,866 @@
+{
+  "schema": "advisory_workbench_postrestart_v1",
+  "receipt_id": "advisory-workbench-postrestart-20261028",
+  "observed_at": "2026-10-28T03:46:29.388985+01:00",
+  "source_head": "bf3f4c79cf963e02d06a260200556efed49a46a3",
+  "feature_merge": "9dd71bfb18e3a14a77d1caf7df24c11da3fe025e",
+  "runtime_before": {
+    "status": "ready",
+    "merge_commit": "bf3f4c79cf963e02d06a260200556efed49a46a3"
+  },
+  "runtime_after": {
+    "status": "ready",
+    "merge_commit": "bf3f4c79cf963e02d06a260200556efed49a46a3"
+  },
+  "probes": [
+    {
+      "path": "/runtime-identity",
+      "status": 200,
+      "seconds": 0.021,
+      "sha256": "a325fc4d182b23534a475dfa09da2b691c553a1d1d38f2f82b3a140ce5d85159"
+    },
+    {
+      "path": "/advisory/workbench/overview",
+      "status": 200,
+      "seconds": 0.831,
+      "sha256": "3723aead9bf81674639f10e958d62971ac9ed168b4287a1f82c63940181292dd"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f",
+      "status": 200,
+      "seconds": 0.256,
+      "sha256": "cf11bbd1772787adbcfa9f07ad7c439c959a8bdb5271f0f3e0d06793882889c0"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/daily",
+      "status": 200,
+      "seconds": 0.102,
+      "sha256": "d586e90706e1a56286eb4d1964df2338ab5ff29aef246055f19ecba8f9cc9ee8"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/episodes",
+      "status": 200,
+      "seconds": 0.162,
+      "sha256": "76ca04d97332d0d86f85e551a10b4da8bdf1904d71a0a0898a27d836ac53198e"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/episodes/advep_1ad449a9200eda8686d0255cd226249d",
+      "status": 200,
+      "seconds": 0.119,
+      "sha256": "86bd4a2bf997aa407d4435076ea45db6ebee2a295e9b0aef0877cb971ffd8fcc"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/episodes",
+      "status": 200,
+      "seconds": 0.194,
+      "sha256": "ab13e50c75ac230fd74e099a1f4e78482cad68dbd06757f6dd062aa2fe27c82a"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/readiness",
+      "status": 200,
+      "seconds": 0.269,
+      "sha256": "4ad4cf16446999a076f2b3fbb805c728ac638b4df46ff8b70d03daafb94e35fe"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_be042d9519e74775b7aaa08627ea7b9d",
+      "status": 200,
+      "seconds": 0.063,
+      "sha256": "54cf6542feea52569550c0180df481d318f5f7c01af51b2f1d87e7033de692d2"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_be042d9519e74775b7aaa08627ea7b9d/daily",
+      "status": 200,
+      "seconds": 0.067,
+      "sha256": "132a39dd6cf2db30602c359e1c610492b298d398142f95f63aaa8b4c119e9350"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_be042d9519e74775b7aaa08627ea7b9d/episodes",
+      "status": 200,
+      "seconds": 0.055,
+      "sha256": "c07810005503b86354a192a0c97f4a6edc3ee1cd683919196d5f1043163a555a"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_be042d9519e74775b7aaa08627ea7b9d/episodes/advep_0887979f59a8ba80f5c91712d32e102f",
+      "status": 200,
+      "seconds": 0.034,
+      "sha256": "55b2fca7db99f41bc6dca3f2d1921c11225447d62bc1949d68a223e31223ebc7"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_be042d9519e74775b7aaa08627ea7b9d/readiness",
+      "status": 200,
+      "seconds": 0.261,
+      "sha256": "b7aac7d9aee0a1a3d7c62b45185d2ba70e9f68cfc4e6b97340cc32b4f813e5bf"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b",
+      "status": 200,
+      "seconds": 0.115,
+      "sha256": "d1d19da470bf4b97c70eead387befafff9c03de7a892a6311efd6a46e761de4d"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b/daily",
+      "status": 200,
+      "seconds": 0.116,
+      "sha256": "49127fc311a2410585d7ea17df307675959acbf5b493175c622d7a239c60d2c6"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b/episodes",
+      "status": 200,
+      "seconds": 0.093,
+      "sha256": "00aab47cd9270d1405ef281f1a4a0daa4994aa3877d252ed2fe55c2590a60e1b"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b/episodes/advep_465add647f35993419d5e54c5ee9ff72",
+      "status": 200,
+      "seconds": 0.053,
+      "sha256": "581e770a6b0babf983ddcb6e85b3ee522493877bb89be2847502d115f17498f8"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b/episodes",
+      "status": 200,
+      "seconds": 0.108,
+      "sha256": "08ab99731deafe52f00d9b9ee466a81212e5554c30917fbcd9a2e62ed6f8287f"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b/readiness",
+      "status": 200,
+      "seconds": 0.25,
+      "sha256": "b2e769a088926afac7f82c2bd9a15e4d43e438a7c5071efbfc9b9584f0da6f88"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5c2b7a817cfa46f8b8708e9886082e7e",
+      "status": 200,
+      "seconds": 0.132,
+      "sha256": "1afc75452fb2ea73e2439cd76743bd1c1f0ddf71e9079ae1d3937a577b79e6c3"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5c2b7a817cfa46f8b8708e9886082e7e/daily",
+      "status": 200,
+      "seconds": 0.146,
+      "sha256": "0b14f99b8e35e1cfb56645d32c1d1c2a151b1c1bdf66064654ef1327a678fcdf"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5c2b7a817cfa46f8b8708e9886082e7e/episodes",
+      "status": 200,
+      "seconds": 0.11,
+      "sha256": "10b5c0deafcee1d0f2916bc143a541826fde87b5ea6bed89f9c564928862388c"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5c2b7a817cfa46f8b8708e9886082e7e/episodes/advep_0c0f1122b9d6b7b1f943b2400777393c",
+      "status": 200,
+      "seconds": 0.073,
+      "sha256": "73ca657f999988b96da9f148a31073ac98efb53b654e1c8d534ebe997bcd5baf"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5c2b7a817cfa46f8b8708e9886082e7e/episodes",
+      "status": 200,
+      "seconds": 0.19,
+      "sha256": "257d8603163d356d0dbc59d96bf8838140c08df6b0b9b91d907a45038637e19e"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5c2b7a817cfa46f8b8708e9886082e7e/readiness",
+      "status": 200,
+      "seconds": 0.378,
+      "sha256": "8094883a9494a046ede0228c1135c93d1a19bf19393308264cac22fc2eb6c3b6"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5a46150a7e9541d2a8887541781c9dfc",
+      "status": 200,
+      "seconds": 0.422,
+      "sha256": "3cdc09214976cfa73e9d4867e9234319a4db05e83306b41e3eaa454a4b6828d4"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5a46150a7e9541d2a8887541781c9dfc/daily",
+      "status": 200,
+      "seconds": 0.575,
+      "sha256": "d7ff0063933a7d83fb36f214dda539364a9a2de78539526a58c55104a81ac9c2"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5a46150a7e9541d2a8887541781c9dfc/episodes",
+      "status": 200,
+      "seconds": 0.327,
+      "sha256": "d06d4a80bdc6025c06a8806898407b6a25a1df22e615c6e38499fcae700e1696"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5a46150a7e9541d2a8887541781c9dfc/episodes/advep_3f2b8fafb79dede73e249865146f5b10",
+      "status": 200,
+      "seconds": 0.188,
+      "sha256": "4221e2707efde80bf025a9d67dbe2216cbd129154f8c08b5bd65bbead8fc0569"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5a46150a7e9541d2a8887541781c9dfc/episodes",
+      "status": 200,
+      "seconds": 0.321,
+      "sha256": "77f70f6312bd47b52f4b81cf45f123d27d2bee96b0592be1ca216f7828f424d1"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_5a46150a7e9541d2a8887541781c9dfc/readiness",
+      "status": 200,
+      "seconds": 2.426,
+      "sha256": "70534ff04d064655388823cee739dd9b57ff197ddedb94d1e942b43024f0989f"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/episodes/advep_0887979f59a8ba80f5c91712d32e102f",
+      "status": 404,
+      "seconds": 0.162,
+      "sha256": "6fbc878ab8b50937d7f49a3c79dd61cdfea0b2082160cd60b072c52d6bd1242a"
+    },
+    {
+      "path": "/advisory/workbench/programs/advp_3126dd77f9774d94850f37ad012f640f/daily",
+      "status": 409,
+      "seconds": 0.132,
+      "sha256": "adfad83fd79ffe3f1ec6412c3263f1a2e33c1f855c30d6625439f02dee392575"
+    },
+    {
+      "path": "/advisory/workbench/programs/not-a-program",
+      "status": 404,
+      "seconds": 0.01,
+      "sha256": "7c1203b96e67a1ee2bd279abb1fa10233ca13dcb2187a03ec42add1f519e7f23"
+    },
+    {
+      "path": "/advisory/programs/advp_ed918504a02f4b15892f0dba65da139b/reranking-shadow",
+      "status": 200,
+      "seconds": 0.573,
+      "sha256": "f3699d0b86f295e1c4a2a34b3a7fc74ae9005b41c2f40b9a542849017bc8a68f"
+    },
+    {
+      "path": "/local-data/integrity/days/2026-10-27",
+      "status": 200,
+      "seconds": 2.074,
+      "sha256": "4b748610d8dbc18492d20f5083862f7b0ed38a959b38d384617e20f541e3381b"
+    },
+    {
+      "path": "/runtime-identity",
+      "status": 200,
+      "seconds": 0.003,
+      "sha256": "a325fc4d182b23534a475dfa09da2b691c553a1d1d38f2f82b3a140ce5d85159"
+    }
+  ],
+  "programs": [
+    {
+      "program_id": "advp_3126dd77f9774d94850f37ad012f640f",
+      "name": "每日 Top20 荐股任务",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-09",
+      "runtime": {
+        "state": "ASSET_BLOCKED",
+        "reason": "multi_alpha_parent_leg_runtime_assets_incomplete",
+        "settlement": "NOT_DUE",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "AFTER_CLOSE_PUBLISH",
+        "configured": "ENABLED",
+        "attempt_count": 64,
+        "updated_at": "2026-10-27T23:59:30.558427+08:00"
+      },
+      "membership": null,
+      "history_total": 164,
+      "selected": false,
+      "readiness": {
+        "schema_version": "advisory_workbench_v1",
+        "program_id": "advp_3126dd77f9774d94850f37ad012f640f",
+        "data_date": "2026-10-27",
+        "generated_at": "2026-10-28T10:46:31.737148+08:00",
+        "status": "AVAILABLE",
+        "items": [
+          {
+            "binding_id": "pkg_ma_8ec5e389fa2c5e484a1ac7e9",
+            "consumer_ready": false,
+            "prediction_ready": false,
+            "state": "UNKNOWN",
+            "reason": "factor dependencies cannot be resolved deterministically: RevenueYOY_Momentum",
+            "all_sync_complete": false
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "program_id": "advp_be042d9519e74775b7aaa08627ea7b9d",
+      "name": "日频荐股 LGB 新策略包 20261023",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 1,
+        "updated_at": "2026-10-28T10:44:47.120849+08:00"
+      },
+      "membership": {
+        "in_scope": 25,
+        "new": 6,
+        "continuing": 19,
+        "removed": 9,
+        "unknown_change": 0,
+        "observation": 15,
+        "outside_pending": 7,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 28,
+        "comparison_known": true
+      },
+      "history_total": 20,
+      "selected": true,
+      "readiness": {
+        "schema_version": "advisory_workbench_v1",
+        "program_id": "advp_be042d9519e74775b7aaa08627ea7b9d",
+        "data_date": "2026-10-27",
+        "generated_at": "2026-10-28T10:46:32.237318+08:00",
+        "status": "AVAILABLE",
+        "items": [
+          {
+            "binding_id": "pkg_c8d3d51fb6d24be89cfb3a50c30c80e4",
+            "consumer_ready": false,
+            "prediction_ready": false,
+            "state": "UNKNOWN",
+            "reason": "factor dependencies cannot be resolved deterministically: m_drawdown_from_high",
+            "all_sync_complete": false
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "program_id": "advp_ed918504a02f4b15892f0dba65da139b",
+      "name": "日频荐股 LSTM 新策略包 20261009",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 1,
+        "updated_at": "2026-10-28T10:44:47.936975+08:00"
+      },
+      "membership": {
+        "in_scope": 21,
+        "new": 7,
+        "continuing": 14,
+        "removed": 7,
+        "unknown_change": 0,
+        "observation": 19,
+        "outside_pending": 13,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 21,
+        "comparison_known": true
+      },
+      "history_total": 71,
+      "selected": true,
+      "readiness": {
+        "schema_version": "advisory_workbench_v1",
+        "program_id": "advp_ed918504a02f4b15892f0dba65da139b",
+        "data_date": "2026-10-27",
+        "generated_at": "2026-10-28T10:46:32.978042+08:00",
+        "status": "AVAILABLE",
+        "items": [
+          {
+            "binding_id": "pkg_cc7eccb6202e4816b9d7c7d6b748bd37",
+            "consumer_ready": false,
+            "prediction_ready": false,
+            "state": "UNKNOWN",
+            "reason": "factor dependencies cannot be resolved deterministically: m_turnover_percentile_250d",
+            "all_sync_complete": false
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "program_id": "advp_5c2b7a817cfa46f8b8708e9886082e7e",
+      "name": "日频荐股 TCN 新策略包 20261009",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 1,
+        "updated_at": "2026-10-28T10:44:47.057129+08:00"
+      },
+      "membership": {
+        "in_scope": 24,
+        "new": 12,
+        "continuing": 12,
+        "removed": 10,
+        "unknown_change": 0,
+        "observation": 16,
+        "outside_pending": 14,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 22,
+        "comparison_known": true
+      },
+      "history_total": 69,
+      "selected": true,
+      "readiness": {
+        "schema_version": "advisory_workbench_v1",
+        "program_id": "advp_5c2b7a817cfa46f8b8708e9886082e7e",
+        "data_date": "2026-10-27",
+        "generated_at": "2026-10-28T10:46:34.011493+08:00",
+        "status": "AVAILABLE",
+        "items": [
+          {
+            "binding_id": "pkg_8dbd396d27184de6aa5fe288011220f6",
+            "consumer_ready": false,
+            "prediction_ready": false,
+            "state": "UNKNOWN",
+            "reason": "factor dependencies cannot be resolved deterministically: m_turnover_percentile_250d",
+            "all_sync_complete": false
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "program_id": "advp_5a46150a7e9541d2a8887541781c9dfc",
+      "name": "荐股但alpha测试包",
+      "target_date": "2026-10-28",
+      "latest": "2026-10-28",
+      "runtime": {
+        "state": "PUBLISHED",
+        "reason": "DATA_UNAVAILABLE",
+        "settlement": "WAITING_DATA",
+        "data_date": "2026-10-27",
+        "target_date": "2026-10-28",
+        "stage": "TARGET_OPEN_SETTLE",
+        "configured": "ENABLED",
+        "attempt_count": 25,
+        "updated_at": "2026-10-28T10:44:46.906106+08:00"
+      },
+      "membership": {
+        "in_scope": 20,
+        "new": 19,
+        "continuing": 1,
+        "removed": 20,
+        "unknown_change": 0,
+        "observation": 20,
+        "outside_pending": 25,
+        "outside_exit": 0,
+        "unknown": 0,
+        "previous_count": 21,
+        "comparison_known": true
+      },
+      "history_total": 230,
+      "selected": true,
+      "readiness": {
+        "schema_version": "advisory_workbench_v1",
+        "program_id": "advp_5a46150a7e9541d2a8887541781c9dfc",
+        "data_date": "2026-10-27",
+        "generated_at": "2026-10-28T10:46:38.277541+08:00",
+        "status": "AVAILABLE",
+        "items": [
+          {
+            "binding_id": "pkg_378eb9c91e104c64935404e257e932ee",
+            "consumer_ready": false,
+            "prediction_ready": false,
+            "state": "UNKNOWN",
+            "reason": "factor dependencies cannot be resolved deterministically: neg_mf_main_net_amt_std_5d",
+            "all_sync_complete": false
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "integrity": {
+    "as_of": "2026-10-28T10:46:40.143150+08:00",
+    "fact_date": "2026-10-27",
+    "revision": 24,
+    "state": "PARTIAL",
+    "all_sync_complete": false,
+    "summary_current": true,
+    "daily_integrity_id": "ddi_aca1ad1dab68e1083aaec4119e2aaccb722bfbd19ae1725cf8c55df430c6b4db",
+    "partitions": [
+      {
+        "dataset": "adj_factor",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:25.545659+08:00"
+      },
+      {
+        "dataset": "anns_metadata",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 3293,
+        "refreshed_at": "2026-10-28T10:42:15.306003+08:00"
+      },
+      {
+        "dataset": "bak_basic",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:25.703643+08:00"
+      },
+      {
+        "dataset": "cyq_perf",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:25.939663+08:00"
+      },
+      {
+        "dataset": "daily_basic",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:26.021949+08:00"
+      },
+      {
+        "dataset": "dividend",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:26.071743+08:00"
+      },
+      {
+        "dataset": "etf_basic_snapshots",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:26.601435+08:00"
+      },
+      {
+        "dataset": "etf_share_size",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:40:27.462924+08:00"
+      },
+      {
+        "dataset": "index_daily",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 1007,
+        "refreshed_at": "2026-10-28T10:40:27.643341+08:00"
+      },
+      {
+        "dataset": "kline_daily_raw",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 5577,
+        "refreshed_at": "2026-10-28T10:40:30.131471+08:00"
+      },
+      {
+        "dataset": "kline_minute_raw",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 1336800,
+        "refreshed_at": "2026-10-28T10:40:30.881803+08:00"
+      },
+      {
+        "dataset": "margin_detail",
+        "trade_date": null,
+        "status": null,
+        "row_count": null,
+        "refreshed_at": null
+      },
+      {
+        "dataset": "moneyflow_ts",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 5577,
+        "refreshed_at": "2026-10-28T10:41:14.921181+08:00"
+      },
+      {
+        "dataset": "sector_data",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 4918,
+        "refreshed_at": "2026-10-28T10:41:16.410401+08:00"
+      },
+      {
+        "dataset": "stk_limit",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:16.580746+08:00"
+      },
+      {
+        "dataset": "stock_basic",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:16.632930+08:00"
+      },
+      {
+        "dataset": "stock_st",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:16.692871+08:00"
+      },
+      {
+        "dataset": "stock_st_events",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:16.753102+08:00"
+      },
+      {
+        "dataset": "suspend_d",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:16.814449+08:00"
+      },
+      {
+        "dataset": "sw_daily",
+        "trade_date": "2026-10-27",
+        "status": "success",
+        "row_count": 155,
+        "refreshed_at": "2026-10-28T10:41:16.881610+08:00"
+      },
+      {
+        "dataset": "sw_index_classify",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:16.932733+08:00"
+      },
+      {
+        "dataset": "sw_index_member",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:42:14.892932+08:00"
+      },
+      {
+        "dataset": "tushare_express_raw",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:42:14.950573+08:00"
+      },
+      {
+        "dataset": "tushare_fina_indicator_raw",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:42:15.012835+08:00"
+      },
+      {
+        "dataset": "tushare_forecast_raw",
+        "trade_date": "2026-10-27",
+        "status": "failed",
+        "row_count": 0,
+        "refreshed_at": "2026-10-28T10:41:14.604738+08:00"
+      }
+    ]
+  },
+  "status": "PASS",
+  "command": "python -X utf8 tmp/handoff/advisory-workbench-postrestart-20261028/probe.py",
+  "source_hash_mismatches": [
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "source_hash_mismatch_explanation": "Only shared ownership catalogue changed in later merged PR #6781; all 36 other delivery files match LF-normalized hashes.",
+  "shadow": {
+    "status": "SHADOW_ONLY",
+    "captured_days": 0,
+    "complete_days": 0,
+    "mean_delta_bps": null,
+    "missed": [
+      {
+        "observed_at": "2026-10-28T09:31:43.595996+08:00",
+        "publication": {
+          "binding_version_id": "advb_9673d612b6d14668b4d7545fcee8d277",
+          "created_at": "2026-10-27T16:43:45.417784+08:00",
+          "decision_date": "2026-10-27",
+          "list_version_id": "advlv_1bb7eeca87f8fd064181b7af42bafc3f",
+          "program_id": "advp_ed918504a02f4b15892f0dba65da139b",
+          "selection_run_id": "sel_5899ec7f868444709c622fc06532b6fd",
+          "target_date": "2026-10-28"
+        },
+        "release_sha256": "877bfb0f0826487504ffbd5fcc92947497b226e864e10297ed1718392eb0b74e",
+        "sha256": "843e82563d0dbf12251c619bb970d81109c6c5ea878793ab4d8e4cb6077a9e4d",
+        "status": "MISSED_CAPTURE_WINDOW"
+      }
+    ],
+    "last_failure": {
+      "database_writes": 0,
+      "observed_at": "2026-10-28T00:04:31.832799+08:00",
+      "pending_evaluations": 0,
+      "physical_fit_count": 0,
+      "release_sha256": "877bfb0f0826487504ffbd5fcc92947497b226e864e10297ed1718392eb0b74e",
+      "results": [
+        {
+          "decision_date": "2026-10-27",
+          "error_type": "ValueError",
+          "message": "original publication reference differs",
+          "stage": "PREDICTION",
+          "status": "FAILED"
+        }
+      ],
+      "sha256": "e9dbd645d95123e14bd275a83f84825d6dcc3de1aacb8542992807b3a9724129",
+      "status": "FAILED"
+    },
+    "independent_economic_confirmation": false,
+    "production_ranking_replaced": false,
+    "release_sha256": "877bfb0f0826487504ffbd5fcc92947497b226e864e10297ed1718392eb0b74e",
+    "model_sha256": "8c915844002eab8b2dde0f8bc91f176ee7768b16ba5089520f106167bdf48813"
+  },
+  "browser": {
+    "schema": "advisory_workbench_live_browser_v1",
+    "observed_at": "2026-10-28T02:46:33.838Z",
+    "origin": "http://127.0.0.1:3000",
+    "mocked_responses": 0,
+    "errors": [],
+    "checks": [
+      "five live cards and active global navigation",
+      "LSTM live current recommendations and NEW filter",
+      "live history detail, keyboard close and server pagination",
+      "persisted shadow observation, no model inference",
+      "blocked parent does not substitute historical list"
+    ],
+    "status": "PASS",
+    "api_methods": [
+      "GET"
+    ],
+    "request_count": 33,
+    "screenshots": {
+      "live-overview.png": "44bbb0411c4052c70994f849883d3b36052fb00719bda8c9cc78dbb9b9900210",
+      "live-history-detail.png": "4cdb5c55c016c11b817464164954da258557b7130976c2392c750b78985c65a1",
+      "live-daily-settled.png": "6cdd5c02bbe8b61ff33f0d4f8e0b754fd307e20d4d75eef9b1a5d2c9ee5ad40f"
+    },
+    "screenshot_location": "F:\\Dev\\AIstock\\tmp\\handoff\\advisory-workbench-postrestart-20261028",
+    "new_filter_settled": {
+      "status": "PASS",
+      "observed_at": "2026-10-28T03:01:15.108Z",
+      "new_rows": 7,
+      "changes": [
+        "NEW"
+      ],
+      "mocked_responses": 0
+    },
+    "screenshot_note": "The initial NEW-filter screenshot captured a loading state. Rechecked only that filter after response/render completion; seven NEW rows verified and replacement screenshot recorded."
+  },
+  "cleanup": [
+    {
+      "schema_version": "aistock_issue_workflow_cleanup_v1",
+      "branch": "docs/advisory-workbench-20261028",
+      "worktree": "F:\\Dev\\AIstock_worktrees\\advisory-workbench-design-20261028",
+      "workflow_gate": "cleanup_done",
+      "generated_at": "2026-10-28T02:47:10.948228Z",
+      "duration_seconds": 11.422,
+      "cleanup_verification": {
+        "all_clear": true,
+        "local_branch_absent": true,
+        "path_absent": true,
+        "registration_absent": true,
+        "remote_branch_absent": true,
+        "remote_check_attempts": 1,
+        "remote_check_ok": true,
+        "schema_version": "aistock_worktree_cleanup_verification_v1"
+      },
+      "purge": [
+        {
+          "manifest_sha256": "f0f2f176198a9666e556faa01ea9a5d66b41679a43d09107e5effc88103f0e07",
+          "transient_manifest_sha256": "4ca2a1e8049eadf437e06c0f03b72649f99338c9d95ec56a05701ed6b67bd25b",
+          "removed_root_count": 2,
+          "ignored_count_after": 0,
+          "ok": true
+        }
+      ]
+    },
+    {
+      "schema_version": "aistock_issue_workflow_cleanup_v1",
+      "branch": "feat/advisory-workbench-20261028",
+      "worktree": "F:\\Dev\\AIstock_worktrees\\advisory-workbench-20261028",
+      "workflow_gate": "cleanup_done",
+      "generated_at": "2026-10-28T02:47:57.899271Z",
+      "duration_seconds": 10.267,
+      "cleanup_verification": {
+        "all_clear": true,
+        "local_branch_absent": true,
+        "path_absent": true,
+        "registration_absent": true,
+        "remote_branch_absent": true,
+        "remote_check_attempts": 1,
+        "remote_check_ok": true,
+        "schema_version": "aistock_worktree_cleanup_verification_v1"
+      },
+      "purge": [
+        {
+          "manifest_sha256": "9bb9c9f66bacd7e9a71cc55976548d06f823aa7f8c23d631550dd489d0506ee7",
+          "transient_manifest_sha256": "6f00dfd9b1cad83011fef984de0ac50ff573448a0c898bd53c0f4bf1683bb448",
+          "removed_root_count": 57,
+          "ignored_count_after": 0,
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "bug_2111": {
+    "diagnosis": {
+      "publication_created_at": "2026-10-27T16:43:45.417784+08:00",
+      "repository_created_at": "2026-10-27T08:43:45.417784+00:00",
+      "checks": {
+        "program": true,
+        "binding": true,
+        "published": true,
+        "selection": true,
+        "decision": true,
+        "target": true,
+        "created_text": false,
+        "created_instant": true,
+        "past": true
+      },
+      "list_version_id": "advlv_1bb7eeca87f8fd064181b7af42bafc3f"
+    },
+    "fresh_process": {
+      "schema": "advisory_shadow_identity_fresh_process_v1",
+      "status": "PASS",
+      "loaded_file": "F:\\Dev\\AIstock_worktrees\\BUG-2111-lstm-utc-20261028\\backend\\services\\advisory_model_first\\lstm_spo_shadow_source_v1.py",
+      "source_sha256": "a9be40719b185e7112ce33936bc939afc4ab2dc9ace4e5c0f07e878892c7ade3",
+      "list_version_id": "advlv_1bb7eeca87f8fd064181b7af42bafc3f",
+      "publication_created_at": "2026-10-27T16:43:45.417784+08:00",
+      "read_scope": "READ_ONLY actual publication metadata; stopped before selection/artifact/features",
+      "asset_reads": 0,
+      "label_reads": 0,
+      "model_calls": 0,
+      "capture_calls": 0,
+      "database_writes": 0,
+      "service_control": 0
+    },
+    "unit_tests": "24 passed",
+    "ruff": "PASS",
+    "runtime": "pending_user_restart_after_source_merge",
+    "runtime_gate_on_actual_payload": {
+      "verdict": "failed",
+      "reason": "no prospective capture yet; configured status is insufficient",
+      "facts": {
+        "program_id": "advp_ed918504a02f4b15892f0dba65da139b",
+        "captured_days": 0,
+        "complete_days": 0,
+        "release_sha256": "877bfb0f0826487504ffbd5fcc92947497b226e864e10297ed1718392eb0b74e",
+        "economic_confirmation": false
+      }
+    },
+    "workflow_smoke": "PASS",
+    "l0": "PASS",
+    "semantic_tests": "13 passed",
+    "adjacent_entry_probe_tests": "10 passed"
+  },
+  "boundaries": {
+    "database_writes": 0,
+    "model_fit_calls": 0,
+    "new_prediction_capture_calls": 0,
+    "service_control": 0,
+    "dataset_switches": 0,
+    "qe_calls": 0
+  }
+}

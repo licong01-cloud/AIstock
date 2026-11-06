@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 interface AlertItem {
   alert_id: string;
@@ -26,6 +26,7 @@ export default function DataAlertsToast() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const router = useRouter();
+  const pathname = usePathname();
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -68,6 +69,36 @@ export default function DataAlertsToast() {
 
   const visible = alerts.filter((a) => !dismissed.has(a.alert_id));
   if (visible.length === 0) return null;
+
+  if (pathname === "/simulation/localsim" || pathname?.startsWith("/simulation/localsim/")) {
+    const hasError = visible.some((a) => a.severity === "error" || a.severity === "critical");
+    return (
+      <details
+        aria-label="数据准备提醒"
+        style={{ position: "fixed", bottom: 12, right: 16, zIndex: 9999,
+          maxWidth: "min(320px, calc(100vw - 32px))", border: "1px solid #ead4a5",
+          borderRadius: 8, background: "#fffaf0", color: "#79551a", fontSize: 13,
+          boxShadow: "0 2px 8px #17243318" }}
+      >
+        <summary style={{ padding: "8px 12px", cursor: "pointer" }}>
+          {hasError ? "数据准备异常" : "数据准备提醒"} · {visible.length} 项
+        </summary>
+        <div style={{ padding: "0 12px 12px" }}>
+          <p>数据准备仍有待处理提醒。请到数据准备页查看原因与处理进度。</p>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => router.push("/local-data?tab=jobs")}>
+              查看数据准备
+            </button>
+            <button type="button" onClick={() => setDismissed((prev) => {
+              const next = new Set(prev);
+              visible.forEach((a) => next.add(a.alert_id));
+              return next;
+            })}>关闭本页提醒</button>
+          </div>
+        </div>
+      </details>
+    );
+  }
 
   const severityBg: Record<string, string> = {
     critical: "#dc2626",

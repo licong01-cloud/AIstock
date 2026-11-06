@@ -108,6 +108,7 @@ async function mockLocalSimApi(page: Page, requests: Array<{ method: string; pat
     const method = request.method();
     const body = request.postDataJSON?.();
     requests.push({ method, path, body });
+    if (method === "GET" && path === "/simulation-runtime/localsim/workbench/overview") return json(route, {items:[],complete:true,generated_at:new Date().toISOString(),included_count:0,excluded_count:0,curve:[]});
     if (method === "GET" && path === "/simulation-runtime/localsim/cutover-readiness") {
       await state.readinessGate?.();
       if (state.readinessStatus) return json(route, { detail: { code: "READBACK_UNAVAILABLE", message: "切流核验暂不可用" } }, state.readinessStatus);
@@ -176,9 +177,9 @@ test("LocalSIM UI uses only the successor control plane and never calls session 
   await mockLocalSimApi(page, requests);
 
   await page.goto("/simulation/localsim?package_id=pkg_ui_contract&top_k=30");
-  await expect(page.getByRole("heading", { name: "LocalSIM 模拟盘" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "原子创建 LocalSIM" })).toBeEnabled();
-  await page.getByRole("button", { name: "原子创建 LocalSIM" }).click();
+  await expect(page.getByRole("heading", { name: "模拟账户创建与配置" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建模拟账户" })).toBeEnabled();
+  await page.getByRole("button", { name: "创建模拟账户" }).click();
   const create = requests.find((item) => item.method === "POST" && item.path.endsWith("/localsim/accounts"));
   expect(create?.body).toMatchObject({
     schema_version: "localsim_account_create_request_v1",
@@ -189,13 +190,13 @@ test("LocalSIM UI uses only the successor control plane and never calls session 
   expect(JSON.stringify(create?.body)).not.toMatch(/manifest_sha256|admission_receipt_id|release_id|binding_id|ledger_scope|policy_json/);
 
   await page.goto("/simulation/localsim/replays?package_id=pkg_ui_contract");
-  await expect(page.getByRole("heading", { name: "LocalSIM 历史回放" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "原子创建回放" })).toBeEnabled();
-  await page.getByRole("button", { name: "原子创建回放" }).click();
+  await expect(page.getByRole("heading", { name: "历史回放", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建历史回放" })).toBeEnabled();
+  await page.getByRole("button", { name: "创建历史回放" }).click();
   const replayCreate = requests.find((item) => item.method === "POST" && item.path.endsWith("/localsim/replays"));
   expect(replayCreate?.body).toMatchObject({
     schema_version: "localsim_replay_create_request_v1",
-    historical_source_id: "market.kline_minute_raw.v1",
+    historical_source_id: "dataset_files.frozen_market.v1",
     end_trade_date: "2026-08-28",
   });
   expect(JSON.stringify(replayCreate?.body)).not.toMatch(/source_sha256|calendar_snapshot|day_engine|cursor|safe_boundary/);
@@ -223,7 +224,7 @@ test("remaining Selection and MiniQMT pages do not call the retired Paper contro
   expect(selectionSource).toContain("tradingDayStatus");
 });
 
-for (const path of ["/simulation/localsim", "/simulation/localsim/replays"]) {
+for (const path of ["/simulation/localsim/configure", "/simulation/localsim/replays"]) {
   test(`${path} follows economic in-flight changes without reloading or resetting form edits`, async ({ page }) => {
     await page.clock.install();
     const requests: Array<{ method: string; path: string }> = [];
@@ -231,7 +232,7 @@ for (const path of ["/simulation/localsim", "/simulation/localsim/replays"]) {
     await mockLocalSimApi(page, requests, state);
     await page.goto(path);
     await expect(page.getByText("切流条件 · 有 1 个交易日正在执行，切流暂时等待", { exact: true })).toBeVisible();
-    const create = page.getByRole("button", { name: path.endsWith("replays") ? "原子创建回放" : "原子创建 LocalSIM", exact: true });
+    const create = page.getByRole("button", { name: path.endsWith("replays") ? "创建历史回放" : "创建模拟账户", exact: true });
     await expect(create).toBeDisabled();
     await page.getByLabel("账户名称", { exact: true }).fill("保持我的输入");
     await expect(page.getByText("in_flight_economic_run_count:1", { exact: false })).not.toBeVisible();
@@ -254,8 +255,8 @@ test("failed readiness invalidates controls and a successful read clears the err
   const requests: Array<{ method: string; path: string }> = [];
   const state: MockState = {};
   await mockLocalSimApi(page, requests, state);
-  await page.goto("/simulation/localsim");
-  const create = page.getByRole("button", { name: "原子创建 LocalSIM", exact: true });
+  await page.goto("/simulation/localsim/configure");
+  const create = page.getByRole("button", { name: "创建模拟账户", exact: true });
   await expect(create).toBeEnabled();
   state.readinessStatus = 503;
   await page.clock.runFor(5_100);
@@ -276,7 +277,7 @@ test("returning to a page refreshes readiness independently of package-list fail
   await mockLocalSimApi(page, requests, state);
   await page.goto("/simulation/localsim/replays");
   await expect(page.getByText("切流条件 · 切流前置检查通过", { exact: true })).toBeVisible();
-  await expect(page.getByText("策略包列表读取失败", { exact: true })).toBeVisible();
+  await expect(page.getByText("策略目录读取失败，请刷新重试。", { exact: true })).toBeVisible();
   state.readiness = { ...readiness, ready: false, blockers: ["in_flight_economic_run_count:1"], in_flight_economic_run_count: 1 };
   await page.evaluate(() => { window.dispatchEvent(new Event("focus")); });
   await expect(page.getByText("切流条件 · 有 1 个交易日正在执行，切流暂时等待", { exact: true })).toBeVisible();
@@ -286,9 +287,9 @@ test("returning to a page refreshes readiness independently of package-list fail
 test("contradictory readiness cannot enable controls or masquerade as normal in-flight waiting", async ({ page }) => {
   const state: MockState = { readiness: { ...readiness, ready: true, blockers: ["in_flight_economic_run_count:1"], in_flight_economic_run_count: 1 } };
   await mockLocalSimApi(page, [], state);
-  await page.goto("/simulation/localsim");
+  await page.goto("/simulation/localsim/configure");
   await expect(page.getByText("切流条件 · 切流状态读取失败", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "原子创建 LocalSIM", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "创建模拟账户", exact: true })).toBeDisabled();
 });
 
 test("replay polling separates known asynchronous inference from real historical failures", async ({ page }, testInfo) => {
@@ -302,13 +303,13 @@ test("replay polling separates known asynchronous inference from real historical
   await page.clock.runFor(5_100);
   await expect(page.getByText("回放已终止，需诊断", { exact: true })).toBeVisible();
   await expect(page.getByText("历史分钟行情读取失败，需要核对数据及交易资格；尚未完成该交易日。", { exact: true })).toBeVisible();
-  await expect(page.getByText("下一交易日：2026-07-10", { exact: true })).toBeVisible();
+  await expect(page.getByText("下一日 2026-07-10", { exact: true })).toBeVisible();
   await expect(page.getByText("当日调度核验 · 未发现当日调度阻塞", { exact: true })).toBeVisible();
   await expect(page.getByText("等待选股推理（自动接续）", { exact: true })).not.toBeVisible();
   state.replays = [{ ...replay, status: "FAILED_RETRYABLE", failure_code: "DataUnavailableError", failure_context: { reason_code: "REFERENCE_CLOSE_MISSING", message: "真实参考价缺失" } }];
   await page.clock.runFor(5_100);
   await expect(page.getByText("执行受阻，等待自动重试", { exact: true })).toBeVisible();
-  await expect(page.getByText("真实参考价缺失", { exact: true })).toBeVisible();
+  await expect(page.getByText("真实参考价缺失，需要核对合法估值依据。", { exact: true })).toBeVisible();
   state.readiness = { ...readiness, ready: false, blockers: ["in_flight_economic_run_count:1"], in_flight_economic_run_count: 1 };
   state.replays = [
     { ...replay, replay_job_id: "lsreplay_lstm_contract", status: "FAILED_RETRYABLE", failure_context: { reason_code: "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS" } },
@@ -327,11 +328,11 @@ test("replay detail clears read errors after recovery without issuing lifecycle 
   const state: MockState = { replayStatus: 503 };
   await mockLocalSimApi(page, requests, state);
   await page.goto(`/simulation/localsim/replays/${replay.replay_job_id}`);
-  await expect(page.getByText("回放状态读取失败：回放记录暂不可用 [REPLAY_UNAVAILABLE]", { exact: true })).toBeVisible();
+  await expect(page.getByText("本次读取失败，保留上次成功结果；请按账户与发生时间核查。", { exact: true })).toBeVisible();
   state.replayStatus = undefined;
   await page.getByRole("button", { name: "刷新回放状态" }).click();
   await expect(page.getByText("等待开始", { exact: true })).toBeVisible();
-  await expect(page.getByText("回放状态读取失败：回放记录暂不可用 [REPLAY_UNAVAILABLE]", { exact: true })).not.toBeVisible();
+  await expect(page.getByText("本次读取失败，保留上次成功结果；请按账户与发生时间核查。", { exact: true })).not.toBeVisible();
   expect(requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
@@ -340,8 +341,8 @@ test("slow readback is serial, times out visibly, then resumes polling", async (
   const requests: Array<{ method: string; path: string }> = [];
   const state: MockState = {};
   await mockLocalSimApi(page, requests, state);
-  await page.goto("/simulation/localsim");
-  const create = page.getByRole("button", { name: "原子创建 LocalSIM", exact: true });
+  await page.goto("/simulation/localsim/configure");
+  const create = page.getByRole("button", { name: "创建模拟账户", exact: true });
   await expect(create).toBeEnabled();
   const count = () => requests.filter((request) => request.path.endsWith("cutover-readiness")).length;
   const before = count();
@@ -370,8 +371,8 @@ test("hidden pages stop polling and invalidate old readiness before resuming", a
   await page.clock.install();
   const requests: Array<{ method: string; path: string }> = [];
   await mockLocalSimApi(page, requests);
-  await page.goto("/simulation/localsim");
-  const create = page.getByRole("button", { name: "原子创建 LocalSIM", exact: true });
+  await page.goto("/simulation/localsim/configure");
+  const create = page.getByRole("button", { name: "创建模拟账户", exact: true });
   await expect(create).toBeEnabled();
   const before = requests.filter((request) => request.path.endsWith("cutover-readiness")).length;
   await page.evaluate(() => {
@@ -391,10 +392,10 @@ test("hidden pages stop polling and invalidate old readiness before resuming", a
 test("scheduler read failures remain visible without overriding backend cutover authority", async ({ page }) => {
   const state: MockState = { schedulerStatus: 503 };
   await mockLocalSimApi(page, [], state);
-  await page.goto("/simulation/localsim");
+  await page.goto("/simulation/localsim/configure");
   await expect(page.getByText("当日调度核验 · 当日调度核验读取失败", { exact: true })).toBeVisible();
   await expect(page.getByText("切流条件 · 切流前置检查通过", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "原子创建 LocalSIM", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "创建模拟账户", exact: true })).toBeEnabled();
   state.schedulerStatus = undefined;
   await page.getByRole("button", { name: "刷新运行状态" }).click();
   await expect(page.getByText("当日调度核验 · 未发现当日调度阻塞", { exact: true })).toBeVisible();
@@ -403,6 +404,6 @@ test("scheduler read failures remain visible without overriding backend cutover 
 test("detail rejects a different replay identity and keeps controls unavailable", async ({ page }) => {
   await mockLocalSimApi(page, []);
   await page.goto("/simulation/localsim/replays/lsreplay_different_contract");
-  await expect(page.getByText("回放状态读取失败：回放任务身份不一致，请重新核验", { exact: true })).toBeVisible();
+  await expect(page.getByText("本次读取失败，保留上次成功结果；请按账户与发生时间核查。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "取消回放" })).not.toBeVisible();
 });

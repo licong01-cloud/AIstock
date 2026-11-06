@@ -36,6 +36,13 @@ STATUS_FAILURE_MODULES = {
 BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
 CHANGE_FILE_ONLY_PLAN_KEYS = frozenset({"l0"})
 CHANGE_FILE_ONLY_SESSIONS = frozenset({"l0"})
+# miniQMT paper simulation is retired. Shared/LocalSIM and the independent
+# MiniQMT execution runtime remain eligible; historical failed receipts cannot
+# reintroduce the retired simulation lanes.
+RETIRED_SIMULATION_PLANS = frozenset({
+    "paper_v2_live", "miniqmt_sim_stub_l3", "miniqmt_sim_trading_hours_l5",
+    "simulation_dual_backend_l4",
+})
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
 
@@ -187,13 +194,21 @@ def build_nightly_execution_plan(
         raise ValueError("unmapped executable code in Nightly change window: " + ", ".join(unmatched_code))
 
     plans = issue_flow._plans_by_key()
+    retired_plans = set(RETIRED_SIMULATION_PLANS) | {
+        key for key, plan in plans.items()
+        if str(plan.get("nox_session") or "") in RETIRED_SIMULATION_PLANS}
     operational_plans = {key for key, plan in plans.items() if plan.get("execution_scope") == "operations"}
+    retired_sessions = set(RETIRED_SIMULATION_PLANS) | {
+        str(plan.get("nox_session") or "") for key, plan in plans.items()
+        if key in retired_plans}
     operational_sessions = {str(plans[key].get("nox_session") or "") for key in operational_plans}
     automation_denied = {key for key, plan in plans.items()
                          if (plan.get("runtime_policy") or {}).get("allow_github_actions") is False}
     denied_sessions = {str(plans[key].get("nox_session") or ""): key for key in automation_denied}
     retry_context = retry_context or {}
     retry_sessions = unique_values([str(item) for item in retry_context.get("failed_sessions") or []])
+    retired_retry_sessions = [session for session in retry_sessions if session in retired_sessions]
+    retry_sessions = [session for session in retry_sessions if session not in retired_sessions]
     operational_retry_sessions = [session for session in retry_sessions if session in operational_sessions]
     excluded_automation = {denied_sessions[session]: "not_executed: catalog allow_github_actions=false"
                            for session in retry_sessions if session in denied_sessions}
@@ -218,7 +233,7 @@ def build_nightly_execution_plan(
     selected_sessions: list[str] = []
     nightly_plan_keys: list[str] = []
     for key in unique_values(plan_keys):
-        if key in operational_plans:
+        if key in operational_plans or key in retired_plans:
             continue
         plan = plans.get(key) or {}
         if not full_run and plan.get("execution_scope") == "pr":
@@ -234,6 +249,8 @@ def build_nightly_execution_plan(
             ):
                 raise ValueError(f"Nightly replacement plan is invalid for PR-only plan {key}: {replacement_key}")
             key = replacement_key
+        if key in retired_plans:
+            continue
         if key in automation_denied:
             excluded_automation[key] = "not_executed: catalog allow_github_actions=false"
             continue
@@ -252,6 +269,7 @@ def build_nightly_execution_plan(
         str(plan.get("nox_session") or "").strip(): key
         for key, plan in plans.items()
         if plan.get("execution_scope") != "pr"
+        and key not in retired_plans
         and key not in automation_denied
         and plan.get("enabled", True)
         and plan.get("runner_enabled")
@@ -307,6 +325,8 @@ def build_nightly_execution_plan(
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
         "excluded_operational_plans": sorted(operational_plans),
         "excluded_operational_retry_sessions": operational_retry_sessions,
+        "excluded_retired_simulation_plans": sorted(retired_plans),
+        "excluded_retired_simulation_retry_sessions": retired_retry_sessions,
         "excluded_automation_plans": excluded_automation,
         "excluded_pr_only_plans": (
             sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []
@@ -355,6 +375,8 @@ def collect_statuses(*, status_json: Path | None, inline_statuses: list[str] | N
 def recent_failure_modules_from_statuses(statuses: dict[str, str]) -> list[str]:
     modules: list[str] = []
     for key, value in statuses.items():
+        if key == "paper_v2_live":
+            continue  # A historical status must not revive the retired job.
         if value.strip().lower() in FAILURE_STATUSES:
             modules.extend(STATUS_FAILURE_MODULES.get(key, []))
     return unique_values(modules)
@@ -387,6 +409,32 @@ def code_intelligence_refs_from_artifact(path: Path | None) -> dict[str, Any]:
     return llm_provider_adapter.code_intelligence_refs_from_file(path)
 
 
+def exclude_retired_simulation_advice(advice: dict[str, Any]) -> dict[str, Any]:
+    """Apply retirement after provider advice, including legacy failure inputs.
+
+    Keep a visible deferred row for audit while removing retired plans from
+    every consumable plan list. This policy cannot be overridden by an LLM.
+    """
+    result = dict(advice)
+    queue = []
+    exclusions = {}
+    for original in advice.get("queue") or []:
+        item = dict(original)
+        key = str(item.get("plan_key") or "")
+        session = str(item.get("nox_session") or "")
+        if key in RETIRED_SIMULATION_PLANS or session in RETIRED_SIMULATION_PLANS:
+            reason = "not_executed: retired miniQMT paper simulation; LocalSIM remains active"
+            item.update(allowed=False, deferred_reason=reason)
+            exclusions[key] = reason
+        queue.append(item)
+    result["queue"] = queue
+    for field in ("deterministic_plan_keys", "advised_plan_keys", "executed_plan_keys"):
+        result[field] = [key for key in advice.get(field) or []
+                         if key not in RETIRED_SIMULATION_PLANS and key not in exclusions]
+    result["excluded_retired_simulation_plans"] = exclusions
+    return result
+
+
 def build_report(
     *,
     provider: str,
@@ -414,6 +462,7 @@ def build_report(
         invoke_llm=invoke_llm,
         fallback_on_llm_error=fallback_on_llm_error,
     )
+    advice = exclude_retired_simulation_advice(advice)
     gate = advice["deterministic_gate"]
     allowed = [item for item in advice["queue"] if item.get("allowed")]
     deferred = [item for item in advice["queue"] if not item.get("allowed")]
@@ -448,6 +497,7 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
+        "excluded_retired_simulation_plans": advice["excluded_retired_simulation_plans"],
         "deterministic_plan_keys": advice.get("deterministic_plan_keys") or [],
         "advised_plan_keys": advice.get("advised_plan_keys") or [],
         "executed_plan_keys": advice.get("executed_plan_keys") or [str(item["plan_key"]) for item in allowed],
@@ -487,6 +537,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     execution = report.get("nightly_execution") or {}
+    retired_exclusions = report.get("excluded_retired_simulation_plans") or {}
+    lines.extend(f"- {key}: `{reason}`" for key, reason in retired_exclusions.items())
+    retired_retries = execution.get("excluded_retired_simulation_retry_sessions") or []
+    if retired_retries:
+        lines.append(f"- retired retry sessions not executed: `{','.join(retired_retries)}`")
     lines.extend(f"- {key}: `{reason}`" for key, reason in (execution.get("excluded_automation_plans") or {}).items())
     return "\n".join(lines)
 
@@ -519,6 +574,10 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
             "resource_budget_seconds": queue.get("resource_budget_seconds"),
         },
         "queue": report.get("queue") or [],
+        "excluded_retired_simulation_plans": report.get("excluded_retired_simulation_plans") or {},
+        "excluded_retired_simulation_retry_sessions": (
+            report.get("nightly_execution") or {}
+        ).get("excluded_retired_simulation_retry_sessions") or [],
         "deterministic_plan_keys": report.get("deterministic_plan_keys") or [],
         "advised_plan_keys": report.get("advised_plan_keys") or [],
         "executed_plan_keys": report.get("executed_plan_keys") or [],

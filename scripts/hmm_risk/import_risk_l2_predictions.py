@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate sealed L2 historical risk, or explicitly write an existing DB target."""
+"""Validate sealed L2 risk products, or explicitly write an existing DB target."""
 
 from __future__ import annotations
 
@@ -63,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
             "input_hash": product.run["input_hash"],
             "row_hash": product.run["compact_summary"]["row_hash"],
             "risk_l2_capability_status": product.run["risk_l2_capability_status"],
+            "validation_basis": product.run["validation_basis"],
+            "effect_status": product.run["effect_status"],
             "database_write": args.mode == "write",
             "new_fits": 0,
             "tail_accessed": False,

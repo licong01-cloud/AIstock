@@ -19,6 +19,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import normalize_json
 
 from .node_execution import MAX_QE_NODE_PARALLELISM
+from .qe_batch_execution_policy import QE_CPU_TRAINING_LOOP_CAPACITY, QE_TRAINING_LOOP_CAPACITY
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
@@ -45,8 +46,8 @@ NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
 # One local WSL slot is the fail-closed host-responsiveness baseline.  A
 # repository-proven same-task pure-backtest cohort may use the task's explicit
 # node_parallelism across the globally supported range.  Catalog-resolved
-# non-GAT training remains capped separately at two; unresolved, mixed-task,
-# and graph-model workloads retain the single-slot baseline.
+# non-GAT GPU training remains capped at two and proven CPU training may use
+# four. Unresolved, mixed-task, and graph-model workloads retain one slot.
 WSL_HARD_CAPACITY = 1
 WSL_BACKTEST_DEFAULT_CAPACITY = 2
 WSL_BACKTEST_HARD_CAPACITY = MAX_QE_NODE_PARALLELISM
@@ -219,6 +220,7 @@ class QEActiveExecutionCapacityService:
         *,
         backtest_only: bool = False,
         parallel_training: bool = False,
+        compute_kind: str | None = None,
     ) -> int:
         normalized_node_id = self.canonical_node_id(node_id)
         if backtest_only and parallel_training:
@@ -237,7 +239,8 @@ class QEActiveExecutionCapacityService:
                 self._wsl_backtest_hard_capacity
                 if backtest_only
                 else (
-                    self._wsl_parallel_training_hard_capacity
+                    (QE_CPU_TRAINING_LOOP_CAPACITY if compute_kind == "cpu"
+                     else self._wsl_parallel_training_hard_capacity)
                     if parallel_training
                     else self._wsl_hard_capacity
                 )
@@ -1131,12 +1134,27 @@ class QEWorkspaceSubmissionCoordinator:
             and source.source_kind == "multi_alpha_durable_attempt"
             and self._capacity_service.is_wsl_node(source.node_id)
         )
+        compute_kind = None
+        if same_task_parallel_training_cohort and payload.config.get("model_id"):
+            from .config_composer import ConfigComposer
+            from .qe_batch_execution_policy import loop_compute_kind
+            # Resolve the real catalog model and device overrides. A caller's
+            # eligibility flag alone must never raise GPU training above two.
+            compute_kind = loop_compute_kind(
+                payload.config, ConfigComposer()._get_model_info(payload.config["model_id"]),
+            )
         physical_capacity = self._capacity_service.resolve_node_capacity(
             source.node_id,
             source.requested_node_capacity,
             backtest_only=same_task_backtest_cohort or durable_replay_cohort,
             parallel_training=same_task_parallel_training_cohort,
+            compute_kind=compute_kind,
         )
+        # WSL GPU training keeps its tighter cap, including replay-to-fit retry.
+        # Proven CPU models on either node retain four-Loop capacity.
+        if (source.source_kind == "qe_evolution_loop" and not source.backtest_only
+                and self._capacity_service.is_wsl_node(source.node_id) and compute_kind != "cpu"):
+            physical_capacity = min(physical_capacity, QE_TRAINING_LOOP_CAPACITY)
         capacity = self._effective_consumer_capacity(
             physical_capacity,
             source.consumer_id,

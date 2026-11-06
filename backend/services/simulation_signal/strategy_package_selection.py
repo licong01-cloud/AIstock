@@ -25,8 +25,10 @@ from backend.services.advisory_phase1.stage_trace import (
 from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
     freeze_canonical_pit_runtime_binding,
     has_canonical_pit_runtime_profile,
+    inherit_canonical_pit_runtime_binding,
     require_canonical_pit_generation_current,
     require_canonical_pit_runtime_binding,
 )
@@ -315,9 +317,10 @@ class StrategyPackageSelectionService:
         else:
             raw_config = attach_default_runtime_profile_binding(raw_config)
         if has_canonical_pit_runtime_profile(raw_config):
-            raw_config, _pit_runtime_lease = freeze_canonical_pit_runtime_binding(
+            raw_config, _pit_runtime_lease = self.resolve_pit_runtime_config(
                 raw_config,
                 trade_date=trade_date,
+                runtime_release=runtime_release,
                 authority_resolver=self.pit_authority_resolver,
             )
         config = normalize_selection_runtime_config(raw_config)
@@ -683,6 +686,34 @@ class StrategyPackageSelectionService:
             else:
                 merged[key] = deepcopy(value)
         return merged
+
+    @staticmethod
+    def resolve_pit_runtime_config(
+        runtime_config: dict[str, Any], *, trade_date: date,
+        runtime_release: StrategyRuntimeReleaseView | None = None, authority_resolver=None,
+    ):
+        """Inherit an owning release's lease; freeze only new admissions.
+
+        A verified rolling extension does not change the saved identity or its
+        date scope. The public generation contract verifies the old prefix;
+        requests cannot replace either part of the release's PIT binding.
+        """
+        if runtime_release is not None:
+            frozen = StrategyPackageSelectionService.release_selection_runtime_config(runtime_release)
+            if has_canonical_pit_runtime_profile(frozen):
+                for key in (CANONICAL_PIT_RUNTIME_PROFILE_KEY, CANONICAL_PIT_RUNTIME_LEASE_KEY):
+                    if runtime_config.get(key) != frozen.get(key):
+                        raise RuntimeConfigInvalidError(
+                            "selection request conflicts with the release's frozen PIT identity",
+                            context={"reason_code": "SELECTION_FROZEN_PIT_BINDING_CONFLICT",
+                                     "release_id": runtime_release.release_id},
+                        )
+                config, lease = inherit_canonical_pit_runtime_binding(runtime_config, trade_date=trade_date)
+                require_canonical_pit_generation_current(config, authority_resolver=authority_resolver)
+                return config, lease
+        return freeze_canonical_pit_runtime_binding(
+            runtime_config, trade_date=trade_date, authority_resolver=authority_resolver,
+        )
 
     @staticmethod
     def _attach_runtime_release_binding(

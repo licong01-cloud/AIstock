@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1559",
-  "closed_at": null,
+  "closed_at": "2026-10-25T18:10:30.787660Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,6 +34,16 @@
   ],
   "expected": "A deterministic read-only audit classifies every listed trading day without positive daily bars against full-day suspend_d and minute evidence, daily rolling and weekly historical scheduler jobs fail closed on unresolved gaps, and no row is auto-filled without authority.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/suspend_d_coverage.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "noxfile.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1559-suspend-d-sparse-intervals-evade-full-market-coverage-audit.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/services/suspend_d_coverage.py",
       "scripts/audit_suspend_d_coverage.py",
@@ -41,12 +51,15 @@
     ],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/db/init_tushare_schedules.py",
+      "backend/services/suspend_d_coverage.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
       "noxfile.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1559-suspend-d-sparse-intervals-evade-full-market-coverage-audit.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -199,8 +212,8 @@
   },
   "first_seen_at": "2026-09-16T15:20:03.356883Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b49175bcbc43ddca58fc6f220d3dec0dc0eb1874",
+  "fixed_at": "2026-09-16T16:33:20Z",
   "github_issue_number": 4878,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4878",
   "last_seen_at": "2026-09-16T15:20:03.356883Z",
@@ -208,6 +221,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4879",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -235,9 +249,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-1559-refreshed-official.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1559",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c63a76b089b081882f941a11c446268aade2d25561cb0535338618d939a26379",
+      "contract_digest": "9e5d797914b2ddc3ee3cb7204ad4e83596514e492cef504e688c765f06ef4d04",
+      "expected_identity": "b49175bcbc43ddca58fc6f220d3dec0dc0eb1874",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T18:10:06.806777Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a2034c587726c32feff4a3172107e97c73c671906f79da4afd7437804910c3c4",
+      "receipt_sha256": "aaff1085b625199d098c57f33e0628feb7db1acd5e33cea1ee770e5181ab1982",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f7153dd23abf87df5db5c890d902d4a737314bffd6686421e2dd28803b25b7b7",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -247,7 +284,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -256,6 +293,10 @@
     "fingerprint": "ec718688d74b15207869c9db",
     "source_event_id": "FE-20260916-ec718688d74b"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. fresh Python process at implementation HEAD fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 imported backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler, classified a partial authority gap fail-closed, and resolved the Saturday full-history cadence; python -c fresh process import backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler at fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 -> passed",
+    "Two metadata reviews; source tests/CI retained; current catalog and native data.items schedules probe PASS with deployed source ancestry; DESIGN-COMPLIANCE-001 no partial acceptance or new source action"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

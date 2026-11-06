@@ -33,7 +33,9 @@ from backend.services.strategy_package.selection_signal_preparation import (
 )
 
 from .artifact_store import HistoricalRangeArtifactStore
-from .outcome_file_source import FileHistoricalRangeOutcomeSourceProvider, freeze_outcome_file_binding
+from .outcome_file_source import (
+    FileHistoricalRangeOutcomeSourceProvider, OutcomeFileVerificationSession, freeze_outcome_file_binding,
+)
 from .outcome_file_inputs import (
     FileHistoricalRangeCandidateProjectionLoader,
     FileHistoricalRangeOutcomeSubjectInputProvider,
@@ -525,6 +527,8 @@ _R5_MUTATION_ENV_KEYS = (
 )
 
 _R5_CODE_RELEASE_CLOSURE = (
+    "backend/services/advisory_historical_range/planning_service.py",
+    "backend/services/advisory_historical_range/requirement_planner.py",
     "backend/services/advisory_historical_range/request_resolver.py",
     "backend/services/advisory_historical_range/inference_window.py",
     "backend/services/advisory_historical_range/candidate_producer.py",
@@ -535,6 +539,9 @@ _R5_CODE_RELEASE_CLOSURE = (
     "backend/services/advisory_historical_range/selection_signal_kernel.py",
     "backend/services/advisory_historical_range/batch_inference_provider.py",
     "backend/services/advisory_historical_range/inference_inputs.py",
+    "backend/services/advisory_historical_range/input_source_plan.py",
+    "backend/services/advisory_historical_range/task_input_sources.py",
+    "backend/services/advisory_historical_range/source_roles.py",
     "backend/services/advisory_historical_range/inference_features.py",
     "backend/services/advisory_historical_range/inference_session.py",
     "backend/services/advisory_historical_range/factor_input_materialization.py",
@@ -621,9 +628,10 @@ def build_explicit_historical_range_r5_runtime_factory(
 
     def runtime() -> HistoricalRangeRuntime:
         query = PostgresHistoricalRangeQueryRepository(conn_factory=conn_factory)
+        parent_artifact_store = HistoricalRangeOutcomeReadCache(root=artifact_root)
         repository = PostgresHistoricalRangeRepository(
             conn_factory=conn_factory,
-            artifact_store=artifact_store,
+            artifact_store=parent_artifact_store,
         )
         read_only_factory = historical_read_only_connection_factory(conn_factory)
         package_repository = StrategyPackageRepository(conn_factory=read_only_factory)
@@ -683,10 +691,11 @@ def build_explicit_historical_range_r5_runtime_factory(
             component_root=policy_component_root,
             provider=policy_provider,
         )
+        file_verification = OutcomeFileVerificationSession()
         outcome_requests = HistoricalRangeR5OutcomeRequestFactory(
             policy_registry=policy_registry,
             identities=identities,
-            file_binding_factory=freeze_outcome_file_binding,
+            file_binding_factory=lambda: freeze_outcome_file_binding(verification_session=file_verification),
         )
 
         def outcome_service_factory(request: Any) -> HistoricalRangeOutcomeApplicationService:
@@ -704,6 +713,8 @@ def build_explicit_historical_range_r5_runtime_factory(
                     binding=request.file_source_binding,
                     start_trade_date=inputs.start_trade_date,
                     label_as_of_trade_date=request.label_as_of_trade_date,
+                    verification_session=file_verification,
+                    context_only=request.summary_mode == "ONLY",
                 )
                 projection = FileHistoricalRangeCandidateProjectionLoader(
                     inputs=inputs, artifact_store=read_cache, policy_provider=policy_provider,
@@ -775,7 +786,7 @@ def build_explicit_historical_range_r5_runtime_factory(
             outcome_requests=outcome_requests,
             bridge_requests=bridge_requests,
             options_projector=lambda: _project_historical_range_options(conn_factory),
-            artifact_store=artifact_store,
+            artifact_store=parent_artifact_store,
             outcome_service_factory=outcome_service_factory,
         )
 
