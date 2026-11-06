@@ -10,16 +10,6 @@
   "assigned_agent": null,
   "bug_id": "BUG-2194",
   "closed_at": null,
-  "review_results": {
-    "correctness": "PASS：只修前端，不修改后台完整性判定。当前revision匹配且正式验证为VALID/INCOMPLETE/ERROR时，明确missing/invalid计数或MISSING/INVALID/HISTORY_CONFLICT组才提供缺口按钮和颜色；LEGAL_NA、未知、未到期及过期验收不冒充缺失/完整。",
-    "completeness_and_regression": "PASS：仅中文名称、缺失行颜色加文字、部分完成摘要、分页原始dataset参数和后补齐消除按钮均有回归；两项RED（名称缺失、8个无差别按钮）后GREEN。候选实际React组件在Chromium验证8类分区及分页，未启动应用或修改生产数据。",
-    "design_compliance_001": [
-      "禁止简化交付：中文名称、条件按钮、颜色、部分完成原因摘要均实现，保持未知和合法NA的独立语义。",
-      "禁止静默错误：空计数仍为未知，不将待核验和检查异常标为无缺口；旧revision结果不误标当前缺失。",
-      "禁止改变业务逻辑：后台状态、股票范围、PIT、来源数据、发布/profile、API dataset键均不改。",
-      "禁止私增门禁审批：没有新请求、扫描、服务、依赖或人工步骤，仅复用现有L0/CI和定向UI回归。"
-    ]
-  },
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,14 +28,22 @@
   "evidence_uris": [],
   "expected": "详情仅显示中文数据集名称；无已确认缺口无查看缺口按钮；确认缺口行使用明显不同颜色及文字；未知/过期验收保留待核验，摘要解释部分完成。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2194-local-data-integrity-details-show-gap-actions-for-complete-partitions-an.json"
+    ],
     "added_files": [],
     "changed_files": [
       "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
       "frontend/src/app/local-data/components/dailyIntegrity.module.css",
       "frontend/src/app/local-data/datasetLabels.ts",
-      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2194-local-data-integrity-details-show-gap-actions-for-complete-partitions-an.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
@@ -149,14 +147,26 @@
   "required_verification": [
     "l0"
   ],
+  "review_results": {
+    "completeness_and_regression": "PASS：仅中文名称、缺失行颜色加文字、部分完成摘要、分页原始dataset参数和后补齐消除按钮均有回归；两项RED（名称缺失、8个无差别按钮）后GREEN。候选实际React组件在Chromium验证8类分区及分页，未启动应用或修改生产数据。",
+    "correctness": "PASS：只修前端，不修改后台完整性判定。当前revision匹配且正式验证为VALID/INCOMPLETE/ERROR时，明确missing/invalid计数或MISSING/INVALID/HISTORY_CONFLICT组才提供缺口按钮和颜色；LEGAL_NA、未知、未到期及过期验收不冒充缺失/完整。",
+    "design_compliance_001": [
+      "禁止简化交付：中文名称、条件按钮、颜色、部分完成原因摘要均实现，保持未知和合法NA的独立语义。",
+      "禁止静默错误：空计数仍为未知，不将待核验和检查异常标为无缺口；旧revision结果不误标当前缺失。",
+      "禁止改变业务逻辑：后台状态、股票范围、PIT、来源数据、发布/profile、API dataset键均不改。",
+      "禁止私增门禁审批：没有新请求、扫描、服务、依赖或人工步骤，仅复用现有L0/CI和定向UI回归。"
+    ]
+  },
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
