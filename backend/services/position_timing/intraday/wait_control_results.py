@@ -115,10 +115,23 @@ def prepare(parent_period_spec: FileRef, source_commit: str, timing_root, *, inp
             "account_replay_started": False, "new_study_outcomes_read": False}
 
 
-def source_preflight(spec: WaitBudgetAnalysisSpec):
-    plan = load(spec.research_plan, "position_timing_wait_budget_research_plan_v1")
+def _verified_plan(plan_ref):
+    plan = load(plan_ref, "position_timing_wait_budget_research_plan_v1")
     body, common, refs = _plan_body(plan["parent_period_spec"], plan["timing_source_commit"], plan["input_kind"])
     require(plan == body | {"identity": digest(body)}, "WAIT_PLAN_IDENTITY")
+    return plan, common, [*refs, FileRef.model_validate(plan_ref)]
+
+
+def inspect_plan(plan_ref: FileRef):
+    """Public producer seam: verify the sealed plan without any new NAV input."""
+    plan, _, _ = _verified_plan(plan_ref)
+    return {"integrity": "VERIFIED", "plan": payload(plan_ref), "identity": plan["identity"],
+            "input_kind": plan["input_kind"], "account_count": 3, "account_day_count": 3 * len(plan["trade_dates"]),
+            "new_study_outcomes_read": False, "account_replay_started": False}
+
+
+def source_preflight(spec: WaitBudgetAnalysisSpec):
+    plan, common, refs = _verified_plan(spec.research_plan)
     raw_facts = load(spec.facts, "position_timing_wait_budget_facts_v1")
     require(raw_facts.get("source_batch_verified") is True, "WAIT_SOURCE_NOT_VERIFIED")
     facts = WaitBudgetFacts.model_validate(raw_facts)
@@ -315,7 +328,7 @@ def analyze(spec: WaitBudgetAnalysisSpec, timing_root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "analyze"))
+    parser.add_argument("command", choices=("prepare", "inspect", "analyze"))
     parser.add_argument("--spec", required=True)
     parser.add_argument("--spec-sha256", required=True)
     parser.add_argument("--source-commit")
@@ -326,6 +339,8 @@ def main():
         if not args.source_commit:
             parser.error("prepare requires --source-commit")
         result = prepare(ref, args.source_commit, args.timing_root)
+    elif args.command == "inspect":
+        result = inspect_plan(ref)
     else:
         spec = WaitBudgetAnalysisSpec.model_validate(load(ref, "position_timing_wait_budget_analysis_spec_v1"))
         result = analyze(spec, args.timing_root)

@@ -143,6 +143,7 @@ def three_arm(request):
 
 def test_three_arm_statistics_common_capital_and_retry_are_separate(three_arm):
     spec, root = three_arm
+    assert wr.inspect_plan(spec.research_plan)["account_day_count"] == 6
     first = wr.analyze(spec, root/"reports")
     assert wr.analyze(spec, root/"reports")["report"] == first["report"]
     report = read(first["report"])

@@ -121,7 +121,7 @@ LocalSIM返回以下择时侧消费投影（不冒称LocalSIM现有schema）：
 - 可选exposure_observations为覆盖9:30至14:57的有序as_of/nav_cny/cash_cny，按上个观察值在交易时段内分段保持计算暴露；午休剔除，缺任一天则整体UNAVAILABLE并报告covered_days。可选timing_observations覆盖全部父计划，含plan_id/first_dispatch_at/first_fill_at；无成交的first_fill_at必须为null。没有完整来源时不伪造派单至首笔成交统计。
 - 可选`position_timing_wait_budget_economic_retry_v1`包含status=EXACT_RETRY_VERIFIED、facts/producer_request FileRef、study_identity、recomputed_account_days=51、new_committed_account_days=0。缺少证明不阻塞描述性分析，仍标NOT_SUPPLIED；有证明则校验并单列producer状态，不用分析报告复用冒充经济重算。
 
-CLI：`python -m backend.services.position_timing.intraday.wait_control_results prepare|analyze --spec <绝对路径> --spec-sha256 <完整SHA> --timing-root <独立根>`；prepare的spec是旧期间analysis_spec，另需`--source-commit <择时实现commit>`；analyze的spec是新WaitBudgetAnalysisSpec。prepare不读取新三户收益；analyze先完成整批来源检查后才按原公共NAV归约函数统计。新报告3项比较，不改原13户/24比较入口，不模拟账户。所有plan/report以内容身份不可变发布。
+CLI：`python -m backend.services.position_timing.intraday.wait_control_results prepare|inspect|analyze --spec <绝对路径> --spec-sha256 <完整SHA> --timing-root <独立根>`；prepare的spec是旧期间analysis_spec，另需`--source-commit <择时实现commit>`；inspect的spec是新research_plan，公开`inspect_plan(FileRef)`只校验冻结plan及全来源，不接收新账户收益；analyze的spec是新WaitBudgetAnalysisSpec。prepare不读取新三户收益；analyze先完成整批来源检查后才按原公共NAV归约函数统计。新报告3项比较，不改原13户/24比较入口，不模拟账户。所有plan/report以内容身份不可变发布。
 
 ## Design Acceptance Index
 
