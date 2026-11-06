@@ -1445,57 +1445,32 @@ def test_advisory_lstm_shadow_capture_semantic_contract(case):
     assert semantic["verdict"] == ("passed" if case in {"valid", "old_failure"} else "failed")
 
 
-@pytest.mark.parametrize("case", ["published", "absent", "explicit", "wrong_program", "wrong_date",
-    "wrong_snapshot", "query_date", "query_snapshot", "query_offset", "duplicate_query", "duplicate_row",
-    "mixed_program", "mixed_version", "mixed_binding", "missing_binding", "bad_symbol", "bad_limit",
-    "bad_count", "bad_schema", "error_status", "absent_with_rows", "malformed"])
-def test_advisory_workbench_daily_semantic_contract(case):
+@pytest.mark.parametrize("patch,row,query,passed", [
+    ({}, {}, "", True), ({}, {}, "target_date=2026-11-09&snapshot_id=" + "a" * 64, True),
+    ({"status": "NO_CURRENT_LIST", "list_version_id": None, "summary": None, "items": [], "total_count": 0}, {}, "", True),
+    *[({key: value}, {}, "", False) for key, value in {"program_id": "other", "target_date": "2026-11-9",
+        "snapshot_id": "missing", "binding_version_id": None, "limit": True, "total_count": 3,
+        "schema_version": "wrong", "status": "FAILED"}.items()],
+    ({"status": "NO_CURRENT_LIST"}, {}, "", False), (None, {}, "", False),
+    *[({}, {key: "other"}, "", False) for key in ("program_id", "list_version_id", "binding_version_id", "symbol")],
+    ({}, {"symbol": "000002.SZ"}, "", False),
+    *[({}, {}, query, False) for query in ("target_date=2026-11-10", "snapshot_id=" + "b" * 64,
+        "offset=20", "target_date=2026-11-09&target_date=2026-11-09")]])
+def test_advisory_workbench_daily_semantic_contract(patch, row, query, passed):
     payload = {"schema_version": "advisory_workbench_v1", "program_id": "advp_test",
         "target_date": "2026-11-09", "snapshot_id": "a" * 64, "status": "PUBLISHED",
         "list_version_id": "list-test", "binding_version_id": "binding-test", "summary": {},
-        "limit": 20, "offset": 0, "total_count": 1,
-        "items": [{"program_id": "advp_test", "list_version_id": "list-test",
-            "binding_version_id": "binding-test", "symbol": "000001.SZ"}]}
-    url = "http://127.0.0.1:8001/api/v1/advisory/workbench/programs/advp_test/daily"
-    payload.update({
-        "absent": {"status": "NO_CURRENT_LIST", "list_version_id": None, "summary": None, "items": [], "total_count": 0},
-        "wrong_program": {"program_id": "other"}, "wrong_date": {"target_date": "2026-11-9"},
-        "wrong_snapshot": {"snapshot_id": "missing"}, "missing_binding": {"binding_version_id": None},
-        "bad_limit": {"limit": True}, "bad_count": {"total_count": 2}, "bad_schema": {"schema_version": "wrong"},
-        "error_status": {"status": "FAILED"}, "absent_with_rows": {"status": "NO_CURRENT_LIST"},
-    }.get(case, {}))
-    query = {"explicit": "target_date=2026-11-09&snapshot_id=" + "a" * 64,
-        "query_date": "target_date=2026-11-10", "query_snapshot": "snapshot_id=" + "b" * 64,
-        "query_offset": "offset=20", "duplicate_query": "target_date=2026-11-09&target_date=2026-11-09"}.get(case)
-    if query:
-        url += "?" + query
-    if case == "duplicate_row":
-        payload["items"] *= 2
-        payload["total_count"] = 2
-    elif case in {"mixed_program", "mixed_version", "mixed_binding", "bad_symbol"}:
-        key = {"mixed_program": "program_id", "mixed_version": "list_version_id",
-            "mixed_binding": "binding_version_id", "bad_symbol": "symbol"}[case]
-        payload["items"][0][key] = "other"
-    elif case == "malformed":
-        payload = None
-    semantic = _business_semantic(url, payload, "e" * 64)
+        "limit": 20, "offset": 0, "total_count": 2}
+    identity = {key: payload[key] for key in ("program_id", "list_version_id", "binding_version_id")}
+    payload["items"] = [dict(identity, symbol=symbol) for symbol in ("000001.SZ", "000002.SZ")]
+    payload["items"][0].update(row)
+    payload = dict(payload, **patch) if patch is not None else None
+    semantic = _business_semantic("http://localhost/api/v1/advisory/workbench/programs/advp_test/daily?" + query, payload, "e" * 64)
     assert semantic["contract_id"] == "advisory_workbench_daily_snapshot"
-    assert semantic["verdict"] == ("passed" if case in {"published", "absent", "explicit"} else "failed")
-    if semantic["verdict"] == "passed":
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed:
         assert semantic["facts"]["economic_acceptance"] == "not_evaluated"
         assert semantic["facts"]["default_explicit_roundtrip"] == "requires_separate_readback"
-
-
-def _entry_price_payload(configured=False):
-    return {
-        "ok": True,
-        "schema_version": "advisory_entry_price_status_v1",
-        "configured": configured,
-        "program_id": "advp_test",
-        "status": "QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
-        "database_written": False,
-        **({"binding_activated": False} if configured else {}),
-    }
 
 
 @pytest.mark.parametrize("configured,override,reason", [
@@ -1511,8 +1486,9 @@ def _entry_price_payload(configured=False):
 ])
 def test_entry_price_status_semantic_contract(configured, override, reason):
     """Shared setup retains both positive and every original negative oracle."""
-    payload = _entry_price_payload(configured)
-    payload.update(override)
+    payload = dict(ok=True, schema_version="advisory_entry_price_status_v1", configured=configured,
+        program_id="advp_test", status="QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
+        database_written=False, **({"binding_activated": False} if configured else {})) | override
     semantic = _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/entry-price/status", payload, "e" * 64)
     assert semantic["contract_id"] == "advisory_entry_price_status"
     assert semantic["verdict"] == ("passed" if reason is None else "failed")

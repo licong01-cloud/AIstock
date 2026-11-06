@@ -131,7 +131,8 @@
   "status": "open",
   "validation_evidence": [
     "rtk pytest -q backend/tests/advisory_workbench/test_service.py backend/tests/advisory_workbench/test_api.py -> 29 passed",
-    "rtk pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k advisory_workbench_daily_semantic_contract -> 22 passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'advisory_workbench_daily_semantic_contract or entry_price_status_semantic_contract' -> 32 passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> 1 passed; production_sloc=48105, test_sloc=14430, ratio below 30 percent",
     "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2196 --module validation -> passed",
     "python -m nox -s l0 -- six exact changed files -> passed, zero blocking",
     "rtk ruff check five changed Python files; git diff --check -> passed",
@@ -142,6 +143,7 @@
     "completeness_regression": "已覆盖交易日、周六、周日、长假和两类真实数据变更；默认/显式目标日真实五任务新进程读回通过。浏览器显式日期可读，默认入口的实际生效仍待用户重启。",
     "design_compliance": "普通BUG最小修复；原快照/分页设计逐项对应，未简化一致性门禁，未新增业务入口。运行与经济验收分态，0训练/写库/服务控制。",
     "reviewer": "当前执行Agent自审，不冒充独立第三方审核",
+    "ci_repair": "首次CI为767通过/1失败，失败项为工作流测试比例30.043%超限。删除新增测试按场景名重复分发的分支，直接使用数据表；内联仅调用一次的entry-price测试构造，保留全部22+10项断言。生产分母和30%门槛不变，32项及预算失败nodeid重验通过。最终修订仅测试构造及BUG证据，业务源码和新进程证据SHA不变。",
     "deferred_scope": "advisory_workbench_backend全矩阵由当前PR CI承担；共享bak_basic告警遮挡移交数据管理/全局告警owner。"
   },
   "suspected_modules": [
