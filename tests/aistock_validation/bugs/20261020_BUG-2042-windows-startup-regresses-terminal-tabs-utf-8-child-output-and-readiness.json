@@ -30,17 +30,17 @@
   "expected": "Same-window Windows Terminal tabs, UTF-8 logs, bounded low-overhead readiness and no reload or process termination.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2042-windows-startup-regresses-terminal-tabs-utf-8-child-output-and-readiness.json",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md",
-      "scripts/start_ai_stock.py"
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2042-windows-startup-regresses-terminal-tabs-utf-8-child-output-and-readiness.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2042-windows-startup-regresses-terminal-tabs-utf-8-child-output-and-readiness.json",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md",
-      "scripts/start_ai_stock.py"
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2042-windows-startup-regresses-terminal-tabs-utf-8-child-output-and-readiness.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-10-20T17:00:00.778075Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "adb13c9d3f4dc5de271b3b6ee3468d94a663d541",
+  "fixed_at": "2026-10-20T17:09:28Z",
   "github_issue_number": 6503,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6503",
   "last_seen_at": "2026-10-20T17:00:00.778075Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6504",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,13 +123,13 @@
     "l0",
     "platform_api_backend"
   ],
-  "risk_area": "bug",
   "review_summary": {
+    "design_compliance": "All four checks passed: no partial delivery claim, no silent errors, no business-semantic changes, no new approval gate.",
     "round_1": "Fixed child UTF-8 encoding, shared Terminal tabs and cheaper closed-port polls; retained ownership, identity, bounded errors and no reload.",
     "round_2": "Verified quoted/non-ASCII paths and no duplicate fallback after tab dispatch error; added real harmless Python supervisor/log/nonzero-exit regression and source drift check before launch.",
-    "design_compliance": "All four checks passed: no partial delivery claim, no silent errors, no business-semantic changes, no new approval gate.",
     "runtime_validation": "No user services started/stopped/restarted. Actual three-service startup and Terminal UI verification remain user-owned."
   },
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
@@ -145,6 +146,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -156,7 +158,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2042",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bb9db55a3286e46b",
+    "recorded_at": "2026-10-20T17:10:08.124313Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6e6a4f9d7608e079dc9e45a9b615e0ed07408c18",
+    "source_merge_commit": "adb13c9d3f4dc5de271b3b6ee3468d94a663d541",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6504",
+    "validation_evidence": [
+      "validation-receipt: id=d2b0598385b01a1a commit=6e6a4f9d7608e079dc9e45a9b615e0ed07408c18 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+      "validation-receipt: id=5aa8ec3568dcf614 commit=6e6a4f9d7608e079dc9e45a9b615e0ed07408c18 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/platform_api/test_windows_launcher.py backend/tests/test_aistock_guardrail_scan.py -q --no-cov -p no:cacheprovider --basetemp X:/AIstock-CI/BUG-2042-final` result=`75 passed`"
+    ],
+    "validation_evidence_digest": "8db61826042ba6c8a936d239035fe95619af8df2bc078e25ba8cd1cae0f3c77a"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.config"
   ],
@@ -165,6 +189,10 @@
     "fingerprint": "b8e04017d93b45cae019c02d",
     "source_event_id": "FE-20261020-b8e04017d93b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d2b0598385b01a1a commit=6e6a4f9d7608e079dc9e45a9b615e0ed07408c18 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=5aa8ec3568dcf614 commit=6e6a4f9d7608e079dc9e45a9b615e0ed07408c18 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/platform_api/test_windows_launcher.py backend/tests/test_aistock_guardrail_scan.py -q --no-cov -p no:cacheprovider --basetemp X:/AIstock-CI/BUG-2042-final` result=`75 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
