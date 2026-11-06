@@ -1,4 +1,6 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.64
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.65
+
+> 2026-11-06跨期尺度审查已完成零拟合负分支：[原计划](../analysis/advisory_lstm_crosssection_scale_research_plan_20261106.md)及[结果报告](../analysis/advisory_lstm_crosssection_scale_review_20261106.md)。原21150行/423D、三旧Ridge身份和阶段链通过；68,526条统计、972,900秩坐标及162阈值独立核算PASS。开发没有满足尺度/贡献联合条件的因子；压力仅波动因子4D和既知VSTD5单日，没有两个因子达到20D且跨两个月。行支持97%以上，但开发/压力完整50股票D仅36/126、51/118，未达事前80%。终态NO_SCALE_CANDIDATE_EVIDENCE，P2/P3不执行，0新候选/金融fit/收益标签/推荐排序，累计266＋1保持；无新上线模型，不自动放宽门槛或恢复模型轮换。原生/V2、Top50→Top10/5TD/100bps及暂停方向保持；NON_VINTAGE和已消费历史不成为PIT或独立经济证明。
 
 > 2026-11-06冻结LSTM表示任务已完成P0～P4：[F1](advisory_lstm_frozen_representation_v1_f1_design_20261106.md)及[结果](../analysis/advisory_lstm_frozen_representation_review_20261106.md)。原21150行提取h64、独立LSTM递推通过；设计#7062先合入后真实3fit，旧54字段Ridge直接复用。原生主开发101D为+25.740525bps、压力108D为−70.472897bps，描述性区间均跨零；辅助对控制101/107D为−25.236428/+19.103408bps，不能异分母相减。STOP_EXACT_REPRESENTATION_CANDIDATE/CLOSED_NEGATIVE，累计266实际fit＋1旧index、追加预算0、无新上线模型。38直接项及独立24400分数/排名、488日表、费用/区间通过，新进程复用0fit；源码CI/合入与经济分态。原生/V2/Top50→Top10/5TD/100bps及暂停方向不变，历史PIT/原张量parity与经济独立确认未成立。
 
@@ -2824,6 +2826,8 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 ## 16. 当前下一步
 
 ### 16.0 当前唯一任务队列与真实断点（2026-11-06 接续）
+
+2026-11-06[跨期尺度失配计划](../analysis/advisory_lstm_crosssection_scale_research_plan_20261106.md)已按条件分支执行至完成，[结果](../analysis/advisory_lstm_crosssection_scale_review_20261106.md)为NO_SCALE_CANDIDATE_EVIDENCE。P0/P1及独立审核完成，尺度持续性门和完整D支持门均失败；开发0联合事件，压力两因子分别4D/1D，不满足各20D/跨两月。全部423D/21150行保留，原输入/控制/阶段链不变；68,526统计、972,900秩坐标及162阈值独立PASS，新进程复用0fit。P2候选F1和P3最多三fit的前置条件未成立，因此未创建候选、模型、预测或金融评价；累计266实际fit＋1旧index，未用预算不自动结转。完整D支持门仅适用于此研究，不阻断原荐股。当前长任务所有适用阶段结束，无自动下一模型或等待新交易日；原生/V2及暂停方向不变。后续需明确不同机制证据才另行立项，不能依据少数极值或本负结果调整门槛继续训练。以下为保留的历史完成记录。
 
 2026-11-06冻结LSTM表示任务已完成P0～P4：[F1](advisory_lstm_frozen_representation_v1_f1_design_20261106.md)及[结果](../analysis/advisory_lstm_frozen_representation_review_20261106.md)。原21150行提取h64、独立LSTM递推通过；设计#7062先合入后真实3fit，旧54字段Ridge直接复用。原生主开发101D为+25.740525bps、压力108D为−70.472897bps，描述性区间均跨零；辅助对控制101/107D为−25.236428/+19.103408bps，不能异分母相减。STOP_EXACT_REPRESENTATION_CANDIDATE/CLOSED_NEGATIVE，累计266实际fit＋1旧index、追加预算0、无新上线模型。38直接项及独立24400分数/排名、488日表、费用/区间通过，新进程复用0fit；源码CI/合入与经济分态。原生/V2/Top50→Top10/5TD/100bps及暂停方向不变，历史PIT/原张量parity与经济独立确认未成立。 当前本长任务所有适用阶段完成，没有自动排队的新模型或fit；精确候选不再等待新交易日，不追加参数/维度/头搜索，不恢复已关闭局部关系候选。237上下文缺行、43原负无穷与冻结变换另账保留。正分支独立确认不执行，CONFIRMATION_SOURCE_NOT_READY也不作为开发阻断；原V2自然协议不改。后续只有明确不同机制及可检验证据，或已复现的源正确性问题，才另行界定任务；本报告不自动授权下一研究。以下日期记录保留历史，不恢复旧队列。
 
