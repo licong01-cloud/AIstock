@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-11-06T03:50:44.523600Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "112c682a8935f9d4fd41dfa68bfd33e209e13f1a",
+  "fixed_at": "2026-11-06T04:27:44Z",
   "github_issue_number": 7065,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7065",
   "last_seen_at": "2026-11-06T03:50:44.523600Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7068",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -169,6 +170,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -180,7 +182,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2186",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "87d9b81ac5463dc6",
+    "recorded_at": "2026-11-06T04:28:25.304599Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3efbc6bb91aa15c45f53b86edfd0833d5978d81a",
+    "source_merge_commit": "112c682a8935f9d4fd41dfa68bfd33e209e13f1a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7068",
+    "validation_evidence": [
+      "validation-receipt: id=67137c3a0a87df4f commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_execution/localsim/timing.py backend/services/simulation_execution/localsim/human_portfolio.py backend/services/simulation_execution/localsim/native_research.py backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py tests/aistock_validation/bugs/20261106_BUG-2186-localsim-id.json` result=`passed (0 blocking)`",
+      "validation-receipt: id=15c371395e3b3fa5 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py` result=`passed (4 tests; fresh process; X:/AIstock_temp/localsim-october-account-replay-20261106/bug2186-targeted.xml)`",
+      "validation-receipt: id=8d8ff498bec6c3e2 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "9e45adf4f1cb92e472891fe4eaeafbfebc6011c6a7bf90e36cd9e576fcf6bf44"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -189,6 +214,11 @@
     "fingerprint": "019d2ab59b076e22e515ee78",
     "source_event_id": "FE-20261106-019d2ab59b07"
   },
+  "validation_evidence": [
+    "validation-receipt: id=67137c3a0a87df4f commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_execution/localsim/timing.py backend/services/simulation_execution/localsim/human_portfolio.py backend/services/simulation_execution/localsim/native_research.py backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py tests/aistock_validation/bugs/20261106_BUG-2186-localsim-id.json` result=`passed (0 blocking)`",
+    "validation-receipt: id=15c371395e3b3fa5 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py` result=`passed (4 tests; fresh process; X:/AIstock_temp/localsim-october-account-replay-20261106/bug2186-targeted.xml)`",
+    "validation-receipt: id=8d8ff498bec6c3e2 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
