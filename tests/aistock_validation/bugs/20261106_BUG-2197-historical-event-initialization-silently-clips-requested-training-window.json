@@ -16,6 +16,19 @@
   ],
   "created_at": "2026-11-06T17:42:06.327975Z",
   "description": "用户授权从2018-08-01或上游最早时间初始化。只读探测stk_alert在2018-08-01..2025-12-31返回2025-07-14真实行，但DatasetSpec初始起点写为2026-01-01，sync_events按max(start,initial_start_date)裁掉明确请求范围。修复通用事件初始化边界；默认起点与用户训练窗口一致，不把空响应伪装为历史PIT；保留增量尾部复查、原始版本、合法上游空结果、日频限流和账号预算。只处理本地数据管理和直接测试。",
+  "design_compliance_review": {
+    "business_semantics_unchanged": "只修改数据准备的范围解析；股票范围、原始版本、限流、增量尾部复核及其他业务模块不变。",
+    "no_extra_gate": "没有新增审批或门禁；复用现有DEV验证、源码CI与用户负责的后端重启。RED9->GREEN9、相关81passed、Ruff/L0和DEV幂等读回通过。",
+    "no_silent_error": "保留查询失败、上游空结果和NON_VINTAGE/UNKNOWN；不造事实、不声称北交所记录是沪深漏采。",
+    "no_simplified_delivery": "显式起点不裁剪及三风险默认起点全部实现；指数公告源异常单独列明，不将部分初始化报告为全部完成。"
+  },
+  "diagnostic_readback": {
+    "earlier_probe_disposition": "北交所按既有范围排除；不据此声称漏采了沪深事实，也不扩大采集范围。",
+    "earlier_probe_symbol": "920305.BJ",
+    "publication_time_quality": "UNKNOWN",
+    "root_cause": "默认游标起点被误作显式历史范围的硬下界；缺陷独立于上游实际是否返回沪深历史事件。",
+    "source_history_quality": "NON_VINTAGE"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,33 +40,22 @@
   "evidence_uris": [
     "X:/AIstock_temp/DATA_PREPARATION/new-inputs-history-init-20261107/BUG-2197-dev.json"
   ],
-  "diagnostic_readback": {
-    "earlier_probe_symbol": "920305.BJ",
-    "earlier_probe_disposition": "北交所按既有范围排除；不据此声称漏采了沪深事实，也不扩大采集范围。",
-    "root_cause": "默认游标起点被误作显式历史范围的硬下界；缺陷独立于上游实际是否返回沪深历史事件。",
-    "source_history_quality": "NON_VINTAGE",
-    "publication_time_quality": "UNKNOWN"
-  },
-  "review_rounds": [
-    "正确性：9条回归先RED后GREEN；显式起止日不再被默认游标裁切，查询空结果不伪造事实。",
-    "完整性/回归：81项事件及首批接入定向测试通过；已有DEV连续两次原生同步及独立SQL读回，数量不扩大，北交所继续排除。",
-    "最终修改复审：仅通用事件范围、三风险默认起点及直接测试；无DDL、服务、其他业务模块、发布或模型改动。"
-  ],
-  "design_compliance_review": {
-    "no_simplified_delivery": "显式起点不裁剪及三风险默认起点全部实现；指数公告源异常单独列明，不将部分初始化报告为全部完成。",
-    "no_silent_error": "保留查询失败、上游空结果和NON_VINTAGE/UNKNOWN；不造事实、不声称北交所记录是沪深漏采。",
-    "business_semantics_unchanged": "只修改数据准备的范围解析；股票范围、原始版本、限流、增量尾部复核及其他业务模块不变。",
-    "no_extra_gate": "没有新增审批或门禁；复用现有DEV验证、源码CI与用户负责的后端重启。RED9->GREEN9、相关81passed、Ruff/L0和DEV幂等读回通过。"
-  },
   "expected": "显式历史初始化范围不得被临时默认起点静默裁剪；2018-08-01后真实事件均可采集并保留NON_VINTAGE/UNKNOWN。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_event_inputs.py",
+      "backend/tests/test_tushare_event_inputs.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2197-historical-event-initialization-silently-clips-requested-training-window.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/tushare_event_inputs.py",
       "backend/services/tushare_dataset_specs.py",
-      "backend/tests/test_tushare_event_inputs.py"
+      "backend/services/tushare_event_inputs.py",
+      "backend/tests/test_tushare_event_inputs.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2197-historical-event-initialization-silently-clips-requested-training-window.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_event_inputs.py",
@@ -147,22 +149,32 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    "正确性：9条回归先RED后GREEN；显式起止日不再被默认游标裁切，查询空结果不伪造事实。",
+    "完整性/回归：81项事件及首批接入定向测试通过；已有DEV连续两次原生同步及独立SQL读回，数量不扩大，北交所继续排除。",
+    "最终修改复审：仅通用事件范围、三风险默认起点及直接测试；无DDL、服务、其他业务模块、发布或模型改动。"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "database_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/new-inputs-history-init-20261107/BUG-2197-dev.json",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "X:/AIstock_temp/DATA_PREPARATION/new-inputs-history-init-20261107/BUG-2197-dev.json: existing DEV 127.0.0.1:5433/aistock_dev, two native producer init jobs and SQL readback PASS; production_write=false,runtime_action=false."
+      "X:/AIstock_temp/DATA_PREPARATION/new-inputs-history-init-20261107/BUG-2197-dev.json: existing DEV 127.0.0.1:5433/aistock_dev, two native producer init jobs and SQL readback PASS; production_write=false,runtime_action=false.",
+      "X:/AIstock_temp/DATA_PREPARATION/new-inputs-history-init-20261107/BUG-2197-dev.json"
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
