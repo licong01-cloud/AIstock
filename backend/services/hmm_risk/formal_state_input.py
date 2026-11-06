@@ -603,8 +603,14 @@ def _bounded_l2_stock_facts(
     calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= end)
     if not calendar or start not in calendar or calendar[-1] != end:
         raise fail("effect source boundary is not an open session")
+    authority_options = {}
+    if frozen["industry_authority"].get("schema_version") == "hmm_risk_release_l2_classification_binding_v1":
+        authority_options = {
+            "candidate_root": assets["release_root"],
+            "release_binding": frozen_release_binding() if release_binding is None else release_binding,
+        }
     adapter = reader._industry_adapter(
-        frozen["industry_authority"], forbidden_roots=(Path(__file__).resolve().parents[3],)
+        frozen["industry_authority"], forbidden_roots=(Path(__file__).resolve().parents[3],), **authority_options
     )
     _, l2 = reader._canonical_sector_codes(adapter)
     if list(l2) != frozen["catalog"]:
@@ -737,6 +743,8 @@ def _bounded_l2_stock_facts(
         )
     if any((path.stat().st_size, path.stat().st_mtime_ns) != stamps[key] for key, path in assets["files"].items()):
         raise fail("effect source changed while read", reason="identity_mismatch")
+    if callable(getattr(adapter, "unchanged", None)):
+        adapter.unchanged()
     # Tuple keys are internal only and never passed to canonical JSON.
     return assets, window, aggregates["L2"], identity
 

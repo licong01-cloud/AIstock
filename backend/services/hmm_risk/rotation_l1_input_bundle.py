@@ -2324,7 +2324,19 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
     return assets
 
 
-def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path]) -> HMMIndustryPitAdapter:
+def _industry_adapter(
+    authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path], candidate_root: Path | None = None,
+    release_binding: Mapping[str, Any] | None = None,
+) -> HMMIndustryPitAdapter:
+    if isinstance(authority, Mapping) and authority.get("schema_version") == "hmm_risk_release_l2_classification_binding_v1":
+        from backend.services.hmm_risk.release_industry_binding import ReleaseIndustryAdapter
+
+        if candidate_root is None or release_binding is None:
+            raise _fail(REASON_MANIFEST_INVALID, "release L2 authority requires an explicit matching file source")
+        if (Path(str(authority.get("candidate_root") or "")).resolve() != candidate_root.resolve()
+                or authority.get("release_binding") != release_binding):
+            raise _fail(REASON_MANIFEST_INVALID, "release L2 authority differs from the actual input source")
+        return ReleaseIndustryAdapter(authority, forbidden_roots=forbidden_roots)
     if not isinstance(authority, Mapping) or set(authority) != {
         "artifact_root",
         "identity",
