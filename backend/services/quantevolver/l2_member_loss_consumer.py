@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 import yaml
-from scripts.qe_l2_member_loss_admission import validate_admission
+from scripts.qe_l2_member_loss_admission import SAVED_AF_MODE, validate_admission
 from scripts.qe_l2_risk_admission import canonical_sha, physical_binding
 from .l2_natural_entry_consumer import bind_natural_entry_hook, WORKERS as NATURAL_WORKERS
 from .l2_relative_consumer import EXECUTION_PORT_SHA
@@ -21,6 +21,45 @@ OTHER_OVERLAYS = (
     "qe_l2_study_manifest", "qe_stock_probability_study", "qe_l2_risk_enabled", "enable_sector_hmm",
     "enable_hmm_risk_gate", "sector_risk_overlay_enabled",
 )
+
+
+def saved_member_prediction_payload(manifest, *, source_task_id, source_loop_index, source_node_id, expected_sha256):
+    """Stage admitted saved bytes, explicitly retaining their evidence gap."""
+    import sys
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from qe_l2_member_loss_consumer import read_json, validate_saved_af_evidence
+    from qe_l2_risk_consumer import checked_asset
+
+    validate_admission(manifest)
+    if manifest.get("af_evidence_mode") != SAVED_AF_MODE:
+        raise ValueError("QE_L2_MEMBER_AF_EVIDENCE_MODE")
+    evidence = read_json(checked_asset(manifest["assets"]["AF_receipt"]))
+    saved = validate_saved_af_evidence(evidence, manifest)
+    source = evidence["source"]
+    if (source_task_id, source_loop_index) != (source["task_id"], source["loop_index"]):
+        raise ValueError("QE_L2_MEMBER_SAVED_MODEL_ORIGIN")
+    path = checked_asset(manifest["assets"]["prediction"])
+    size = path.stat().st_size
+    if not 0 < size <= 512 * 1024**2 or expected_sha256 != saved["sha256"]:
+        raise ValueError("QE_L2_MEMBER_SAVED_REPLAY_PIN")
+    raw = path.read_bytes()
+    if len(raw) != size or hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError("QE_L2_MEMBER_SAVED_REPLAY_CHANGED")
+    ref = {
+        "schema_version": "qe_prediction_replay_source_ref_v1", "mode": "prediction_replay",
+        "source_task_id": source_task_id, "source_loop_index": source_loop_index, "source_node_id": source_node_id,
+        "catalog_path": str(path), "sha256": expected_sha256, "size_bytes": len(raw),
+        "source_kind": SAVED_AF_MODE, "source_identity_semantics": "original_model_provenance",
+        "saved_asset_path": str(path), "saved_asset_evidence_sha256": manifest["assets"]["AF_receipt"]["sha256"],
+        "original_runtime_integrity": "UNKNOWN", "legacy_reference_equivalent": False,
+    }
+    return ref, {
+        "frozen_prediction.pkl.b64": base64.b64encode(raw).decode("ascii"),
+        "qe_prediction_replay_source_ref.json": json.dumps(ref, ensure_ascii=False, indent=2),
+    }
 
 
 def extract_member_loss(params):

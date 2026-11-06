@@ -132,6 +132,166 @@ def readmit_fixture(formal):
     write(formal.root, formal.path.name, m)
 
 
+def saved_af_fixture(formal):
+    """Synthetic saved evidence, explicitly distinct from an old inference."""
+    m = formal.manifest
+    frame = pd.read_pickle(m["assets"]["prediction"]["path"])
+    index_sha = hashlib.sha256(pd.util.hash_pandas_object(frame.index, index=True).values.tobytes()).hexdigest()
+    source = {"task_id": "qe_20261028_104720_a38a", "loop_index": 1,
+              "model_sha256": "1" * 64, "dataset_sha256": "2" * 64, "processor_asset_fingerprint": "3" * 64,
+              "training_manifest_sha256": "590b3b204085373ff4bd101efc50a45c6dd3844200200f987f9bc783e0c6b394"}
+    saved = {"sha256": m["assets"]["prediction"]["sha256"], "panel_sha256": prediction_panel_sha256(frame),
+             "index_sha256": index_sha, "rows": len(frame), "days": len(frame),
+             "start": "2026-01-05", "end": "2026-10-30"}
+    review = {
+        "schema_version": "qe_af_version_bridge_review_v1", "contract_id": "QE-AF-772-VERSION-BRIDGE-V1",
+        "release_id": consumer.RELEASE, "dataset_manifest_sha256": admission.TARGET_MANIFEST,
+        "data_asset_acceptance": "ACCEPTED_WITH_DISCLOSED_GAPS", "legacy_reference_equivalent": False,
+        "legacy_strict_acceptance": "FAILED_PRESERVED", "original_runtime_integrity": "UNKNOWN",
+        "formal_admission": "NOT_ADMITTED", "original_runtime_fingerprints": {
+            "processor_before": None, "processor_after": None, "weights_before": None, "weights_after": None},
+        "fresh_readback": {"rows": [{"seed": 42, "source_task_id": source["task_id"], "source_loop_index": 1,
+            "model_file_sha256": source["model_sha256"], "dataset_pickle_sha256": source["dataset_sha256"],
+            "source_processor_fingerprint_now": source["processor_asset_fingerprint"],
+            "candidate_sha256": saved["sha256"], "prediction_index_sha256": index_sha,
+            "prediction_rows": len(frame), "prediction_days": len(frame)}]},
+        "data_owner_confirmation": {"EPS": {"keys": 211, "stocks": 15, "days": 65,
+            "historical_initial_missing_cause": "UNKNOWN", "may_claim_legitimate_na": False}},
+    }
+    evidence = {"schema_version": "qe_saved_af_asset_evidence_v1", "evidence_type": "SAVED_ASSET_NOT_ORIGINAL_INFERENCE",
+                "seed": 42, "release_id": consumer.RELEASE, "dataset_manifest_sha256": admission.TARGET_MANIFEST,
+                "original_runtime_integrity": "UNKNOWN", "legacy_reference_equivalent": False,
+                "data_asset_acceptance": "ACCEPTED_WITH_DISCLOSED_GAPS", "formal_admission": "NOT_ADMITTED",
+                "bridge_review": review, "bridge_review_canonical_sha256": consumer.canonical_sha(review),
+                "source": source, "saved_prediction": saved}
+    m["af_evidence_mode"] = admission.SAVED_AF_MODE
+    m["assets"]["AF_receipt"] = write(formal.root, "saved_AF_evidence.json", evidence)
+    readmit_fixture(formal)
+    return evidence
+
+
+def test_saved_af_is_explicit_and_keeps_runtime_unknown(formal):
+    saved_af_fixture(formal)
+    receipt = consumer.MemberEntryInputs(formal.path).receipt
+    assert receipt["af_evidence_mode"] == admission.SAVED_AF_MODE
+    assert receipt["original_runtime_integrity"] == "UNKNOWN"
+    assert receipt["legacy_reference_equivalent"] is False
+    # Merely presenting the saved schema must never enable the new mode.
+    formal.manifest.pop("af_evidence_mode")
+    formal.record.pop("af_evidence_mode")
+    readmit_fixture(formal)
+    with pytest.raises(ValueError, match="AF_FROZEN_RECEIPT"):
+        consumer.MemberEntryInputs(formal.path)
+
+
+@pytest.mark.parametrize("fault,reason", [
+    ("runtime", "AF_SAVED_EVIDENCE"), ("reference", "AF_SAVED_EVIDENCE"),
+    ("fabricated_fingerprint", "AF_RUNTIME_UNKNOWN_REQUIRED"), ("missing_cause", "AF_MISSING_DISCLOSURE"),
+    ("source_seed", "AF_SAVED_SOURCE"), ("source_model", "AF_SAVED_SOURCE"),
+    ("prediction_pin", "AF_SAVED_PREDICTION"), ("panel", "AF_RECEIPT_PANEL"),
+    ("index", "AF_SAVED_INDEX"), ("forged_review", "AF_BRIDGE_REVIEW"),
+])
+def test_saved_af_rejects_disguised_unknown_and_drift(formal, fault, reason):
+    evidence = saved_af_fixture(formal)
+    review = evidence["bridge_review"]
+    row = review["fresh_readback"]["rows"][0]
+    if fault == "runtime": evidence["original_runtime_integrity"] = "VERIFIED"
+    elif fault == "reference": evidence["legacy_reference_equivalent"] = True
+    elif fault == "fabricated_fingerprint": review["original_runtime_fingerprints"]["processor_before"] = "3" * 64
+    elif fault == "missing_cause": review["data_owner_confirmation"]["EPS"]["historical_initial_missing_cause"] = "LEGAL_NA"
+    elif fault == "source_seed": row["seed"] = 2024
+    elif fault == "source_model": evidence["source"]["model_sha256"] = "4" * 64
+    elif fault == "prediction_pin": evidence["saved_prediction"]["sha256"] = "5" * 64
+    elif fault == "panel": evidence["saved_prediction"]["panel_sha256"] = "6" * 64
+    elif fault == "index": evidence["saved_prediction"]["index_sha256"] = row["prediction_index_sha256"] = "7" * 64
+    elif fault == "forged_review": review["formal_admission"] = "ADMITTED"
+    evidence["bridge_review_canonical_sha256"] = consumer.canonical_sha(review)
+    formal.manifest["assets"]["AF_receipt"] = write(formal.root, "saved_AF_evidence.json", evidence)
+    readmit_fixture(formal)
+    with pytest.raises(ValueError, match=reason):
+        consumer.MemberEntryInputs(formal.path)
+
+
+def test_strict_af_null_fingerprints_cannot_prove_integrity(formal):
+    ref = formal.manifest["assets"]["AF_receipt"]
+    evidence = json.loads(Path(ref["path"]).read_text())
+    for key in ("processor_state_before", "processor_state_after", "model_weights_before", "model_weights_after"):
+        evidence[key] = None
+    formal.manifest["assets"]["AF_receipt"] = write(formal.root, "AF_receipt.json", evidence)
+    readmit_fixture(formal)
+    with pytest.raises(ValueError, match="AF_FROZEN_RECEIPT"):
+        consumer.MemberEntryInputs(formal.path)
+
+
+def test_scheduler_stages_only_admitted_saved_bytes_without_workspace_download(formal):
+    import asyncio
+    import base64
+    from unittest.mock import AsyncMock
+    from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+
+    saved_af_fixture(formal)
+    client = SimpleNamespace(list_workspace_files=AsyncMock(), download_workspace_file_bytes=AsyncMock())
+    scheduler = object.__new__(AutoEvolutionScheduler)
+    ref, files = asyncio.run(scheduler._build_prediction_replay_payload(
+        client, "qe_20261028_104720_a38a", 1, source_node_id="rdagent-node1",
+        expected_sha256=formal.manifest["assets"]["prediction"]["sha256"], member_loss_manifest=formal.manifest,
+    ))
+    client.list_workspace_files.assert_not_called()
+    assert ref["source_kind"] == admission.SAVED_AF_MODE and ref["original_runtime_integrity"] == "UNKNOWN"
+    assert base64.b64decode(files["frozen_prediction.pkl.b64"]) == Path(formal.manifest["assets"]["prediction"]["path"]).read_bytes()
+    assert json.loads(files["qe_prediction_replay_source_ref.json"])["source_identity_semantics"] == "original_model_provenance"
+    with pytest.raises(ValueError, match="SAVED_MODEL_ORIGIN"):
+        asyncio.run(scheduler._build_prediction_replay_payload(
+            client, "different-task", 1, source_node_id="rdagent-node1", expected_sha256=ref["sha256"],
+            member_loss_manifest=formal.manifest,
+        ))
+
+
+@pytest.mark.parametrize("fault", [None, "release", "october_receipt", "membership", "reason"])
+def test_release_authority_extension_keeps_baseline_and_october_distinct(formal, fault):
+    m = formal.manifest
+    baseline = json.loads(Path(m["assets"]["authority"]["path"]).read_text())
+    authority = {"schema_version": "hmm_risk_release_l2_classification_binding_v1", "baseline": baseline,
+                 "release_binding": {"manifest_sha256": admission.TARGET_MANIFEST, "release_id": consumer.RELEASE},
+                 "extension_start": "2026-10-01", "extension_end": "2026-10-30",
+                 "membership_sha256": "1" * 64, "code_map_sha256": "2" * 64, "component_receipt_sha256": "3" * 64}
+    if fault == "release": authority["release_binding"]["manifest_sha256"] = "4" * 64
+    authority["receipt_sha256"] = consumer.canonical_sha(authority)
+    m["assets"]["authority"] = write(formal.root, "release_authority.json", authority)
+    m["authority_canonical_sha256"] = consumer.canonical_sha(authority)
+    old_receipt = json.loads(Path(m["assets"]["mapping_receipt"]["path"]).read_text())
+    base_mm = old_receipt["mapping_manifest"]
+    mm = {"schema_version": authority["schema_version"] + "_mapping", "baseline": base_mm,
+          "binding_sha256": authority["receipt_sha256"], "release_binding": authority["release_binding"],
+          "membership_sha256": authority["membership_sha256"], "code_map_sha256": authority["code_map_sha256"],
+          "historical_as_known": False, "l3_identity_inferred": False, "canonical_l2_count": 131}
+    if fault == "membership": mm["membership_sha256"] = "5" * 64
+    frame = pd.read_parquet(m["assets"]["mapping"]["path"])
+    extension = frame.as_of_date.ge("2026-10-01")
+    assert extension.any() and (~extension).any()
+    if fault != "october_receipt": frame.loc[extension, "classification_receipt_hash"] = authority["receipt_sha256"]
+    if fault == "reason":
+        frame.loc[extension, "mapping_status"] = "unavailable"
+        frame.loc[extension, "l2_code"] = None
+        # A baseline reason cannot silently substitute for the release source.
+        frame.loc[extension, "mapping_reason"] = "classification:classification_authority_unavailable"
+    path = formal.root / "release_mapping.parquet"
+    frame.to_parquet(path, index=False)
+    m["assets"]["mapping"] = write(formal.root, path.name, path.read_bytes())
+    m["assets"]["mapping_receipt"] = write(formal.root, "release_mapping_receipt.json", {
+        **old_receipt, "mapping_manifest": mm, "mapping_sha256": m["assets"]["mapping"]["sha256"],
+        "authority_spec_sha256": m["assets"]["authority"]["sha256"],
+    })
+    readmit_fixture(formal)
+    if fault is None:
+        inputs = consumer.MemberEntryInputs(formal.path)
+        assert len(inputs.mapping) == len(frame) and inputs.receipt["historical_as_known"] is False
+    else:
+        reason = "AUTHORITY_RELEASE" if fault == "release" else "MAPPING_RELEASE_IDENTITY" if fault == "membership" else "MAPPING_AUTHORITY"
+        with pytest.raises(ValueError, match=reason):
+            consumer.MemberEntryInputs(formal.path)
+
+
 def test_native_series_AF_is_read_without_rewriting_admitted_bytes(formal):
     ref = formal.manifest["assets"]["prediction"]
     path = Path(ref["path"])

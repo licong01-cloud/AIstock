@@ -399,13 +399,90 @@ def adjust_member_entry_budgets(
     return result, audit
 
 
+def validate_saved_af_evidence(evidence, manifest):
+    """Accept reviewed saved bytes without claiming a successful old inference."""
+    from qe_l2_member_loss_admission import SAVED_AF_MODE
+
+    require(manifest.get("af_evidence_mode") == SAVED_AF_MODE, "AF_EVIDENCE_MODE")
+    require(
+        isinstance(evidence, dict)
+        and evidence.get("schema_version") == "qe_saved_af_asset_evidence_v1"
+        and evidence.get("evidence_type") == "SAVED_ASSET_NOT_ORIGINAL_INFERENCE"
+        and evidence.get("seed") == manifest["seed"]
+        and evidence.get("release_id") == RELEASE
+        and evidence.get("dataset_manifest_sha256") == MANIFEST
+        and evidence.get("original_runtime_integrity") == "UNKNOWN"
+        and evidence.get("legacy_reference_equivalent") is False
+        and evidence.get("data_asset_acceptance") == "ACCEPTED_WITH_DISCLOSED_GAPS"
+        and evidence.get("formal_admission") == "NOT_ADMITTED",
+        "AF_SAVED_EVIDENCE",
+    )
+    review = evidence.get("bridge_review", {})
+    require(
+        isinstance(review, dict)
+        and review.get("schema_version") == "qe_af_version_bridge_review_v1"
+        and review.get("contract_id") == "QE-AF-772-VERSION-BRIDGE-V1"
+        and review.get("release_id") == RELEASE and review.get("dataset_manifest_sha256") == MANIFEST
+        and review.get("data_asset_acceptance") == "ACCEPTED_WITH_DISCLOSED_GAPS"
+        and review.get("legacy_reference_equivalent") is False
+        and review.get("legacy_strict_acceptance") == "FAILED_PRESERVED"
+        and review.get("original_runtime_integrity") == "UNKNOWN"
+        and review.get("formal_admission") == "NOT_ADMITTED"
+        and canonical_sha(review) == evidence.get("bridge_review_canonical_sha256"),
+        "AF_BRIDGE_REVIEW",
+    )
+    unknown = review.get("original_runtime_fingerprints", {})
+    require(
+        all(key in unknown and unknown[key] is None for key in (
+            "processor_before", "processor_after", "weights_before", "weights_after"
+        )), "AF_RUNTIME_UNKNOWN_REQUIRED",
+    )
+    rows = review.get("fresh_readback", {}).get("rows", [])
+    candidates = [row for row in rows if row.get("seed") == manifest["seed"]]
+    require(len(candidates) == 1, "AF_SAVED_SOURCE")
+    row = candidates[0]
+    source, saved = evidence.get("source", {}), evidence.get("saved_prediction", {})
+    loop = {42: 1, 2024: 3, 2026: 5}[manifest["seed"]]
+    require(
+        source.get("task_id") == row.get("source_task_id") == "qe_20261028_104720_a38a"
+        and source.get("loop_index") == row.get("source_loop_index") == loop
+        and source.get("model_sha256") == row.get("model_file_sha256")
+        and source.get("dataset_sha256") == row.get("dataset_pickle_sha256")
+        and source.get("processor_asset_fingerprint") == row.get("source_processor_fingerprint_now")
+        and source.get("training_manifest_sha256") == "590b3b204085373ff4bd101efc50a45c6dd3844200200f987f9bc783e0c6b394"
+        and all(_sha(source.get(k)) for k in ("model_sha256", "dataset_sha256", "processor_asset_fingerprint")),
+        "AF_SAVED_SOURCE",
+    )
+    require(
+        saved.get("sha256") == row.get("candidate_sha256") == manifest["assets"]["prediction"]["sha256"]
+        and saved.get("index_sha256") == row.get("prediction_index_sha256")
+        and type(saved.get("rows")) is int and saved["rows"] > 0
+        and saved["rows"] == row.get("prediction_rows")
+        and type(saved.get("days")) is int and saved["days"] > 0
+        and saved["days"] == row.get("prediction_days")
+        and (saved.get("start"), saved.get("end")) == ("2026-01-05", "2026-10-30")
+        and _sha(saved.get("panel_sha256")) and _sha(saved.get("index_sha256")),
+        "AF_SAVED_PREDICTION",
+    )
+    # These disclosures remain part of the admitted evidence, including causes
+    # that the data owner could not establish. No all-NA or zero-risk rewrite.
+    eps = review.get("data_owner_confirmation", {}).get("EPS", {})
+    require(
+        (eps.get("keys"), eps.get("stocks"), eps.get("days")) == (211, 15, 65)
+        and eps.get("historical_initial_missing_cause") == "UNKNOWN"
+        and eps.get("may_claim_legitimate_na") is False,
+        "AF_MISSING_DISCLOSURE",
+    )
+    return saved
+
+
 class MemberEntryInputs:
     """Formal admitted inputs. A preflight binding alone can never enter here."""
 
     def __init__(self, manifest_file):
         import pandas as pd
         from qe_l2_continuous_consumer import ContinuousInputs, prediction_panel_sha256
-        from qe_l2_member_loss_admission import validate_admission, validate_projection
+        from qe_l2_member_loss_admission import SAVED_AF_MODE, STRICT_AF_MODE, validate_admission, validate_projection
         from qe_l2_risk_consumer import checked_asset
 
         self.manifest = m = read_json(manifest_file)
@@ -436,12 +513,23 @@ class MemberEntryInputs:
         self.as_of = {d: calendar[calendar.index(d) - 1] for d in signal_days}
         self.execution_as_of = {d: a for d, a in self.as_of.items() if d <= ECONOMIC_END}
         authority = read_json(paths["authority"])
-        catalog = sorted(r["canonical_l2_code"] for r in authority["l2_projection"]["rows"])
+        extended = authority.get("schema_version") == "hmm_risk_release_l2_classification_binding_v1"
+        baseline = authority["baseline"] if extended else authority
+        if extended:
+            require(
+                authority.get("receipt_sha256") == canonical_sha({k: v for k, v in authority.items() if k != "receipt_sha256"})
+                and authority["release_binding"]["manifest_sha256"] == m["release_identity"]["dataset_manifest_sha256"]
+                and authority["release_binding"]["release_id"] == RELEASE
+                and (authority["extension_start"], authority["extension_end"]) == ("2026-10-01", SIGNAL_END)
+                and all(_sha(authority.get(k)) for k in ("component_receipt_sha256", "code_map_sha256", "membership_sha256")),
+                "AUTHORITY_RELEASE",
+            )
+        catalog = sorted(r["canonical_l2_code"] for r in baseline["l2_projection"]["rows"])
         require(
             len(set(catalog)) == len(catalog) == 131
             and canonical_sha(authority) == m["authority_canonical_sha256"]
-            and authority["research_basis"]["active_mode"] == "historical_replay"
-            and authority["research_basis"]["historical_classification_basis"] == "stable_taxonomy_backcast",
+            and baseline["research_basis"]["active_mode"] == "historical_replay"
+            and baseline["research_basis"]["historical_classification_basis"] == "stable_taxonomy_backcast",
             "AUTHORITY",
         )
         binding = m["risk_binding"]
@@ -453,15 +541,19 @@ class MemberEntryInputs:
             "RISK_BINDING",
         )
         af_receipt = read_json(paths["AF_receipt"])
-        require(
+        af_mode = m.get("af_evidence_mode", STRICT_AF_MODE)
+        saved = validate_saved_af_evidence(af_receipt, m) if af_mode == SAVED_AF_MODE else None
+        require(saved is not None or (
             af_receipt.get("schema_version") == "qe_frozen_inference_result_v1"
             and af_receipt.get("status") == "verified" and af_receipt.get("fit_calls") == 0
             and af_receipt.get("reference_equivalent") is True and af_receipt.get("source_bytes_unchanged") is True
             and af_receipt.get("reference_max_abs_error") == 0
             and af_receipt["spec"]["input_manifest_sha256"] == m["release_identity"]["dataset_manifest_sha256"]
+            and af_receipt.get("processor_state_before") is not None
+            and af_receipt.get("model_weights_before") is not None
             and af_receipt["processor_state_before"] == af_receipt["processor_state_after"]
-            and af_receipt["model_weights_before"] == af_receipt["model_weights_after"],
-            "AF_FROZEN_RECEIPT",
+            and af_receipt["model_weights_before"] == af_receipt["model_weights_after"]
+        ), "AF_FROZEN_RECEIPT",
         )
         prediction = pd.read_pickle(paths["prediction"])
         # Native Qlib LGBModel returns Series; normalize only the in-memory
@@ -474,7 +566,11 @@ class MemberEntryInputs:
             and prediction.index.is_unique and prediction.index.is_monotonic_increasing
             and prediction.score.map(_number).all(), "AF_SCHEMA",
         )
-        require(prediction_panel_sha256(prediction) == af_receipt["executable_prediction_panel_sha256"], "AF_RECEIPT_PANEL")
+        expected_panel = saved["panel_sha256"] if saved is not None else af_receipt["executable_prediction_panel_sha256"]
+        require(prediction_panel_sha256(prediction) == expected_panel, "AF_RECEIPT_PANEL")
+        if saved is not None:
+            index_sha = hashlib.sha256(pd.util.hash_pandas_object(prediction.index, index=True).values.tobytes()).hexdigest()
+            require(len(prediction) == saved["rows"] and index_sha == saved["index_sha256"], "AF_SAVED_INDEX")
         projection = validate_projection(m["prediction_projection"], m["assets"]["prediction"]["sha256"])
         dates = prediction.index.get_level_values("datetime")
         source_days = self._calendar[(self._calendar >= projection["source_start"]) & (self._calendar <= projection["source_end"])]
@@ -487,6 +583,9 @@ class MemberEntryInputs:
             "status": "FORMAL_MEMBER_INPUTS_VERIFIED", "contract": CONTRACT, "arm": m["arm"], "seed": m["seed"],
             "admission_version": admission, "signal_days": 142, "economic_days": 141, "industries": 131,
             "risk_rows": len(self.risk), "new_fits": 0, "new_inferences": 0,
+            "af_evidence_mode": af_mode,
+            "original_runtime_integrity": "UNKNOWN" if saved is not None else "STRICT_FROZEN_RECEIPT_VERIFIED",
+            "legacy_reference_equivalent": False if saved is not None else True,
             "historical_as_known": False, "untouched_holdout": False,
         }
 
@@ -496,27 +595,47 @@ class MemberEntryInputs:
         m = self.manifest
         receipt = read_json(paths["mapping_receipt"])
         mm = receipt["mapping_manifest"]
+        extended = authority.get("schema_version") == "hmm_risk_release_l2_classification_binding_v1"
+        base = authority["baseline"] if extended else authority
+        base_mm = mm["baseline"] if extended else mm
+        if extended:
+            require(
+                mm.get("schema_version") == "hmm_risk_release_l2_classification_binding_v1_mapping"
+                and mm.get("binding_sha256") == authority["receipt_sha256"]
+                and mm.get("release_binding") == authority["release_binding"]
+                and mm.get("membership_sha256") == authority["membership_sha256"]
+                and mm.get("code_map_sha256") == authority["code_map_sha256"]
+                and mm.get("historical_as_known") is False and mm.get("l3_identity_inferred") is False
+                and mm.get("canonical_l2_count") == 131,
+                "MAPPING_RELEASE_IDENTITY",
+            )
         require(
             receipt["mapping_sha256"] == m["assets"]["mapping"]["sha256"]
             and receipt["authority_spec_sha256"] == m["assets"]["authority"]["sha256"]
             and receipt["membership_file_sha256"] == m["assets"]["pit"]["sha256"]
-            and mm["non_as_known_taxonomy"] is True and mm["active_classification_basis"] == "stable_taxonomy_backcast"
-            and mm["candidate_bundle_hash"] == authority["identity"]["bundle_hash"]
-            and mm["research_basis_contract_sha256"] == authority["research_basis"]["canonical_hash"]
-            and mm["l2_code_projection_sha256"] == authority["l2_projection"]["canonical_hash"], "MAPPING_IDENTITY",
+            and base_mm["non_as_known_taxonomy"] is True and base_mm["active_classification_basis"] == "stable_taxonomy_backcast"
+            and base_mm["candidate_bundle_hash"] == base["identity"]["bundle_hash"]
+            and base_mm["research_basis_contract_sha256"] == base["research_basis"]["canonical_hash"]
+            and base_mm["l2_code_projection_sha256"] == base["l2_projection"]["canonical_hash"], "MAPPING_IDENTITY",
         )
         frame = pd.read_parquet(paths["mapping"])
         for col in ("as_of_date", "trade_date"):
             frame[col] = pd.to_datetime(frame[col]).dt.strftime("%Y-%m-%d")
         require(not frame.duplicated(["as_of_date", "instrument"]).any(), "MAPPING_DUPLICATE")
+        expected_classification = pd.Series(base_mm["classification_authority_receipt_hash"], index=frame.index)
+        expected_reason = pd.Series("classification:classification_authority_unavailable", index=frame.index)
+        if extended:
+            extension_rows = frame.as_of_date.ge(authority["extension_start"])
+            expected_classification.loc[extension_rows] = authority["receipt_sha256"]
+            expected_reason.loc[extension_rows] = "classification:release_membership_unavailable"
         resolved, na = frame.mapping_status.eq("resolved"), frame.mapping_status.eq("unavailable")
         require(
             (resolved | na).all() and frame.loc[resolved, "l2_code"].isin(catalog).all()
             and frame.loc[resolved, "mapping_reason"].isna().all()
             and frame.loc[na, "l2_code"].isna().all()
-            and frame.loc[na, "mapping_reason"].eq("classification:classification_authority_unavailable").all()
+            and frame.loc[na, "mapping_reason"].eq(expected_reason.loc[na]).all()
             and frame.non_as_known_taxonomy.eq(True).all()
-            and frame.classification_receipt_hash.eq(mm["classification_authority_receipt_hash"]).all(), "MAPPING_AUTHORITY",
+            and frame.classification_receipt_hash.eq(expected_classification).all(), "MAPPING_AUTHORITY",
         )
         used = frame.used_in_142_signal_days.eq(True)
         economic = frame.used_in_141_economic_days.eq(True)
