@@ -1,6 +1,6 @@
 # 申万L2成员损失：新release与Q4连续交付
 
-> v1.1；2026-11-06；F2；父蓝图§1.27。用户“开始执行合并的连续任务”批准本包方向和Q4四次拟合预算；源码、预检、正式研究及QE采用分开报告。正式新增fit=4/4已完成，预算耗尽；本次只回填真实结果，不改变D1～D6。
+> v1.2；2026-11-06；F2；父蓝图§1.27。用户“开始执行合并的连续任务”批准本包方向和Q4四次拟合预算；源码、预检、正式研究及QE采用分开报告。正式新增fit=4/4已完成，预算耗尽；本次只回填零fit诊断、142日交付、有界数据库实读及审计复验，不改变D1～D6。
 
 ## 1. Background / 终极目标
 
@@ -66,7 +66,7 @@ F-011：D1/D3/D5唯一模型与价值问题；F-012：D2/D4身份、因果和载
 | F-012 | 同service及release_industry_binding.py；共享reader显式分派与读取稳定性检查；本行仅source/文件载体断言 | backend/tests/hmm_risk/test_release_industry_binding.py；backend/tests/hmm_risk/test_risk_l2_member_release.py；正式文件回执见§11.1 | VERIFIED_SOURCE_FILE_ONLY | 无 |
 | F-013 | scripts/hmm_risk/run_risk_l2_member_release.py：guard/clean_head/双process与不重试 | backend/tests/hmm_risk/test_risk_l2_member_release.py：attempt先行/两process预算/完整grid回读；生产状态见§11 | VERIFIED_SOURCE | 无 |
 
-本Index没有将新数据数据库事实实读或当前在线加载列为已验证断言：D4只允许既有历史数据库快照验证共同核，不承诺本包直接上线。§11.1单列NOT_EVALUATED，不是获豁免的已完成项目；后续真实双入口消费仍须独立核验。F2源码/文件合同通过不能消除该未完成的业务状态，也不使本包成为生产采用。
+本Index仅断言源码/文件合同，不承诺本包直接上线。§11.1后续独立接续已完成两个决策点的historical_current_revision数据库实读，不扩大为142日全量数据库、当前forward加载或生产采用。在线authority时效与QE经济采用仍未完成；F2源码/文件合同通过不能消除这些真实缺口。
 
 ## 10. Risks / Production Gates / Rollback
 
@@ -82,11 +82,23 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 
 原Q2/Q3四模型已在原生效期基于新release真实20维重新推断，四次fresh-process CLI均零fit，旧资产SHA未变。封存之后读取评价事实：4–9月125个全行业共同定义日，B/C对成员亏损Rank IC为0.186587/0.255571，C−B=+0.068984；不是原QE新买同样本99日的+0.045903口径，不能相互比较或当作收益提升。C高风险组的平均成员亏损5.8694%、上行5.1206%；低风险组为2.4902%/2.0595%。风险与机会同时增强，不能自动套禁买、降仓或1-p。
 
-Q4仅7个成熟日，B/C Rank IC=0.664752/0.661386，C−B=−0.003366，未证明新季度C增量；另10日保持OUTCOME_NOT_MATURE。全期另有2个合法FIXED_COHORT_ENDPOINT_NA，不补价或删成员重归一化。没有QE账户净收益证据，没有同新输入的数据库事实实读，原历史双入口不冒充当前验收。QE新买队列/新输入双入口/消费者准入各自仍NOT_EVALUATED；无新QE任务、DB/数据集/profile写入或服务动作。
+Q4仅7个成熟日，B/C Rank IC=0.664752/0.661386，C−B=−0.003366，未证明新季度C增量；另10日保持OUTCOME_NOT_MATURE。全期另有2个合法FIXED_COHORT_ENDPOINT_NA，不补价或删成员重归一化。随后完成下述零fit接续，原研究结果不回写；QE账户净收益、当前在线准入和生产采用仍未完成。
 
-独立价格编码修复PR #7049已合入，merge=`d6d4b01a3b0784e695bfcf7c24fe57acca757c40`，关闭同步PR #7061已合入。主任务已安全同步main，BUG登记记录不再属于PR #7037的实际差异；剩余11个文件均为本任务HMM源码、测试及设计。用户已授权合入和本轮工作树清理，继续复验最终提交门禁及CI后交付；不删除正式BUG记录、扩大BUG scope或修改流水线。研究执行身份保持上面的固定HEAD，不伪造绑定到后续文档提交；源码合入仍不等于backend-main已加载或经济价值已确认。
+独立价格编码修复PR #7049已合入，merge=`d6d4b01a3b0784e695bfcf7c24fe57acca757c40`，关闭同步PR #7061已合入。主任务PR #7037于11/6合入`1a7ce7ce163ad28f872bb695a5acc1a0221eb75f`，实际差异为11个HMM源码、测试及设计文件；不删除正式BUG记录、扩大BUG scope或修改流水线。研究执行身份保持上面的固定HEAD，不伪造绑定到后续文档提交；本次文档不追加工作树清理，也不把源码合入称为经济价值确认。
 
-结果文档第一轮自审核对原回执/文件SHA、125与7+10日算术、716/89,871训练mask和4/4计数；第二轮核对与父蓝图/原成员设计的一致性，明确全行业与真实新买口径不同、上下行机会并列、无新数据DB实读和QE采用。没有独立第三方审核，缺口不因F2 PASS消失。已批准D1～D6未修改，不为结果记录新增环境变量、DB表或重启。
+#### 同日零fit接续：价值、消费者与在线输入（当前状态）
+
+结果根仍为`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/`，不重新训练或覆盖旧预测。
+
+- `value_dual_v1/value_analysis.json` canonical=`97bd9775ed551040e6acb8ec1a70150f853d7cd96473024b449fa239b218810f`：原2053条seed记录/1269个唯一股票日；主口径成熟至9/30为1181成熟、88未成熟，99共同日C−B=+0.045903，与旧同队列结果一致。成熟延至10/30的同队列次口径109共同日差+0.045743，不冒充新独立样本。原临时entry文件已随旧树清理，复用的是正式outcomes中的封存集合和原pin，不捏造旧文件仍可读。
+- `value_dual_v1/consumer_binding.json`及`C_20260401_20261030.collection.json`：142日、131行业、18,602唯一可用行；文件SHA=`5d41be51fee66df0f58d47cda24f2eb07004427e163222288b8d18c749020ea7`，7,445,682字节。仅组合原三季度原行并保留模型/输入身份，不重推；transport schema不是旧QE准入schema。QE负责显式准入、AF/映射、CAS、Composer与六账户，不由HMM代启任务。
+- `value_dual_v1/dual_summary.json`：9/30和10/08两个decision、265日上下文、262行真实数据库READ ONLY/REPEATABLE READ特征；B/C各日期131可用，双fresh-process一致。跨文件/数据库最大预测差3.4358306824633367e-10、特征差1.81114387931558e-8，availability/reason变化0。这是历史current-revision，不是当前在线或全142日数据库平价。
+- `continuation_v1/online_probe.json` canonical=`6354d43f47632445927ee748017cd5f5a012fe2a78303e0c0b1aa4a143889804`：BUG-2177修复后10/29完成审计由HMM实际复验PASS，row_count=5223、需求5216/5216、VALID，未放宽原校验。observed authority仍止10/22；10/12官方观察与10/29目标PIT股票集合均4918，只证明集合覆盖，不证明后续分类无修订。严格按双入口设计§4.1保留知识时间和时效边界，不延长旧manifest、不使用研究回溯分类作forward；不再请求数据窗口重复修复已通过的完成审计。
+- `continuation_v1/mechanism_diagnosis.json` canonical=`316eb01c57132d35aabfa686b14c3a31f030c2421c4b2bc0a707413279bbe8c8`：主口径C亏损/上行/绝对收益日均Rank相关0.078232/−0.011984/0.090678，分母99/107/114日各自披露。控制volatility_Nd后的共同98日B/C为0.017754/0.080326；不能用单一波动代理解释全部增量。109个行业逐一剔除后差仍+0.037795..+0.051740，但不是独立显著性。三个seed控制原AF的共同日偏Rank增量+0.073611/−0.015672/+0.054018（90/90/96日），不支持三seed稳定独立增益；没有将旧AF换标为新release AF。只是既有批准研究的描述性诊断，不形成新的效果门、公式、候选或fit许可。
+
+两轮作者审修（非第三方）：第一轮核对固定队列、原AF SHA/shift=1、成熟边界、去重不混账户closed状态；第二轮用独立Pandas rank与秩向量投影复核2380项相关、682项AF条件量，`mechanism_review.json=PASS`。源码/资产身份未变，不新增fit、DB写入、生产激活、服务控制或QE任务。旧高20%组股票日加权收益+1.9441%与日期等权−0.0678%并列，禁止选择有利权重冒称净收益。下一步仅接续既定QE效果及合法在线输入，不为等结果扩大模型搜索。
+
+首次结果文档自审历史：第一轮核对原回执/文件SHA、125与7+10日算术、716/89,871训练mask和4/4计数；第二轮核对父蓝图/原成员设计，明确全行业与真实新买口径不同、上下行机会并列，当时尚无新数据DB实读或QE采用。数据库有界实读已由上方同日接续取代，QE采用仍未完成。没有独立第三方审核，缺口不因F2 PASS消失；D1～D6未修改，不为记录新增环境变量、DB表或重启。
 
 ### 11.2 开发审修过程（历史状态）
 
