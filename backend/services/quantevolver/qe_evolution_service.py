@@ -1053,8 +1053,17 @@ class AutoEvolutionScheduler:
         *,
         source_node_id: str,
         expected_sha256: str | None,
+        member_loss_manifest: Dict[str, Any] | None = None,
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         """Resolve and stage one immutable completed-loop prediction artifact."""
+
+        if member_loss_manifest is not None and member_loss_manifest.get("af_evidence_mode") == "saved_asset_version_bridge_v1":
+            from .l2_member_loss_consumer import saved_member_prediction_payload
+
+            return saved_member_prediction_payload(
+                member_loss_manifest, source_task_id=source_task_id, source_loop_index=source_loop_index,
+                source_node_id=source_node_id, expected_sha256=expected_sha256,
+            )
 
         source_loop = f"Loop{source_loop_index}"
         catalog = await source_client.list_workspace_files(source_task_id, source_loop)
@@ -8181,6 +8190,7 @@ class AutoEvolutionScheduler:
                     cfg.prediction_source_loop_index,
                     source_node_id=source_node_id,
                     expected_sha256=cfg.prediction_source_sha256,
+                    member_loss_manifest=cfg.build_custom_params().get("qe_l2_member_loss_manifest"),
                 )
                 prediction_replay_source = PredictionReplaySource.model_validate(source_ref)
                 cfg = cfg.model_copy(

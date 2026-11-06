@@ -2357,9 +2357,11 @@ class ConfigComposer:
         from .stock_probability_consumer import apply_stock_probability, extract_stock_probability
         from .l2_relative_consumer import apply_relative, extract_relative
         from .l2_natural_entry_consumer import apply_natural_entry, extract_natural_entry
+        from .l2_member_loss_consumer import apply_member_loss, extract_member_loss
         from .terminal_replay_consumer import apply_terminal_replay, extract_terminal_replay
         from .trend_entry_consumer import apply_trend_entry, extract_trend_entry
 
+        custom_params, member_loss_study = extract_member_loss(custom_params)
         custom_params, trend_entry_study = extract_trend_entry(custom_params)
         custom_params, natural_entry_study = extract_natural_entry(custom_params)
         custom_params, terminal_replay = extract_terminal_replay(custom_params)
@@ -2879,6 +2881,7 @@ class ConfigComposer:
         result = apply_stock_probability(result, stock_probability_study, scripts_dir=scripts_dir)
         result = apply_relative(result, relative_study, scripts_dir=scripts_dir)
         result = apply_natural_entry(result, natural_entry_study, scripts_dir=scripts_dir)
+        result = apply_member_loss(result, member_loss_study, scripts_dir=scripts_dir)
         result = apply_trend_entry(result, trend_entry_study, scripts_dir=scripts_dir)
         return apply_terminal_replay(result, terminal_replay, scripts_dir=scripts_dir)
 

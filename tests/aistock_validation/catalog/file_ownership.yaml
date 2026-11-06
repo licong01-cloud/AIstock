@@ -337,6 +337,14 @@ rules:
       - scripts/qe_l2_natural_entry_strategy.py
       - backend/tests/quantevolver/test_qe_l2_natural_entry.py
       - backend/tests/unified_engine/test_qe_l2_natural_entry_strategy.py
+      - scripts/qe_l2_member_loss_consumer.py
+      - scripts/qe_l2_member_loss_admission.py
+      - scripts/qe_l2_member_loss_strategy.py
+      - backend/services/quantevolver/l2_member_loss_consumer.py
+      - backend/tests/quantevolver/test_qe_l2_member_loss_composer.py
+      - backend/tests/unified_engine/test_qe_l2_member_loss_strategy.py
+      - backend/tests/quantevolver/test_qe_l2_member_loss_consumer.py
+      - docs/design/qe_l2_member_loss_consumer_20261105.md
       - scripts/qe_l2_relative_consumer.py
       - scripts/qe_l2_relative_strategy.py
       - backend/tests/quantevolver/test_qe_l2_relative.py
