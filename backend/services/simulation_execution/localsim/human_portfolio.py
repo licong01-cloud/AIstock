@@ -160,7 +160,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                 queue.invalidate_plan(plan.plan_id, reason="PLAN_EXPIRED_OR_CANCELLED")
                 if execution is not None and clock >= plan.valid_until and execution.order.status not in TERMINAL:
                     capacity_debt += 1
-                    execution.cancel("PLAN_HARD_EXPIRY")
+                    execution.cancel("PLAN_HARD_EXPIRY", confirmed_at=clock)
                 continue
             if clock not in polls and clock not in changes:
                 continue
@@ -214,7 +214,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                 race = execution.order.status == OrderStatus.FILLED or execution.order.filled_quantity > requested_quantity
                 if race:
                     cancellation_races += 1
-                execution.cancel("HUMAN_CANCEL_CONFIRMED")
+                execution.cancel("HUMAN_CANCEL_CONFIRMED", confirmed_at=clock)
                 outcome = {"status": execution.order.status.value, "order_id": execution.order.order_id,
                            "filled_quantity_at_request":requested_quantity,
                            "filled_quantity_at_cancel":execution.order.filled_quantity, "cancellation_race":race}
@@ -260,7 +260,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
         for execution in proposal.executions:
             if execution.order.status not in TERMINAL:
                 capacity_debt += 1
-            execution.cancel("COMMON_TERMINAL_1457")
+            execution.cancel("COMMON_TERMINAL_1457", confirmed_at=terminal)
     result = portfolio_day_result(backend=backend, sessions=executions, initial=initial, marks=marks,
                                   navs=navs, day=day, terminal=terminal, initial_nav=initial_nav)
     parents = []
