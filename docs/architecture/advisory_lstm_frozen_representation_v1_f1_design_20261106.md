@@ -1,6 +1,6 @@
 # 冻结LSTM时序表示的5TD重排序（F1）
 
-2026-11-06；Advisory/model_first；`EXPLORATORY_SCREEN`。用户已授权执行[研究计划](../analysis/advisory_lstm_frozen_representation_research_plan_20261106.md)全部适用阶段及最多3次候选fit。本设计提交时P0/P1和独立输入算术已完成，金融fit仍0、累计263实际fit＋1旧index；读取头源码和金融评价尚未执行。设计通过不等于盈利或生产可用。
+2026-11-06；Advisory/model_first；`EXPLORATORY_SCREEN`。用户已授权执行原计划P0～P4和最多3次候选fit，全部适用任务已完成；设计PR #7062先合入后开发。真实3fit、0控制/父包重训，累计266实际fit＋1旧index。主开发+25.740525bps、压力−70.472897bps，事前终态`STOP_EXACT_REPRESENTATION_CANDIDATE`，无新上线模型、追加预算0。详[结果报告](../analysis/advisory_lstm_frozen_representation_review_20261106.md)。下文输入与合同保留事前定义，源码CI/合入另记。
 
 ## Background / Goal / Feature Card
 
@@ -82,17 +82,17 @@ CPU两线程、模型fit按次串行，已有环境；记录真实可用CPU/内�
 
 ## Design Acceptance Matrix
 
-本表用于本次设计先行提交，验证输入证据与设计合同已明确，不表示读取头实现或金融研究完成。F-983～F-986的实现/真实研究验收留待P3/P4逐项替换；设计阶段没有将其作为已完成代码交付。原张量/PIT限制属于计划已声明的探索边界，不是以缺失实现替代需求。
+本表已从设计先行验收更新为实现与实际研究逐项验收。经济负面是预先允许的完整终态，不把代码通过当作模型可用；独立确认设计属于正结果条件分支，本候选触发停止故不执行。原张量/PIT限制是已声明的探索边界。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-981 | 本文Scope/Clock | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/asset_clock_final.json；novelty_review.json | PASS_INPUT_REVIEW | none |
-| F-982 | 本文Inputs | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/representation_input_review.json；p1_independent_receipt.json | PASS_INPUT_REVIEW | none |
-| F-983 | 本文Model Contract | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/design_review.json | VERIFIED_DESIGN_CONTRACT_ONLY | none |
-| F-984 | 本文Execution | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/design_review.json | VERIFIED_DESIGN_CONTRACT_ONLY | none |
-| F-985 | 本文Evaluation | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/design_review.json | VERIFIED_DESIGN_CONTRACT_ONLY | none |
-| F-986 | 本文Implementation Plan / Verification Plan | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/design_review.json | VERIFIED_DESIGN_CONTRACT_ONLY | none |
-| F-987 | 本文Scope/Non-goals | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/scope.json | PASS_DESIGN_BOUNDARY | none |
+| F-981 | 原计划；本设计Scope/Clock | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/asset_clock_final.json；novelty_review.json；study/preregistered/protocol.json | PASS | none |
+| F-982 | p1_extract.py；冻结表示输入 | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/representation_input_review.json；p1_independent_receipt.json | PASS | none |
+| F-983 | backend/services/advisory_model_first/lstm_frozen_representation_v1.py | backend/tests/advisory_model_first/test_lstm_frozen_representation_v1.py；artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/independent_research_audit.json | PASS | none |
+| F-984 | scripts/advisory_lstm_frozen_representation.py | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/validation_receipt.json；study/fit_claims；study/evaluated/resource.json | PASS | none |
+| F-985 | core.summarize/decision；CLI评价段 | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/study/evaluated/report.json；independent_research_audit.json | PASS_CLOSED_NEGATIVE | none |
+| F-986 | docs/analysis/advisory_lstm_frozen_representation_review_20261106.md | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/implementation_review.json；validation_receipt.json | PASS | none |
+| F-987 | CLI离线入口；结果报告和蓝图16.0 | artifact: X:/AIstock_temp/ADVISORY/lstm-frozen-representation-20261106/scope.json；source_delivery.json | PASS_SCOPE | none |
 
 ## Risks / Production Gates
 
