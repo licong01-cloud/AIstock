@@ -333,6 +333,11 @@ class TimingExecution:
             order, engine_state, fills, events, capital = self.backend._fit_buy_fills_to_available_cash(
                 order_before=self.order, engine_state=engine_state, final_order=order, fills=fills, events=events,
             )
+            if getattr(self.backend, "_historical_execution_events", False):
+                # General OMS audit time is wall time. In a frozen replay the
+                # existing confirmed fill owns the historical event clock.
+                events = [event.model_copy(update={"event_time": event.fill.trade_time})
+                          if event.fill is not None else event for event in events]
             for fill in fills:
                 self.backend._ledger.apply_fill(fill)
             available_at = max(bar.end, bar.received_at, bar.source_available_at or bar.end)

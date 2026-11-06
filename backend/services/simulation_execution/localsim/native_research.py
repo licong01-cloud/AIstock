@@ -59,13 +59,16 @@ def native_backend_for(*, account, markets, cost, manifest, source_identity, cas
         raise ValueError("LOCALSIM_CASH_ONLY_SCOPE_HAS_POSITIONS")
     provider = FrozenResearchMarketProvider(package_id=account["package_id"], markets=markets,
                                             source_identity=source_identity, cash_only_trade_date=cash_only_trade_date)
-    return LocalSimBackend(portfolio_id=account["portfolio_id"], package_id=account["package_id"],
+    backend = LocalSimBackend(portfolio_id=account["portfolio_id"], package_id=account["package_id"],
                            manifest=manifest, data_source=MinuteDataSource.DATASET_FILES,
                            market_data_provider=provider, frozen_research_inputs=True,
                            initial_cash=Decimal(account["origin_initial_cash_cny"]),
                            initial_available_cash=Decimal(account["cash_cny"]),
                            initial_positions={s: PositionLot.model_validate(p) for s, p in account["positions"].items()},
                            fee_model=fee_model(cost), execution_policy=local_sim_twap_only_policy_snapshot())
+    # Explicit offline adapter capability; ordinary backends keep their clocks.
+    backend._historical_execution_events = True
+    return backend
 
 
 def run_cash_only_portfolio_day(*, backend, trade_date, human_policy=None):
