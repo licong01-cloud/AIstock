@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1901",
-  "closed_at": null,
+  "closed_at": "2026-11-06T09:49:48.921474Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -123,10 +123,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1901/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1901",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "0733eddaf2395804c293a15848bcfddd045fc6c81141d0efa0fe5cc30dc1ad9e",
+      "expected_identity": "7aba9ddddf0b333b0cd80b89da5d79c23bc80f88",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T09:48:27.760486Z",
+      "mode": "read_only",
+      "observed_identity": "951962f310202c87f0f459c8b5162b4d0ea1d53e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c10cda4cf0e2dce3261b8c51435735eeba08d4a9d871a000e3e6bef105773f8a",
+      "receipt_sha256": "e4734c7c1c93cef7e9b2846d740e6cbadeb6e814e63f868cdd6ad37062a93b20",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d5397d849d362b9bfe6de1c14d6662787524af7c9da8057ecd84252b62750ffb",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -161,7 +183,7 @@
     ],
     "validation_evidence_digest": "5c0345d18ce2655abb145dc8ebf2eeeac63e531cb101a70df6b51a5832ce88ab"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
