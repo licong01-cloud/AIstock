@@ -72,6 +72,8 @@ source-store只保存按SHA去重的官方工作簿、不可变观察回执和�
 
 当合法目标日及其数据完成状态具备时，正式构建、标准adapter读回、完整264日数据库prepare与冻结模型双fresh-process零fit验证连续执行。只读事务、131完整输出及所有availability/reason保留；预检通过不要求每个行业均available，不把合法停牌/空成员升级为全局失败。若尚无合法目标日或存在具体输入阻断，源码可独立交付，真实业务状态明确pending，不无限等待QE或日历。
 
+2026-11-06正式clean-source读回（源码27628f74d16f5f29a9e4f5c3d455de1b06bc1531）：官方来源实际首次观察为11月6日19:08（上海），12,933行，目标PIT 4,919只股票全部唯一解析；capture文件SHA为1c401740c86ed47b501e70597cc9d945167f8fa4d0dcc94ff66fb4025c53503a，保存在外部HMM source-store。目标as-of 11月5日早于新来源知识边界，正式CLI返回PENDING_OBSERVATION_NOT_YET_CAUSAL，未生成authority或执行推断。只读canonical日历确认后续开放日为11月9日、11月10日：本观察最早可用于11月9日source/as-of、11月10日decision，届时仍须完整预检。11月5日六项依赖的完成审计全部成功，只证明该日完成记录，不代替264日业务输入验证。database_live_ready=false；无新数据补录请求、写库、激活或fit。
+
 ## 5. D3：Implementation Plan / 共用特征与自然不可用
 
 数据库股票行与文件股票行进入同一 _collect_domains 和 build_c010_feature_domain_panel，再用同一特征载体构造与原参数推断函数。复用文件 reader 的 C-013 authority 区间索引，按真实变更边界缓存身份并恢复每条事实的实际日期，不复制分类实现或按股票日重复认证。全部 131 行始终保留。单成分、正常停牌、空成员、正式来源不可用沿原有 typed NA；不补 neutral/1.0，不新设最小股票数或每行业全成功门。
@@ -102,7 +104,7 @@ HMM 交接入口为同一 CLI 的 --source-mode frozen_file（默认）或 datab
 
 完成源码与直接验证，报告实际数据库就绪状态；有缺口保留 pending，不宣称实时双入口完成。用户已于2026-10-21追加授权本任务提交、PR及满足门禁后的合入和后续步骤；该授权不推导生产 DDL/DML、runtime activation、其他模块接线或服务控制，后端重启仍由用户操作。
 
-Rollout 为 HMM 可选 service/CLI；回退为不调用新 database source-mode，旧 file/preset_A 行为完全保留。新 backend 文件按实际 runtime contract 分类，fresh import 不等于后端已加载。当前只读元数据确认全局 PIT ready/clean 至 2026-10-20；kline_daily_raw 最新成功完成记录仅至 2026-10-15，不能宣称 10-20 forward 数据齐备。
+Rollout 为 HMM 可选 service/CLI；回退为不调用新 database source-mode，旧 file/preset_A 行为完全保留。新 backend 文件按实际 runtime contract 分类，fresh import 不等于后端已加载。2026-10-21历史读回的全局 PIT ready/clean 至 2026-10-20、kline_daily_raw 完成记录至 2026-10-15，仅保留当时结论；当前源侧扩展与实际pending以§4.2为准。
 
 ### Production Gates / 生产门禁
 
