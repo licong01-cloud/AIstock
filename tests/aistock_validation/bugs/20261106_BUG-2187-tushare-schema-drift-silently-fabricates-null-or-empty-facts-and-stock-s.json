@@ -32,19 +32,21 @@
   "expected": "Requests match supported API fields; explicit NULL and valid empty results stay legal; malformed responses fail before writes with bounded retry; historical columns are preserved.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/tushare_sync_engine.py",
-      "backend/services/tushare_dataset_specs.py",
       "backend/services/event_signal/tushare_event_raw_sync.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
       "scripts/ingest_tushare_stock_st.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "tests/aistock_validation/bugs/20261106_BUG-2187-tushare-schema-drift-silently-fabricates-null-or-empty-facts-and-stock-s.json"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/services/tushare_sync_engine.py",
-      "backend/services/tushare_dataset_specs.py",
       "backend/services/event_signal/tushare_event_raw_sync.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
       "scripts/ingest_tushare_stock_st.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "tests/aistock_validation/bugs/20261106_BUG-2187-tushare-schema-drift-silently-fabricates-null-or-empty-facts-and-stock-s.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -122,8 +124,8 @@
   },
   "first_seen_at": "2026-11-06T06:05:23.662118Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "49eb013214b3461c38537d12f391f4c1564dcffc",
+  "fixed_at": "2026-11-06T06:35:25Z",
   "github_issue_number": 7074,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7074",
   "last_seen_at": "2026-11-06T06:05:23.662118Z",
@@ -131,6 +133,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7075",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -160,6 +163,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -171,7 +175,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2187",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ef1d404d8bb698fd",
+    "recorded_at": "2026-11-06T06:36:08.639483Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e0ca6359695e85cd4a728506016ba73e1e485e8a",
+    "source_merge_commit": "49eb013214b3461c38537d12f391f4c1564dcffc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7075",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/event_signal/test_tushare_event_raw_sync.py -q -> 210 passed",
+      "nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "73f66b0131a03cc988379ac2a242fa80bd00b3da9f9a799e3baa87c2cca558d0"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -180,6 +206,10 @@
     "fingerprint": "8c03a2c9c4d86a5ce6cdefb3",
     "source_event_id": "FE-20261106-8c03a2c9c4d8"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/event_signal/test_tushare_event_raw_sync.py -q -> 210 passed",
+    "nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
