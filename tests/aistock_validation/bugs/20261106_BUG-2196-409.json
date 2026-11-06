@@ -1,0 +1,265 @@
+{
+  "actual": "2026-11-07默认目标日2026-11-09，全部5个启用任务摘要至列表409 SNAPSHOT_CHANGED；同参数往返200。",
+  "allowed_write_scope": [
+    "backend/services/advisory_workbench/service.py",
+    "backend/tests/advisory_workbench/test_service.py",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261106_BUG-2196-409.json"
+  ],
+  "scope_expansion_reason": "finish实际拒绝未注册的workbench daily业务smoke；仅补该精确GET响应的纯语义合同、分发登记及定向回归，不恢复流水线或修改现有验收门槛。",
+  "assigned_agent": null,
+  "bug_id": "BUG-2196",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "用户重启后核对运行身份，并对五个启用任务执行默认摘要到显式目标日分页的真实GET往返；不得仅凭HTTP健康检查关闭。"
+  ],
+  "created_at": "2026-11-06T17:39:08.566932Z",
+  "description": "2026-11-07默认目标日2026-11-09，全部5个启用任务摘要至列表409 SNAPSHOT_CHANGED；同参数往返200。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261106-6b75419b59f6",
+      "timestamp": "2026-11-06T17:39:08.566916Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/snapshot-defect.json",
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/browser-readback.json",
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh-source-readback.json",
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fix-matrix.xml",
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/semantic-tests.xml",
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/workflow-smoke.json"
+  ],
+  "expected": "相同业务目标日及未变化的数据应共享快照；默认摘要传给显式目标日分页应成功，真实日历或watermark变化仍返回409。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_workbench/service.py",
+      "backend/tests/advisory_workbench/test_service.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_workbench/service.py",
+        "backend/tests/advisory_workbench/test_service.py"
+      ],
+      "impacted_modules": [
+        "advisory.workbench"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_workbench/service.py",
+          "impact_modules": [],
+          "primary_module": "advisory.workbench",
+          "risk_level": "medium",
+          "rule_id": "advisory_workbench_read_contracts"
+        },
+        {
+          "file": "backend/tests/advisory_workbench/test_service.py",
+          "impact_modules": [],
+          "primary_module": "advisory.workbench",
+          "risk_level": "medium",
+          "rule_id": "advisory_workbench_read_contracts"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_workbench/service.py",
+        "backend/tests/advisory_workbench/test_service.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_workbench/service.py",
+      "backend/tests/advisory_workbench/test_service.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_workbench/service.py",
+      "backend/tests/advisory_workbench/test_service.py"
+    ]
+  },
+  "first_seen_at": "2026-11-06T17:39:08.566932Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7111,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7111",
+  "last_seen_at": "2026-11-06T17:39:08.566932Z",
+  "module": "advisory.ui",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "GET workbench/programs/{id} then GET daily?target_date=summary.target_date&snapshot_id=summary.snapshot_id",
+  "required_verification": [
+    "advisory_workbench_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/workbench/programs/advp_ed918504a02f4b15892f0dba65da139b/daily",
+    "fresh_process_evidence": [
+      "新进程加载本工作树持久源码，对五个真实启用任务核对默认/显式目标日快照一致，四个PUBLISHED及一个真实NO_CURRENT_LIST通过；仅READ ONLY事务，0写库/训练/V2经济读取。回执X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh-source-readback.json绑定源码SHA256。"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/advisory_workbench/test_service.py backend/tests/advisory_workbench/test_api.py -> 29 passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'advisory_workbench_daily_semantic_contract or entry_price_status_semantic_contract' -> 32 passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> 1 passed; production_sloc=48105, test_sloc=14430, ratio below 30 percent",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2196 --module validation -> passed",
+    "python -m nox -s l0 -- six exact changed files -> passed, zero blocking",
+    "rtk ruff check five changed Python files; git diff --check -> passed",
+    "python -B X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh_source_readback.py -> passed for five enabled programs; runtime restart still pending"
+  ],
+  "agent_review": {
+    "correctness": "已核对摘要和分页共用_context，解析默认目标日后统一日历上界；保留完整日历hash及真实更新拒绝，不修改目标日、名单、排名、价格或收益。",
+    "completeness_regression": "已覆盖交易日、周六、周日、长假和两类真实数据变更；默认/显式目标日真实五任务新进程读回通过。浏览器显式日期可读，默认入口的实际生效仍待用户重启。",
+    "design_compliance": "普通BUG最小修复；原快照/分页设计逐项对应，未简化一致性门禁，未新增业务入口。运行与经济验收分态，0训练/写库/服务控制。",
+    "reviewer": "当前执行Agent自审，不冒充独立第三方审核",
+    "ci_repair": "首次CI为767通过/1失败，失败项为工作流测试比例30.043%超限。删除新增测试按场景名重复分发的分支，直接使用数据表；内联仅调用一次的entry-price测试构造，保留全部22+10项断言。生产分母和30%门槛不变，32项及预算失败nodeid重验通过。最终修订仅测试构造及BUG证据，业务源码和新进程证据SHA不变。",
+    "deferred_scope": "advisory_workbench_backend全矩阵由当前PR CI承担；共享bak_basic告警遮挡移交数据管理/全局告警owner。"
+  },
+  "suspected_modules": [
+    "advisory.ui"
+  ],
+  "title": "荐股周末默认目标日与显式目标日生成不同快照，列表持续返回409",
+  "trigger_condition": {
+    "fingerprint": "6b75419b59f677aef796d454",
+    "source_event_id": "FE-20261106-6b75419b59f6"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.ui",
+        "advisory_workbench"
+      ],
+      "plans": [
+        "advisory_workbench_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.ui",
+          "advisory_workbench"
+        ],
+        "plans": [
+          "advisory_workbench_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

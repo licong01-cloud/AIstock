@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -45,6 +45,53 @@ def test_stale_paged_request_fails_before_rows_are_served():
     with pytest.raises(WorkbenchError) as error:
         service().daily("p", snapshot_id="0" * 64)
     assert error.value.status == 409
+
+
+class CalendarRangeRepo(Repo):
+    """Honor the production reader's inclusive range and 30-day lookahead."""
+
+    watermark_version = "v1"
+    changed_calendar_day = None
+
+    def calendar(self, start, end):
+        rows = []
+        for offset in range((end + timedelta(days=30) - start).days + 1):
+            day = start + timedelta(days=offset)
+            opened = day.weekday() < 5 and not date(2026, 10, 1) <= day <= date(2026, 10, 8)
+            rows.append({"cal_date": day, "is_trading": not opened if day == self.changed_calendar_day else opened})
+        return rows
+
+    def watermark(self, *_args):
+        return {"source": self.watermark_version}
+
+
+@pytest.mark.parametrize("today, target", [
+    ("2026-11-06", "2026-11-06"),
+    ("2026-11-07", "2026-11-09"),
+    ("2026-11-08", "2026-11-09"),
+    ("2026-10-01", "2026-10-09"),
+])
+def test_default_target_snapshot_can_be_used_by_explicit_target_page(today, target):
+    reader = WorkbenchService(CalendarRangeRepo(), lambda: datetime.fromisoformat(today + "T12:00:00+08:00"))
+    first = reader.daily("p")
+    assert first["target_date"] == target
+    explicit = reader.daily("p", target_date=target, snapshot_id=first["snapshot_id"])
+    assert explicit["snapshot_id"] == first["snapshot_id"]
+    assert explicit["status"] == first["status"] == "NO_CURRENT_LIST"
+
+
+@pytest.mark.parametrize("mutation", ["watermark", "calendar"])
+def test_resolved_target_snapshot_still_rejects_real_source_changes(mutation):
+    repo = CalendarRangeRepo()
+    reader = WorkbenchService(repo, lambda: datetime(2026, 11, 7, 12, tzinfo=ZoneInfo("Asia/Shanghai")))
+    first = reader.daily("p")
+    if mutation == "watermark":
+        repo.watermark_version = "v2"
+    else:
+        repo.changed_calendar_day = date(2026, 11, 10)
+    with pytest.raises(WorkbenchError) as error:
+        reader.daily("p", target_date=first["target_date"], snapshot_id=first["snapshot_id"])
+    assert error.value.code == "SNAPSHOT_CHANGED" and error.value.status == 409
 
 
 def test_current_binding_without_formal_identity_does_not_include_old_bindings():
