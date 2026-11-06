@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2123",
-  "closed_at": null,
+  "closed_at": "2026-11-05T18:50:17.820966Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "Finite positive mandatory fields remain strict; only volume_ratio NULL with proven first-five-listed-trading-day boundary is explicit legal NA; unknown listing/calendar never exempted.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2123-daily-basic-integrity-treats-new-listing-volume-ratio-warmup-as-missing.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-29T02:17:33.012996Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5a888a6f8bab180217acbf9f9ac987aa8bf3cdfc",
+  "fixed_at": "2026-10-29T02:31:26Z",
   "github_issue_number": 6827,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6827",
   "last_seen_at": "2026-10-29T02:17:33.012996Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6831",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -126,9 +127,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\data-owner-backlog-20261106\\BUG-2123-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2123",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "5a888a6f8bab180217acbf9f9ac987aa8bf3cdfc",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-05T18:43:40.181899Z",
+      "mode": "read_only",
+      "observed_identity": "c03dcf1730a38787faccd777949daf5c65e813ec",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "5c43a2757d299076e78863eed2f5a4f120a8e29a89fcbd0fea2a70ed6f1206a6",
+      "receipt_sha256": "93dd066f00f0becc112648742d8ba0a1ad533fb3a2a857d20bc27ee240fb95dd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1a31f45e02234852edf3b09e1b476c66d44b31f7c092746d40d281c864b4a66c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -138,7 +162,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -147,6 +171,9 @@
     "fingerprint": "828d5c1449055be4663559d9",
     "source_event_id": "FE-20261029-828d5c144905"
   },
+  "validation_evidence": [
+    "2026-11-06: 正式 post-restart-verify 通过，运行 c03dcf1730a38787faccd777949daf5c65e813ec 包含该源码合入；18项精确回归通过，覆盖重试公平调度、IPO暖启动、NUMERIC NaN及历史证券前缀。11月5日daily_basic当前VALID，保留真实上游MISSING；无生产写库/采集/进程操作。"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

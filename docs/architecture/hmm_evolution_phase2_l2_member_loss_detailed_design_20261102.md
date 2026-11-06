@@ -1,6 +1,6 @@
 # 申万L2成员损失：单候选与配对控制详细设计
 
-> v1.1；2026-11-02；F2设计文档；父蓝图v3.00 §1.26/§7。状态：设计已随PR #7008合入；正在实施源码，正式研究尚未启动。文档合入不等同于训练完成。
+> v1.2；2026-11-06状态同步；F2设计文档；父蓝图§1.26/§1.27。状态：设计#7008及源码#7013均已合入，正式8/8 fits、125日完整预测与有界双入口完成。该研究有亏损排序增量，未证明经济增益；不重跑旧8-fit。§13保留合入前实施历史，当前终态见§14。
 > 2026-11-02接续授权：用户要求“执行文档的提交合入，开始下一步的实施”，本设计进入源码实施；实际源码、fit消耗、结果与生产状态分别记录，不将授权或文档合入记成训练完成。
 
 ## 1. Background / 目标和依据
@@ -103,8 +103,8 @@ F-011：目标、样本、预算及风险识别评价（D1/D2/D3/D5）；F-012�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-011 | backend/services/hmm_risk/risk_l2_member_loss.py：pair_target/training_rows/fit_pair/cohort_metrics/evaluate | backend/tests/hmm_risk/test_risk_l2_member_loss.py；18 passed；同mask/因果成熟/失败前置/配对分母直接测试；§13正式文件样本读回 | VERIFIED_SOURCE | 无 |
-| F-012 | 同service：FrozenMemberSource/provider_path/validate_model/infer_prepared | backend/tests/hmm_risk/test_risk_l2_member_loss.py：alias/停牌NA/无回退/旧schema拒绝/两个carrier；正式prepare_v2 identity与131目录读回；真实模型双入口仍属后续研究，未代报 | VERIFIED_SOURCE | 无 |
-| F-013 | 同service：execute_child/close_processes；scripts/hmm_risk/run_risk_l2_member_loss.py | backend/tests/hmm_risk/test_risk_l2_member_loss.py：封闭4模型、8-fit上限/失败不重试；python -m nox -s l0；§13分别列源码PR与0/8预算，不冒充研究完成 | VERIFIED_SOURCE | 无 |
+| F-012 | 同service：FrozenMemberSource/provider_path/validate_model/infer_prepared | backend/tests/hmm_risk/test_risk_l2_member_loss.py：alias/停牌NA/无回退/旧schema拒绝/两个carrier；§14实际131目录与有界双入口终态 | VERIFIED_SOURCE | 无 |
+| F-013 | 同service：execute_child/close_processes；scripts/hmm_risk/run_risk_l2_member_loss.py | backend/tests/hmm_risk/test_risk_l2_member_loss.py：封闭4模型、8-fit上限/失败不重试；python -m nox -s l0；§14正式8/8及结果，非生产采用 | VERIFIED_SOURCE | 无 |
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
@@ -134,6 +134,16 @@ C可能只是放大波动、无法由现有20D预测；行业级信号仍不能�
 
 正式文件prepare已在固定源码`016c47218b5a2f861edeb893815f931f35c27750`完成，准备包为`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/prepare_v2/prepared.json`，canonical SHA=`cb889ddc486ed4ebea6e9278423bcaaa87245b9ce80a3be64829b29b6ee9b574`，实际读取10,406个已钉住文件，数据库/数据集写入为0。两季度共同mask分别88,929行/714日、89,569行/715日。额外1个合法NA键均为`2026-01-12/801178.SI`：`603056.SH`在as-of 01-09只有日内停牌且收盘有效，正式reader保留该成员；01-12及01-26的必要端点为全天停牌NaN，故整个标签NA（缺失权重约2.3715%），不移除该股重归一化。先前scratch把日内停牌也当全天排除而得到42成员，正式reader为43成员；以原正式停牌语义为准，不要求数据窗口补造报价。
 
-最终审修将两个vintage完整输入/共同mask检查移至首个fit前，Q3错误不得先消耗Q2预算；之后封存4模型才读取评价结果。源码PR #7013已创建，正式研究消耗仍为0/8；有界真实双入口及效果评价须在模型产生后执行。本节不把代码测试、准备包或源码CI绿色当模型有效、生产加载或新QE_READY。
+合入前最终审修将两个vintage完整输入/共同mask检查移至首个fit前，Q3错误不得先消耗Q2预算；之后封存4模型才读取评价结果。当时源码PR #7013已创建，正式研究消耗为0/8；以下preflight及待运行表述均保留该历史时间点，当前终态见§14。
 
 固定源码`0b963509e`的正式CLI `preflight`已通过：`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/preflight_v1.json`，两个vintage的共同mask均完成前置验证；`fits=0`、`evaluation_outcomes_read=false`、`database_access=false`、`runtime_action=false`。源码PR后续文档状态提交不改变该preflight对应的实现，正式研究尚未启动。
+
+## 14. 已完成研究终态及新release任务边界
+
+#7013合入`2866c1bd02dd0aac0627245a854605fd02f83377`后，按固定源码完成双fresh-process共8次拟合，无重试，两process字节一致。完整125日×131行业=16,375行/臂，B/C共同mask分别88,929/714日和89,569/715日，scaler相同。评价15,063个标签可用、2个合法端点NA、1,310个未成熟；旧A/M0/M1和全部原资产未覆盖。
+
+真实新买同股票/同日期99日上，A/B/C日均亏损Rank IC分别0.038217/0.032329/0.078232，C−B=+0.045903；Q2/Q3增量分别+0.042852/+0.050044。C全期目标MSE skill约4.4198%。但高预测风险组仍约50.17%上涨，不能据此禁买、套1-p或声称收益已证明。完整结果：`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261102/result_summary_v1.md`；acceptance canonical=`ac7da595ce37ec827255c784d462069899c05337233c46ee82133a4bcefc6cf6`。结果在本次仅只读引用，不另建历史账本。
+
+2026-04-01/07-01各131行的历史文件/数据库快照双入口已验证，最大数值差约2.838e-10/2.202e-10，未实时查库。QE_READY=NOT_EVALUATED、economic_value_confirmed=false；未执行新QE任务或生产采用。原设计8-fit预算至此耗尽。
+
+用户2026-11-06批准执行[新release/Q4连续包](hmm_evolution_phase2_l2_member_release_q4_detailed_design_20261106.md)：仅新增Q4 B/C×双process共4-fit，不改变本合同的旧训练/模型/结果身份。新release推断已真实重新读取输入，未将旧prepared/hash换绑；正式20D预检、旧季度四次零fit重推及新Q4 4/4 fits均已完成，各臂17日×131完整可用，预算耗尽。原C-013边界后的分类仅显式使用同release共享membership/code map，没有改变本研究训练分类或资产。新数据全行业125日C−B Rank IC=+0.068984，与本节原真实新买99日口径不同；Q4只有7个成熟日、C−B=−0.003366，另10日未成熟。随后零fit接续重核固定新买队列，主口径99日仍+0.045903，未把数据更新称为模型提升；142日C文件已交付，9/30和10/08两个decision完成真实DB/文件有界核验。机制诊断控制原AF后三seed增量并非全部正，经济采用仍未评估。10/29完成审计已由HMM复验PASS，当前forward分类时效仍待闭合；不把历史current-revision或文件研究分类冒充在线就绪。完整新结果及指针只引用新设计§11.1，不覆盖本节旧终态或要求重跑旧8-fit。

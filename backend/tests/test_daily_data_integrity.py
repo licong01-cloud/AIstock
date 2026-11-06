@@ -13,6 +13,30 @@ from backend.services.data_integrity.provider import provider_scan, verify_scan
 from backend.services.tushare_dataset_specs import DAILY_BASIC, DIVIDEND
 
 
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("bad_price", [None, float("nan"), 0, -1, float("inf"), 10])
+def test_stk_limit_validation_retains_physical_count_without_hiding_price_gaps(monkeypatch, bad_price, missing):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation, RULE_VERSION, SCOPE_VERSION
+    day = date(2026, 11, 5)
+    def read(_conn, query, _params=()):
+        if isinstance(query, str) and "dataset='kline_daily_raw'" in query:
+            return [{"data_revision": 1, "validated_revision": 1, "validation_status": "VALID",
+                     "validation_id": "daily-valid", "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION}]
+        return [{"ts_code": "000001.SZ", "pre_close": 10, "up_limit": 11, "down_limit": 9},
+                {"ts_code": "000002.SZ", "pre_close": bad_price, "up_limit": 11, "down_limit": 9}]
+    monkeypatch.setattr(validation, "rows", read)
+    validator = validation.PhysicalValidator()
+    monkeypatch.setattr(validator, "_traded", lambda *_: ["000001.SZ", "000002.SZ"] + (["000003.SZ"] if missing else []))
+    result = validator.validate(None, Obligation("stk_limit", "daily_series", "09:10"), day, 1)
+    assert result.checks["physical_rows"] == 2
+    invalid = bad_price != 10
+    assert result.state == (PartitionState.INCOMPLETE if missing or invalid else PartitionState.VALID)
+    assert result.counts[0].missing == int(missing) and result.counts[0].invalid == int(invalid)
+    assert {gap["classification"] for gap in result.gaps} == (
+        ({"MISSING"} if missing else set()) | ({"INVALID"} if invalid else set()))
+
+
 def test_history_validation_backoff_is_bounded_and_recent_data_stays_fast():
     from backend.services.data_integrity.repository import validation_retry_minutes
     today = date(2026, 11, 5)

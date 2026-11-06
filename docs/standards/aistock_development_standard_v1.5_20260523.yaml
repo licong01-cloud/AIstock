@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 3ef873d84b2c5b72accb2bd576a17e37daa6735e505e07e7529996e0518236ee
+source_sha256: 813f916fdee70595ed22cb65964ba3f94815203cb6203aeca7030d5b5f9ddbdb
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-10-08"
@@ -10,6 +10,16 @@ rule_sync_policy:
   requirement: Every enabled machine rule references a stable section in the sole human-readable standard.
   source_digest_required: true
   archive_directory: docs/standards/archive
+agent_execution_defaults:
+  standard_refs:
+    - docs/standards/aistock_development_standard_v1.5_20260523.md#rule-doc-minimum-001
+    - docs/standards/aistock_development_standard_v1.5_20260523.md#rule-auto-review-delivery-001
+  extra_narrative_files: 0
+  review_executor: active_agent
+  source_delivery:
+    enabled: true
+    authorization_ref: "用户批准统一实施计划：最小文档、自动多轮审核修复和授权源码交付（2026-11-06）"
+  task_restrictions_override_defaults: true
 control_taxonomy:
   effects:
     block: Blocks only the declared enforcement phase when the control applies.

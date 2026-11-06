@@ -1365,6 +1365,135 @@ def test_query_tushare_dataapi_returns_rows_and_genuine_empty(monkeypatch):
     assert sync_engine._query_tushare_dataapi("sw_daily", {}, "ts_code,close", token="t") == []
 
 
+@pytest.mark.parametrize("body", [
+    [], {"code": False, "data": {"fields": [], "items": []}},
+    {"code": 0}, {"code": 0, "data": None}, {"code": 0, "data": {}},
+    {"code": 0, "data": {"fields": [], "items": None}},
+    {"code": 0, "data": {"fields": None, "items": []}},
+])
+def test_contract_drift_is_not_a_successful_empty_sparse_partition(monkeypatch, body):
+    response = SimpleNamespace(status_code=200, json=lambda: body)
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: response)
+    with pytest.raises(sync_engine.TushareHttpError):
+        sync_engine._query_tushare_dataapi("suspend_d", {}, "ts_code,trade_date", token="t")
+
+
+@pytest.mark.parametrize("columns,item", [
+    (["ts_code", "out_date"], ["000001.SZ"]),
+    (["ts_code", "out_date"], ["000001.SZ", None, "discarded"]),
+    (["ts_code", "ts_code"], ["000001.SZ", "000002.SZ"]),
+    (["ts_code", None], ["000001.SZ", None]),
+    ("ts_code", ["000001.SZ"]),
+])
+def test_contract_drift_rejects_malformed_rows_for_all_shared_apis(monkeypatch, columns, item):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [item]}}))
+    with pytest.raises(sync_engine.TushareHttpError):
+        sync_engine._query_tushare_dataapi("index_member_all", {}, "ts_code,out_date", token="t")
+
+
+def test_contract_drift_rejects_omitted_membership_out_date_not_explicit_null(monkeypatch):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": ["ts_code"], "items": [["000001.SZ"]]}}))
+    with pytest.raises(sync_engine.TushareHttpError):
+        sync_engine._query_tushare_dataapi("index_member_all", {}, "ts_code,out_date", token="t")
+
+
+def test_contract_drift_preserves_explicit_null_and_reordered_added_fields(monkeypatch):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": ["out_date", "new_field", "ts_code"],
+                                  "items": [[None, 12, "000001.SZ"]]}}))
+    assert sync_engine._query_tushare_dataapi("index_member_all", {}, "ts_code,out_date", token="t") == [
+        {"ts_code": "000001.SZ", "out_date": None, "new_field": 12}]
+
+
+def test_stock_st_requests_only_published_snapshot_keys_and_preserves_legacy_columns(monkeypatch):
+    spec = DATASET_REGISTRY["stock_st"]
+    assert spec.columns == {"ann_date": "date", "ts_code": "text"}
+    assert spec.api_field_map == {"ann_date": "trade_date"}
+    assert spec.date_column == "ann_date"
+    conn = _FakeConn()
+    statements = []
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _, sql, values, **kwargs:
+                        statements.append((sql, values)) or [])
+    TushareSyncEngine()._upsert_batch(conn, spec, [{"ann_date": "20261030", "ts_code": "000001.SZ"}])
+    sql, values = statements[0]
+    assert "ON CONFLICT (ts_code, ann_date) DO NOTHING" in sql
+    assert all(column not in sql for column in ("start_date", "end_date", "market=", "exchange"))
+    assert values == [(dt.date(2026, 10, 30), "000001.SZ")]
+
+
+def test_legacy_stock_st_entrypoint_delegates_the_same_source_and_write_contract(monkeypatch):
+    from scripts import ingest_tushare_stock_st as legacy
+
+    fetched, written = [], []
+    day = dt.date(2026, 10, 30)
+    rows = [{"ts_code": "000001.SZ", "ann_date": "20261030"}]
+    monkeypatch.setattr(TushareSyncEngine, "_fetch_from_tushare",
+                        lambda self, spec, params: fetched.append((spec, params)) or rows)
+    monkeypatch.setattr(TushareSyncEngine, "_upsert_batch",
+                        lambda self, conn, spec, batch: written.append((spec, batch)) or len(batch))
+    assert legacy._fetch_stock_st_for_date(None, day) == rows
+    assert legacy._upsert_stock_st(_FakeConn(), rows) == 1
+    assert fetched == [(DATASET_REGISTRY["stock_st"], {"trade_date": "20261030"})]
+    assert written == [(DATASET_REGISTRY["stock_st"], rows)]
+
+
+def test_contract_drift_failure_never_writes_or_publishes_sparse_success(monkeypatch):
+    engine = TushareSyncEngine()
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sync_engine, "get_limiter", lambda *_: SimpleNamespace(acquire=lambda: None))
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(200, {"code": 0, "data": None}))
+    day = dt.date(2026, 10, 30)
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_upsert_sync_target", lambda *_, **__: None)
+    monkeypatch.setattr(engine, "_log", lambda *_, **__: None)
+    monkeypatch.setattr(engine, "_update_progress", lambda *_, **__: None)
+    writes, successes, failures = [], [], []
+    monkeypatch.setattr(engine, "_replace_date_batch", lambda *args: writes.append(args) or 0)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda *args: writes.append(args) or 0)
+    engine._refresh_audit = SimpleNamespace(record_success=lambda **kwargs: successes.append(kwargs),
+                                           record_failure=lambda **kwargs: failures.append(kwargs))
+    result = engine._sync_by_date(_FakeConn(), SUSPEND_D, day, day, uuid.uuid4())
+    assert result.failed_batches == 1 and not result.ok
+    assert not writes and not successes
+    assert len(failures) == 1
+
+
+def test_financial_native_http_failure_is_not_a_successful_empty_period(monkeypatch):
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(503, text="Bad Gateway"))
+    with pytest.raises(sync_engine.TushareHttpError, match="HTTP 503"):
+        raw_sync_module.fetch_period_rows(None, raw_sync_module.DATASET_CONFIGS["forecast"], period="20260930")
+
+
+def test_financial_default_service_does_not_open_database_after_http_failure(monkeypatch):
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(429, text="rate limited"))
+    opened = []
+    monkeypatch.setattr(raw_sync_module, "get_conn", lambda **kwargs: opened.append(kwargs))
+    with pytest.raises(sync_engine.TushareHttpError, match="HTTP 429"):
+        raw_sync_module.TushareEventRawSyncService().sync_period("forecast", period="20260930", ensure_schema=False)
+    assert not opened
+
+
+def test_financial_native_http_keeps_explicit_null_and_true_empty(monkeypatch):
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    payloads = iter([
+        {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "eps"],
+                              "items": [["000001.SZ", "20261030", "20260930", None]]}},
+        {"code": 0, "data": {"fields": [], "items": []}},
+    ])
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(200, next(payloads)))
+    config = raw_sync_module.DATASET_CONFIGS["fina_indicator"]
+    _, params, rows = raw_sync_module.fetch_period_rows(None, config, period="20260930",
+                                      fields=["ts_code", "ann_date", "end_date", "eps"])
+    assert params == {"period": "20260930", "fields": "ts_code,ann_date,end_date,eps"}
+    assert rows[0]["eps"] is None
+    assert raw_sync_module.fetch_period_rows(None, config, period="20260930")[2] == []
+
+
 @pytest.mark.parametrize("missing", ["dv_ratio", "dv_ttm", "turnover_rate_f"])
 def test_daily_basic_rejects_missing_requested_field_before_null_normalization(monkeypatch, missing):
     requested = ["ts_code", "trade_date", "dv_ratio", "dv_ttm", "turnover_rate_f"]
@@ -1658,9 +1787,11 @@ def test_fetch_from_tushare_retries_after_http_error_then_succeeds(monkeypatch):
         calls.append(url)
         if len(calls) < 3:
             return _FakeHttpResponse(429, text="Too Many Requests")
+        columns = payload["fields"].split(",")
+        row = {"l2_code": "801767.SI", "ts_code": "000406.SZ"}
         return _FakeHttpResponse(
             200,
-            {"code": 0, "data": {"fields": ["l2_code", "ts_code"], "items": [["801767.SI", "000406.SZ"]]}},
+            {"code": 0, "data": {"fields": columns, "items": [[row.get(column) for column in columns]]}},
         )
 
     monkeypatch.setattr(sync_engine, "_http_post", _flaky)

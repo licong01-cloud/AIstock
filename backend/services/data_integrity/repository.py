@@ -83,7 +83,9 @@ def enqueue_validation(conn, dataset: str, day: date, *, source_completed: bool 
               AND (validated_revision IS DISTINCT FROM data_revision OR validation_status NOT IN ('VALID','NOT_APPLICABLE')
                    OR scope_version IS DISTINCT FROM %s OR rule_version IS DISTINCT FROM %s
                    OR (dataset=ANY(%s) AND validation_status='VALID'
-                       AND metadata#>>'{validation,checks,coverage_basis}' IS DISTINCT FROM %s))
+                       AND metadata#>>'{validation,checks,coverage_basis}' IS DISTINCT FROM %s)
+                   OR (dataset='stk_limit' AND validation_status='VALID' AND row_count=0 AND expected_rows>0
+                       AND metadata#>>'{validation,checks,physical_rows}' IS NULL))
             ON CONFLICT (dataset,data_source,target_key_sha256) DO UPDATE SET
                 metadata=CASE WHEN %s OR t.metadata->>'desired_scope' IS DISTINCT FROM EXCLUDED.metadata->>'desired_scope'
                     OR t.metadata->>'desired_rule' IS DISTINCT FROM EXCLUDED.metadata->>'desired_rule'

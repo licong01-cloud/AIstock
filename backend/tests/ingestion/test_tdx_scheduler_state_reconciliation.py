@@ -125,6 +125,7 @@ def test_alert_recovery_cannot_acknowledge_partition_changed_since_readback(monk
 
 def test_existing_final_sweep_reclassifies_old_provider_alert_without_refetch():
     scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._reconcile_recovered_schedule_states = lambda: None
     queries, alerts = [], []
     target = {"dataset": "bak_basic", "target_id": "expired", "target_date": dt.date(2026, 10, 27),
               "data_source": "tushare", "target_status": "final_blocked"}
@@ -1036,6 +1037,7 @@ def test_orphan_go_reconciliation_has_bounded_refresh_budget(monkeypatch):
 
 def test_final_target_recovery_sweep_repairs_historical_recovered_family(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._reconcile_recovered_schedule_states = lambda: None
     calls = []
     fixed_now = dt.datetime(2026, 7, 17, 2, 0, tzinfo=dt.timezone.utc)
     monkeypatch.setattr(scheduler_module, "_now", lambda: fixed_now)
@@ -1069,6 +1071,46 @@ def test_final_target_recovery_sweep_repairs_historical_recovered_family(monkeyp
         }
     ]
     assert scheduler._reconcile_recovered_final_targets() == []
+
+
+def test_final_recovery_sweep_repairs_schedule_even_when_targets_already_reconciled(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc))
+    scheduler._fetchall = lambda *_: []  # no final targets remain after recovery
+    scheduler._reconcile_recovered_schedule_states = lambda: calls.append("schedule_projection")
+    assert scheduler._reconcile_recovered_final_targets() == []
+    assert calls == ["schedule_projection"]
+    scheduler._reconcile_recovered_final_targets()
+    assert calls == ["schedule_projection"]  # reuse the existing ten-minute sweep
+
+
+def test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._execute = lambda query, params=(): queries.append((query, params))
+    scheduler._reconcile_recovered_schedule_states()
+    query, _params = queries[0]
+    assert "LIMIT 100" in query and "SKIP LOCKED" in query
+    assert "data_revision=p.validated_revision" in query
+    assert "p.refreshed_at>=s.updated_at" not in query
+    assert "j.finished_at>p.refreshed_at" in query
+    assert "s.last_status IN ('failed','delayed')" in query
+    assert "s.last_run_at AT TIME ZONE 'Asia/Shanghai'" in query
+    assert "UPDATE market.ingestion_jobs" not in query and "market.kline" not in query
+
+
+def test_schedule_projection_error_is_visible_and_does_not_stop_other_recovery(monkeypatch, caplog):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    reads = []
+    scheduler._fetchall = lambda query, params=(): reads.append(query) or []
+    def fail():
+        raise RuntimeError("DEV injected projection error")
+    scheduler._reconcile_recovered_schedule_states = fail
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc))
+    assert scheduler._reconcile_recovered_final_targets() == []
+    assert len(reads) == 1 and "final_blocked" in reads[0]
+    assert "DEV injected projection error" in caplog.text
 
 
 def test_recent_submission_keeps_running_job_visible_outside_recent_window():

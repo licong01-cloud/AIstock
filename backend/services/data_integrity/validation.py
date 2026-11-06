@@ -294,7 +294,7 @@ class PhysicalValidator:
                 count = CheckCounts("traded_equity_limit", len(set(expected)), len(set(expected))-len(invalid)-missing, 0,
                                     missing, len(invalid), 0)
                 return ValidationResult(PartitionState.VALID if count.complete else PartitionState.INCOMPLETE,
-                    (count,), {"price_contract": "source_reference_and_limits_no_estimation"},
+                    (count,), {**result.checks, "price_contract": "source_reference_and_limits_no_estimation"},
                     result.gaps+(({"classification": "INVALID", "symbols": invalid},) if invalid else ()))
             if dataset == "moneyflow_ts":
                 from backend.data_service.moneyflow_contract import TUSHARE_MONEYFLOW_AMOUNT_COLUMNS, TUSHARE_MONEYFLOW_VOLUME_COLUMNS
@@ -398,6 +398,17 @@ class PhysicalValidator:
             complete_scan = CheckCounts("completed_provider_scan", 1, 1, 0, 0, 0, 0)
             checks = {"provider": source["data_source"], "scan_sha256": scan["scan_sha256"],
                       "physical_rows": len(actual), "as_of_policy": "CURRENT_SOURCE_NOT_HISTORICAL_VINTAGE"}
+            if dataset in {"vix_index", "stock_daily_afterhours"}:
+                from ..tushare_supplemental_inputs import normalize_rows
+                try:
+                    normalize_rows(spec, actual)
+                except ValueError as exc:
+                    return ValidationResult(PartitionState.INCOMPLETE, (check,), checks, reason=str(exc))
+                checks.update(required_for_daily_complete=False,
+                              nullable_value_count=sum(value is None for row in actual for value in row.values()))
+                if dataset == "vix_index":
+                    checks["session_calendar_completeness"] = "NOT_EVALUATED"
+                    checks["scope"] = "completed_provider_query_returned_facts_only"
             if dataset == "index_daily":
                 quotes = index_quote_result({entry["key"][0] for entry in scan["entries"]},
                     {str(r["ts_code"]).strip(): r for r in actual})

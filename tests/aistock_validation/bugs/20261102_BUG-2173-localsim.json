@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2173",
-  "closed_at": null,
+  "closed_at": "2026-11-05T16:15:41.109460Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -16,10 +16,10 @@
   "created_at": "2026-11-02T03:01:22.671721Z",
   "description": "summary调用_pnl时丢弃missing_dates；现有前端已支持显示缺失日期但收不到。",
   "design_compliance": {
-    "no_simplified_delivery": "账户概览完整传递现行收益校验得到的缺失估值日期，不替换为静态说明。",
-    "no_silent_error": "保留部分数据、警告和收益未知，不补收盘估值、期初资金或交易流水。",
     "no_business_semantic_drift": "只传递已计算日期，不改费用、选股、撮合、账户、持仓、资金、账本和旧研究。",
-    "no_new_approval_or_gate": "不增加业务参数、审批或门禁，后端仍由用户重启。"
+    "no_new_approval_or_gate": "不增加业务参数、审批或门禁，后端仍由用户重启。",
+    "no_silent_error": "保留部分数据、警告和收益未知，不补收盘估值、期初资金或交易流水。",
+    "no_simplified_delivery": "账户概览完整传递现行收益校验得到的缺失估值日期，不替换为静态说明。"
   },
   "events": [
     {
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-11-02T03:01:22.671721Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "343882919c0d9fd3fd35c3fc637896052e252268",
+  "fixed_at": "2026-11-02T03:24:11Z",
   "github_issue_number": 7011,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7011",
   "last_seen_at": "2026-11-02T03:01:22.671721Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7012",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,9 +135,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/localsim-yesterday-audit-20261106-r1/post-restart-verify-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2173",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "343882919c0d9fd3fd35c3fc637896052e252268",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-05T16:06:45.700964Z",
+      "mode": "read_only",
+      "observed_identity": "8b1d8cd0ed8d15a2fed217b0cc2cff089b1a907a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "68f3166d50257810e5969e7a73e94299c8c3ffac07b972e37c788b7ad23977bb",
+      "receipt_sha256": "357d952a2ae91c6d445e41b5888f58aed550eb6e431c6b4eea7941d4ee2654f5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7bbf3d923dee5e90eec0ab5fa0a4267e4869cad7c52864bed9f56953c27af4dd",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -146,7 +170,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2173",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "36198654e134218a",
+    "recorded_at": "2026-11-02T03:25:03.659601Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1a48afc15b1aab0f64cd9233c13cea9fbc2d5827",
+    "source_merge_commit": "343882919c0d9fd3fd35c3fc637896052e252268",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7012",
+    "validation_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -q -> passed (72 tests; source pins unchanged)",
+      "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench.py tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json -> passed (0 blocking)",
+      "git diff --check -> passed (three-file scope, three sequential same-agent reviews)"
+    ],
+    "validation_evidence_digest": "fea9005cb9df9faf7a91bee82843c277dec3b0986f773d4c6c0bf842eb6da131"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -155,6 +202,12 @@
     "fingerprint": "c32d3de796ddc41460718e51",
     "source_event_id": "FE-20261102-c32d3de796dd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -q -> passed (72 tests; source pins unchanged)",
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench.py tests/aistock_validation/bugs/20261102_BUG-2173-localsim.json -> passed (0 blocking)",
+    "git diff --check -> passed (three-file scope, three sequential same-agent reviews)",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2173 --target backend-main --expected-identity 343882919c0d9fd3fd35c3fc637896052e252268 -> passed (loaded 8b1d8cd0; complete digest-bound identity and business-smoke receipt)"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],

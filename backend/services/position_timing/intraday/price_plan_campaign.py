@@ -19,6 +19,7 @@ from backend.services.strategy_package.manifest import compute_manifest_json_sha
 
 from .contracts import CHINA, Contract, canonical, digest, payload
 from .price_plans import PricePlanPolicy, PriceReference, build_price_plan
+from .period_context import PREFLIGHT_SCHEMA, load_period_context
 from .replay import FileRef
 from .research import freeze
 from .research_inputs import CandidateReader, checked_file
@@ -39,7 +40,8 @@ def _json(ref: FileRef):
 
 def implementation_identity():
     root = Path(__file__).resolve().parents[4]
-    names = ["price_plans.py", "price_plan_campaign.py", "contracts.py", "research_inputs.py"]
+    names = ["price_plans.py", "price_plan_campaign.py", "period_context.py", "contracts.py", "research_inputs.py",
+             "inputs.py", "research.py", "replay.py", "store.py"]
     paths = [Path(__file__).parent / n for n in names] + [root / n for n in (
         "backend/data_service/frozen_dataset.py", "backend/services/strategy_package/manifest.py")]
     return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest() for p in paths}
@@ -47,9 +49,13 @@ def implementation_identity():
 
 def _context(spec):
     preflight = _json(spec.preflight)
-    if preflight.get("schema_version") != "localsim_timing_campaign_preflight_v1":
+    period, period_refs = None, []
+    if preflight.get("schema_version") == PREFLIGHT_SCHEMA:
+        _, _, _, period_refs = load_period_context(spec.preflight)
+        period = preflight
+    elif preflight.get("schema_version") != "localsim_timing_campaign_preflight_v1":
         raise IntradayError("PRICE_PLAN_PREFLIGHT_SCHEMA_INVALID", 422)
-    refs = [spec.preflight, spec.templates_schema, spec.event_schema]
+    refs = [spec.preflight, spec.templates_schema, spec.event_schema, *period_refs]
     refs += [FileRef.model_validate(v) for v in preflight["inputs"].values()]
     inventory_ref = FileRef.model_validate(preflight["selection_inventory"])
     refs.append(inventory_ref)
@@ -65,8 +71,17 @@ def _context(spec):
     for ref in refs:
         checked_file(ref)
     reader = CandidateReader(FileRef.model_validate(preflight["inputs"]["candidate_manifest"]))
+    try:
+        return _selection_context(spec, preflight, refs, inventory, reader, period)
+    except BaseException:
+        reader.close()
+        raise
+
+
+def _selection_context(spec, preflight, refs, inventory, reader, period):
     calendar = [str(d.date()) for d in reader.calendar("day")]
-    days = [d for d in calendar if preflight["start_trade_date"] <= d <= preflight["candidate_end_trade_date"]]
+    end = period["trade_dates"][-1] if period else preflight["candidate_end_trade_date"]
+    days = [d for d in calendar if preflight["start_trade_date"] <= d <= end]
     if not days or [r["trade_date"] for r in inventory["days"]] != days or inventory["expected_trade_days"] != len(days):
         raise IntradayError("PRICE_PLAN_DAY_POPULATION_CONFLICT", 422)
     selected = []
@@ -91,7 +106,7 @@ def _context(spec):
         selected.append((day, {t["symbol"] for t in targets}))
     validators = [Draft202012Validator(_json(ref), format_checker=FormatChecker())
                   for ref in (spec.templates_schema, spec.event_schema)]
-    return preflight, refs, reader, selected, validators
+    return preflight, refs, reader, selected, validators, period
 
 
 class _References:
@@ -134,8 +149,17 @@ class _References:
 
 
 def build(spec: CampaignPriceSpec, timing_root, *, verify_only=False):
-    preflight, refs, reader, selected, validators = _context(spec)
-    symbols = set().union(*(targets for _, targets in selected))
+    context = _context(spec)
+    try:
+        return _build(spec, timing_root, verify_only, context)
+    finally:
+        context[2].close()
+
+
+def _build(spec, timing_root, verify_only, context):
+    preflight, refs, reader, selected, validators, period = context
+    historical = set(period["historical_sell_symbols"]) if period else set()
+    symbols = historical | set().union(*(targets for _, targets in selected))
     book = _References(reader, symbols)
     source = implementation_identity()
     identity = digest({"spec": spec, "implementation": source, "components": reader.pins, "missing": book.missing})
@@ -150,7 +174,7 @@ def build(spec: CampaignPriceSpec, timing_root, *, verify_only=False):
             return ref
         return freeze(path, value)
 
-    days, unknown, seen, counts = [], [], set(), Counter()
+    days, unknown, seen, counts = [], [], set(historical), Counter()
     for day, targets in selected:
         seen.update(targets)
         events = []
@@ -178,12 +202,16 @@ def build(spec: CampaignPriceSpec, timing_root, *, verify_only=False):
              "source_files": refs, "candidate_components": reader.pins, "missing_reference_components": book.missing,
              "unknown_references": unknown, "counts": dict(counts), "stock_count": len(symbols), "trade_day_count": len(days),
              "outcomes_read": False}
+    period_binding = ({"period_preparation": period["preparation_request"],
+                       "opening_accounts": period["initial_accounts"], "historical_sell_symbols": sorted(historical)}
+                      if period else {})
+    audit.update(period_binding)
     audit_ref = emit("reference_audit.json", audit)
     policy = {**payload(spec.policy), "producer_source_commit": spec.producer_source_commit, "implementation": source,
               "package_manifest_sha256": preflight["manifest_sha256"],
               "candidate_manifest_sha256": preflight["inputs"]["candidate_manifest"]["sha256"],
               "selection_inventory_sha256": preflight["selection_inventory"]["sha256"], "preflight": spec.preflight,
-              "start_trade_date": preflight["start_trade_date"], "end_trade_date": preflight["candidate_end_trade_date"],
+              "start_trade_date": selected[0][0], "end_trade_date": selected[-1][0],
               "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP", "reference_audit": audit_ref, "source_files": refs,
               "applicability_statement": "Independent research extension of the predeclared 0.5% engineering formula to the frozen LGBM12 population; not a native model prediction, optimal threshold, or production default.",
               "reference": "D raw prev_close field; no forward fill, native target reference substitution, OHLC or return selection",
@@ -194,6 +222,9 @@ def build(spec: CampaignPriceSpec, timing_root, *, verify_only=False):
               "population": "Current targets BUY; all targets observed through D SELL; no prior-only BUY or account holdings assertion",
               "unknown_contract": "NONE with empty intervals; typed reasons in reference_audit; C1 unavailable, B0/C2 retain legal NONE",
               "inference": "EXPLORATORY_NO_ECONOMIC_CONFIRMATION", "original_288_modified": False}
+    policy.update(period_binding)
+    if period:
+        policy["population"] = "Current targets BUY; inherited opening holdings and targets observed through D SELL; no prior-only BUY or future-target use"
     policy_ref = emit("policy_document.json", policy)
     templates = {"schema_version": "localsim_timing_campaign_price_templates_v1",
                  "producer_source_commit": spec.producer_source_commit,

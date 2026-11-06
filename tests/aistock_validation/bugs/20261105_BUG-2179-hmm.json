@@ -1,0 +1,274 @@
+{
+  "actual": "10月scale=1，9月scale=0.9784479330245184；忽略9月编码后12.75在错误区间之外。",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+    "tests/aistock_validation/bugs/20261105_BUG-2179-hmm.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2179",
+  "closed_at": "2026-11-06T02:21:43Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-05T18:33:03.273233Z",
+  "description": "10月scale=1，9月scale=0.9784479330245184；忽略9月编码后12.75在错误区间之外。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261105-c7125963cb7f",
+      "timestamp": "2026-11-05T18:33:03.273215Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/price_context_diagnosis_v1.json"
+  ],
+  "expected": "显式验证所有适用历史前缀重编码，逐层精确反演float32后唯一恢复原始整数厘；当前月scale=1不丢弃祖先编码；来源冲突/真实不可恢复仍fail closed。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2179-hmm.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261105_BUG-2179-hmm.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ]
+  },
+  "first_seen_at": "2026-11-05T18:33:03.273233Z",
+  "fix_branch": null,
+  "fix_commit": "d6d4b01a3b0784e695bfcf7c24fe57acca757c40",
+  "fixed_at": "2026-11-06T02:21:43Z",
+  "github_issue_number": 7039,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7039",
+  "last_seen_at": "2026-11-05T18:33:03.273233Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7049",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "HMM prepare_v3 at HEAD 119bdf2438c5ff81656ba10dd21e1b777575041c; zero-fit price_context_diagnosis_v1.json",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2179",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e564154259a675da",
+    "recorded_at": "2026-11-06T02:23:46.750730Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+    "source_merge_commit": "d6d4b01a3b0784e695bfcf7c24fe57acca757c40",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7049",
+    "validation_evidence": [
+      "rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py::test_qlib_encoding_no_append_instrument_inherits_only_identical_files backend/tests/hmm_risk/test_rotation_l1_input_bundle.py::test_qlib_monthly_encoding_preserves_ancestor_casts_and_append_boundaries backend/tests/hmm_risk/test_rotation_l1_input_bundle.py::test_qlib_encoding_amended_identity_target_cannot_use_ancestor_cast -q -> 5 passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+      "python -m nox -s l0 -> passed: 0 findings at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+      "rtk ruff check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -> passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+      "python -m py_compile backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -> passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+      "git diff --check -> passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d"
+    ],
+    "validation_evidence_digest": "77f69338cfc26fdda46ac6d1db1ef67364142cad1962b503d891011130e5b9a1"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM月更价格解码遗漏继承的复权前缀编码链",
+  "trigger_condition": {
+    "fingerprint": "c7125963cb7f7090906ac12e",
+    "source_event_id": "FE-20261105-c7125963cb7f"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py::test_qlib_encoding_no_append_instrument_inherits_only_identical_files backend/tests/hmm_risk/test_rotation_l1_input_bundle.py::test_qlib_monthly_encoding_preserves_ancestor_casts_and_append_boundaries backend/tests/hmm_risk/test_rotation_l1_input_bundle.py::test_qlib_encoding_amended_identity_target_cannot_use_ancestor_cast -q -> 5 passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+    "python -m nox -s l0 -> passed: 0 findings at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+    "rtk ruff check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -> passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+    "python -m py_compile backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -> passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d",
+    "git diff --check -> passed at fe7b3ec29a1f19ef1b939d320d406a76cbc97b3d"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

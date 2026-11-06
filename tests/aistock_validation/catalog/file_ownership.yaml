@@ -158,6 +158,9 @@ rules:
       - scripts/advisory_lstm_frozen_specialist_stress.py
       - scripts/advisory_lstm_factor_information.py
       - scripts/advisory_lstm_factor_nonlinear.py
+      - scripts/advisory_lstm_pool_relation.py
+      - scripts/advisory_lstm_frozen_representation.py
+      - scripts/advisory_lstm_linear_rank_replay.py
       - scripts/advisory_lstm_prospective_confirmation.py
       - scripts/advisory_lstm_top10_business_review.py
       - scripts/advisory_model_prepare_request.py
@@ -351,6 +354,22 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: Optional frozen loss relative allocation with shared absolute target orders and strict B-star reference identity uses the existing QE direct validation lane.
+  - rule_id: qe_trend_natural_entry_consumer
+    priority: 127
+    include:
+      - backend/services/quantevolver/trend_entry_consumer.py
+      - scripts/qe_trend_entry_admission.py
+      - scripts/qe_trend_entry_strategy.py
+      - scripts/qe_build_frozen_trend_entry.py
+      - backend/tests/quantevolver/test_trend_entry_consumer.py
+      - backend/tests/quantevolver/test_trend_entry_reuse_contract.py
+      - backend/tests/unified_engine/test_qe_trend_entry_strategy.py
+      - docs/architecture/qe_l7_natural_entry_consumer_design_20261106.md
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.archive]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Optional post-decision natural-entry qualification preserves original sells, slot thresholds and budgets; direct QE tests and real Qlib worker validation cover the consumer independently of API activation.
   - rule_id: qe_stock_probability_entry_consumer
     priority: 126
     include:
@@ -1433,6 +1452,10 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - backend/services/tushare_supplemental_inputs.py
+      - backend/db/migrations/add_tushare_phase1_inputs_v1.sql
+      - backend/tests/test_tushare_phase1_inputs.py
+      - scripts/validate_tushare_phase1_inputs.py
       - scripts/repair_stk_limit_pre_close.py
       - backend/tests/scripts/test_repair_stk_limit_pre_close.py
       - backend/services/adj_factor_history_reconciler.py

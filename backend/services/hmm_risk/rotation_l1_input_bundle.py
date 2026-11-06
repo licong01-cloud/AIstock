@@ -924,7 +924,7 @@ def _raw_qlib_price(value: float, factor_bounds: tuple[float, float]) -> float:
     return first / 1000
 
 
-def _float32_rebase_predecessors(value: float, scale: float) -> tuple[float, ...]:
+def _float32_rebase_predecessors(value: float, scale: float, *, allow_empty: bool = False) -> tuple[float, ...]:
     """Invert the writer's float64 multiply / float32 cast, not price rounding."""
     if not math.isfinite(scale) or scale <= 0:
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix scale must be finite and positive")
@@ -943,17 +943,28 @@ def _float32_rebase_predecessors(value: float, scale: float) -> tuple[float, ...
         if float(item) > 0 and np.float32(float(item) * scale) == np.float32(value):
             result.append(float(item))
         item = np.nextafter(item, np.float32(np.inf))
-    if not result:
+    if not result and not allow_empty:
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix has no exact serialization predecessor")
     return tuple(result)
 
 
-def _raw_rebased_qlib_price(value: float, factor: float, scale: float) -> float:
+def _raw_rebased_qlib_price(value: float, factor: float, scale: float | tuple[float, ...]) -> float:
     """Union ALL possible old float32 encodings; never select the nearest one."""
+    scales = scale if isinstance(scale, tuple) else (scale,)
+
+    def predecessors(item):
+        values = {item}
+        for step in scales:
+            values = {old for v in values for old in _float32_rebase_predecessors(v, step, allow_empty=True)}
+        if not values:
+            raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix chain has no exact serialization predecessor")
+        return values
+
+    prices, factors = predecessors(value), predecessors(factor)
     candidates: set[int] = set()
-    for old_price in _float32_rebase_predecessors(value, scale):
+    for old_price in prices:
         pl, pu = _float32_source_interval(old_price)
-        for old_factor in _float32_rebase_predecessors(factor, scale):
+        for old_factor in factors:
             fl, fu = _float32_source_interval(old_factor)
             lower = math.nextafter(math.nextafter(pl / fu, -math.inf) * 1000, -math.inf)
             upper = math.nextafter(math.nextafter(pu / fl, math.inf) * 1000, math.inf)
@@ -973,32 +984,58 @@ def _raw_rebased_qlib_price(value: float, factor: float, scale: float) -> float:
 class _QlibPriceEncoding:
     """Per-read provenance for the native monthly prefix serialization.
 
-    Paths in writer receipts are historical locators, NEVER input fallbacks.
-    Only current-release, manifest-pinned files can supply a scale. No process
-    global cache survives a release change. Direct exports retain single-cast
-    decoding; appended rows are not treated as twice-rounded prefixes.
+    Old releases supply authenticated encoding METADATA only, never old prices.
+    A pinned writer locator identifies an exact sibling release, portable across
+    node-local stores; its canonical manifest must match before metadata is used.
+    Each intermediate float32 cast is preserved, including through scale=1 months.
     """
 
-    def __init__(self, qlib_root: Path, calendar: Sequence[date]):
+    def __init__(self, qlib_root: Path, calendar: Sequence[date], *,
+                 _expected: str | None = None, _ancestry: frozenset[str] = frozenset()):
         self.prefixes: dict[str, tuple[int, int, float]] = {}
+        self.unbound_prefixes: dict[str, tuple[date, date]] = {}
+        self.changed_targets: set[str] = set()
         self.verified: set[str] = set()
         self.files = None
+        self.parent = None
         root = qlib_root.parent.parent
-        if qlib_root != root / "components/daily_bin_candidate" or not (root / "release_closure_receipt.json").is_file():
+        if _expected is None and (
+            qlib_root != root / "components/daily_bin_candidate"
+            or not (root / "release_closure_receipt.json").is_file()
+        ):
             return
         from backend.services.hmm_risk.monthly_release_input import _Files, _manifest_pins
 
         self.files = _Files(root)
         manifest = self.files.read(self.files.path("qe_dataset_manifest.json"))
         self.pins = _manifest_pins(manifest)
+        identity = manifest["dataset_manifest_sha256"]
+        if (manifest.get("schema_version") != "qe_dataset_manifest_v1"
+                or (_expected is not None and identity != _expected) or identity in _ancestry):
+            raise _fail(REASON_HASH_MISMATCH, "Qlib encoding ancestor identity differs or repeats")
+        relative = "daily_bin/materialization_receipt.json"
+        if relative not in self.pins and not (root / "release_closure_receipt.json").exists():
+            # Only a pinned direct exporter ends the cast chain. Missing monthly
+            # provenance is not silently interpreted as a single-cast export.
+            meta_ref = "components/daily_bin_candidate/meta_export.json"
+            if meta_ref not in self.pins:
+                raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib direct encoding provenance is missing")
+            meta = self.files.read(self.files.verify(self.pins[meta_ref]))
+            if meta.get("export_mode") != "authoritative_aistock_dump_bin":
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib encoding seed is not a supported direct export")
+            calendar_ref = "components/daily_bin_candidate/calendars/day.txt"
+            if calendar_ref not in self.pins:
+                raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib encoding seed calendar is unpinned")
+            self.full_calendar = _load_qlib_calendar(self.files.verify(self.pins[calendar_ref]))
+            return
         calendar_ref = "components/daily_bin_candidate/calendars/day.txt"
         if calendar_ref not in self.pins:
             raise _fail(REASON_SOURCE_COMPONENT_MISSING, "monthly Qlib encoding calendar is unpinned")
         full_calendar = _load_qlib_calendar(self.files.verify(self.pins[calendar_ref]))
-        if not set(calendar) <= set(full_calendar):
+        if _expected is None and not set(calendar) <= set(full_calendar):
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "monthly Qlib read dates escape the encoding calendar")
         calendar = full_calendar
-        relative = "daily_bin/materialization_receipt.json"
+        self.full_calendar = full_calendar
         if relative not in self.pins:
             raise _fail(REASON_SOURCE_COMPONENT_MISSING, "monthly Qlib materialization provenance is missing")
         receipt = self.files.read(self.files.verify(self.pins[relative]))
@@ -1033,26 +1070,33 @@ class _QlibPriceEncoding:
             scale = row.get("prefix_scale")
             if type(scale) not in (float, int) or not math.isfinite(scale) or scale <= 0:
                 raise _fail(REASON_SOURCE_UNIT_INVALID, "monthly Qlib prefix scale is invalid")
-            if scale == 1:
-                continue
             start, end, count = (row.get(k) for k in ("start_index", "end_index", "written_value_count"))
             if (
                 any(type(v) is not int for v in (start, end, count))
                 or not 0 <= start <= end < len(calendar)
                 or not 0 < count <= end - start + 1
-                or end - count >= writer["calendar_prefix_count"]
+                or (end - count >= start and end - count >= writer["calendar_prefix_count"])
+                or (end - count < start and (scale != 1 or start < writer["calendar_prefix_count"]))
                 or type(row.get("target_size")) is not int
                 or row["target_size"] != 4 * (end - start + 2)
-                or row.get("predecessor_manifest_sha256") != writer["predecessor_manifest_sha256"]
+                or (row.get("predecessor_manifest_sha256") != writer["predecessor_manifest_sha256"]
+                    and not (scale == 1 and row.get("predecessor_manifest_sha256") is None))
             ):
                 raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib prefix boundary differs")
             prefix = (start, end - count, float(scale))
+            if row.get("predecessor_manifest_sha256") is None:
+                # Some benchmark prefixes have no inherited stock binding.
+                # Do not reject unrelated benchmark receipts, or assume their
+                # unproven historical encoding is safe for a stock consumer.
+                if prefix[1] >= start:
+                    self.unbound_prefixes[symbol] = (calendar[start], calendar[prefix[1]])
+                continue
             if symbol in self.prefixes and self.prefixes[symbol] != prefix:
                 raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib price/factor encoding differs")
             self.prefixes[symbol] = prefix
         if (
             type(writer.get("qfq_basis_changed_instrument_count")) is not int
-            or len(self.prefixes) != writer["qfq_basis_changed_instrument_count"]
+            or sum(p[2] != 1 for p in self.prefixes.values()) != writer["qfq_basis_changed_instrument_count"]
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib rebased instrument inventory differs")
         for symbol, (start, end, scale) in self.prefixes.items():
@@ -1064,30 +1108,74 @@ class _QlibPriceEncoding:
                     row.get("prefix_scale") != scale or row.get("start_index") != start
                     or type(row.get("end_index")) is not int or type(row.get("written_value_count")) is not int
                     or row["end_index"] - row["written_value_count"] != end
-                    or pin is None or pin[1:] != (row.get("target_sha256"), row.get("target_size"))
+                    or pin is None
                 ):
                     raise _fail(REASON_HASH_MISMATCH, "monthly Qlib price/factor provenance is incomplete or changed")
+                if pin[1:] != (row.get("target_sha256"), row.get("target_size")):
+                    if scale != 1:
+                        raise _fail(REASON_HASH_MISMATCH, "monthly Qlib rebased target provenance differs")
+                    self.changed_targets.add(symbol)
 
-    def scale(self, symbol: str, day: date) -> float:
+        locator = writer.get("baseline_root")
+        if not isinstance(locator, str) or not locator or "\x00" in locator:
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib encoding predecessor locator is missing")
+        parts = locator.replace("\\", "/").rstrip("/").split("/")
+        if (len(parts) < 4 or any(p in {".", ".."} for p in parts)
+                or tuple(parts[-2:]) not in {("daily_bin", "qlib"), ("components", "daily_bin_candidate")}):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib encoding predecessor locator is invalid")
+        # Resolve one exact sibling, not latest/search/fallback. Only metadata
+        # is read here; all actual OHLC/factor bytes remain the current release.
+        parent_root = root.parent / parts[-3]
+        self.parent = _QlibPriceEncoding(
+            parent_root / "components/daily_bin_candidate", calendar,
+            _expected=writer["predecessor_manifest_sha256"], _ancestry=_ancestry | {identity})
+        if tuple(self.parent.full_calendar) != tuple(calendar[:writer["calendar_prefix_count"]]):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "Qlib encoding ancestor calendar is not the inherited prefix")
+
+    def _scales(self, symbol: str, day: date) -> tuple[float, ...]:
+        unbound = self.unbound_prefixes.get(symbol)
+        if unbound is not None and unbound[0] <= day <= unbound[1]:
+            raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib stock prefix has no encoding identity")
         prefix = self.prefixes.get(symbol)
         if prefix is None:
-            return 1.0
+            scales = self.parent._scales(symbol, day) if self.parent is not None else ()
+            if scales:
+                for field in ("open", "high", "low", "close", "factor"):
+                    relative = f"components/daily_bin_candidate/features/{symbol.lower()}/{field}.day.bin"
+                    if (relative not in self.pins or self.pins[relative] != self.parent.pins.get(relative)):
+                        raise _fail(REASON_HASH_MISMATCH, "Qlib inherited encoding has an unrecorded target change")
+            return scales
         start, end, scale = prefix
-        if not start <= self.calendar_positions[day] <= end:
+        position = self.calendar_positions.get(day)
+        if position is None or not start <= position <= end:
+            return ()
+        scales = (() if scale == 1 else (scale,)) + self.parent._scales(symbol, day)
+        # A scale=1 amendment irrelevant to any inherited cast needs no new
+        # decoding rule. Never apply a cast chain to an amended target whose
+        # encoding history has not been proven, even if only its suffix changed.
+        if scales and symbol in self.changed_targets:
+            raise _fail(REASON_HASH_MISMATCH, "Qlib inherited encoding target was amended")
+        return scales
+
+    def scale(self, symbol: str, day: date) -> float | tuple[float, ...]:
+        scales = self._scales(symbol, day)
+        if not scales:
             return 1.0
         if symbol not in self.verified:
             for field in ("open", "high", "low", "close", "factor"):
                 relative = f"components/daily_bin_candidate/features/{symbol.lower()}/{field}.day.bin"
                 self.files.verify(self.pins[relative])
             self.verified.add(symbol)
-        return scale
+        return scales[0] if len(scales) == 1 else scales
 
     def unchanged(self) -> None:
         if self.files is not None:
             self.files.unchanged()
+        if self.parent is not None:
+            self.parent.unchanged()
 
 
-def _raw_qlib_values(raw: np.void, *, prefix_scale: float = 1.0) -> dict[str, float]:
+def _raw_qlib_values(raw: np.void, *, prefix_scale: float | tuple[float, ...] = 1.0) -> dict[str, float]:
     values = {field: float(raw[field]) for field in QLIB_STOCK_FIELDS}
     factor = values["factor"]
     if not math.isfinite(factor) or factor <= 0:
@@ -2236,7 +2324,19 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
     return assets
 
 
-def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path]) -> HMMIndustryPitAdapter:
+def _industry_adapter(
+    authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path], candidate_root: Path | None = None,
+    release_binding: Mapping[str, Any] | None = None,
+) -> HMMIndustryPitAdapter:
+    if isinstance(authority, Mapping) and authority.get("schema_version") == "hmm_risk_release_l2_classification_binding_v1":
+        from backend.services.hmm_risk.release_industry_binding import ReleaseIndustryAdapter
+
+        if candidate_root is None or release_binding is None:
+            raise _fail(REASON_MANIFEST_INVALID, "release L2 authority requires an explicit matching file source")
+        if (Path(str(authority.get("candidate_root") or "")).resolve() != candidate_root.resolve()
+                or authority.get("release_binding") != release_binding):
+            raise _fail(REASON_MANIFEST_INVALID, "release L2 authority differs from the actual input source")
+        return ReleaseIndustryAdapter(authority, forbidden_roots=forbidden_roots)
     if not isinstance(authority, Mapping) or set(authority) != {
         "artifact_root",
         "identity",

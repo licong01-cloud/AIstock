@@ -16,6 +16,11 @@ from .pg_pool import get_conn
 
 
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
+    {"dataset": "vix_index", "mode": "incremental", "frequency": "daily", "at": "08:00",
+     "skip_auto_range": True},
+    {"dataset": "_vix_index_midday", "mode": "incremental", "frequency": "daily", "at": "12:00",
+     "skip_auto_range": True},
+    {"dataset": "stock_daily_afterhours", "mode": "incremental", "frequency": "daily", "at": "20:35"},
     # ── Phase 1 — 盘前 ──────────────────────────────────────────────
     {"dataset": "stk_limit",             "mode": "incremental", "frequency": "daily", "at": "09:01"},
     {"dataset": "dividend",              "mode": "incremental", "frequency": "daily", "at": "07:20",
@@ -78,8 +83,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v4"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "a1d89a26e53c6d18e725baf9b95ada1c818b569d946340032d7afb30ba8d599c"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v5"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "7eb7191f2b4b31bd548039ca24dbfeb35c1cae77b971d6664320d56d66f92428"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 

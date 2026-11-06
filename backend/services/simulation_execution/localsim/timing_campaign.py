@@ -125,108 +125,124 @@ def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> d
     if [str(day.trade_date) for day in templates.days] != expected_days:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_DAY_POPULATION_CONFLICT")
     candidate = CandidateReader(FileRef.model_validate(preflight["inputs"]["candidate_manifest"]))
-    native_dates = [str(d.date()) for d in candidate.calendar("day")
-                    if preflight["start_trade_date"] <= str(d.date()) <= preflight["candidate_end_trade_date"]]
-    if expected_days != native_dates:
-        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_CALENDAR_POPULATION_CONFLICT")
-    all_refs = [preflight_ref, templates_ref, inventory_ref, templates.policy_document]
-    unknowns, audit = {}, None
-    if policy.get("reference_audit"):
-        audit_ref = FileRef.model_validate(policy["reference_audit"])
-        audit = read_json(checked_file(audit_ref))
-        all_refs.append(audit_ref)
-        if (audit.get("schema_version") != "position_timing_shared_price_reference_audit_v1"
-                or audit.get("price_policy_id") != templates.price_policy_id
-                or audit.get("outcomes_read") is not False):
-            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REFERENCE_AUDIT_IDENTITY_CONFLICT")
-        for row in audit["unknown_references"]:
-            declaration = AuditedUnknownReference.model_validate(row)
-            for side in declaration.sides:
-                key = (str(declaration.trade_date), declaration.symbol, side)
-                if key in unknowns:
-                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_DECLARATION_DUPLICATED")
-                unknowns[key] = declaration
-            all_refs.append(declaration.source_file)
-    for document in (policy, audit or {}):
-        all_refs.extend(FileRef.model_validate(item) for item in document.get("source_files", []))
-    for value in preflight["inputs"].values():
-        item = FileRef.model_validate(value)
-        checked_file(item)
-        all_refs.append(item)
-    # Verify each immutable source once per inspection, then again after parsing.
-    # The same candidate component can be named by thousands of day templates.
-    verified = {}
-    for item in all_refs:
-        if item.path in verified and verified[item.path] != item.sha256:
-            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_REFERENCE_CONFLICT")
-        if item.path not in verified:
-            checked_file(item)
-            verified[item.path] = item.sha256
-    inspected, possible_holdings, observed_unknowns = {}, set(), set()
-    counts = {"BUY": 0, "SELL": 0, "UNKNOWN": 0, "AVAILABLE": 0}
-    for day, native in zip(templates.days, inventory["days"], strict=True):
-        projection_ref = FileRef.model_validate(native["projection"])
-        completion_ref = FileRef.model_validate(native["completion"])
-        for item in (projection_ref, completion_ref, day.events):
+    try:
+        native_dates = [str(d.date()) for d in candidate.calendar("day")
+                        if preflight["start_trade_date"] <= str(d.date()) <= preflight["candidate_end_trade_date"]]
+        if expected_days != native_dates:
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_CALENDAR_POPULATION_CONFLICT")
+        all_refs = [preflight_ref, templates_ref, inventory_ref, templates.policy_document]
+        unknowns, audit = {}, None
+        if policy.get("reference_audit"):
+            audit_ref = FileRef.model_validate(policy["reference_audit"])
+            audit = read_json(checked_file(audit_ref))
+            all_refs.append(audit_ref)
+            if (audit.get("schema_version") != "position_timing_shared_price_reference_audit_v1"
+                    or audit.get("price_policy_id") != templates.price_policy_id
+                    or audit.get("outcomes_read") is not False):
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REFERENCE_AUDIT_IDENTITY_CONFLICT")
+            for row in audit["unknown_references"]:
+                declaration = AuditedUnknownReference.model_validate(row)
+                for side in declaration.sides:
+                    key = (str(declaration.trade_date), declaration.symbol, side)
+                    if key in unknowns:
+                        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_DECLARATION_DUPLICATED")
+                    unknowns[key] = declaration
+                all_refs.append(declaration.source_file)
+        for document in (policy, audit or {}):
+            all_refs.extend(FileRef.model_validate(item) for item in document.get("source_files", []))
+        for value in preflight["inputs"].values():
+            item = FileRef.model_validate(value)
             checked_file(item)
             all_refs.append(item)
-        projection = read_json(Path(projection_ref.path))
-        if (projection["manifest_sha256_by_package"] != {preflight["package_id"]: preflight["manifest_sha256"]}
-                or len(projection["aggregate_results"]) != native["target_count"]
-                or projection["runtime_config"]["point_in_time_context"]["cutoff_date"] != native["data_cutoff"]):
-            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_NATIVE_TARGET_IDENTITY_CONFLICT")
-        current_targets = {target["symbol"] for target in projection["aggregate_results"]}
-        possible_holdings.update(current_targets)
-        events = [PriceTemplateEvent.model_validate(row) for row in read_json(Path(day.events.path))]
-        series = {}
-        for event in events:
-            if event.trade_date != day.trade_date:
-                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_EVENT_DAY_CONFLICT")
-            source = event.source_file
-            if source.path in verified and verified[source.path] != source.sha256:
+        # Verify each immutable source once per inspection, then again after parsing.
+        # The same candidate component can be named by thousands of day templates.
+        verified = {}
+        for item in all_refs:
+            if item.path in verified and verified[item.path] != item.sha256:
                 raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_REFERENCE_CONFLICT")
-            if source.path not in verified:
-                checked_file(source)
-                verified[source.path] = source.sha256
-                all_refs.append(source)
-            unknown_key = (str(event.trade_date), event.symbol, event.side)
-            declaration = unknowns.get(unknown_key)
-            is_unknown = event.price_constraint.mode == "NONE"
-            if (is_unknown != (declaration is not None)
-                    or declaration is not None and declaration.source_file != source):
-                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_REFERENCE_CONFLICT:" + repr(unknown_key))
-            if is_unknown:
-                observed_unknowns.add(unknown_key)
-            counts[event.side] += 1
-            counts["UNKNOWN" if is_unknown else "AVAILABLE"] += 1
-            key = (event.symbol, event.side)
-            prior = series.setdefault(key, [])
-            if (not prior and (event.revision != 1 or event.lifecycle != "ACTIVE" or event.available_at > event.valid_from)
-                    or prior and (event.revision != prior[-1].revision + 1
-                                  or event.available_at <= prior[-1].available_at
-                                  or prior[-1].lifecycle != "ACTIVE")):
-                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_REVISION_CONFLICT")
-            prior.append(event)
-        # A previous target can remain held after a no-fill. Its future SELL
-        # preference is needed even when it is absent from today's top stocks.
-        expected = {(symbol, "BUY") for symbol in current_targets} | {
-            (symbol, "SELL") for symbol in possible_holdings}
-        if not expected.issubset(series):
-            missing = sorted(expected - set(series))
-            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_TEMPLATE_MISSING:" + repr(missing[:20]))
-        inspected[str(day.trade_date)] = {"series": series, "native": native,
-                                          "unknown_references": {key[1:]: row for key, row in unknowns.items()
-                                                                 if key[0] == str(day.trade_date)}}
-    if (observed_unknowns != set(unknowns) or audit is not None and (
-            audit.get("counts") != counts or audit.get("trade_day_count") != len(inspected)
-            or audit.get("stock_count") != len(possible_holdings))):
-        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REFERENCE_AUDIT_POPULATION_CONFLICT")
-    for item in {(r.path, r.sha256): r for r in all_refs}.values():
-        checked_file(item)
-    candidate.verify_pins()
-    return {"preflight": preflight, "inventory": inventory, "templates": templates,
-            "days": inspected, "source_refs": list({(r.path, r.sha256): r for r in all_refs}.values()),
-            "reference_counts": counts, "outcomes_read": False, "stage": "COMPLETE_SOURCE_BATCH_INSPECTED"}
+            if item.path not in verified:
+                checked_file(item)
+                verified[item.path] = item.sha256
+        historical = set()
+        if preflight.get("schema_version") == "localsim_period_continuation_preflight_v2":
+            from backend.services.position_timing.intraday.period_context import load_period_context
+            load_period_context(preflight_ref)
+            historical = set(preflight["historical_sell_symbols"])
+        inspected, possible_holdings, observed_unknowns = {}, historical, set()
+        counts = {"BUY": 0, "SELL": 0, "UNKNOWN": 0, "AVAILABLE": 0}
+        for day, native in zip(templates.days, inventory["days"], strict=True):
+            projection_ref = FileRef.model_validate(native["projection"])
+            completion_ref = FileRef.model_validate(native["completion"])
+            for item in (projection_ref, completion_ref, day.events):
+                checked_file(item)
+                all_refs.append(item)
+            projection = read_json(Path(projection_ref.path))
+            if (projection["manifest_sha256_by_package"] != {preflight["package_id"]: preflight["manifest_sha256"]}
+                    or len(projection["aggregate_results"]) != native["target_count"]
+                    or projection["runtime_config"]["point_in_time_context"]["cutoff_date"] != native["data_cutoff"]):
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_NATIVE_TARGET_IDENTITY_CONFLICT")
+            current_targets = {target["symbol"] for target in projection["aggregate_results"]}
+            possible_holdings.update(current_targets)
+            events = [PriceTemplateEvent.model_validate(row) for row in read_json(Path(day.events.path))]
+            series = {}
+            for event in events:
+                if event.trade_date != day.trade_date:
+                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_EVENT_DAY_CONFLICT")
+                source = event.source_file
+                if source.path in verified and verified[source.path] != source.sha256:
+                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_REFERENCE_CONFLICT")
+                if source.path not in verified:
+                    checked_file(source)
+                    verified[source.path] = source.sha256
+                    all_refs.append(source)
+                unknown_key = (str(event.trade_date), event.symbol, event.side)
+                declaration = unknowns.get(unknown_key)
+                is_unknown = event.price_constraint.mode == "NONE"
+                if (is_unknown != (declaration is not None)
+                        or declaration is not None and declaration.source_file != source):
+                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_REFERENCE_CONFLICT:" + repr(unknown_key))
+                if is_unknown:
+                    observed_unknowns.add(unknown_key)
+                counts[event.side] += 1
+                counts["UNKNOWN" if is_unknown else "AVAILABLE"] += 1
+                key = (event.symbol, event.side)
+                prior = series.setdefault(key, [])
+                if (not prior and (event.revision != 1 or event.lifecycle != "ACTIVE" or event.available_at > event.valid_from)
+                        or prior and (event.revision != prior[-1].revision + 1
+                                      or event.available_at <= prior[-1].available_at
+                                      or prior[-1].lifecycle != "ACTIVE")):
+                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_REVISION_CONFLICT")
+                prior.append(event)
+            # A previous target can remain held after a no-fill. Its future SELL
+            # preference is needed even when it is absent from today's top stocks.
+            expected = {(symbol, "BUY") for symbol in current_targets} | {
+                (symbol, "SELL") for symbol in possible_holdings}
+            if not expected.issubset(series):
+                missing = sorted(expected - set(series))
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_TEMPLATE_MISSING:" + repr(missing[:20]))
+            inspected[str(day.trade_date)] = {"series": series, "native": native,
+                                              "unknown_references": {key[1:]: row for key, row in unknowns.items()
+                                                                     if key[0] == str(day.trade_date)}}
+        # The shared producer serializes a Counter: absent categories mean zero.
+        # Accept either explicit or absent zeroes, but no unknown category/value.
+        audit_counts = audit.get("counts", {}) if audit is not None else {}
+        normalized_counts = {**dict.fromkeys(counts, 0), **audit_counts}
+        if (observed_unknowns != set(unknowns) or audit is not None and (
+                normalized_counts != counts
+                or any(type(value) is not int or value < 0 for value in audit_counts.values())
+                or audit.get("trade_day_count") != len(inspected)
+                or audit.get("stock_count") != len(possible_holdings))):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REFERENCE_AUDIT_POPULATION_CONFLICT")
+        for item in {(r.path, r.sha256): r for r in all_refs}.values():
+            checked_file(item)
+        candidate.verify_pins()
+        return {"preflight": preflight, "inventory": inventory, "templates": templates,
+                "days": inspected, "source_refs": list({(r.path, r.sha256): r for r in all_refs}.values()),
+                "reference_counts": counts, "outcomes_read": False, "stage": "COMPLETE_SOURCE_BATCH_INSPECTED"}
+    finally:
+        close = getattr(candidate, "close", None)
+        if callable(close):
+            close()
 
 
 def campaign_source_identity() -> dict:
@@ -588,7 +604,7 @@ def _asset_bindings(value):
 
 
 def inspect_selection_history(root: Path, *, package_id: str, manifest_sha256: str,
-                              trade_dates: list[str]) -> dict:
+                               trade_dates: list[str], committed_artifacts: list[dict] | None = None) -> dict:
     """Inspect the owner's committed artifacts; never turn a mark into a limit.
 
     Published projections, rather than a mutable active profile or a production
@@ -597,7 +613,20 @@ def inspect_selection_history(root: Path, *, package_id: str, manifest_sha256: s
     """
     expected = set(trade_dates)
     days, outside, conflicts = {}, [], []
-    for marker in sorted(root.glob("*/*/completion.json")):
+    pinned = {}
+    if committed_artifacts is not None:
+        for pair in committed_artifacts:
+            completion_ref = FileRef.model_validate(pair["completion"])
+            projection_ref = FileRef.model_validate(pair["projection"])
+            marker = checked_file(completion_ref)
+            projection_path = checked_file(projection_ref)
+            if marker in pinned or projection_path.resolve() != marker.with_name("projection.json").resolve():
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_COMMITTED_REFERENCE_CONFLICT")
+            pinned[marker] = projection_ref
+        markers = sorted(pinned)
+    else:
+        markers = sorted(root.glob("*/*/completion.json"))
+    for marker in markers:
         completion = read_json(marker)
         if completion.get("consumer_scope") != "LOCALSIM" or completion.get("status") != "SIGNAL_COMMITTED":
             continue
@@ -605,6 +634,8 @@ def inspect_selection_history(root: Path, *, package_id: str, manifest_sha256: s
         path = marker.with_name("projection.json")
         body = path.read_bytes()
         projection = json.loads(body)
+        if marker in pinned and hashlib.sha256(body).hexdigest() != pinned[marker].sha256:
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_COMMITTED_SOURCE_CHANGED")
         if projection.get("manifest_sha256_by_package", {}).get(package_id) != manifest_sha256:
             continue
         if set(projection["manifest_sha256_by_package"]) != {package_id}:

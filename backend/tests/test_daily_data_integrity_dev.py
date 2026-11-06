@@ -57,6 +57,120 @@ def result():
     return ValidationResult(PartitionState.VALID, (CheckCounts("row", 1, 1, 0, 0, 0, 0),), {"source": "DEV fixture"})
 
 
+def test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision(db):
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.repository import enqueue_validation
+    _ds, repo = db
+    day = date(2099, 1, 3)
+    # Only metadata on this unused synthetic date, all writes rolled back.
+    with pytest.raises(RuntimeError, match="rollback legacy count fixture"):
+        with repo.transaction() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM market.dataset_date_refresh_audit WHERE dataset='stk_limit' AND trade_date=%s", (day,))
+            assert cur.fetchone() is None
+            cur.execute("""INSERT INTO market.dataset_date_refresh_audit
+                (dataset,trade_date,data_source,status,row_count,expected_rows,data_revision,validated_revision,
+                 validation_status,validation_id,scope_version,rule_version,quality_status)
+                VALUES('stk_limit',%s,'canonical_db','success',0,2,1,1,'VALID','legacy-proof',%s,%s,'ok')""",
+                (day, SCOPE_VERSION, RULE_VERSION))
+            enqueue_validation(conn, "stk_limit", day)
+            cur.execute("""SELECT target_status,metadata->>'desired_revision' FROM market.data_sync_targets
+                WHERE dataset='stk_limit' AND target_date=%s AND data_source='canonical_db'""", (day,))
+            assert cur.fetchone() == ("pending", "1")
+            cur.execute("""UPDATE market.dataset_date_refresh_audit SET row_count=2,
+                metadata='{"validation":{"checks":{"physical_rows":2}}}'::jsonb
+                WHERE dataset='stk_limit' AND trade_date=%s AND data_source='canonical_db'""", (day,))
+            cur.execute("""UPDATE market.data_sync_targets SET target_status='reconciled'
+                WHERE dataset='stk_limit' AND target_date=%s AND data_source='canonical_db'""", (day,))
+            enqueue_validation(conn, "stk_limit", day)
+            cur.execute("""SELECT t.target_status,p.data_revision,p.row_count
+                FROM market.data_sync_targets t JOIN market.dataset_date_refresh_audit p
+                ON p.dataset=t.dataset AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                WHERE t.dataset='stk_limit' AND t.target_date=%s AND t.data_source='canonical_db'""", (day,))
+            assert cur.fetchone() == ("reconciled", 1, 2)
+            raise RuntimeError("rollback legacy count fixture")
+
+
+def test_schedule_recovery_native_query_is_bounded_idempotent_and_preserves_true_failures(db):
+    from datetime import datetime, timedelta, timezone
+    from psycopg2.extras import Json
+    from backend.ingestion.tdx_scheduler import TDXScheduler
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    from backend.services.data_integrity.contracts import DENSE_TRADED_BASIS
+    _ds, repo = db
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    statements = []
+    scheduler._execute = lambda query, params: statements.append((query, params))
+    scheduler._reconcile_recovered_schedule_states()
+    query, params = statements[0]
+    query = query.replace("market.ingestion_schedules", "pg_temp.schedule_projection")
+    query = query.replace("market.dataset_date_refresh_audit", "pg_temp.partition_projection")
+    query = query.replace("market.ingestion_jobs", "pg_temp.job_projection")
+    assert "market." not in query
+    failure = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
+    proof = failure + timedelta(hours=5)
+    cases = {"recovered": {}, "delayed": {"status": "delayed"},
+        "rescheduled": {"updated": proof+timedelta(hours=12)},
+        "newer_failure": {"run": proof+timedelta(minutes=1), "updated": proof+timedelta(minutes=1)},
+        "late_failure": {"job_finished": proof+timedelta(minutes=1)},
+        "late_next_day": {"job_created": failure+timedelta(days=1), "job_finished": proof+timedelta(days=1)},
+        "next_day_unscoped": {"job_created": failure+timedelta(days=1), "job_finished": proof+timedelta(days=1),
+                              "job_target_date": None},
+        "old_failure": {"job_finished": proof-timedelta(minutes=1)},
+        "other_date_retry": {"job_finished": proof+timedelta(minutes=1), "job_target_date": "2026-10-28"},
+        "newer_day": {"run": failure+timedelta(days=1)},
+        "dirty": {"revision": 2}, "missing": {"state": "INCOMPLETE"},
+        "unknown": {"state": "UNVERIFIED"}, "error": {"state": "ERROR"},
+        "old_rule": {"rule": "old"}, "no_id": {"validation_id": "  "},
+        "queued": {"status": "queued"}, "running": {"status": "running"},
+        "disabled": {"enabled": False}, "history_job": {"mode": "full"},
+        "old_dense": {"dataset": "bak_basic"},
+        "current_dense": {"dataset": "cyq_perf", "basis": DENSE_TRADED_BASIS},
+        "alias": {"dataset": "moneyflow_ts", "schedule_dataset": "stock_moneyflow_ts"}}
+    with repo.transaction() as conn, conn.cursor() as cur:
+        cur.execute("""CREATE TEMP TABLE schedule_projection(
+            schedule_id text PRIMARY KEY,dataset text,enabled boolean,mode text,last_status text,
+            last_run_at timestamptz,updated_at timestamptz,last_error text) ON COMMIT DROP""")
+        cur.execute("""CREATE TEMP TABLE partition_projection(
+            dataset text,trade_date date,data_source text,data_revision bigint,validated_revision bigint,
+            validation_status text,validation_id text,scope_version text,rule_version text,
+            refreshed_at timestamptz,metadata jsonb) ON COMMIT DROP""")
+        cur.execute("""CREATE TEMP TABLE job_projection(
+            status text,created_at timestamptz,finished_at timestamptz,summary jsonb) ON COMMIT DROP""")
+        for name, overrides in cases.items():
+            dataset = overrides.get("dataset", name)
+            cur.execute("INSERT INTO pg_temp.schedule_projection VALUES(%s,%s,%s,%s,%s,%s,%s,'old failure')",
+                (name, overrides.get("schedule_dataset", dataset), overrides.get("enabled", True),
+                 overrides.get("mode", "incremental"), overrides.get("status", "failed"),
+                 overrides.get("run", failure), overrides.get("updated", failure)))
+            cur.execute("INSERT INTO pg_temp.partition_projection VALUES(%s,%s,'canonical_db',%s,1,%s,%s,%s,%s,%s,%s)",
+                (dataset, failure.date(), overrides.get("revision", 1), overrides.get("state", "VALID"),
+                 overrides.get("validation_id", "valid-proof"), SCOPE_VERSION, overrides.get("rule", RULE_VERSION),
+                 proof, Json({"validation": {"checks": {"coverage_basis": overrides.get("basis")}}})))
+            if "job_finished" in overrides:
+                cur.execute("INSERT INTO pg_temp.job_projection VALUES('failed',%s,%s,%s)",
+                    (overrides.get("job_created", failure), overrides["job_finished"], Json({"dataset": dataset,
+                        "target_date": overrides.get("job_target_date", str(failure.date()))})))
+        cur.execute(query, params)
+        assert cur.rowcount == 8
+        cur.execute("SELECT schedule_id FROM pg_temp.schedule_projection WHERE last_status='success'")
+        assert {r[0] for r in cur.fetchall()} == {
+            "recovered", "delayed", "current_dense", "alias", "rescheduled", "old_failure", "other_date_retry",
+            "next_day_unscoped"}
+        cur.execute(query, params)
+        assert cur.rowcount == 0
+        cur.execute("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) " + query, params)
+        plan = cur.fetchone()[0][0]
+        print("DEV schedule metadata query execution_ms=", plan["Execution Time"])
+        # Exact same native statement: at most 100 cards, never 100 markets.
+        cur.execute("""INSERT INTO pg_temp.schedule_projection
+            SELECT 'bounded-'||n,'recovered',TRUE,'incremental','failed',%s,%s,'old failure'
+            FROM generate_series(1,105) AS n""", (failure, failure))
+        cur.execute(query, params)
+        assert cur.rowcount == 100
+        cur.execute(query, params)
+        assert cur.rowcount == 5
+
+
 def test_unchanged_old_verdict_backs_off_but_new_source_completion_wakes_it(db):
     from datetime import datetime, timedelta, timezone
     from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION

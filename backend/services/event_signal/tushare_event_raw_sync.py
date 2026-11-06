@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
-import importlib
 import json
 import math
 import os
@@ -221,14 +220,6 @@ def source_record_key(config: RawDatasetConfig, payload: dict[str, Any]) -> str:
     return ":".join(pieces)
 
 
-def _pro_api():
-    token = os.getenv("TUSHARE_TOKEN")
-    if not token:
-        raise RuntimeError("TUSHARE_TOKEN not set")
-    ts = importlib.import_module("tushare")
-    return ts.pro_api(token)
-
-
 def dataframe_to_rows(df: Any) -> list[dict[str, Any]]:
     if df is None:
         return []
@@ -257,6 +248,20 @@ def fetch_period_rows(
 
     limiter = get_limiter(api_name, config.rate_per_minute)
     limiter.acquire()
+    if pro is None:
+        # Share the production transport: SDK 1.4.24 converts HTTP failures
+        # to empty DataFrames, which cannot prove a completed empty period.
+        # Failure still uses the existing job retry path; no extra retry loop.
+        from backend.services.tushare_sync_engine import _query_tushare_dataapi
+
+        token = os.getenv("TUSHARE_TOKEN")
+        if not token:
+            raise RuntimeError("TUSHARE_TOKEN not set")
+        rows = _query_tushare_dataapi(api_name, {"period": period},
+                                     fetch_params.get("fields", ""), token=token)
+        return api_name, fetch_params, [normalize_row(row) for row in rows]
+    # Explicit caller-injected clients remain supported for controlled tools
+    # and tests; the default scheduled producer never uses the masking SDK.
     api_fn = getattr(pro, api_name)
     df = api_fn(**fetch_params)
     return api_name, fetch_params, dataframe_to_rows(df)
@@ -369,12 +374,6 @@ class TushareEventRawSyncService:
     def __init__(self, pro: Any | None = None) -> None:
         self._pro = pro
 
-    @property
-    def pro(self) -> Any:
-        if self._pro is None:
-            self._pro = _pro_api()
-        return self._pro
-
     def sync_period(
         self,
         dataset: str,
@@ -389,7 +388,7 @@ class TushareEventRawSyncService:
             init_tushare_event_raw_schema()
 
         api_name, fetch_params, rows = fetch_period_rows(
-            self.pro,
+            self._pro,
             config,
             period=period,
             source_api=source_api,
