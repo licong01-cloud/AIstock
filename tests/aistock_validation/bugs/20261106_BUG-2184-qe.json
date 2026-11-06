@@ -15,7 +15,29 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-06T03:47:52.005308Z",
-  "description": "QE_PREDICTION_REPLAY_RESULTS_NOT_COMPLETED 阻断已完整计算账户的登记恢复。",
+  "description": "?????????PortAnaRecord?????????prediction-store??????????failed??results_only???completed??????????????????????????????/???????recorder?????????????",
+  "design_compliance_review": [
+    {
+      "evidence": "?????results_only?????????????/???/???????????????????????",
+      "requirement": "??????",
+      "result": "PASS_SOURCE_RUNTIME_PENDING"
+    },
+    {
+      "evidence": "19?????????????????????/MLflow?????????47????????",
+      "requirement": "??????",
+      "result": "PASS"
+    },
+    {
+      "evidence": "???????????????????????????????????????????",
+      "requirement": "????????",
+      "result": "PASS"
+    },
+    {
+      "evidence": "??????????????????????????backend-main?????",
+      "requirement": "????????",
+      "result": "PASS"
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,13 +51,20 @@
   ],
   "expected": "精确核对任务、源预测、当前recorder、完整账户日期及上传失败收据后，允许正式results_only仅补登记和入仓；其他失败仍拒绝。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/results_only_retry.py",
       "backend/tests/unified_engine/test_qe_results_only_retry.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/results_only_retry.py",
+      "backend/tests/unified_engine/test_qe_results_only_retry.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_evolution_service.py",
@@ -127,6 +156,19 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "recovery_activation_plan": {
+    "backtest_submissions": 0,
+    "formal_recovery": "POST original task Loop9 and Loop10 retry_mode=results_only once each with durable intent; reconcile timeouts before any action",
+    "required_readback": [
+      "original node failures and MLflow FAILED preserved",
+      "central task completed 12/12",
+      "archive 12/12 and prediction pointers available",
+      "all six final reports 549 dates before paired economic conclusion"
+    ],
+    "source_merge": "pending",
+    "training_submissions": 0,
+    "user_restart": "pending"
+  },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -134,13 +176,26 @@
     "qe_read_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "results_only???????????completed????????????????????????????????????????????????BUG-2184???????????",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261106_035105_f2b9/custom-evo-config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python pytest loaded tracked QE scheduler and results-only recovery: 47 passed; no runtime process control or production writes.",
+      "Fresh Windows Python loaded the worktree collector and read real WSL Loop9/10 via official GET client: both 549-date accounts, pinned prediction panel and recorder/upload identity passed; 0 uploads, 0 DB writes, 0 training/backtest submissions. Receipt tmp/issue_workflow/BUG-2184/real-artifact-preflight.json.",
+      "Fresh Python loaded tracked source; both real 549-day failed-upload accounts passed artifact gate; no uploads or DB writes",
+      "Fresh Python loaded tracked source; both real 549-day failed-upload accounts passed artifact gate; no uploads or DB writes; tmp/issue_workflow/BUG-2184/real-artifact-preflight.json"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -159,6 +214,12 @@
     "fingerprint": "e9f1cc0c026a13b503046588",
     "source_event_id": "FE-20261106-e9f1cc0c026a"
   },
+  "validation_evidence": [
+    "python -B -m pytest backend/tests/unified_engine/test_qe_results_only_retry.py -q --disable-warnings --maxfail=1 -> 47 passed",
+    "python -B -m ruff check changed Python files -> passed",
+    "git diff --check -> passed",
+    "real-artifact-preflight.json -> READ_ONLY_REAL_ARTIFACT_GATE_PASSED, Loop9/10, 549 days each"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

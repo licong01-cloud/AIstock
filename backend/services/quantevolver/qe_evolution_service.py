@@ -4337,10 +4337,18 @@ class AutoEvolutionScheduler:
         loop_id = f"Loop{loop_index}"
         try:
             replay_result = None
+            failed_upload = False
             if config.get("prediction_replay"):
                 receipt = await client.inspect_loop_submission(task_id, loop_id)
-                if (receipt.task_id, receipt.loop_id, receipt.status) != (task_id, loop_id, "completed"):
+                if (receipt.task_id, receipt.loop_id) != (task_id, loop_id) or receipt.status not in {"completed", "failed"}:
                     raise ValueError("QE_PREDICTION_REPLAY_RESULTS_NOT_COMPLETED")
+                failed_upload = receipt.status == "failed"
+                if failed_upload and any(
+                    not isinstance(getattr(receipt, key, None), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", getattr(receipt, key))
+                    for key in ("request_digest", "submission_intent_hash")
+                ):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_SUBMISSION_IDENTITY_MISSING")
                 source_ref = await client.get_workspace_file(
                     task_id, loop_id, "qe_prediction_replay_source_ref.json"
                 )
@@ -4376,6 +4384,7 @@ class AutoEvolutionScheduler:
                 task_id=task_id,
                 loop_id=loop_id,
                 node_id=effective_node_id,
+                **({"failed_upload_config": config} if failed_upload else {}),
                 **({
                     "expected_prediction_panel_sha256": (replay_result or frozen_result)["executable_prediction_panel_sha256"],
                     "expected_prediction_rows": (replay_result["executable_prediction_rows"] if replay_result is not None
@@ -4384,6 +4393,25 @@ class AutoEvolutionScheduler:
             )
             if replay_result is not None:
                 artifacts.metrics["prediction_replay_result"] = replay_result
+            if failed_upload:
+                # Do not register against a changed attempt or a new recorder.
+                current = await client.inspect_loop_submission(task_id, loop_id)
+                current_ref = await client.get_workspace_file(task_id, loop_id, "qe_current_recorder.json")
+                current_upload = await client.get_workspace_file(task_id, loop_id, "qe_prediction_store_upload.json")
+                recovery = artifacts.metrics["results_only_upload_recovery"]
+                if (
+                    any(getattr(current, key, None) != getattr(receipt, key) for key in (
+                        "task_id", "loop_id", "status", "request_digest", "submission_intent_hash",
+                    ))
+                    or not isinstance(current_ref, dict)
+                    or any(current_ref.get(key) != artifacts.recorder_ref.get(key) for key in (
+                        "recorder_id", "experiment_id", "written_at",
+                    ))
+                    or current_upload != recovery["original_upload"]
+                ):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_ATTEMPT_CHANGED")
+                recovery["request_digest"] = receipt.request_digest
+                recovery["submission_intent_hash"] = receipt.submission_intent_hash
             if frozen_result is not None:
                 artifacts.metrics["frozen_inference_result"] = frozen_result
             manifest = upload_results_only_prediction_store(
