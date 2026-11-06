@@ -260,7 +260,9 @@ def sync_events(engine, conn, spec, start, end, job_id):
     result = SyncResult(dataset=spec.name, mode='sync', job_id=job_id)
     fetcher = EventFetcher(engine, conn, spec, job_id)
     ranges = [(day, day) for day in engine._late_recheck_dates.get(spec.name, []) if not start <= day <= end]
-    ranges += list(request_windows(max(start, parse_date(spec.initial_start_date)), end))
+    # initial_start_date seeds an absent incremental cursor; it is not a
+    # provider availability boundary and must not clip an explicit backfill.
+    ranges += list(request_windows(start, end))
     for outer_start, outer_end in ranges:
         completed = set()
         try:

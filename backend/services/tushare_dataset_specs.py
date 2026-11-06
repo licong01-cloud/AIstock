@@ -230,11 +230,11 @@ def _event_spec(name, table, fields, floor, *, cap=1000, rate=60, date_param='tr
 
 
 STK_SHOCK = _event_spec('stk_shock', 'tushare_risk_event_raw',
-    'ts_code trade_date name trade_market reason period'.split(), '2026-01-01')
+    'ts_code trade_date name trade_market reason period'.split(), '2018-08-01')
 STK_HIGH_SHOCK = _event_spec('stk_high_shock', 'tushare_risk_event_raw',
-    'ts_code trade_date name trade_market reason period'.split(), '2026-01-01')
+    'ts_code trade_date name trade_market reason period'.split(), '2018-08-01')
 STK_ALERT = _event_spec('stk_alert', 'tushare_risk_event_raw',
-    'ts_code name start_date end_date type'.split(), '2026-01-01')
+    'ts_code name start_date end_date type'.split(), '2018-08-01')
 IDX_ANNS = _event_spec('idx_anns', 'index_announcements_raw',
     'ann_date title url source type'.split(), '2018-06-01', rate=50, date_param='ann_date')
 STK_SEASONED = _event_spec('stk_seasoned', 'stock_seasoned_raw', _SEASONED_FIELDS,

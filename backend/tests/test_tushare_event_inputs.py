@@ -265,3 +265,40 @@ def test_empty_current_query_never_erases_stored_row_count_and_history_is_verifi
     result = validate_partition(Mock(), DATASET_REGISTRY['idx_anns'], day, 1)
     assert result.checks['physical_rows'] == 1 and result.checks['provider_observed_rows'] == 0
     assert result.state == ('INCOMPLETE' if tamper else 'VALID')
+
+
+@pytest.mark.parametrize('name', ('stk_shock', 'stk_high_shock', 'stk_alert'))
+def test_risk_default_history_starts_at_shared_training_boundary(name):
+    assert DATASET_REGISTRY[name].initial_start_date == '2018-08-01'
+
+
+@pytest.mark.parametrize('name', EVENTS)
+def test_explicit_event_history_is_not_clipped_by_default_cursor_floor(monkeypatch, name):
+    from backend.services import tushare_event_inputs as events
+    # A default cursor is not proof that older source facts cannot exist.
+    day = dt.date(2025, 7, 14)
+    spec = replace(DATASET_REGISTRY[name], initial_start_date='2026-01-01')
+    engine = Mock(_late_recheck_dates={})
+    engine._upsert_sync_target.return_value = 'target'
+    fetch = Mock(return_value=iter([(day, day, [], {'start_date': '20250714', 'end_date': '20250714'})]))
+    monkeypatch.setattr(events.EventFetcher, 'windows', fetch)
+    store = Mock(return_value=(0, 0))
+    monkeypatch.setattr(events, 'store_day', store)
+    result = events.sync_events(engine, Mock(), spec, day, day, 'job')
+    fetch.assert_called_once_with(day, day)
+    store.assert_called_once()
+    assert result.ok and result.success_batches == result.total_batches == 1
+    assert result.inserted_rows == 0  # query-covered empty is not a fabricated event
+
+
+def test_event_incremental_without_cursor_uses_training_floor():
+    from backend.services.tushare_event_inputs import incremental_start
+    conn, cursor = Mock(), Mock()
+    conn.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    conn.cursor.return_value.__exit__ = Mock(return_value=False)
+    cursor.fetchone.return_value = (None,)
+    engine = Mock(_late_recheck_dates={})
+    engine._unclosed_publication_dates.return_value = []
+    start, details = incremental_start(engine, conn, DATASET_REGISTRY['stk_alert'], dt.date(2026, 11, 6))
+    assert start == dt.date(2018, 8, 1)
+    assert details['safe_audit_cursor_date'] is None
