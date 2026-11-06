@@ -48,17 +48,26 @@ from .shared_sector_context import (
     validate_market_context_frame,
     validate_membership_frame,
 )
-from .sw_l2_quote_policy import build_quote_availability_payload
+from .sw_l2_quote_policy import build_quote_availability_payload, publication_quote_observations
 from .monthly_worker import ProducerContext
 
 
 PRIVATE_SHARED_DOMAIN_SCHEMA = "aistock_monthly_private_shared_domain_v1"
+_QUOTE_FIELDS = ("sw2_pct_change", "sw2_vol", "sw2_amount")
 _GATES = {
     "stock_pools": frozenset({"calendar_lifecycle", "pit_stock_pools"}),
     "benchmark": frozenset({"calendar_lifecycle", "daily_price", "adj_factor_history"}),
     "suspend": frozenset({"calendar_lifecycle", "suspend_limit"}),
     "sector_context": frozenset({"calendar_lifecycle", "pit_stock_pools", "sector_authority"}),
 }
+
+
+def _sector_quote_error(message, *, reason, row, day, code, fields):
+    # Formatting belongs to the failing row only, not every row of a large H5.
+    return ComponentPreparationError(
+        f"{message}: {reason} instrument={row.instrument} trade_date={day.isoformat()} "
+        f"canonical_l2_code={code} l2_code_id={int(row.l2_code_id)} fields={fields}"
+    )
 
 
 def shared_preparation_identity(
@@ -125,7 +134,11 @@ def shared_preparation_identity(
         component=component,
         cutoff=snapshot.official_cutoff,
         predecessor_profile_sha256=predecessor_sha256,
-        effective_source_sha256=digest_named_fields("aistock_monthly_private_shared_inputs_v1", {"partitions": rows}),
+        effective_source_sha256=digest_named_fields("aistock_monthly_private_shared_inputs_v1", {
+            "partitions": rows,
+            **({"suspension_day_authority_sha256": getattr(snapshot, "suspension_day_authority_sha256", None)}
+               if component == "suspend" else {}),
+        }),
         pit_sha256=snapshot.pit_snapshot_digest,
         qfq_sha256=digest_named_fields(
             "aistock_monthly_private_benchmark_qfq_v1",
@@ -137,6 +150,9 @@ def shared_preparation_identity(
             "aistock_monthly_private_shared_producer_v1",
             {
                 "files": {name: _file_ref(code_root, name) for name in names},
+                **({"suspension_projection": _file_ref(code_root.parent.parent / "data_service",
+                                                      "suspension_day_authority.py")}
+                   if component == "suspend" else {}),
                 "toolchain": profile.qlib_toolchain.digest,
             },
         ),
@@ -152,6 +168,8 @@ def shared_preparation_identity(
             {
                 "semantic_profile": profile.semantic_profile_digest,
                 "sector_membership_start": sector_membership_start.isoformat(),
+                **({"fact_population_contract": "all_frozen_shsz_suspension_facts_v1"}
+                   if component == "suspend" else {}),
             },
         ),
         validation_policy_sha256=digest_named_fields(
@@ -401,8 +419,12 @@ def _sector_context_files(
         authority_sha256=authority,
     )
     code_map = validate_release_sw_l2_code_map(code_payload)
+    publication_evidence = {}
     quote_payload = build_quote_availability_payload(
-        code_map=code_map, required_start=start, cutoff=snapshot.official_cutoff
+        code_map=code_map, required_start=start, cutoff=snapshot.official_cutoff,
+        classification_rows=classify,
+        quote_observations=publication_quote_observations(root / "facts" / "sector_data.h5", chunk_rows=bound),
+        evidence=publication_evidence,
     )
     quote = validate_sector_quote_availability(quote_payload, code_map=code_map, required_end=snapshot.official_cutoff)
     membership, market, counts = summarize_sector_context(
@@ -418,7 +440,7 @@ def _sector_context_files(
     return [
         "facts/sector_data.h5", "sector_code_map.json", "sector_quote_availability.json",
         "sector_membership_spans.parquet", "market_context.parquet",
-    ], {"sector_facts": facts, **counts}
+    ], {"sector_facts": facts, "publication_evidence": publication_evidence, **counts}
 
 
 def summarize_sector_context(
@@ -437,6 +459,7 @@ def summarize_sector_context(
     spans = []
     markets = []
     frozen_days = authority_resolved_days = required_quotes = 0
+    factual_days = selection_days = unclassified_factual_days = 0
     used_ids = set()
 
     def close(symbol):
@@ -476,30 +499,54 @@ def summarize_sector_context(
                 if sector_id not in code_map.id_to_code:
                     raise ComponentPreparationError("private sector has an unknown code ID")
                 used_ids.add(sector_id)
+                code = code_map.id_to_code[sector_id]
                 triple = (row.sw2_pct_change, row.sw2_vol, row.sw2_amount)
                 if np.isinf(triple).any():
-                    raise ComponentPreparationError("sector quote is infinite")
+                    fields = [name for name, value in zip(_QUOTE_FIELDS, triple) if np.isinf(value)]
+                    raise _sector_quote_error(
+                        "sector quote is infinite", reason="SW_L2_QUOTE_NONFINITE",
+                        row=row, day=day, code=code, fields=fields,
+                    )
                 normalized_quote = tuple(None if pd.isna(value) else float(value) for value in triple)
                 if quotes.setdefault(sector_id, normalized_quote) != normalized_quote:
                     raise ComponentPreparationError("private sector quote fields conflict")
                 if day >= start:
-                    code = code_map.id_to_code[sector_id]
                     available = any(left <= day <= right for left, right in quote.entries[code])
                     if available and not np.isfinite(triple).all():
-                        raise ComponentPreparationError("private quote-available stock row lacks facts")
+                        fields = [name for name, value in zip(_QUOTE_FIELDS, triple) if not np.isfinite(value)]
+                        raise _sector_quote_error(
+                            "private quote-available stock row lacks facts: "
+                            "publication expectation is not proof of a frozen quote fact",
+                            reason="SW_L2_QUOTE_FACTS_MISSING", row=row, day=day, code=code, fields=fields,
+                        )
                     if not available and not pd.isna(list(triple)).all():
-                        raise ComponentPreparationError("private stopped sector has unexpected quote facts")
+                        fields = [name for name, value in zip(_QUOTE_FIELDS, triple) if not pd.isna(value)]
+                        raise _sector_quote_error(
+                            "private stopped sector has unexpected quote facts: "
+                            "historical observations do not authorize extending publication spans",
+                            reason="SW_L2_QUOTE_OUTSIDE_AUTHORITY", row=row, day=day, code=code, fields=fields,
+                        )
                 if np.isfinite(row.sw2_vol):
                     prior = volumes.setdefault(sector_id, float(row.sw2_vol))
                     if prior != float(row.sw2_vol) or prior < 0:
                         raise ComponentPreparationError("private sector quote volume conflicts")
                 if np.isfinite([row.sw2_pct_change, row.sw2_vol, row.sw2_amount]).all():
                     finite.add(sector_id)
-            active = {
+            required_members = {
                 symbol
                 for symbol, intervals in by_symbol.items()
                 if day >= start and any(left <= day <= right for left, right in intervals)
             }
+            # This is a shared fact sidecar, not a buy-eligibility snapshot.
+            # Preserve every already-frozen classified stock-date, including
+            # after a stock leaves the selectable universe. Missing dates and
+            # unknown classifications do not acquire an inferred assignment.
+            factual_members = {symbol for symbol, id_ in assignments.items() if id_ >= 0} if day >= start else set()
+            active = required_members | factual_members
+            factual_days += len(factual_members)
+            selection_days += len(required_members)
+            if day >= start:
+                unclassified_factual_days += sum(id_ < 0 for id_ in assignments.values())
             for symbol in set(states) - active:
                 close(symbol)
             needed = set()
@@ -551,6 +598,9 @@ def summarize_sector_context(
         "membership_span_count": len(spans),
         "frozen_stock_trading_day_count": frozen_days,
         "member_gap_fill_stock_trading_day_count": authority_resolved_days,
+        "factual_classification_stock_day_count": factual_days,
+        "selection_required_stock_day_count": selection_days,
+        "unclassified_factual_stock_day_count": unclassified_factual_days,
         "quote_required_sector_date_count": required_quotes,
         "quote_gap_count": 0,
         "membership_gap_count": 0,
@@ -608,6 +658,7 @@ def prepare_shared_domain_files(
         outputs = [path.name]
         counts = {"benchmark_code": "000300.SH", "provider_catalog_only": True}
     elif component == "suspend":
+        from backend.data_service.suspension_day_authority import frozen_authority
         parquet, metadata, keys, input_count = _build_suspend(
             root=output_root,
             rows=_source_rows(cas, snapshot, "suspend_d"),
@@ -615,6 +666,7 @@ def prepare_shared_domain_files(
             calendar=calendar,
             profile=profile,
             cutoff=snapshot.official_cutoff,
+            suspension_authority=frozen_authority(cas, snapshot),
         )
         outputs = [parquet.relative_to(output_root).as_posix(), metadata.relative_to(output_root).as_posix()]
         counts = {"suspended_stock_date_count": len(keys), "source_rows_read": input_count}

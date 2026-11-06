@@ -169,6 +169,10 @@ class HistoricalRangePlanningService:
             raise ValueError("list_semantics_version and list_semantics_hash must be supplied together")
 
     def create(self, request: HistoricalRangeResearchBatchRequestV1) -> CreatedHistoricalRangePlanningBatch:
+        if request.selection_input_source_mode is not None:
+            existing = self._repository.find_existing_source_planning_batch(request=request)
+            if existing is not None:
+                return existing
         release = self._code_release_resolver.resolve()
         programs = self._program_resolver.freeze_programs(
             request=request,
@@ -183,6 +187,9 @@ class HistoricalRangePlanningService:
             request=request,
             frozen_programs=programs,
         )
+        from .task_input_sources import freeze_program_input_sources
+
+        programs = freeze_program_input_sources(request=request, date_plan=date_plan, frozen_programs=programs)
         plan = self._requirement_planner.build(
             request=request,
             date_plan=date_plan,

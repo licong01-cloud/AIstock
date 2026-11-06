@@ -1,6 +1,6 @@
 # 荐股与模拟盘策略包通用选股信号共享内核详细设计
 
-> 日期：2026-10-14；版本：v1.3；状态：DESIGN_REVIEWED / IMPLEMENTATION_PENDING。
+> 日期：2026-10-14；版本：v1.4（2026-10-15 BUG-1912 能力时钟修订）；原设计交付状态：DESIGN_REVIEWED / IMPLEMENTATION_PENDING。
 > 本次交付：详细设计文档，多轮审核修订后提交独立 PR；不实施业务源码、不启动实验、不操作数据库或服务。
 > 文档源码基线：`origin/main@53c8ccae19aeab9f64f8a49907699863b549b8e3`。
 > 后续实现风险：F2 / T3，共享计算契约涉及 Advisory、StrategyPackage、Selection 与模拟盘消费者；不因此扩大任何窗口的修改权限。
@@ -119,6 +119,11 @@
 
 适配器同时映射 `trade_date_requested`、`effective_trade_date/score_trade_date`、reference-price日期及各stage的as-of时钟，保持旧字段含义，不将 `T` 当作HMM/risk输入的默认截止。只要求各stage消费其原合同允许、在本次决策时已可得的信息；执行日的成交可用性检查仍属模拟盘私有执行，不倒灌进更早评分。调用与实际记录日期不一致时返回具体合同错误，不改日期或从最新配置补填。
 
+BUG-1912 明确各能力并非统一绑定 C：[provider 时钟合同](../contracts/strategy_package_selection_provider_clocks_v1.md)
+规定模型/参考价/risk/PIT 行业截止 C，停牌 eligibility 按冻结政策在 D 观测。
+停牌是原生基础选股约束，不仅是下单时的检查；仍由唯一 TradabilityFilter 过滤递补。
+HMM 保留原生 C/D 标签与生效日，验证行情/训练信息不超过 C、资产可用日期不超过 D，不能将 D 标签改取 C 行或生成系数。
+
 历史计划必须逐项提供截止映射，不能把最后一天 cutoff 广播到整个历史区间。固定 cutoff 的原合法请求仍保留其明确语义，不能冒称每日增量。TopK 不参与模型资源选择；改变10/20/50只重算必要后处理，不重复模型推理。
 
 ### 5.2 `SelectionSignalDayResultV1`
@@ -193,6 +198,11 @@ HMM、risk、tradability 和包融合各调用原实现，使用显式政策及�
 
 `semantic_identity`绑定包/模型/输入/政策/合法日；`storage_identity`绑定消费者/run/day/阶段。两侧同输入可以有相同语义摘要，但其运行证据、观测时间、产物引用和发布状态是各自真实生成的。
 
+BUG-1912 起，共享结果与 risk/selection receipt 显式保存 `selection_provider_clocks_v1`
+及实际 provider 调用日期；禁用能力以无 lookup 日期表达，不冒称读过数据。
+语义身份包含这些证据和完整原生 receipt hash；storage identity 也绑定语义身份。
+旧 C 过滤结果不可当作 D eligibility 结果命中或续跑，已存产物不可覆盖；身份验证的原始评分可在本侧明确重算后处理。
+
 当前公共 repository 的查询及唯一键包含 package/manifest/date/source/runtime hash，未体现消费者隔离；不能直接把全局 artifact 命中当成本次独立计算。新共享计算入口必须绕开跨消费者结果发现，产物通过现有消费者私有 task/artifact存储及相应原生writer发布。不能把 consumer/run 混进评分政策 hash 来假装原算法改变，也不能伪造原生 receipt 或捕获时间。
 
 公共原生产物若无法在现有存储合同中表达独立来源，记录该适配缺口并由所属 owner 解决；不能静默共用全局评分行、覆盖旧记录或以本地JSON冒充原生发布完成。本次文档不执行或预授权 schema/DDL 变更。
@@ -215,7 +225,7 @@ HMM、risk、tradability 和包融合各调用原实现，使用显式政策及�
 
 ## 9. 实施责任、文件范围与两长任务
 
-本次文档 PR 唯一允许修改：`docs/architecture/advisory_shared_selection_signal_kernel_detailed_design_20261014.md`。不修改旧优化分支、蓝图、catalog、公共标准或任何源码。未来实现逐项登记精确文件/函数和实际影响，以下是职责映射，不是跨模块写权限。
+2026-10-14 原文档 PR 唯一允许修改：`docs/architecture/advisory_shared_selection_signal_kernel_detailed_design_20261014.md`；当次不修改源码。后续实现及 BUG-1912 按各自用户授权、登记的精确文件/函数和实际影响独立交付，不修改旧优化分支、catalog 或公共标准。以下是职责映射，不是跨模块写权限；BUG-1912 的共享 Tradability 日期接口不授权修改 LocalSIM 私有实现。
 
 | owner / 已有路径 | 后续交付 | 本窗口边界 |
 |---|---|---|
@@ -324,3 +334,5 @@ v1.1 / R1（本窗口人工自审）：复核用户需求、现有组件及模�
 v1.2 / R2（本窗口人工自审）：复核PIT/处理器/缓存/恢复反例；源码确认HMM默认provider存在系数生成能力，补充只读注入、禁止隐式训练/写入与缺失语义。补充不安全模板的原正确fresh-load、节点import兼容、数值执行身份、同存储原子发布及“产物已发布但checkpoint未推进”的恢复处理；对应定向测试写入§10。未运行模型或交易任务，终轮复核待执行。
 
 v1.3 / R3（本窗口人工自审）：完成共享整链/通用包/两侧运行隔离、三点兼容、模块所有权、X临时、增量/恢复、真实基准和DESIGN-COMPLIANCE-001的全文复核；补清完整可评分集合与未评分原键UNKNOWN边界，避免把4913人口/4907评分误当必须补分数或静默删股。设计条款自审通过，源码、跨消费者接入及运行态全部仍待交付；文档引用与diff检查另以最终提交证据为准，不声称独立外审。
+
+v1.4 / BUG-1912：修正实现中把整个 tradability 绑定 C 的冲突，停牌 eligibility 使用 D、行业/risk 保持 C，HMM 输入与标签分离。该修订按用户明确授权登记共享精确源码和直接测试，不扩大 LocalSIM 私有写权限；源码/CI、断点兼容和用户重启后的生产复验分别交付。

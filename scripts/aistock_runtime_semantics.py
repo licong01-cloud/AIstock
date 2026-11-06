@@ -517,10 +517,18 @@ def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[st
         value = payload.get(field)
         if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
             return "failed", f"collection payload reports failure {field}={value.strip()}", {}
+    # Local-data returns the standard {status, data: {items, ...}} envelope.
+    # Validate both levels; an outer success marker must not hide an inner
+    # error/malformed collection. Row statuses themselves are collection facts.
+    if isinstance(payload.get("data"), dict):
+        state, reason, facts = _validate_collection_payload(payload["data"])
+        return state, reason, {**facts, "envelope": "data"}
     for key in _COLLECTION_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list):
             return "passed", None, {"items_key": key, "size": len(value)}
+        if key == "items" and key in payload:
+            return "failed", "collection items must be an array", {}
     if payload.get("ok") is True:
         return "passed", None, {"ok": True}
     for field in _STATUS_FIELD_NAMES:
@@ -563,6 +571,62 @@ def _validate_tdx_raw_kline(payload: Any) -> tuple[str, str | None, dict[str, An
     return 'passed', None, {'row_count': len(rows), 'first_time': rows[0]['Time'], 'last_time': rows[-1]['Time']}
 
 
+def _validate_pipeline_overview(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Verify truthful partial observations, not the health of unrelated businesses."""
+    if not isinstance(payload, dict) or payload.get('status') != 'success':
+        return 'failed', 'overview success envelope missing', {}
+    data = payload.get('data')
+    if not isinstance(data, dict) or data.get('schema_version') != 'aistock_pipeline_overview_v1':
+        return 'failed', 'overview schema missing', {}
+    sections = data.get('sections')
+    keys = {'ci', 'runners', 'nightly', 'bugs', 'prs', 'worktrees'}
+    if not isinstance(sections, dict) or set(sections) != keys or data.get('read_only') is not True:
+        return 'failed', 'overview source set or read-only boundary invalid', {}
+    available = 0
+    for key, source in sections.items():
+        if not isinstance(source, dict) or source.get('state') not in {'loading', 'available', 'unavailable', 'timeout'}:
+            return 'failed', f'{key} source state invalid', {}
+        if not isinstance(source.get('stale'), bool) or not isinstance(source.get('refreshing'), bool):
+            return 'failed', f'{key} freshness metadata missing', {}
+        if source['state'] == 'available':
+            if not isinstance(source.get('data'), dict) or not source.get('source') or not source.get('collected_at'):
+                return 'failed', f'{key} observation identity missing', {}
+            age = source.get('age_seconds')
+            if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0:
+                return 'failed', f'{key} observation age invalid', {}
+            if not source['stale']:
+                available += 1
+            observed = source['data']
+            def count(value):
+                return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            valid = False
+            if key == 'bugs':
+                valid = count(observed.get('pending')) and count(observed.get('total')) and observed['pending'] <= observed['total']
+            elif key == 'worktrees':
+                valid = count(observed.get('total')) and count(observed.get('task_worktrees')) and observed['total'] > observed['task_worktrees']
+            elif key == 'ci':
+                valid = all(isinstance(observed.get(state), dict) and count(observed[state].get('total'))
+                            and isinstance(observed[state].get('items'), list) for state in ['queued', 'in_progress'])
+            elif key == 'prs':
+                valid = count(observed.get('observed_open')) and isinstance(observed.get('items'), list) and isinstance(observed.get('truncated'), bool)
+            elif key == 'runners':
+                valid = isinstance(observed.get('items'), list) and observed.get('expected_roles') == ['ci', 'security'] and isinstance(observed.get('missing_roles'), list)
+            elif key == 'nightly':
+                run = observed.get('latest_run')
+                valid = isinstance(run, dict) and bool(run.get('id')) and run.get('status') in {'queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'}
+                if valid:
+                    valid = bool(run.get('conclusion')) == (run['status'] == 'completed')
+            if not valid:
+                return 'failed', f'{key} observed payload invalid', {}
+        elif source['state'] in {'unavailable', 'timeout'} and not source.get('error'):
+            return 'failed', f'{key} failure is not explicit', {}
+        elif source['state'] == 'loading' and source.get('data') is not None:
+            return 'failed', f'{key} loading source fabricates data', {}
+    if not available:
+        return 'pending', 'no fresh independent source has completed yet', {'available_sources': 0}
+    return 'passed', None, {'available_sources': available, 'scope': 'read-only pipeline observations, not business readiness'}
+
+
 def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Object endpoints must return a non-error object or array payload."""
     if isinstance(payload, list):
@@ -579,6 +643,256 @@ def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, 
         if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
             return "failed", f"object payload reports failure {field}={value.strip()}", {}
     return "passed", None, {"kind": "object"}
+
+
+def _validate_advisory_historical_operations(
+    payload: Any, *, url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Validate the public operation projection, never infer replay completion.
+
+    The query deliberately redacts worker_id and lease_token. Only its public
+    expiry/fencing identity is checked; no secrets, DB reads or artifact IO.
+    A consistent QUEUED/failed row is evidence of status readback, not success
+    of that operation, recovery of a stranded operation, or batch completion.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/api/v1/advisory/historical-range-batches/([^/]+)/operations", parsed.path)
+    if match is None:
+        return "failed", "operation probe requires an exact batch path", {}
+    batch_id = urllib.parse.unquote(match[1])
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    pinned = query.get("expected_operation_id")
+    if pinned is not None and (len(pinned) != 1 or not pinned[0].strip()):
+        return "failed", "expected_operation_id must be one non-empty identity", {}
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return "failed", "operations require ok=true without envelope errors", {}
+    data, page = payload.get("data"), payload.get("page")
+    rows = data.get("operations") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows or not isinstance(page, dict):
+        return "failed", "operations require a non-empty list and pagination", {}
+    limit, more, cursor = page.get("limit"), page.get("has_more"), page.get("next_cursor")
+    if type(limit) is not int or not 1 <= limit <= 500 or len(rows) > limit or type(more) is not bool:
+        return "failed", "operations pagination limit/count is invalid", {}
+    if (more and (len(rows) != limit or not isinstance(cursor, str) or not cursor.strip())) or (
+        not more and cursor is not None
+    ):
+        return "failed", "operations pagination cursor contradicts has_more", {}
+    if "limit" in query and query["limit"] != [str(limit)]:
+        return "failed", "operations page limit differs from probe", {}
+
+    receipt_kinds = {
+        "CREATE": "SOURCE_REQUIREMENT_PLAN", "BUILD_SOURCE_CATALOG": "SOURCE_CATALOG_CHECKPOINT",
+        "RESUME": "RANGE_RECEIPT", "CANCEL": "RANGE_RECEIPT",
+        "REFRESH_OUTCOMES": "OUTCOME_REFRESH_RECEIPT", "REFRESH_OUTCOMES_RUN": "OUTCOME_REFRESH_RECEIPT",
+        "BUILD_DATASET_BRIDGE": "DATASET_BRIDGE_RECEIPT", "BUILD_DATASET_BRIDGE_RUN": "DATASET_BRIDGE_RECEIPT",
+    }
+    statuses = {"QUEUED", "RUNNING", "WAITING_INPUT", "COMPLETED", "RETRYABLE_FAILED", "FAILED"}
+    ids, keys, running_types = set(), set(), set()
+    observed: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return "failed", "operation must be an object", {}
+        operation_id, key = row.get("operation_id"), row.get("operation_idempotency_key")
+        kind, status = row.get("operation_type"), row.get("status")
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 200
+               for value in (operation_id, key, kind, status)):
+            return "failed", "operation identity/type/status is missing or invalid", {}
+        if row.get("batch_id") != batch_id or operation_id in ids or (kind, key) in keys:
+            return "failed", "operation batch identity mismatch or duplicate operation/idempotency identity", {}
+        if kind not in receipt_kinds or status not in statuses:
+            return "failed", "operation type/status is unknown", {}
+        planning = kind in {"CREATE", "BUILD_SOURCE_CATALOG"}
+        identity_hash = row.get("planning_identity_hash" if planning else "request_payload_sha256")
+        if not isinstance(identity_hash, str) or re.fullmatch(r"[0-9a-f]{64}", identity_hash) is None:
+            return "failed", "operation request/planning identity hash is invalid", {}
+        if planning and row.get("request_payload_sha256") is not None:
+            return "failed", "planning operation cannot claim a sealed request hash", {}
+        if not planning and (type(row.get("expected_row_version")) is not int or row["expected_row_version"] < 1):
+            return "failed", "sealed operation requires expected batch row version", {}
+        if any(name in query and row[field] not in query[name]
+               for name, field in (("status", "status"), ("operation_type", "operation_type"))):
+            return "failed", "operation does not match requested filters", {}
+        ids.add(operation_id)
+        keys.add((kind, key))
+        attempt, version, fencing = row.get("attempt_no"), row.get("row_version"), row.get("fencing_token")
+        if type(attempt) is not int or attempt < 0 or type(version) is not int or version < 1:
+            return "failed", "operation attempt/row version is invalid", {}
+        if fencing is not None and (type(fencing) is not int or fencing < 1):
+            return "failed", "operation fencing identity is invalid", {}
+        times = {}
+        for field in ("created_at", "started_at", "finished_at", "lease_expires_at"):
+            if field not in row:
+                return "failed", f"operation is missing {field}", {}
+            value = row[field]
+            if value is None and field != "created_at":
+                times[field] = None
+                continue
+            try:
+                stamp = datetime.fromisoformat(value) if isinstance(value, str) else None
+                if stamp is None or stamp.utcoffset() is None:
+                    raise ValueError("timestamp must be timezone-aware")
+            except (ValueError, OverflowError):
+                return "failed", f"operation {field} must be an aware timestamp", {}
+            times[field] = stamp
+        created, started, finished, expiry = (times[name] for name in (
+            "created_at", "started_at", "finished_at", "lease_expires_at",
+        ))
+        if (started is not None and started < created) or (
+            finished is not None and (started is None or finished < started)
+        ):
+            return "failed", "operation timestamps contradict lifecycle ordering", {}
+        expired = row.get("lease_expired")
+        if type(expired) is not bool:
+            return "failed", "operation lease_expired must be boolean", {}
+        if status == "RUNNING":
+            if expiry is None or started is None or attempt < 1 or fencing is None or kind in running_types:
+                return "failed", "RUNNING operation requires a unique type and public lease identity", {}
+            if expiry <= started:
+                return "failed", "operation lease expiry must follow its start", {}
+            running_types.add(kind)
+        # CREATE's atomic planning insert retains historical lease columns;
+        # the public query reports lease_expired=false outside RUNNING.
+        elif expired or (expiry is not None and not (
+            kind == "CREATE" and status == "COMPLETED" and fencing is not None and attempt >= 1
+            and started is not None and expiry > started
+        )):
+            return "failed", "non-running operation retains a lease", {}
+        if (status in {"COMPLETED", "FAILED"}) != (finished is not None):
+            return "failed", "operation status and terminal timestamp contradict", {}
+        if status == "QUEUED" and (attempt != 0 or started is not None or fencing is not None):
+            return "failed", "QUEUED operation cannot claim an execution attempt", {}
+        error = row.get("error_json")
+        dispatch_schema = "advisory_historical_range_background_dispatch_failure_v1"
+        if isinstance(error, dict) and error.get("schema_version") == dispatch_schema:
+            command = {"RESUME": "EXECUTION_RESUME", "BUILD_SOURCE_CATALOG": "CATALOG_EXECUTE"}.get(kind, kind)
+            if (error.get("operation_id") != operation_id or error.get("batch_id") != batch_id
+                    or error.get("retryable") is not True or error.get("command") != command
+                    or not isinstance(error.get("stage"), str)
+                    or error.get("stage") not in {"RUNTIME_RECONSTRUCTION", "REQUEST_RECONSTRUCTION", "CLAIM_AND_EXECUTION"}
+                    or any(not isinstance(error.get(name), str) or not error[name].strip()
+                           for name in ("reason_code", "error_type"))):
+                return "failed", "background dispatch error contradicts operation identity", {}
+            try:
+                recorded = error.get("recorded_at")
+                if not isinstance(recorded, str) or datetime.fromisoformat(recorded).utcoffset() is None:
+                    raise ValueError("dispatch failure requires an aware recorded_at")
+            except (ValueError, OverflowError):
+                return "failed", "background dispatch error recorded_at is invalid", {}
+        # The failure recorder may fail before a worker ever claims the row.
+        dispatch_failure = (
+            status == "RETRYABLE_FAILED" and attempt == 0 and started is None and fencing is None
+            and isinstance(error, dict)
+            and error.get("schema_version") == dispatch_schema
+            and error.get("operation_id") == operation_id and error.get("batch_id") == batch_id
+            and error.get("retryable") is True
+        )
+        if status != "QUEUED" and not dispatch_failure and (attempt < 1 or started is None):
+            return "failed", "executed operation requires attempt/start evidence", {}
+        if "error_json" not in row:
+            return "failed", "operation error field is missing", {}
+        if status in {"FAILED", "RETRYABLE_FAILED"}:
+            if not isinstance(error, dict) or not error:
+                return "failed", "failed operation requires structured error evidence", {}
+        elif error is not None:
+            return "failed", "non-failed operation carries contradictory error evidence", {}
+        if "result_ref" not in row or "result_hash" not in row:
+            return "failed", "operation result fields are missing", {}
+        ref, digest = row["result_ref"], row["result_hash"]
+        publishes = status in {"WAITING_INPUT", "COMPLETED", "FAILED"}
+        if publishes != isinstance(ref, dict) or (not publishes and (ref is not None or digest is not None)):
+            return "failed", "operation status contradicts published result", {}
+        if publishes:
+            if ref.get("schema_version") != "advisory_historical_range_artifact_ref_v1":
+                return "failed", "operation result reference schema is invalid", {}
+            if ref.get("artifact_kind") != receipt_kinds[kind] or digest != ref.get("semantic_content_hash"):
+                return "failed", "operation result kind/hash differs from its operation", {}
+            if any(not isinstance(ref.get(name), str) or re.fullmatch(r"[0-9a-f]{64}", ref[name]) is None
+                   for name in ("semantic_content_hash", "payload_sha256", "file_sha256")):
+                return "failed", "operation result hashes are invalid", {}
+            path = ref.get("relative_path")
+            if (not isinstance(path, str) or not path.strip() or path.startswith(("/", "\\"))
+                    or ":" in path or ".." in path.replace("\\", "/").split("/")):
+                return "failed", "operation result path must be contained", {}
+            if any(not isinstance(ref.get(name), str) or not ref[name].strip()
+                   for name in ("producer_contract_version", "payload_schema_version")):
+                return "failed", "operation result contract identity is missing", {}
+        result_version, result_status = row.get("result_row_version"), row.get("result_status")
+        if result_version is not None and (type(result_version) is not int or result_version < 1):
+            return "failed", "operation result row version is invalid", {}
+        if result_status is not None and (not isinstance(result_status, str) or not result_status.strip()):
+            return "failed", "operation result status is invalid", {}
+        if not publishes and (result_version is not None or result_status is not None):
+            return "failed", "non-publishing operation claims result status/version", {}
+        if status == "COMPLETED" and kind in {"RESUME", "CANCEL"} and (
+            result_version is None or result_status not in {
+                "PLANNING", "QUEUED", "RUNNING", "PARTIAL", "WAITING_INPUT", "COMPLETED",
+                "FAILED", "CANCELLING", "CANCELLED",
+            }
+        ):
+            return "failed", "completed execution operation requires batch result status/version", {}
+        observed.append({"operation_id": operation_id, "status": status, "lease_expired": expired,
+                         "operation_completed": status == "COMPLETED", "result_status": result_status,
+                         "lease_reported_active": status == "RUNNING" and not expired})
+    if pinned is not None and pinned[0] not in ids:
+        return "failed", "requested operation identity is absent from this page", {}
+    return "passed", None, {
+        "batch_id": batch_id, "operations": observed, "has_more": more,
+        "verification_scope": "operation_status_readback_only", "execution_completed": False,
+    }
+
+
+def _validate_advisory_lstm_shadow_capture(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Require an actual prospective capture; a configured model alone is not runtime proof."""
+    facts: dict[str, Any] = {}
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return "failed", "shadow status requires ok=true without errors", facts
+    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/reranking-shadow", urllib.parse.urlsplit(url).path)
+    if not match or payload.get("program_id") != urllib.parse.unquote(match.group(1)):
+        return "failed", "shadow program identity differs", facts
+    if (payload.get("status") != "SHADOW_ONLY" or payload.get("production_ranking_replaced") is not False
+            or payload.get("independent_economic_confirmation") is not False):
+        return "failed", "shadow must remain active observation without production or economic promotion", facts
+    release, days = payload.get("release"), payload.get("days")
+    if (not isinstance(release, dict) or release.get("schema") != "lstm_spo_shadow_v1"
+            or release.get("program_id") != payload["program_id"] or release.get("mode") != "SHADOW_ONLY"
+            or type(release.get("physical_fit_count")) is not int or release["physical_fit_count"] != 0
+            or not all(re.fullmatch(r"[0-9a-f]{64}", str(release.get(k, ""))) for k in ("sha256", "model_sha256"))):
+        return "failed", "shadow frozen release identity is invalid", facts
+    captured, complete = payload.get("captured_days"), payload.get("complete_days")
+    if (not isinstance(days, list) or type(captured) is not int or type(complete) is not int
+            or captured != len(days) or not 0 <= complete <= captured):
+        return "failed", "shadow capture counts are inconsistent", facts
+    facts.update(program_id=payload["program_id"], captured_days=captured, complete_days=complete,
+                 release_sha256=release["sha256"], economic_confirmation=False)
+    if not days:
+        return "failed", "no prospective capture yet; configured status is insufficient", facts
+    try:
+        instants = []
+        decision_dates = set()
+        for day in days:
+            decision = datetime.fromisoformat(day["decision_date"]).date()
+            target = datetime.fromisoformat(day["target_date"]).date()
+            observed = datetime.fromisoformat(day["observed_at"])
+            local = observed.astimezone(timezone(timedelta(hours=8)))
+            opened = datetime.combine(target, datetime.min.time(), tzinfo=local.tzinfo) + timedelta(hours=9, minutes=30)
+            closed = datetime.combine(decision, datetime.min.time(), tzinfo=local.tzinfo) + timedelta(hours=15)
+            if (observed.utcoffset() is None or decision >= target or not closed <= local < opened
+                    or day["decision_date"] in decision_dates
+                    or not re.fullmatch(r"[0-9a-f]{64}", day["prediction_sha256"])):
+                return "failed", "shadow capture identity or prospective clock is invalid", facts
+            decision_dates.add(day["decision_date"])
+            instants.append(observed)
+        if sum(day.get("evaluation", {}).get("status") == "COMPLETE" for day in days) != complete:
+            return "failed", "shadow complete count differs from persisted days", facts
+        failure = payload.get("last_failure")
+        if failure is not None:
+            failed_at = datetime.fromisoformat(failure["observed_at"])
+            if failed_at.utcoffset() is None or failed_at >= max(instants):
+                return "failed", "shadow has no successful capture after its last failure", facts
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "failed", "shadow capture evidence is malformed", facts
+    facts["latest_capture_at"] = max(instants).isoformat()
+    return "passed", None, facts
 
 
 def _validate_advisory_entry_price_status(
@@ -631,6 +945,56 @@ def _validate_advisory_entry_price_status(
             "database_written": database_written,
         },
     )
+
+
+def _validate_advisory_trading_day_defaults(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Attest calendar choices only, never market/minute data readiness."""
+    def failed(reason):
+        return "failed", reason, {}
+
+    def day(value):
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+        if parsed.isoformat() != value:
+            raise ValueError("non-canonical calendar date")
+        return parsed
+
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("calendar_only") is not True or payload.get("errors"):
+        return failed("calendar defaults require ok=true and calendar_only=true without errors")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    try:
+        raw = query.get("lookback_trading_days", ["10"])
+        if len(raw) != 1 or not re.fullmatch(r"[0-9]+", raw[0]):
+            raise ValueError("invalid requested lookback")
+        lookback = int(raw[0])
+        if not 1 <= lookback <= 250 or type(payload.get("lookback_trading_days")) is not int or payload["lookback_trading_days"] != lookback:
+            raise ValueError("lookback identity mismatch")
+        as_of = day(payload.get("as_of_date"))
+        if "as_of_date" in query and query["as_of_date"] != [as_of.isoformat()]:
+            raise ValueError("as-of identity mismatch")
+        values = payload.get("trading_days")
+        if not isinstance(values, list) or not 1 <= len(values) <= lookback:
+            raise ValueError("calendar choices must be nonempty and bounded by lookback")
+        days = [day(value) for value in values]
+        if days != sorted(set(days)) or days[-1] > as_of or day(payload.get("latest_trading_day")) != days[-1]:
+            raise ValueError("calendar choices must be unique, ascending and latest <= as-of")
+        next_value = payload.get("next_trading_day")
+        if next_value is not None and day(next_value) <= as_of:
+            raise ValueError("next trading day must follow as-of")
+        status = payload.get("trading_day_status")
+        if (not isinstance(status, dict) or status.get("ok") is not True
+                or status.get("as_of_date") != as_of.isoformat()
+                or status.get("latest_completed_trading_day") != days[-1].isoformat()
+                or "next_trading_day" not in payload or "next_trading_day" not in status
+                or status.get("next_trading_day") != next_value):
+            raise ValueError("calendar status disagrees with defaults")
+        if (type(payload.get("available_trading_day_count")) is not int or payload["available_trading_day_count"] != len(days)
+                or payload.get("replay_start_date") != values[0] or payload.get("replay_end_date") != values[-1]):
+            raise ValueError("calendar count or replay bounds disagree")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return failed(str(exc))
+    return "passed", None, {"calendar_only": True, "market_data_readiness": "not_evaluated",
+                             "as_of_date": as_of.isoformat(), "latest_trading_day": values[-1],
+                             "next_trading_day": next_value, "trading_day_count": len(days)}
 
 
 def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
@@ -1109,6 +1473,137 @@ def _validate_hmm_daily_coefficient_jobs(payload: Any, *, url: str) -> tuple[str
     return "passed", None, facts
 
 
+def _validate_hmm_coefficient_extension(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one completed frozen-file extension, not mere enrollment or HTTP liveness.
+
+    An optional job_id pins a job when multiple current-policy jobs are returned.
+    Database-daily/old-policy history is not proof for this extension. This pure
+    contract checks durable readback; it never opens model/artifact files or DBs.
+    Pre-PR only requires registration, not a new job or runtime success.
+    """
+    facts: dict[str, Any] = {}
+
+    def require(condition: bool, reason: str) -> None:
+        if not condition:
+            raise ValueError(reason)
+
+    def sha(value: Any) -> bool:
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+    def day(value: Any):
+        require(isinstance(value, str), "extension date must be an ISO date")
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+        require(parsed.isoformat() == value, "extension date must be canonical")
+        return parsed
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        match = re.fullmatch(r"/api/v1/hmm-training/configs/([^/]+)/coefficient-extension", parsed.path)
+        require(match is not None and isinstance(payload, dict), "extension requires a config-owned object")
+        config_id = urllib.parse.unquote(match[1])
+        require(bool(config_id.strip()) and payload.get("config_id") == config_id, "extension config identity mismatch")
+        policy, jobs = payload.get("policy"), payload.get("jobs")
+        require(isinstance(policy, dict) and policy.get("schema_version") == "hmm_coefficient_extension_policy_v1",
+                "extension requires the registered policy schema")
+        require(policy.get("enabled") is True and isinstance(policy.get("snapshot_id"), str) and bool(policy["snapshot_id"].strip()),
+                "extension requires an enabled fixed-snapshot policy")
+        require(all(sha(policy.get(k)) for k in ("model_sha256", "config_sha256")), "extension policy hashes are invalid")
+        presets = policy.get("signal_presets")
+        require(isinstance(presets, list) and bool(presets) and all(isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in presets),
+                "extension presets are invalid")
+        require(presets == sorted(set(presets)), "extension presets must be unique and canonical")
+        start = day(policy.get("coefficient_start"))
+        require(isinstance(jobs, list) and bool(jobs) and all(isinstance(j, dict) for j in jobs), "extension requires non-empty job readback")
+        ids = [j.get("job_id") for j in jobs]
+        require(all(isinstance(v, str) and v.strip() for v in ids) and len(set(ids)) == len(ids), "extension job identities are missing or duplicated")
+        require(all(j.get("config_id") == config_id for j in jobs), "extension job config ownership mismatch")
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        pinned = query.get("job_id")
+        require(pinned is None or (len(pinned) == 1 and bool(pinned[0].strip())), "extension job_id must be unique and non-empty")
+        candidates = [j for j in jobs if j.get("job_id") == pinned[0]] if pinned else [
+            j for j in jobs if j.get("generation_mode") == "frozen_window_extension_v1"
+            and isinstance(j.get("plan_json"), dict) and j["plan_json"].get("policy") == policy]
+        require(len(candidates) == 1, "extension requires one current-policy job; pin job_id if ambiguous")
+        job = candidates[0]
+        facts.update(config_id=config_id, job_id=job["job_id"], acceptance_scope="one_registered_frozen_extension")
+        require(job.get("status") == "COMPLETED" and not job.get("error_message") and not job.get("error_context"),
+                "extension job must be COMPLETED without errors")
+        plan, result = job.get("plan_json"), job.get("result_json")
+        require(isinstance(plan, dict) and isinstance(result, dict), "extension requires durable plan and result")
+        require(plan.get("policy") == policy and plan.get("source_mode") == "qe_frozen_file", "extension frozen policy/source mismatch")
+        require(job.get("generation_mode") == plan.get("generation_mode") == "frozen_window_extension_v1", "extension generation mode mismatch")
+        require(job.get("result_status") == result.get("status") == "REGISTERED" and result.get("training_performed") is False,
+                "extension result must be REGISTERED with no training")
+        preset = job.get("signal_preset")
+        require(preset in presets and plan.get("signal_preset") == preset, "extension preset mismatch")
+        require(job.get("snapshot_id") == plan.get("snapshot_id") == policy["snapshot_id"] and plan.get("config_id") == config_id,
+                "extension frozen snapshot/config mismatch")
+        require(plan.get("model_sha256") == result.get("model_sha256") == policy["model_sha256"], "extension model identity mismatch")
+        require(sha(plan.get("generator_sha256")) and plan["generator_sha256"] == result.get("generator_sha256"), "extension generator identity mismatch")
+        end = day(plan.get("backtest_end"))
+        require(plan.get("test_start") == policy["coefficient_start"] and start <= end, "extension window does not match policy")
+        require(all(obj.get(k) == plan["backtest_end"] for obj in (job, plan) for k in ("as_of_trade_date", "effective_trade_date"))
+                and all(obj.get("input_data_max_dates") == {"frozen_release": plan["backtest_end"]} for obj in (job, plan)),
+                "extension row dates must match the frozen release window")
+        origin = plan.get("model_inference_origin")
+        require(isinstance(origin, dict) and origin.get("origin_authority") == "snapshot_metrics_original_precompute_origin_v1",
+                "extension requires frozen snapshot temporal authority")
+        ts, te, vs, ve = (day(origin.get(k)) for k in ("train_start", "train_end", "validation_start", "validation_end"))
+        # Existing precompute history origin: validation_start - (3*365 + 30).
+        require(ts <= te < vs <= ve < start and origin.get("history_start") == (vs - timedelta(days=1125)).isoformat(),
+                "extension window must follow frozen training/semantic calibration")
+        completed = datetime.fromisoformat(job.get("completed_at", ""))
+        require(completed.utcoffset() is not None and completed <= datetime.now(timezone.utc)
+                and end <= completed.astimezone(timezone(timedelta(hours=8))).date(), "extension completion time is invalid")
+        identity = plan.get("dataset_identity")
+        require(isinstance(identity, dict) and identity == result.get("dataset_identity"), "extension dataset identity mismatch")
+        require(all(isinstance(identity.get(k), str) and identity[k].strip() for k in ("generation", "release_id"))
+                and all(sha(identity.get(k)) for k in ("dataset_manifest_sha256", "dataset_manifest_file_sha256", "active_profile_sha256")),
+                "extension dataset pins are incomplete")
+        reader_sha = plan.get("extension_reader_sha256")
+        require(sha(reader_sha), "extension reader identity must be a lowercase SHA-256")
+        key = dict(policy=policy, preset=preset, preset_coeffs=plan.get("preset_coeffs"), model_inference_origin=origin,
+                   input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256=plan["generator_sha256"],
+                   extension_reader_sha256=reader_sha)
+        require(isinstance(key["preset_coeffs"], dict) and bool(key["preset_coeffs"]), "extension preset coefficients are missing")
+        encoded = (json.dumps(key, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+        require(sha(plan.get("extension_key")) and hashlib.sha256(encoded).hexdigest() == plan["extension_key"] == result.get("extension_key"),
+                "extension key does not bind frozen model/config/input/window identity")
+        windows = result.get("windows")
+        require(isinstance(windows, list) and bool(windows) and all(isinstance(w, dict) for w in windows), "extension registered windows are missing")
+        seen, primary = set(), []
+        for window in windows:
+            lo, hi = day(window.get("test_start")), day(window.get("backtest_end"))
+            require(start <= lo <= hi <= end and (lo, hi) not in seen, "extension window is duplicated or outside frozen plan")
+            seen.add((lo, hi))
+            require(window.get("strict_no_leakage") is True and window.get("role") == "automatic_frozen_model_extension",
+                    "extension window lacks strict frozen-model provenance")
+            expected = dict(config_id=config_id, snapshot_id=policy["snapshot_id"], preset=preset, model_sha256=policy["model_sha256"],
+                            extension_key=plan["extension_key"], generator_sha256=plan["generator_sha256"], extension_reader_sha256=reader_sha,
+                            dataset_generation=identity["generation"],
+                            release_id=identity["release_id"], dataset_manifest_identity=identity["dataset_manifest_sha256"],
+                            dataset_manifest_file_sha256=identity["dataset_manifest_file_sha256"], active_profile_sha256=identity["active_profile_sha256"])
+            require(all(window.get(k) == v for k, v in expected.items()), "extension window identity mismatch")
+            require(sha(window.get("coefficient_sha256")) and type(window.get("coefficient_bytes")) is int and window["coefficient_bytes"] > 0,
+                    "extension window artifact evidence is incomplete")
+            filename = f"coefficients_{preset}_{lo.isoformat()}_{hi.isoformat()}__auto_{plan['extension_key'][:16]}__{window['coefficient_sha256'][:16]}.json"
+            require(window.get("coefficient_filename") == filename, "extension artifact filename identity mismatch")
+            if lo == start and hi == end:
+                primary.append(window)
+        require(isinstance(plan.get("windows"), list) and plan["windows"] == [list(w) for w in sorted(
+            (lo.isoformat(), hi.isoformat()) for lo, hi in seen)], "extension registered windows differ from frozen plan")
+        require(len(primary) == 1 and job.get("artifact_sha256") == result.get("artifact_sha256") == primary[0]["coefficient_sha256"],
+                "extension primary artifact hash mismatch")
+        output = result.get("output_path")
+        require(isinstance(output, str) and job.get("output_path") == output
+                and output.replace("\\", "/").rsplit("/", 1)[-1] == primary[0]["coefficient_filename"], "extension primary artifact path mismatch")
+        facts.update(snapshot_id=policy["snapshot_id"], extension_key=plan["extension_key"], artifact_sha256=job["artifact_sha256"],
+                     frozen_plan_boundary_validated=True, training_performed=False, artifact_bytes_verified=False)
+        return "passed", None, facts
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return "failed", str(exc), facts
+
+
 def _validate_hmm_workers(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
     """Read one explicitly identified worker; never infer a reload from controller health."""
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
@@ -1224,6 +1719,116 @@ def _validate_hmm_research_records(payload: Any, *, url: str) -> tuple[str, str 
                             "scope": "existing record readback, not authorization or proof of a new write"}
 
 
+def _validate_selection_artifacts(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one declared native artifact; not proof of scoring or suspension behavior.
+
+    expected_* parameters bind local verification, not server-side list filters.
+    The route deliberately omits full scores; only its header/preview is verified.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/api/v1/strategy-packages/([^/]+)/selection-artifacts", parsed.path)
+    if match is None:
+        return "failed", "selection artifact probe path is invalid", {}
+    package_id = urllib.parse.unquote(match[1])
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    expected: dict[str, str] = {}
+    for field in ("artifact_id", "manifest_sha256", "runtime_config_hash", "trade_date", "data_source"):
+        values = query.get("expected_" + field, [])
+        if len(values) != 1 or not values[0].strip():
+            return "failed", f"selection artifact probe requires one non-empty expected_{field}", {}
+        expected[field] = values[0]
+    for field in ("manifest_sha256", "runtime_config_hash"):
+        if re.fullmatch(r"[0-9a-f]{64}", expected[field]) is None:
+            return "failed", f"selection artifact expected_{field} must be SHA-256", {}
+    try:
+        if datetime.strptime(expected["trade_date"], "%Y-%m-%d").date().isoformat() != expected["trade_date"]:
+            raise ValueError("non-canonical date")
+    except ValueError:
+        return "failed", "selection artifact expected_trade_date must be an ISO date", {}
+    if (not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("success") is False
+            or payload.get("package_id") != package_id or payload.get("error") or payload.get("errors")):
+        return "failed", "selection artifact envelope must report ok=true and the requested package", {}
+    rows = payload.get("artifacts")
+    if not isinstance(rows, list) or not rows:
+        return "failed", "selection artifact readback must not be empty", {}
+    ids: set[str] = set()
+    for item in rows:
+        if (not isinstance(item, dict) or not isinstance(item.get("artifact_id"), str)
+                or not item["artifact_id"].strip() or item["artifact_id"] in ids
+                or item.get("package_id") != package_id or item.get("manifest_sha256") != expected["manifest_sha256"]):
+            return "failed", "selection artifact rows have duplicate or conflicting identities", {}
+        ids.add(item["artifact_id"])
+    matches = [row for row in rows if row["artifact_id"] == expected["artifact_id"]]
+    if len(matches) != 1 or any(matches[0].get(key) != value for key, value in expected.items()):
+        return "failed", "declared selection artifact identity is absent or mismatched", {}
+    row = matches[0]
+    facts = {"package_id": package_id, **expected, "status": row.get("status"),
+             "acceptance_scope": "native_artifact_header_preview_readback_only; BUG-specific behavior requires separate evidence"}
+    if row.get("status") != "SUCCEEDED" or "error_json" not in row or row["error_json"] is not None:
+        # A correctly read FAILED record is still failure, never business success.
+        error = row.get("error_json")
+        facts["error_code"] = error.get("error_code") if isinstance(error, dict) else None
+        return "failed", "selection artifact status/error_json does not prove successful native generation", facts
+    metadata = row.get("metadata")
+    if (not isinstance(metadata, dict) or metadata.get("authority_scope") != "authoritative_selection"
+            or metadata.get("source_type") not in ("live_qe_model_inference_v1", "live_multi_alpha_inference_v1")):
+        return "failed", "selection artifact must have native authoritative inference provenance, not diagnostic data", facts
+    count, universe, preview = row.get("score_count"), row.get("universe_count"), row.get("score_preview")
+    if (type(count) is not int or type(universe) is not int or not 0 <= count <= universe
+            or not isinstance(preview, list) or len(preview) != min(count, 10)):
+        return "failed", "selection artifact counts and score_preview are inconsistent", facts
+    symbols: set[str] = set()
+    for score in preview:
+        if (not isinstance(score, dict) or not isinstance(score.get("symbol"), str) or not score["symbol"].strip()
+                or score["symbol"] in symbols or type(score.get("score")) not in {int, float}
+                or abs(score["score"]) > sys.float_info.max or not math.isfinite(score["score"])):
+            return "failed", "selection artifact preview contains malformed/duplicate scores", facts
+        symbols.add(score["symbol"])
+    if row.get("top_score_symbol") != (preview[0]["symbol"] if preview else None):
+        return "failed", "selection artifact top symbol contradicts its preview", facts
+    version = row.get("artifact_contract_version")
+    hash_fields = ["artifact_sha256"]
+    if version == "selection_score_artifact_v2":
+        hash_fields += ["artifact_payload_sha256", "artifact_input_context_hash", "source_revision_set_hash", "asset_closure_hash"]
+        if (metadata.get("provider_semantics_id") != "strategy_package_live_inference_v2"
+                or not isinstance(metadata.get("provider_semantics_hash"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", metadata["provider_semantics_hash"]) is None):
+            return "failed", "selection artifact v2 provider identity is incomplete", facts
+        outcome = metadata.get("candidate_outcome")
+        if (outcome != ("CANDIDATES_PRESENT" if count else "VALID_NO_CANDIDATE")
+                or (not count and (universe <= 0 or metadata.get("empty_stage") != "alpha_raw"))):
+            return "failed", "selection artifact v2 candidate outcome contradicts native counts", facts
+    elif version is not None or count == 0:
+        return "failed", "unsupported artifact version or unproven empty legacy artifact", facts
+    if any(not isinstance(row.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", row[field]) is None for field in hash_fields):
+        return "failed", "selection artifact persisted digest identity is incomplete", facts
+    # When GET returns every score, verify the score digest too. For >10 scores,
+    # never pretend that the truncated preview verifies the full ranking payload.
+    if count <= 10:
+        try:
+            encoded = json.dumps(preview, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        except (TypeError, ValueError):
+            return "failed", "selection artifact preview is not canonical JSON", facts
+        if hashlib.sha256(encoded).hexdigest() != row["artifact_sha256"]:
+            return "failed", "selection artifact score digest mismatch", facts
+    if version is not None:
+        parity_hash = metadata.get("multi_alpha_parent_parity_hash")
+        if parity_hash is not None and (not isinstance(parity_hash, str) or re.fullmatch(r"[0-9a-f]{64}", parity_hash) is None):
+            return "failed", "selection artifact parent parity identity is malformed", facts
+        # Exact writer canonical_v2_header; full scores are intentionally not returned by GET.
+        header = {key: row.get(key) for key in (
+            "package_id", "manifest_sha256", "trade_date", "data_source", "runtime_config_hash", "artifact_sha256",
+            "score_count", "universe_count", "top_score_symbol", "status", "artifact_input_context_hash",
+            "source_revision_set_hash", "asset_closure_hash")}
+        header.update(schema_version=version)
+        header.update({key: metadata.get(key) for key in ("authority_scope", "candidate_outcome", "provider_semantics_id",
+                                                       "provider_semantics_hash", "multi_alpha_parent_parity_hash")})
+        digest = hashlib.sha256(json.dumps(header, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if row["artifact_payload_sha256"] != digest:
+            return "failed", "selection artifact v2 header digest mismatch", facts
+    return "passed", None, {**facts, "artifact_sha256": row["artifact_sha256"], "score_count": count, "universe_count": universe}
+
+
 def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """QE dataset-profile must identify one usable active profile."""
     if not isinstance(payload, dict) or payload.get("ok") is not True:
@@ -1254,6 +1859,50 @@ def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[st
     if len(pool_ids) != len(set(pool_ids)):
         return "failed", "QE dataset profile contains duplicate pool_id values", required
     return "passed", None, {**required, "universe_count": len(pool_ids)}
+
+
+def _validate_qe_batch_execution_policy(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Prove the loaded QE default placement and workload limits, not just HTTP."""
+    expected = {
+        "version": "qe_model_workload_v2",
+        "default_node_allocation": "balanced",
+        "per_node_workload_limits": {"cpu_full_fit_loop": 4, "gpu_full_fit_loop": 2, "pure_backtest_loop": 4},
+        "model_node_affinity": {"gpu": "wsl2-5080"},
+        "cpu_training_nodes": ["rdagent-node1", "wsl2-5080"],
+        "prediction_replay_nodes": ["rdagent-node1", "wsl2-5080"],
+        "slot_lifetime": "whole_loop",
+        "stricter_model_and_global_capacity_guards": "preserved",
+        "existing_task_bindings": "submitted_immutable_pending_explicit_cas",
+    }
+    if not isinstance(payload, dict):
+        return "failed", "QE execution policy must be a JSON object", {}
+    limits = payload.get("per_node_workload_limits")
+    if not isinstance(limits, dict) or any(type(limits.get(key)) is not int for key in ("cpu_full_fit_loop", "gpu_full_fit_loop", "pure_backtest_loop")):
+        return "failed", "QE execution policy limits must be integers", {}
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            return "failed", f"QE execution policy mismatch: {field}", {}
+    return "passed", None, expected
+
+
+def _validate_qe_workspace_preflight(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Require the actual loaded metadata-read contract, not HTTP-only success."""
+    expected = {
+        "status": "ready",
+        "workspace_config_read_policy": "qe_workspace_config_get_retry_v1",
+        "max_read_attempts": 3,
+        "submission_performed": False,
+    }
+    if not isinstance(payload, dict) or set(payload) != set(expected) | {"node_id"}:
+        return "failed", "QE workspace preflight payload fields are incomplete or unknown", {}
+    node_id = payload.get("node_id")
+    if not isinstance(node_id, str) or not node_id.strip() or node_id != node_id.strip():
+        return "failed", "QE workspace preflight node_id is invalid", {}
+    if type(payload["max_read_attempts"]) is not int or payload["submission_performed"] is not False:
+        return "failed", "QE workspace preflight read/submission contract is invalid", {}
+    if any(payload.get(field) != value for field, value in expected.items()):
+        return "failed", "QE workspace preflight loaded contract does not match", {}
+    return "passed", None, {**expected, "node_id": node_id}
 
 
 def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
@@ -1500,6 +2149,18 @@ _LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
     "paper_v2.run",
     "paper_v2.intraday_snapshots",
 })
+
+
+def _validate_localsim_replay_recovery(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    from backend.services.simulation_runtime.localsim_replay_recovery import validate_replay_recovery_check
+
+    return validate_replay_recovery_check(payload)
+
+
+def _validate_localsim_workbench(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    from backend.services.simulation_runtime.localsim_workbench_metrics import validate_workbench_overview
+
+    return validate_workbench_overview(payload)
 
 
 def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:

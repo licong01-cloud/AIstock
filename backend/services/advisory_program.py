@@ -2184,6 +2184,7 @@ class AdvisoryProgramService:
         decision_as_of_trade_date: date,
         target_trade_date: date,
         data_source: str = "DB_HISTORICAL",
+        input_bindings: dict[str, Any] | None = None,
     ) -> tuple[AdvisoryProgram, AdvisoryStrategyBindingVersion, SelectionRun, dict[str, Any]]:
         program = self.repository.get_program(program_id)
         binding = self._ensure_active_binding(program)
@@ -2198,6 +2199,20 @@ class AdvisoryProgramService:
             target_trade_date=target_trade_date,
             selection_as_of_trade_date=decision_as_of_trade_date,
         )
+        if input_bindings is not None:
+            if set(input_bindings) != set(bound_program.package_ids):
+                raise RuntimeConfigInvalidError("forward input bindings differ from active packages")
+            config["selection_artifact_config"]["input_readiness_by_package"] = deepcopy(input_bindings)
+            # Selection overlays per-package settings on the program config.
+            # A legacy package override must not erase the new mandatory pin.
+            for package_id in bound_program.package_ids:
+                if isinstance(config.get(package_id), dict):
+                    per_artifact = deepcopy(config[package_id].get("selection_artifact_config") or
+                                            config[package_id].get("selection_artifact") or config["selection_artifact_config"])
+                    per_artifact.update(input_readiness_by_package=deepcopy(input_bindings),
+                                        cutoff_date=decision_as_of_trade_date.isoformat(),
+                                        cutoff_policy="FIXED_CUTOFF", fixed_cutoff=True)
+                    config[package_id]["selection_artifact_config"] = per_artifact
         run = self._selection_run_for_review(
             program=bound_program,
             trade_date=target_trade_date,

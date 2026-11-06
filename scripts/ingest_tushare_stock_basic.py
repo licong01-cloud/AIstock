@@ -14,7 +14,10 @@ import datetime as dt
 import json
 import os
 import sys
-import time
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -82,7 +85,8 @@ def _ensure_session_tune(conn, enabled: bool) -> None:
 def _get_max_list_date(conn) -> Optional[dt.date]:
     """Get the maximum list_date from stock_basic for incremental mode."""
     with conn.cursor() as cur:
-        cur.execute("SELECT max(list_date) FROM market.stock_basic")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(list_date) FROM market.stock_basic WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -170,6 +174,7 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _fetch_stock_basic(pro) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     # All fields documented by Tushare doc_id=25; None or missing values preserved as-is.
     df = pro.stock_basic(
         exchange="",
@@ -179,6 +184,8 @@ def _fetch_stock_basic(pro) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     if df is not None and not df.empty:
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
             rows.append(
                 {
                     "ts_code": row.get("ts_code"),
@@ -201,6 +208,8 @@ def _fetch_stock_basic(pro) -> List[Dict[str, Any]]:
 
 
 def _insert_stock_basic(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
     sql = (
@@ -249,8 +258,8 @@ def _parse_ymd(val) -> dt.date | None:
         if len(s) == 8:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
-    except Exception:
-        return None
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid source date: {val!r}") from exc
 
 
 def main() -> None:

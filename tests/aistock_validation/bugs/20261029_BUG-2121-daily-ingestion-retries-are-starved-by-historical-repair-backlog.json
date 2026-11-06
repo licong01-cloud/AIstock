@@ -1,0 +1,320 @@
+{
+  "actual": "adj_factor 2026-10-28 has zero facts while older 2010 retries repeatedly run whole-market reconciliations; moneyflow and other datasets are absent from the bounded retry selection.",
+  "allowed_write_scope": [
+    "backend/services/data_sync_targets.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/test_data_sync_targets.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2121",
+  "closed_at": "2026-11-05T18:49:43.577561Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T02:10:50.242109Z",
+  "description": "adj_factor 2026-10-28 has zero facts while older 2010 retries repeatedly run whole-market reconciliations; moneyflow and other datasets are absent from the bounded retry selection.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-622ecac31e97",
+      "timestamp": "2026-10-29T02:10:50.242109Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Latest daily obligations across datasets can progress despite historical repair backlog; older targets remain durable and eligible; no false success or skipped completeness checks.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_data_sync_targets.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_data_sync_targets.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2121-daily-ingestion-retries-are-starved-by-historical-repair-backlog.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/data_sync_targets.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/data_sync_targets.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_data_sync_targets.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/data_sync_targets.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_sync_targets.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/test_data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_sync_targets.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/test_data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ]
+  },
+  "first_seen_at": "2026-10-29T02:10:50.242109Z",
+  "fix_branch": null,
+  "fix_commit": "0caff2410d292e0427722ed82fa3d12e136d375c",
+  "fixed_at": "2026-10-29T02:22:59Z",
+  "github_issue_number": 6825,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6825",
+  "last_seen_at": "2026-10-29T02:10:50.242109Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6828",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "{'command': 'python X:/AIstock_temp/DATA_PREPARATION/daily-sync-20261029/validate_queue.py', 'result': 'PASS: existing DEV temporary table with 1100 historical targets; latest dates and other datasets selected before LIMIT; history, priorities, leases and validation-only ordering preserved; production read-only selection 0.016s'}"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\data-owner-backlog-20261106\\BUG-2121-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2121",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "0caff2410d292e0427722ed82fa3d12e136d375c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-05T18:43:38.399556Z",
+      "mode": "read_only",
+      "observed_identity": "c03dcf1730a38787faccd777949daf5c65e813ec",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d6844b79b6f10627eb3b4a91f20adcf164520c25dc2823b5de69c9837c9f0b31",
+      "receipt_sha256": "766522b6cbd1af89f7e7adf193e8062d1fd8ce9eba4176e5640b30ee09813f2f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "960e3c055896a049ae799c4f3ed64c3202c0f9f811fce1720aeb323e3ee9404f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Daily ingestion retries are starved by historical repair backlog",
+  "trigger_condition": {
+    "fingerprint": "622ecac31e973fcf875f6457",
+    "source_event_id": "FE-20261029-622ecac31e97"
+  },
+  "validation_evidence": [
+    "2026-11-06: 正式 post-restart-verify 通过，运行 c03dcf1730a38787faccd777949daf5c65e813ec 包含该源码合入；18项精确回归通过，覆盖重试公平调度、IPO暖启动、NUMERIC NaN及历史证券前缀。11月5日daily_basic当前VALID，保留真实上游MISSING；无生产写库/采集/进程操作。"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

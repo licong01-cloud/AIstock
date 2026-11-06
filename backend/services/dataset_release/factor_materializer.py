@@ -42,7 +42,7 @@ from backend.data_service.security_source_identity import (
 from .canonical import digest_named_fields, ensure_sha256
 from .canonical_stock_transformer import QfqDenominatorAuthority
 from .errors import DatasetReleaseError
-from .pit import FrozenPitSnapshot, filter_frame_to_pit_spans
+from .pit import FrozenPitSnapshot
 from .source_fact_history import SOURCE_HISTORY_CONTRACT, filter_source_fact_history
 from .streaming_artifacts import (
     ArtifactChunkTooLarge,
@@ -65,6 +65,7 @@ from .static_schema import (
 
 FACTOR_MATERIALIZATION_SCHEMA = "dataset_release_factor_materialization_v1"
 FACTOR_CHECKPOINT_SCHEMA = "dataset_release_factor_checkpoint_v1"
+STATIC_ASOF_CONTRACT = "exact_date_provider_facts_v2"
 FACTOR_H5_DATASETS: tuple[str, ...] = (
     "daily_pv",
     "daily_basic",
@@ -259,6 +260,7 @@ class FactorMaterializationSpec:
                 "static_ordered_columns": list(self.static_ordered_columns),
                 "static_schema_version": STATIC_SCHEMA_VERSION,
                 "static_schema_digest": static_schema_digest(),
+                "static_asof_contract": STATIC_ASOF_CONTRACT,
                 "factor_h5_schema_version": FACTOR_H5_SCHEMA_VERSION,
                 "factor_h5_schemas": {key: list(value) for key, value in FACTOR_H5_SCHEMAS.items()},
                 "factor_h5_dtypes": FACTOR_H5_DTYPES,
@@ -345,6 +347,7 @@ class FactorPartitionProducerSpec:
     overlay_summary: Mapping[str, Any] | None = None
     allow_partial_ranges: bool = False
     instrument_filter: tuple[str, ...] = ()
+    fact_stock_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.partitions:
@@ -362,9 +365,15 @@ class FactorPartitionProducerSpec:
         if (
             self.qfq_denominator_authority.cutoff != self.pit_snapshot.cutoff
             or self.qfq_denominator_authority.pit_spans_sha256 != self.pit_snapshot.spans_sha256
-            or set(self.qfq_denominator_authority.by_code) != {span.ts_code for span in self.pit_snapshot.spans}
+            or set(self.qfq_denominator_authority.by_code) != set(
+                self.fact_stock_codes or self.qfq_denominator_authority.by_code
+            )
         ):
             raise FactorMaterializationError("factor QFQ authority differs from PIT/cutoff")
+        if (self.fact_stock_codes != tuple(sorted(set(self.fact_stock_codes)))
+                or any(_STOCK_CODE.fullmatch(code) is None for code in self.fact_stock_codes)
+                or (self.fact_stock_codes and not {span.ts_code for span in self.pit_snapshot.spans}.issubset(self.fact_stock_codes))):
+            raise FactorMaterializationError("factor factual stock population is invalid")
         if self.static_ordered_columns != STATIC_ORDERED_COLUMNS:
             raise FactorMaterializationError("factor producer requires 121-column static authority")
         if type(self.row_group_rows) is not int or not 0 < self.row_group_rows <= 100_000:
@@ -410,6 +419,7 @@ class FactorPartitionProducerSpec:
                 "static_ordered_columns": list(self.static_ordered_columns),
                 "static_schema_version": STATIC_SCHEMA_VERSION,
                 "static_schema_digest": static_schema_digest(),
+                "static_asof_contract": STATIC_ASOF_CONTRACT,
                 "factor_h5_schema_version": FACTOR_H5_SCHEMA_VERSION,
                 "factor_h5_density_contracts": FACTOR_H5_DENSITY_CONTRACTS,
                 "row_group_rows": self.row_group_rows,
@@ -418,6 +428,7 @@ class FactorPartitionProducerSpec:
                 "overlay_summary": dict(self.overlay_summary or {}),
                 "allow_partial_ranges": self.allow_partial_ranges,
                 "instrument_filter": list(self.instrument_filter),
+                **({"fact_stock_codes": list(self.fact_stock_codes)} if self.fact_stock_codes else {}),
             },
         )
 
@@ -625,6 +636,15 @@ class FactorPartitionProductionReceipt:
     source_root: Path
     chunks: tuple[SealedFactorChunk, ...]
     receipt: Mapping[str, Any]
+
+
+def _filter_producer_population(frame, spec, partition):
+    codes = spec.fact_stock_codes or tuple(spec.qfq_denominator_authority.by_code)
+    facts = filter_source_fact_history(frame, codes=codes,
+                                      start=partition.start, end=partition.end)
+    return facts, {"population_policy": "observed_facts_independent_of_pit_v1",
+                   "source_rows": len(frame), "retained_rows": len(facts),
+                   "pit_selection_unchanged": True}
 
 
 class FactorPartitionProducer:
@@ -855,7 +875,7 @@ class FactorPartitionProducer:
             base_factors=base_factors,
             previous_adj_tail=previous_state.adj_factor_tail,
         )
-        daily, daily_pit = filter_frame_to_pit_spans(daily, spec.pit_snapshot)
+        daily, daily_pit = _filter_producer_population(daily, spec, partition)
         if daily.empty:
             raise FactorMaterializationError(f"PIT removed every daily row: {partition.partition_key}")
         if len(daily) > spec.max_source_partition_rows:
@@ -906,11 +926,11 @@ class FactorPartitionProducer:
             frame = _normalize_aux_frame(raw_frame, dataset=dataset)
             source_history = (
                 filter_source_fact_history(
-                    frame, codes=(span.ts_code for span in spec.pit_snapshot.spans),
+                    frame, codes=spec.fact_stock_codes or spec.qfq_denominator_authority.by_code,
                     start=partition.start, end=partition.end,
                 ) if dataset == "daily_basic" else None
             )
-            frame, pit_receipts[dataset] = filter_frame_to_pit_spans(frame, spec.pit_snapshot)
+            frame, pit_receipts[dataset] = _filter_producer_population(frame, spec, partition)
             frame = frame.sort_index() if not frame.empty else frame
             artifact_frame = (
                 _moneyflow_source_identity_frame(frame, raw_frame)
@@ -1567,27 +1587,12 @@ def _static_asof_frame(
     target_index: pd.MultiIndex,
     previous_tail: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if dataset in {"moneyflow", "daily_basic"}:
-        # daily_basic is an exact-date provider fact, including nullable
-        # dividend yields. Carrying yesterday's yield into a source NULL
-        # silently fabricates data and makes H5/static snapshots diverge.
-        return current, pd.DataFrame()
-    slow_columns: list[str] = []
-    if dataset in {"bak_basic", "cyq_perf", "sector_data", "margin_detail"}:
-        slow_columns = list(current.columns)
-    if not slow_columns:
-        return current, _tail_by_instrument(current, 1)
-    prior = previous_tail.loc[:, slow_columns] if not previous_tail.empty else pd.DataFrame()
-    context = _combine_indexed_frames(prior, current.loc[:, slow_columns])
-    if context.empty:
-        return current, pd.DataFrame()
-    union = context.index.union(target_index).sort_values()
-    filled = context.reindex(union).groupby(level="instrument", sort=False).ffill()
-    slow = filled.reindex(target_index).loc[:, slow_columns]
-    exact = current.drop(columns=slow_columns, errors="ignore")
-    output = pd.concat([exact, slow], axis=1).sort_index()
-    tail = _tail_by_instrument(context, 1)
-    return output, tail
+    # Every auxiliary input is a dated provider fact, not a latest-known
+    # financial disclosure. Preserve both source NULLs and absent rows in the
+    # static projection, just as the corresponding H5 does. In particular,
+    # publication lag does not turn yesterday's margin/chip values into today's
+    # facts. Ignore legacy rolling tails, including across month boundaries.
+    return current, pd.DataFrame()
 
 
 def _build_static_frame(

@@ -66,7 +66,8 @@ from .authoritative_bin_exporter import (
     export_stock_daily_csv,
     export_stock_minute_csv,
     normalize_stock_export_exchanges,
-    resolve_stock_universe_from_pit_spans,
+    resolve_stock_universe,
+    StockUniverseConfig,
     rewrite_stock_all_txt_for_ipo_filter,
     rewrite_stock_all_txt_from_pit_spans,
 )
@@ -986,13 +987,8 @@ def _resolve_h5_ts_codes_for_pit(
     if not key:
         return ts_codes, None, None
     pit_ensure = _ensure_stock_pit_universe_for_export(universe_key=key, start=start, end=end)
-    codes = resolve_stock_universe_from_pit_spans(
-        start=start,
-        end=end,
-        universe_key=key,
-        exchanges=exchanges,
-        ts_codes=ts_codes,
-    )
+    codes = resolve_stock_universe(StockUniverseConfig(
+        start=start, end=end, exchanges=exchanges, ts_codes=ts_codes))
     return codes, pit_ensure, key
 
 
@@ -1015,11 +1011,11 @@ def _rewrite_h5_all_txt_from_pit(
 
 
 def _h5_effective_exclude_st(pit_key: Optional[str], requested: bool) -> bool:
-    return False if pit_key else requested
+    return False  # compatibility flag is selection-only
 
 
 def _h5_effective_exclude_delisted_or_paused(pit_key: Optional[str], requested: bool) -> bool:
-    return True if pit_key else requested
+    return False
 
 
 def _load_h5_snapshot_meta(snapshot_id: str) -> Dict[str, Any]:
@@ -1070,13 +1066,7 @@ def _resolve_h5_incremental_ts_codes_for_pit(
         return None, None, None
     start = _h5_meta_start(snapshot_id, DEFAULT_ST_PIT_START_DATE)
     pit_ensure = _ensure_stock_pit_universe_for_export(universe_key=key, start=start, end=end)
-    codes = resolve_stock_universe_from_pit_spans(
-        start=start,
-        end=end,
-        universe_key=key,
-        exchanges=exchanges,
-        ts_codes=None,
-    )
+    codes = resolve_stock_universe(StockUniverseConfig(start=start, end=end, exchanges=exchanges))
     return codes, pit_ensure, key
 
 
@@ -1136,7 +1126,9 @@ def _update_h5_pit_meta(
             "st_pit": True,
             "delist_pit": False,
             "pause_pit": False,
-            "survivorship_bias": "current D/P stocks excluded by scope; delisting PIT not implemented",
+            "survivorship_bias": "no_current_listing_status_filter_on_facts",
+            "fact_population_policy": "all_real_shsz_a_share_facts_independent_of_pit_v1",
+            "quote_catalog_pit_clipped": False,
             "pit_ensure": pit_ensure,
         }
     )
@@ -1217,11 +1209,6 @@ def _export_daily_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if universe_key is None and (not exclude_st or not exclude_delisted_or_paused):
-        raise HTTPException(
-            status_code=400,
-            detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
-        )
 
     summary = export_stock_daily_csv(
         snapshot_id=snapshot_id,
@@ -1262,11 +1249,6 @@ def _export_minute_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if universe_key is None and (not exclude_st or not exclude_delisted_or_paused):
-        raise HTTPException(
-            status_code=400,
-            detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
-        )
 
     dump_freq = MINUTE_FREQ_QLIB if freq in {"1m", "1min"} else freq
     if dump_freq != MINUTE_FREQ_QLIB:
@@ -1488,7 +1470,9 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         "basis_end": body.end.isoformat(),
         "exchanges": stock_exchanges,
         "exclude_st": body.exclude_st,
-        "exclude_delisted_or_paused": True,
+        "exclude_delisted_or_paused": False,
+        "fact_population_policy": "all_real_shsz_a_share_facts_independent_of_pit_v1",
+        "quote_catalog_pit_clipped": False,
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
         "stock_universe_mode": body.stock_universe_mode,
@@ -1498,12 +1482,9 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         "st_pit": bool(pit_universe_key),
         "delist_pit": False if pit_universe_key else None,
         "pause_pit": False if pit_universe_key else None,
-        "survivorship_bias": (
-            "current D/P stocks excluded by scope; delisting PIT not implemented"
-            if pit_universe_key else None
-        ),
+        "survivorship_bias": "no_current_listing_status_filter_on_facts",
         "pit_ensure": pit_ensure,
-        "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
+        "ipo_filter_mode": "separate_pit_selection" if pit_universe_key else "separate_ipo_selection",
         "bin_contains_pre_ipo_filter_data": True,
         "stock_universe_min_listed_days_prefilter": False,
         "ipo_all_txt_rewrite": all_txt_summary,
@@ -3004,7 +2985,9 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
             "start": body.start.isoformat(), "end": body.end.isoformat(),
             "exchanges": stock_exchanges,
             "exclude_st": body.exclude_st,
-            "exclude_delisted_or_paused": True,
+            "exclude_delisted_or_paused": False,
+            "fact_population_policy": "all_real_shsz_a_share_facts_independent_of_pit_v1",
+            "quote_catalog_pit_clipped": False,
             "exclude_bj": True,
             "min_listed_days": IPO_FILTER_DAYS,
             "stock_universe_mode": body.stock_universe_mode,
@@ -3014,12 +2997,9 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
             "st_pit": bool(pit_universe_key),
             "delist_pit": False if pit_universe_key else None,
             "pause_pit": False if pit_universe_key else None,
-            "survivorship_bias": (
-                "current D/P stocks excluded by scope; delisting PIT not implemented"
-                if pit_universe_key else None
-            ),
+            "survivorship_bias": "no_current_listing_status_filter_on_facts",
             "pit_ensure": pit_ensure,
-            "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
+            "ipo_filter_mode": "separate_pit_selection" if pit_universe_key else "separate_ipo_selection",
             "bin_contains_pre_ipo_filter_data": True,
             "stock_universe_min_listed_days_prefilter": False,
             "ipo_all_txt_rewrite": all_txt_summary,
@@ -3181,7 +3161,7 @@ def _finalize_stock_dump_result(
     feature_frequency: Optional[str] = None,
     allowed_bin_root: Optional[Path] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
-    """Rewrite stock all.txt eligibility after dump_bin and return step status."""
+    """Finalize factual quote catalog and separate selection after dump_bin."""
 
     if not dump_res.ok:
         return False, dump_res.stdout, None, None
@@ -3196,10 +3176,10 @@ def _finalize_stock_dump_result(
                 feature_frequency=feature_frequency,
                 allowed_bin_root=allowed_bin_root,
             )
-            label = "AIstock PIT all.txt rewrite"
+            label = "AIstock factual quote catalog and separate PIT selection"
         else:
             summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
-            label = "AIstock IPO all.txt rewrite"
+            label = "AIstock separate IPO selection"
     except Exception as exc:
         return False, dump_res.stdout, f"failed to rewrite stock instruments/all.txt eligibility: {exc}", None
     stdout = (dump_res.stdout or "") + f"\n[{label}]\n" + json.dumps(
@@ -3645,7 +3625,9 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
         "end": body.end.isoformat(),
         "exchanges": stock_exchanges if has_stock_dataset else (list(body.exchanges) if body.exchanges else None),
         "exclude_st": body.exclude_st,
-        "exclude_delisted_or_paused": True,
+        "exclude_delisted_or_paused": False if has_stock_dataset else meta.get("exclude_delisted_or_paused"),
+        "fact_population_policy": "all_real_shsz_a_share_facts_independent_of_pit_v1" if has_stock_dataset else meta.get("fact_population_policy"),
+        "quote_catalog_pit_clipped": False if has_stock_dataset else meta.get("quote_catalog_pit_clipped"),
         "exclude_bj": bool(has_stock_dataset),
         "min_listed_days": IPO_FILTER_DAYS if has_stock_dataset else None,
         "stock_universe_mode": body.stock_universe_mode if has_stock_dataset else meta.get("stock_universe_mode"),
@@ -3660,15 +3642,15 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
         "delist_pit": False if has_stock_dataset and pit_universe_key else meta.get("delist_pit"),
         "pause_pit": False if has_stock_dataset and pit_universe_key else meta.get("pause_pit"),
         "survivorship_bias": (
-            "current D/P stocks excluded by scope; delisting PIT not implemented"
-            if has_stock_dataset and pit_universe_key
+            "no_current_listing_status_filter_on_facts"
+            if has_stock_dataset
             else meta.get("survivorship_bias")
         ),
         "pit_ensure": pit_ensure or meta.get("pit_ensure"),
         "ipo_filter_mode": (
-            "pit_universe_spans"
+            "separate_pit_selection"
             if has_stock_dataset and pit_universe_key
-            else ("instruments_all_txt" if has_stock_dataset else meta.get("ipo_filter_mode"))
+            else ("separate_ipo_selection" if has_stock_dataset else meta.get("ipo_filter_mode"))
         ),
         "bin_contains_pre_ipo_filter_data": bool(has_stock_dataset),
         "stock_universe_min_listed_days_prefilter": False if has_stock_dataset else None,

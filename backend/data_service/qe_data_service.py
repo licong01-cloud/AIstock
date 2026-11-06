@@ -85,6 +85,11 @@ class _DataCache:
 
     def get(self, func_name: str, instruments: List[str], start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         key = self._make_key(func_name, instruments, start_date, end_date)
+        from backend.db.pg_pool import captured_read_cache
+        captured = captured_read_cache()
+        if captured is not None:
+            value = captured.get((id(self), key))
+            return value.copy() if value is not None else None
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -98,6 +103,11 @@ class _DataCache:
     def set(self, func_name: str, instruments: List[str], start_date: str, end_date: str,
             df: pd.DataFrame, ttl_seconds: Optional[int] = None) -> None:
         key = self._make_key(func_name, instruments, start_date, end_date)
+        from backend.db.pg_pool import captured_read_cache
+        captured = captured_read_cache()
+        if captured is not None:
+            captured[(id(self), key)] = df.copy()
+            return
         ttl = ttl_seconds if ttl_seconds is not None else self._default_ttl
         with self._lock:
             self._store[key] = (df, time.time() + ttl)
@@ -1025,6 +1035,7 @@ def build_static_factors(
     end_date: Union[str, date],
     *,
     asof_fill_slow_static: bool = False,
+    asof_fill_prefixes: Iterable[str] = LIVE_ASOF_STATIC_PREFIXES,
 ) -> pd.DataFrame:
     """
     构建完整的 static_factors 数据集，与 generate_static_factors_bundle.py 生成的
@@ -1111,7 +1122,7 @@ def build_static_factors(
         df_merged = df_merged.join(df_next, how="left")
 
     if asof_fill_slow_static and df_pv is not None and not df_pv.empty and isinstance(df_pv.index, pd.MultiIndex):
-        df_merged = _asof_fill_static_prefixes_to_target_index(df_merged, df_pv.index)
+        df_merged = _asof_fill_static_prefixes_to_target_index(df_merged, df_pv.index, prefixes=asof_fill_prefixes)
 
     df_merged = df_merged.sort_index()
     logger.info(f"build_static_factors: 完成，shape={df_merged.shape}")

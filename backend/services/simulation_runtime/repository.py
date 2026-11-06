@@ -2737,6 +2737,12 @@ class SimulationRuntimeRepository:
         run = self._daily_run_with_binding_slots(run, binding)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
+                if run.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+                    # Share the native economic lock with no-run replay recovery.
+                    cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s))", (run.run_id,))
+                    if not cur.fetchone()[0]:
+                        raise InvalidStateTransitionError("LocalSIM daily run writer is active",
+                            context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"})
                 try:
                     cur.execute(
                         """
@@ -2806,6 +2812,32 @@ class SimulationRuntimeRepository:
             (strategy_id, binding_id, trade_date),
         )
         return self._daily_run_from_row(rows[0]) if rows else None
+
+    def require_localsim_side_effect_free_rebuild(self, run: SimulationDailyRun) -> None:
+        from .localsim_replay_recovery import economic_fact_counts, recovery_rebuild_receipt, require_no_economic_effects
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run.run_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise DataUnavailableError("LocalSIM recovery daily run disappeared", context={"run_id": run.run_id})
+                current = self._daily_run_from_row(dict(row))
+                cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s)) AS locked", (run.run_id,))
+                if not cur.fetchone()["locked"]:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM economic writer is active before plan rebuild",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"},
+                    )
+                expected = recovery_rebuild_receipt(run)
+                if (recovery_rebuild_receipt(current) != expected or expected is None
+                        or current.status != SimulationDailyRunStatus.FAILED_RETRYABLE):
+                    raise InvalidStateTransitionError(
+                        "LocalSIM recovery daily inputs changed before rebuilding",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_LINEAGE_CONFLICT"},
+                    )
+                require_no_economic_effects(current.run_payload_json, economic_fact_counts(cur, run.run_id),
+                                            now=datetime.now(UTC), check_retry_claims=False)
 
     def list_simulation_daily_runs(
         self,

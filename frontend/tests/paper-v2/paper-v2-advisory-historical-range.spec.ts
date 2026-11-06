@@ -38,7 +38,7 @@ async function mockPage(page: Page, state: MockState = {}) {
   const runStatus = state.runStatus || "PARTIAL";
   const recoverableProgramCount = state.recoverableProgramCount ?? 0;
   await page.route("**/api/ingestion/**", (route) => json(route, { count: 0, alerts: [] }));
-  await page.route("**/api/v1/paper-v2/trading-days/defaults**", (route) => json(route, {
+  await page.route("**/api/v1/advisory/trading-days/defaults**", (route) => json(route, {
     as_of_date: "2026-07-24",
     trading_day_status: { is_trading_day: true },
     lookback_trading_days: 10,
@@ -53,6 +53,11 @@ async function mockPage(page: Page, state: MockState = {}) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     requests.push(`${request.method()} ${path}`);
+    if (path.endsWith("/trading-days/defaults")) return route.fallback();
+    if (path.endsWith("/workbench/quotes") && request.method() === "GET") {
+      const symbols = (new URL(request.url()).searchParams.get("symbols") || "").split(",");
+      return json(route, { schema_version: "advisory_display_quotes_v1", items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: 12.34, kind: "CLOSE", trade_date: "2026-10-28", observed_at: "2026-10-28T16:00:00+08:00" }])) });
+    }
     if (path.endsWith("/universe-options")) return json(route, { ok: true, schema_version: "advisory_universe_catalog_v1", default_selection: { mode: "stock_universe", pool_ids: [] }, modes: ["stock_universe", "single_index", "index_union"], pools: [] });
     if (path.endsWith("/historical-range-options")) return json(route, { ok: true, data: {
       existing_programs: [{ program_id: PROGRAM_ID, name: "Existing Program R5", version: 3, active_binding_version_id: "advbind_r5_3", package_id: "pkg_single", target_count: 20, review_policy_summary: {} }],
@@ -107,7 +112,7 @@ async function mockPage(page: Page, state: MockState = {}) {
 test("historical range view separates batch and failed operation state without legacy replay", async ({ page }, testInfo) => {
   const browserFailures = observeBrowserFailures(page);
   const requests = await mockPage(page);
-  await page.goto(`/paper-v2/advisory?view=historical-range&program_id=${PROGRAM_ID}`);
+  await page.goto(`/paper-v2/advisory/manage?view=historical-range&program_id=${PROGRAM_ID}`);
   await expect(page.getByTestId("historical-range-view")).toBeVisible();
   await expect(page.getByText("Existing Program R5")).toBeVisible();
   await page.getByRole("button", { name: "查看任务" }).click();
@@ -123,6 +128,10 @@ test("historical range view separates batch and failed operation state without l
   await page.getByRole("button", { name: "查看 2026-07-02 证据" }).click();
   await expect(page.getByTestId("historical-range-day-detail")).toContainText("600000.SH");
   await expect(page.getByTestId("historical-range-day-detail")).toContainText("ACTIVE");
+  const currentPrice = page.getByTestId("historical-range-day-detail").getByTestId("advisory-current-price").first();
+  await currentPrice.scrollIntoViewIfNeeded();
+  await expect(currentPrice).toContainText("¥12.34");
+  await expect(currentPrice).toContainText("最近收盘");
   await expect(page.getByText("未来成熟后的历史结果")).toBeVisible();
   expect(requests.some((item) => item.includes("/replay"))).toBeFalsy();
   expect(browserFailures.consoleErrors).toEqual([]);
@@ -132,7 +141,7 @@ test("historical range view separates batch and failed operation state without l
 
 test("same-batch comparison shows identities, no-candidate support, and non-significance warning", async ({ page }) => {
   const requests = await mockPage(page, { twoRuns: true });
-  await page.goto(`/paper-v2/advisory?view=historical-range&program_id=${PROGRAM_ID}`);
+  await page.goto(`/paper-v2/advisory/manage?view=historical-range&program_id=${PROGRAM_ID}`);
   await page.getByRole("button", { name: "查看任务" }).click();
 
   const panel = page.getByTestId("historical-range-comparison");
@@ -169,7 +178,7 @@ test("research specs carry explicit selection top_k for single and native multi-
     }, 202);
   });
 
-  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.goto("/paper-v2/advisory/manage?view=historical-range");
   const researchFieldset = page.locator(".ahr-fieldset").filter({ hasText: "Research-only Program" });
   const dateInputs = page.locator('.ahr-date-row input[type="date"]');
   await dateInputs.nth(0).fill("2026-07-01");
@@ -214,7 +223,7 @@ test("research specs carry explicit selection top_k for single and native multi-
 
 test("historical range view distinguishes finished partial and retryable facts", async ({ page }) => {
   await mockPage(page, { batchStatus: "PARTIAL", runStatus: "RETRYABLE_FAILED", recoverableProgramCount: 0 });
-  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.goto("/paper-v2/advisory/manage?view=historical-range");
   await page.getByRole("button", { name: "查看任务" }).click();
   await expect(page.getByTestId("historical-range-detail")).toContainText("部分结果，当前无可恢复项");
   await expect(page.getByTestId("historical-range-detail")).toContainText("RETRYABLE_FAILED");
@@ -226,7 +235,7 @@ test("historical range layout has no horizontal page overflow at required viewpo
   await mockPage(page);
   for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
     await page.setViewportSize(viewport);
-    await page.goto("/paper-v2/advisory?view=historical-range");
+    await page.goto("/paper-v2/advisory/manage?view=historical-range");
     await expect(page.getByTestId("historical-range-view")).toBeVisible();
     const layout = await page.evaluate(() => ({
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -244,7 +253,7 @@ test("historical range layout has no horizontal page overflow at required viewpo
 
 test("current view no longer exposes a legacy replay creation card", async ({ page }) => {
   const requests = await mockPage(page);
-  await page.goto("/paper-v2/advisory?view=current");
+  await page.goto("/paper-v2/advisory/manage?view=current");
   await expect(page.getByTestId("advisory-view-switch")).toBeVisible();
   await expect(page.getByText("历史荐股生命周期回放")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "执行回放" })).toHaveCount(0);
@@ -256,7 +265,7 @@ test("missing page in a successful response is a visible contract error", async 
   await page.route("**/api/v1/advisory/historical-range-batches", (route) =>
     json(route, { ok: true, data: { batches: [] } }),
   );
-  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.goto("/paper-v2/advisory/manage?view=historical-range");
   await expect(page.getByTestId("historical-range-view")).toContainText("分页合同无效");
 });
 
@@ -269,7 +278,7 @@ test("missing business identity in a successful response is a visible contract e
       page: { limit: 50, next_cursor: null, has_more: false },
     }),
   );
-  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.goto("/paper-v2/advisory/manage?view=historical-range");
   await expect(page.getByTestId("historical-range-view")).toContainText("数据合同无效：batches[0].batch_id");
 });
 
@@ -293,7 +302,7 @@ test("runs operations and summaries load every cursor page", async ({ page }) =>
       ? { ok: true, data: { summaries: [{ summary_id: "sum_2", summary_version: 2, covered_outcome_set_hash: "2".repeat(64), summary_json: {} }] }, page: { limit: 50, next_cursor: null, has_more: false } }
       : { ok: true, data: { summaries: [{ summary_id: "sum_1", summary_version: 1, covered_outcome_set_hash: "1".repeat(64), summary_json: {} }] }, page: { limit: 50, next_cursor: "summaries-next", has_more: true } });
   });
-  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.goto("/paper-v2/advisory/manage?view=historical-range");
   await page.getByRole("button", { name: "查看任务" }).click();
   await page.getByRole("button", { name: "加载更多 Program" }).click();
   await expect(page.getByText("program_page_2", { exact: true })).toBeVisible();
@@ -317,7 +326,7 @@ test("typed Dataset bridge SEALED and VALID_EMPTY receipts are rendered", async 
       data: { operation: { operation_id: OPERATION_ID, operation_type: "BUILD_DATASET_BRIDGE", status: "COMPLETED", row_version: 6, result_status: "VALID_EMPTY", snapshot: null, bridge_receipt: { result_status: "VALID_EMPTY", reason_codes: ["ADVISORY_HR_DATASET_BRIDGE_VALID_EMPTY"] } } },
     });
   });
-  await page.goto("/paper-v2/advisory?view=historical-range");
+  await page.goto("/paper-v2/advisory/manage?view=historical-range");
   await page.getByRole("button", { name: "查看任务" }).click();
   await page.getByRole("button", { name: /REFRESH_OUTCOMES/ }).click();
   await expect(page.getByTestId("historical-range-detail")).toContainText("snapshot_r5_001");

@@ -208,15 +208,8 @@ def _http_get(api_base: str, path: str, params: Mapping[str, Any]) -> dict[str, 
 
 
 def _is_a_share_code(code: str, exchange: str) -> bool:
-    if len(code) != 6 or not code.isdigit():
-        return False
-    if exchange == "sz":
-        return code.startswith(("000", "001", "002", "003", "30"))
-    if exchange == "sh":
-        return code.startswith("6")
-    if exchange == "bj":
-        return code.startswith(("43", "8", "92"))
-    return False
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    return is_supported_stock_code(f"{code}.{exchange.upper()}")
 
 
 def fetch_current_stock_codes(api_base: str) -> list[str]:
@@ -277,9 +270,10 @@ def fetch_minute_single_day(api_base: str, ts_code: str, target_date: dt.date) -
 
 
 def _all_stock_codes(conn: Any) -> list[str]:
+    from backend.services.data_integrity.stock_scope import stock_scope_sql, is_supported_stock_code
     with conn.cursor() as cur:
-        cur.execute("SELECT ts_code FROM market.stock_basic WHERE ts_code IS NOT NULL ORDER BY ts_code")
-        return [str(row[0]) for row in cur.fetchall()]
+        cur.execute("SELECT ts_code FROM market.stock_basic WHERE ts_code IS NOT NULL" + stock_scope_sql() + " ORDER BY ts_code")
+        return [str(row[0]) for row in cur.fetchall() if is_supported_stock_code(row[0])]
 
 
 def _latest_historical_data_date(conn: Any, target_date: dt.date) -> dt.date | None:

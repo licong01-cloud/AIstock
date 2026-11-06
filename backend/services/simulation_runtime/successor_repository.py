@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -14,7 +14,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
-from .models import SimulationBrokerBackend, SimulationReleaseBinding, StrategyRuntimeRelease
+from .models import SimulationBrokerBackend, SimulationReleaseBinding, StrategyRuntimeRelease, canonical_json_sha256
 from .successor_models import (
     LegacyLocalSimAccountLineageV1,
     LegacyLocalSimLineageStatus,
@@ -31,6 +31,10 @@ SuccessorConnFactory = Callable[[], AbstractContextManager[Any]]
 
 
 class LocalSimSuccessorRepositoryProtocol(Protocol):
+    def source_plan_creation(self, request_hash: str) -> AbstractContextManager: ...
+
+    def find_replay_by_source_request(self, request_hash: str) -> LocalSimReplayJobV1 | None: ...
+
     def create_account_bundle(
         self,
         *,
@@ -229,6 +233,27 @@ class LocalSimSuccessorRepository:
 
     def __init__(self, conn_factory: SuccessorConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or _transaction_conn
+
+    @contextmanager
+    def source_plan_creation(self, request_hash: str):
+        # Serialize request registration, including active resolution. The
+        # existing bundle transaction still atomically publishes all five rows.
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(2432, hashtext(%s))", (request_hash,))
+            yield
+
+    def find_replay_by_source_request(self, request_hash: str) -> LocalSimReplayJobV1 | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""SELECT j.* FROM paper_v2.localsim_replay_job_v1 j
+                    JOIN strategy_pkg.strategy_runtime_release r ON r.release_id = j.release_id
+                    WHERE r.release_config_json->'metadata'->'localsim_source_plan_request_v1'->>'request_hash' = %s
+                    ORDER BY j.created_at, j.replay_job_id LIMIT 2""", (request_hash,))
+                rows = cur.fetchall()
+        if len(rows) > 1:
+            raise InvalidStateTransitionError("LocalSIM source request has multiple replay identities")
+        return self._replay_from_row(dict(rows[0])) if rows else None
 
     def create_account_bundle(
         self,
@@ -876,6 +901,189 @@ class LocalSimSuccessorRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 return self._select_replay(cur, replay_job_id)
+
+    def get_replay_recovery_snapshot(self, replay_job_id: str) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._replay_recovery_snapshot(cur, replay_job_id)
+
+    def _replay_recovery_snapshot(self, cur: Any, replay_job_id: str, *, lock: bool = False) -> dict[str, Any]:
+        from .localsim_cutover_readiness import LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES
+        from .localsim_replay_recovery import economic_fact_counts
+        from .repository import SimulationRuntimeRepository
+
+        job = self._select_replay(cur, replay_job_id, for_update=lock)
+        account = self._select_account(cur, job.simulation_account_id, for_update=lock)
+        cur.execute(
+            "SELECT * FROM paper_v2.simulation_daily_run "
+            "WHERE strategy_id = %s AND binding_id = %s AND trade_date = %s" + (" FOR UPDATE" if lock else ""),
+            (job.simulation_account_id, job.binding_id, job.next_trade_date),
+        )
+        row = cur.fetchone()
+        run = SimulationRuntimeRepository._daily_run_from_row(dict(row)) if row else None
+        plan = None
+        evidence_hash = None
+        if run is not None:
+            cur.execute("SELECT * FROM paper_v2.execution_plan WHERE plan_id = %s", (run.execution_plan_id,))
+            row = cur.fetchone()
+            plan = SimulationRuntimeRepository._execution_plan_from_row(dict(row)) if row else None
+            cur.execute("SELECT artifact_hash FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                        (run.selection_evidence_id,))
+            row = cur.fetchone()
+            evidence_hash = row["artifact_hash"] if row else None
+        cur.execute(
+            "SELECT run_id, broker_backend, binding_id, trade_date::text AS trade_date, status "
+            "FROM paper_v2.simulation_daily_run WHERE strategy_id = %s "
+            "AND status = ANY(%s::text[]) ORDER BY run_id",
+            (job.simulation_account_id, list(LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES)),
+        )
+        account_in_flight_runs = [dict(row) for row in cur.fetchall()]
+        binding = self._select_binding(cur, job.binding_id)
+        release = self._select_release(cur, job.release_id)
+        absence = None
+        if run is None:
+            from .scheduler import SimulationLifecycleScheduler
+
+            identity = SimulationLifecycleScheduler._simulation_daily_run_identity(
+                runtime_release=release, binding=binding, trade_date=job.next_trade_date,
+            ) if job.next_trade_date else None
+            candidate_id = "simrun_" + canonical_json_sha256(identity)[:16]
+            cur.execute(
+                "SELECT run_id, binding_id, broker_backend, status FROM paper_v2.simulation_daily_run "
+                "WHERE strategy_id = %s AND trade_date = %s ORDER BY run_id",
+                (job.simulation_account_id, job.next_trade_date),
+            )
+            absence = {"run_id": candidate_id, "account_day_runs": [dict(row) for row in cur.fetchall()]}
+        return {
+            "job": job.model_dump(mode="json"),
+            "account": account.model_dump(mode="json"),
+            "account_in_flight_runs": account_in_flight_runs,
+            "binding": binding.model_dump(mode="json"),
+            "release": release.model_dump(mode="json"),
+            "run": run.model_dump(mode="json") if run else None,
+            # The persisted payload contains the complete intents/decisions.
+            # Expanded decisions add a default created_at during native readback;
+            # hashing those transient objects makes an unchanged plan unstable.
+            "plan": plan.model_dump(mode="json", exclude={"intents", "trading_rule_decisions"}) if plan else None,
+            "evidence_hash": evidence_hash,
+            "economic_counts": economic_fact_counts(cur, run.run_id if run else absence["run_id"]),
+            "preselection_absence": absence,
+        }
+
+    def recover_terminal_replay(
+        self, *, replay_job_id: str, expected_version: int, expected_snapshot_sha256: str,
+        evaluate: Any, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        from .localsim_replay_recovery import (
+            PRESELECTION_RECOVERY_KEY, RECOVERY_KEY, RECOVERY_SCHEMA, RETIREMENT_KEY, apply_handle_retirement,
+        )
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                snapshot = self._replay_recovery_snapshot(cur, replay_job_id, lock=True)
+                job, run = snapshot["job"], snapshot["run"]
+                if job["version"] != expected_version:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery CAS conflict",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                # Daily creation and economic commits both own this namespace.
+                candidate_id = run["run_id"] if run else snapshot["preselection_absence"]["run_id"]
+                cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s)) AS locked", (candidate_id,))
+                if not cur.fetchone()["locked"]:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM economic writer is active",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"},
+                    )
+                # An absent row cannot be row-locked; re-read after its writer lock.
+                snapshot = self._replay_recovery_snapshot(cur, replay_job_id, lock=True)
+                run = snapshot["run"]
+                check = evaluate(snapshot)
+                if not check.ready or check.snapshot_sha256 != expected_snapshot_sha256:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery evidence is blocked or has changed",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_CHECK_FAILED",
+                                 "blockers": check.reason_codes, "snapshot_sha256": check.snapshot_sha256},
+                    )
+                receipt = {
+                    "schema_version": RECOVERY_SCHEMA, "replay_job_id": replay_job_id,
+                    "replay_version": expected_version, "snapshot_sha256": check.snapshot_sha256,
+                    "run_id": run["run_id"] if run else None, "trade_date": job["next_trade_date"],
+                    "binding_id": job["binding_id"], "release_id": job["release_id"],
+                    "plan_id": run["execution_plan_id"] if run else None,
+                    "plan_hash": run["execution_plan_hash"] if run else None,
+                    "evidence_id": run["selection_evidence_id"] if run else None,
+                    "evidence_hash": run["selection_artifact_hash"] if run else None,
+                    "native_input": check.native_input, "recovered_at": updated_at.isoformat(),
+                    "original_failure": job["failure_context"], "economic_counts": check.economic_counts,
+                }
+                payload = run["run_payload_json"] if run else None
+                retirement = check.native_input.get(RETIREMENT_KEY)
+                if retirement is not None:
+                    payload = apply_handle_retirement(payload, retirement, retired_at=updated_at)
+                    receipt["retirement_sha256"] = payload[RETIREMENT_KEY]["receipt_sha256"]
+                receipt["receipt_sha256"] = canonical_json_sha256(receipt)
+                failure_context = job["failure_context"]
+                if run:
+                    payload = {**payload, RECOVERY_KEY: receipt}
+                    cur.execute(
+                        "UPDATE paper_v2.simulation_daily_run SET run_payload_json = %s, updated_at = %s WHERE run_id = %s",
+                        (psycopg2.extras.Json(payload), updated_at, run["run_id"]),
+                    )
+                else:
+                    failure_context = {**failure_context, PRESELECTION_RECOVERY_KEY: receipt}
+                    # No plan/day is invented for an operation that never reached
+                    # selection. The existing control audit keeps the receipt after
+                    # normal replay advancement clears transient failure fields.
+                    cur.execute(
+                        "INSERT INTO paper_v2.config_change_audit "
+                        "(portfolio_id, package_id, object_type, object_id, change_type, before_json, after_json, "
+                        "before_sha256, after_sha256, reason, created_by, request_id, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (job["simulation_account_id"], snapshot["release"]["package_id"],
+                         "LOCALSIM_REPLAY", replay_job_id, "RECOVER_PRESELECTION",
+                         psycopg2.extras.Json(job), psycopg2.extras.Json(receipt), canonical_json_sha256(job),
+                         receipt["receipt_sha256"], "Native side-effect-free preselection recovery",
+                         "localsim_replay_recovery", receipt["receipt_sha256"], updated_at),
+                    )
+                cur.execute(
+                    "UPDATE paper_v2.localsim_replay_job_v1 SET status = %s, version = version + 1, updated_at = %s, "
+                    "failure_context = %s "
+                    "WHERE replay_job_id = %s AND version = %s AND status = %s",
+                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, psycopg2.extras.Json(failure_context),
+                     replay_job_id, expected_version,
+                     job["status"]),
+                )
+                if cur.rowcount != 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                result = self._select_replay(cur, replay_job_id, for_update=True)
+                payload_matches = result.failure_context == failure_context
+                if run:
+                    cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s", (run["run_id"],))
+                    persisted = cur.fetchone()
+                    payload_matches = payload_matches and persisted is not None and persisted["run_payload_json"] == payload
+                else:
+                    cur.execute("SELECT after_json FROM paper_v2.config_change_audit "
+                                "WHERE object_type = 'LOCALSIM_REPLAY' AND object_id = %s "
+                                "AND change_type = 'RECOVER_PRESELECTION' AND request_id = %s",
+                                (replay_job_id, receipt["receipt_sha256"]))
+                    audits = cur.fetchall()
+                    payload_matches = payload_matches and len(audits) == 1 and audits[0]["after_json"] == receipt
+                if (not payload_matches
+                        or result.replay_hash != job["replay_hash"]
+                        or result.version != expected_version + 1
+                        or result.status is not LocalSimReplayStatus.FAILED_RETRYABLE
+                        or result.next_trade_date.isoformat() != job["next_trade_date"]
+                        or (result.completed_trade_date.isoformat() if result.completed_trade_date else None)
+                           != job["completed_trade_date"]):
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery transaction readback failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_READBACK_FAILED"},
+                    )
+                return result
 
     def list_replay_jobs(
         self,
@@ -1530,6 +1738,18 @@ class LocalSimSuccessorRepository:
             "runtime_profile_sha256", "daily_strategy_profile_version_id", "execution_policy_version_id",
             "execution_policy_sha256", "tail_policy_version_id", "tail_policy_sha256",
         )
+        from .localsim_input_source_plan import SOURCE_PLAN_ID, frozen_source_plan
+        planned = current.historical_source_id == SOURCE_PLAN_ID
+        if planned:
+            before = frozen_source_plan(base_release, job=current)
+            after = frozen_source_plan(release, job=successor_job)
+            if (before["native_policy"] != after["native_policy"] or before["run_id"] == after["run_id"]
+                    or [v for v in after["trading_calendar"]
+                        if before["trading_calendar"][0] <= v <= str(current.end_trade_date)]
+                    != before["trading_calendar"]
+                    or next((v for v in after["trading_calendar"] if v > str(current.end_trade_date)), None)
+                    != str(successor_job.start_trade_date)):
+                raise InvalidStateTransitionError("LocalSIM catch-up source plan does not continue its frozen predecessor")
         if (
             account.status is not SimulationAccountStatus.ACTIVE
             or current.status not in {LocalSimReplayStatus.CAUGHT_UP, LocalSimReplayStatus.READY_FOR_LIVE}
@@ -1549,7 +1769,7 @@ class LocalSimSuccessorRepository:
                 "end_trade_date": successor_job.end_trade_date.isoformat(),
             }
             or successor_job.historical_source_id != current.historical_source_id
-            or successor_job.historical_source_sha256 != current.historical_source_sha256
+            or (not planned and successor_job.historical_source_sha256 != current.historical_source_sha256)
             or successor_job.day_engine_contract_id != current.day_engine_contract_id
             or any(getattr(release, key) != getattr(base_release, key) for key in product_fields)
         ):
@@ -1754,6 +1974,20 @@ class InMemoryLocalSimSuccessorRepository:
         self.replay_jobs: dict[str, LocalSimReplayJobV1] = {}
         self.replay_hash_index: dict[str, str] = {}
         self.selection_links: dict[tuple[str, str], dict[str, Any]] = {}
+
+    @contextmanager
+    def source_plan_creation(self, request_hash: str):
+        # Direct fixtures are single-threaded; production uses the DB mutex.
+        yield
+
+    def find_replay_by_source_request(self, request_hash: str) -> LocalSimReplayJobV1 | None:
+        from .localsim_input_source_plan import REQUEST_KEY
+        jobs = [job for job in self.replay_jobs.values() if
+                (self.get_release(job.release_id).release_config_json.get("metadata", {}).get(REQUEST_KEY) or {}).get(
+                    "request_hash") == request_hash]
+        if len(jobs) > 1:
+            raise InvalidStateTransitionError("LocalSIM source request has multiple replay identities")
+        return jobs[0].model_copy(deep=True) if jobs else None
 
     def create_account_bundle(
         self,

@@ -1,0 +1,380 @@
+{
+  "actual": "QE_PREDICTION_REPLAY_RESULTS_NOT_COMPLETED 阻断已完整计算账户的登记恢复。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/results_only_retry.py",
+    "backend/tests/unified_engine/test_qe_results_only_retry.py",
+    "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2184",
+  "closed_at": "2026-11-06T04:29:52.846920Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-06T03:47:52.005308Z",
+  "description": "冻结预测回放完成PortAnaRecord并生成完整账户后，预测仓连接中断使节点收据为failed；旧results_only仅接受completed节点，导致完整产物无法登记。修复限于声明完整经济窗口、冻结源和面板一致、当前recorder及上传失败回执一致的回放。",
+  "design_compliance_review": [
+    {
+      "requirement": "禁止简化交付",
+      "evidence": "正式results_only恢复已实施并完成真实Loop9/10恢复；全部12 Loop已完成并入仓，预测指针与原始哈希一致。",
+      "result": "PASS"
+    },
+    {
+      "requirement": "禁止静默错误",
+      "evidence": "47项相关测试及两账户真实核验通过。保留原节点和MLflow失败证据，缺失、身份冲突和不完整账户均拒绝。",
+      "result": "PASS"
+    },
+    {
+      "requirement": "禁止改变业务逻辑",
+      "evidence": "未改预测、模型、策略、数据、窗口或费用；仅补登记现有产物，新增训练和回测均为0。",
+      "result": "PASS"
+    },
+    {
+      "requirement": "禁止私增门禁审批",
+      "evidence": "沿用既有正式恢复授权及用户对backend-main重启的归属，不新增研究审批。",
+      "result": "PASS"
+    }
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261106-e9f1cc0c026a",
+      "timestamp": "2026-11-06T03:47:52.005292Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-mainline-recovery-20261106/run_v1/journal/stop_v4.json"
+  ],
+  "expected": "精确核对任务、源预测、当前recorder、完整账户日期及上传失败收据后，允许正式results_only仅补登记和入仓；其他失败仍拒绝。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/results_only_retry.py",
+      "backend/tests/unified_engine/test_qe_results_only_retry.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/results_only_retry.py",
+      "backend/tests/unified_engine/test_qe_results_only_retry.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2184-qe.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/results_only_retry.py",
+        "backend/tests/unified_engine/test_qe_results_only_retry.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_evolution_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/results_only_retry.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_results_only_retry.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/results_only_retry.py",
+        "backend/tests/unified_engine/test_qe_results_only_retry.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/results_only_retry.py",
+      "backend/tests/unified_engine/test_qe_results_only_retry.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/results_only_retry.py",
+      "backend/tests/unified_engine/test_qe_results_only_retry.py"
+    ]
+  },
+  "first_seen_at": "2026-11-06T03:47:52.005308Z",
+  "fix_branch": null,
+  "fix_commit": "99c2c71ee2379f403dbdc8468a061c87748b3094",
+  "fixed_at": "2026-11-06T04:05:17Z",
+  "github_issue_number": 7064,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7064",
+  "last_seen_at": "2026-11-06T03:47:52.005308Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7066",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "recovery_activation_plan": {
+    "backtest_submissions": 0,
+    "formal_recovery": "COMPLETED_ONCE_EACH_LOOP9_LOOP10",
+    "required_readback": [
+      "original node failures and MLflow FAILED preserved",
+      "central task completed 12/12",
+      "archive 12/12 and prediction pointers available",
+      "all six final reports 549 dates before paired economic conclusion"
+    ],
+    "source_merge": "merged",
+    "training_submissions": 0,
+    "user_restart": "verified",
+    "readback_receipt": "F:/Dev/AIstock/tmp/handoff/qe-mainline-recovery-20261106/run_v1/recovery_readback_v1.json"
+  },
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "root_cause": "results_only在读取完整产物前，以节点completed状态排除所有失败回放，未区分计算失败与计算完成后的上传失败。两次连接中断为11:10:44，本机8001当前进程11:10:46启动，时间高度吻合；操作者和前进程退出原因未确认。BUG-2184修复无重算恢复入口。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261106_035105_f2b9/custom-evo-config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python pytest loaded tracked QE scheduler and results-only recovery: 47 passed; no runtime process control or production writes.",
+      "Fresh Windows Python loaded the worktree collector and read real WSL Loop9/10 via official GET client: both 549-date accounts, pinned prediction panel and recorder/upload identity passed; 0 uploads, 0 DB writes, 0 training/backtest submissions. Receipt tmp/issue_workflow/BUG-2184/real-artifact-preflight.json.",
+      "Fresh Python loaded tracked source; both real 549-day failed-upload accounts passed artifact gate; no uploads or DB writes",
+      "Fresh Python loaded tracked source; both real 549-day failed-upload accounts passed artifact gate; no uploads or DB writes; tmp/issue_workflow/BUG-2184/real-artifact-preflight.json"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2184/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2184",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "49a2feeecf2a0d1eae41e29428711d4572035e1941cc02afa747577be7fe3948",
+      "expected_identity": "99c2c71ee2379f403dbdc8468a061c87748b3094",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T04:23:36.844584Z",
+      "mode": "read_only",
+      "observed_identity": "99c2c71ee2379f403dbdc8468a061c87748b3094",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8e5718848b00244f2f8ac459b6968789d39b6f944a45f7601f3ce69764065260",
+      "receipt_sha256": "79c7411d63fbec6bb514a533b3c22cae730303b44166059fb9552c302e6004d9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8dd329e2b52b7ba816ac90b5f10d68f5591d0e87e8015d93af74a33a29c7ee2a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2184",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2ada19f00e93f5aa",
+    "recorded_at": "2026-11-06T04:06:00.309831Z",
+    "runtime_contract_digest": "49a2feeecf2a0d1eae41e29428711d4572035e1941cc02afa747577be7fe3948",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "20ecf78a933bab940ef66e6628d7b18ff430b1f5",
+    "source_merge_commit": "99c2c71ee2379f403dbdc8468a061c87748b3094",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7066",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/quantevolver/qe_evolution_service.py backend/services/quantevolver/results_only_retry.py backend/tests/unified_engine/test_qe_results_only_retry.py tests/aistock_validation/bugs/20261106_BUG-2184-qe.json -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "ed011d147c859ce48540ea5aef48da978b11ec78f70b7ce45bf28cf6009fca33"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE冻结预测回放完成后上传失败无法仅补登记恢复",
+  "trigger_condition": {
+    "fingerprint": "e9f1cc0c026a13b503046588",
+    "source_event_id": "FE-20261106-e9f1cc0c026a"
+  },
+  "validation_evidence": [
+    "python -B -m pytest backend/tests/unified_engine/test_qe_results_only_retry.py -q --disable-warnings --maxfail=1 -> 47 passed",
+    "python -B -m ruff check changed Python files -> passed",
+    "git diff --check -> passed",
+    "real-artifact-preflight.json -> READ_ONLY_REAL_ARTIFACT_GATE_PASSED, Loop9/10, 549 days each",
+    "python -m nox -s l0 -- backend/services/quantevolver/qe_evolution_service.py backend/services/quantevolver/results_only_retry.py backend/tests/unified_engine/test_qe_results_only_retry.py tests/aistock_validation/bugs/20261106_BUG-2184-qe.json -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "delivery_encoding_correction": "修正PowerShell管道默认编码造成的中文说明问号；实际源代码、测试、哈希、登记操作及已冻结实验身份不变。"
+}

@@ -108,7 +108,6 @@ def test_fetch_current_stock_codes_filters_non_stock_tdx_directory_rows(monkeypa
         "000001.SZ",
         "302132.SZ",
         "600000.SH",
-        "920001.BJ",
     ]
 
 

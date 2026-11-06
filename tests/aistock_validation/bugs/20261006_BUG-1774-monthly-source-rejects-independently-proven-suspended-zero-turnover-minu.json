@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1774",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:23:13.422972Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,21 +33,21 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -121,8 +121,8 @@
   },
   "first_seen_at": "2026-10-06T16:28:58.448239Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ef6aa81412f773ba8e4f3fedd1e14a15429b2da5",
+  "fixed_at": "2026-10-06T16:58:54Z",
   "github_issue_number": 5631,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5631",
   "last_seen_at": "2026-10-06T16:28:58.448239Z",
@@ -130,6 +130,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5633",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -153,9 +154,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1774/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1774",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "ef6aa81412f773ba8e4f3fedd1e14a15429b2da5",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:33.638376Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "61f10121bbdfd3bfc0785e071c9b7dc7324418a6b96ccb26ce06709f9ee91f2b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4b70519969ab441b3cb3367f800fd09a2ede8fd6844fda9a1fc7c8f05f2bdfcf",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -165,7 +189,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1774",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a7f4342cdfa67503",
+    "recorded_at": "2026-10-06T16:59:35.825414Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b21e3d8a098800ee65d1eba058663266eb5e84a1",
+    "source_merge_commit": "ef6aa81412f773ba8e4f3fedd1e14a15429b2da5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5633",
+    "validation_evidence": [
+      "validation-receipt: id=f07fa8a9a17fc4ed commit=b21e3d8a098800ee65d1eba058663266eb5e84a1 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; runtime catalog scope and 105 distinct targeted tests verified; DEV and independent source readback passed`"
+    ],
+    "validation_evidence_digest": "20ab01c2d333b98ebc308d1b82828dcc0a9a1c517f0d4660e638c123328cc8cc"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -174,6 +219,10 @@
     "fingerprint": "cbdf71bee393fe6c18f988cd",
     "source_event_id": "FE-20261006-cbdf71bee393"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f07fa8a9a17fc4ed commit=b21e3d8a098800ee65d1eba058663266eb5e84a1 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; runtime catalog scope and 105 distinct targeted tests verified; DEV and independent source readback passed`",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt a7f4342cdfa67503"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

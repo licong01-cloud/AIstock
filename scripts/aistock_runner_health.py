@@ -37,11 +37,17 @@ def _dispatch_api(path: str, payload: dict | None = None) -> Any:
     if "api.github.com" not in {entry.lower() for entry in bypass}:
         bypass.append("api.github.com")
     env["NO_PROXY"] = env["no_proxy"] = ",".join(bypass)
-    result = subprocess.run(args, input=json.dumps(payload) if payload is not None else None,
-                            capture_output=True, text=True, timeout=30, check=False, env=env)
+    # gh emits UTF-8, not the Windows console code page. Decode on this thread so
+    # invalid bytes become a catchable error rather than a reader-thread crash.
+    result = subprocess.run(args, input=json.dumps(payload).encode("utf-8") if payload is not None else None,
+                            capture_output=True, timeout=30, check=False, env=env)
     if result.returncode:
         raise RuntimeError(f"GitHub scheduled-dispatch request failed (exit {result.returncode})")
-    return json.loads(result.stdout) if result.stdout.strip() else {}
+    output = result.stdout.decode("utf-8")
+    data = json.loads(output) if output.strip() else {}
+    if not isinstance(data, dict):
+        raise ValueError("GitHub scheduled-dispatch response must be an object")
+    return data
 
 
 def _save_cycle(path: Path, receipt: dict) -> None:
@@ -98,23 +104,29 @@ def dispatch_scheduled_cycle(*, state_root: Path, apply: bool = False,
             if local < due:
                 continue
             path = state_root / f"{cycle}-{name}.json"
-            receipt = _read_json(path) if path.exists() else {
+            receipt = {
                 "workflow": name, "cycle_date": cycle, "status": "pending",
                 "validation_status": "not_executed",
             }
-            if receipt.get("workflow") != name or receipt.get("cycle_date") != cycle:
-                raise ValueError("scheduled receipt identity mismatch")
-            if receipt.get("status") not in {"pending", "submitted", "uncertain", "run_observed", "missed_window"}:
-                raise ValueError("unrecognized scheduled receipt state")
-            if receipt.get("run_status") == "completed":
-                if receipt.get("conclusion") != "success":
-                    report["blocking"].append(f"{name}: observed run failed; validation is not certified")
-                report["workflows"].append(receipt)
-                continue
+            phase = "receipt"
             try:
+                loaded = _read_json(path) if path.exists() else receipt
+                if not isinstance(loaded, dict) or loaded.get("workflow") != name or loaded.get("cycle_date") != cycle:
+                    raise ValueError("scheduled receipt identity mismatch")
+                if loaded.get("status") not in {"pending", "submitted", "uncertain", "run_observed", "missed_window"}:
+                    raise ValueError("unrecognized scheduled receipt state")
+                receipt = loaded
+                if receipt.get("run_status") == "completed":
+                    if receipt.get("conclusion") != "success":
+                        report["blocking"].append(f"{name}: observed run failed; validation is not certified")
+                    report["workflows"].append(receipt)
+                    continue
+                phase = "query"
                 title = f"AIstock schedule {name} {cycle}"
                 runs = request(f"repos/{DEFAULT_REPO}/actions/workflows/{name}/runs"
                                f"?event=repository_dispatch&branch=main&per_page=20")["workflow_runs"]
+                if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+                    raise ValueError("GitHub workflow runs must be a list of objects")
                 matches = [run for run in runs if run.get("display_title") == title
                            and run.get("event") == "repository_dispatch" and run.get("head_branch") == "main"]
                 if len(matches) > 1:
@@ -141,13 +153,19 @@ def dispatch_scheduled_cycle(*, state_root: Path, apply: bool = False,
                 else:
                     receipt.update(status="uncertain", attempted_at=local.isoformat())
                     _save_cycle(path, receipt)  # Durable intent BEFORE the only side effect.
+                    phase = "dispatch"
                     request(f"repos/{DEFAULT_REPO}/dispatches",
                             {"event_type": event, "client_payload": {"cycle_date": cycle}})
                     receipt["status"] = "submitted"
-            except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+                receipt.pop("error_type", None)
+                receipt.pop("error_phase", None)
+            except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
                 receipt["error_type"] = type(exc).__name__
-                report["blocking"].append(f"{name}: {type(exc).__name__}; see cycle receipt")
-            _save_cycle(path, receipt)
+                receipt["error_phase"] = phase
+                report["blocking"].append(f"{name}: {phase}: {type(exc).__name__}; see last-tick.json")
+            # Never overwrite an unreadable/mismatched receipt or lose its POST intent.
+            if phase != "receipt":
+                _save_cycle(path, receipt)
             report["workflows"].append(receipt)
         _save_cycle(state_root / "last-tick.json", report)
     return report

@@ -3,10 +3,12 @@
 Historical rows are inherited physical content, not a fresh business audit.
 Inputs are explicitly pinned frozen facts. Only daily_pv may need a uniform
 QFQ basis conversion. This
-writer neither calculates factor formulas nor applies historical restatements.
+writer does not recalculate historical factor formulas. Dated auxiliary static
+columns are projected from the same release's H5 facts during serialization.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import date
 import hashlib
 import json
@@ -29,7 +31,10 @@ from .factor_materializer import (
     _canonicalize_moneyflow_artifact_frame,
 )
 from backend.data_service.security_source_identity import MONEYFLOW_DATASET, SecuritySourceIdentityManifest
-from .monthly_legacy_prefix import LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature
+from .monthly_legacy_prefix import (
+    LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature,
+    resolve_legacy_component_pin,
+)
 from .static_schema import STATIC_COLUMN_DTYPES, STATIC_ORDERED_COLUMNS
 from .streaming_artifacts import iter_parquet_frames
 
@@ -48,6 +53,41 @@ def _read_prefix_inventory(prefix: LegacyMonthlyPrefix, pin: Mapping[str, Any]) 
     return raw
 
 
+def legacy_factor_inventory(prefix: LegacyMonthlyPrefix):
+    """Read existing pins in either published layout; never hash old H5 trees.
+
+    New unified manifests already inventory individual files. They do not
+    need the redundant legacy inventory file, nor a manufactured file pin.
+    """
+    components = prefix.manifest["components"]
+    meta = resolve_legacy_component_pin(prefix, "factor_meta")
+    root = _relative(meta["path"]).parent
+    if "factor_content_manifest" in components:
+        inventory = json.loads(_read_prefix_inventory(prefix, components["factor_content_manifest"]))
+        if not isinstance(inventory.get("files"), list):
+            raise LegacyMonthlyPrefixError("legacy factor inventory schema differs")
+        return inventory, root
+    files = {}
+    for pin in components.values():
+        if not isinstance(pin, Mapping):
+            continue
+        relative = pin.get("path")
+        if not isinstance(relative, str) or not relative.startswith(root.as_posix() + "/"):
+            continue
+        path = _relative(relative)
+        if path.parent != root or path.suffix not in {".h5", ".parquet"}:
+            continue
+        ensure_sha256(pin.get("sha256"), field="inherited factor inventory")
+        if type(pin.get("size")) is not int or pin["size"] < 0:
+            raise LegacyMonthlyPrefixError("legacy factor inventory size is invalid")
+        if path in files and files[path] != pin:
+            raise LegacyMonthlyPrefixError("legacy factor inventory pin is ambiguous")
+        files[path] = pin
+    if not files:
+        raise LegacyMonthlyPrefixError("legacy factor inventory pins are missing")
+    return {"schema_version": "qe_factor_component_pin_inventory_v1", "files": list(files.values())}, root
+
+
 def restore_legacy_factor_state(
     prefix: LegacyMonthlyPrefix, *, instruments: Sequence[str], before: date,
     denominators: Mapping[str, float], security_identity: SecuritySourceIdentityManifest,
@@ -63,27 +103,12 @@ def restore_legacy_factor_state(
     the inherited aggregate writer. Never multiply an old factor by the new
     denominator and pretend the resulting number was a source observation.
     """
-    pin = prefix.manifest["components"]["factor_content_manifest"]
-    inventory_path = prefix.root / _relative(pin["path"])
-    _plain_chain(inventory_path)
-    signature = _signature(inventory_path)
-    if signature[2] != pin["size"] or signature[2] > 16 * 1024 * 1024:
-        raise LegacyMonthlyPrefixError("legacy factor seed inventory dimensions differ")
-    raw = inventory_path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != pin["sha256"] or _signature(inventory_path) != signature:
-        raise LegacyMonthlyPrefixError("legacy factor seed inventory bytes differ")
-    inventory = json.loads(raw.decode("utf-8"))
-    if inventory.get("schema_version") != "qe_factor_component_pin_inventory_v1" or not isinstance(inventory.get("files"), list):
-        raise LegacyMonthlyPrefixError("legacy factor seed inventory schema differs")
-    factor_root = _relative(prefix.manifest["components"]["factor_meta"]["path"]).parent
+    inventory, factor_root = legacy_factor_inventory(prefix)
 
     def tail(dataset: str, count: int, codes: Sequence[str]) -> pd.DataFrame:
         physical = (dataset_prefixes or {}).get(dataset, prefix)
         if physical is not prefix:
-            pin = physical.manifest["components"]["factor_content_manifest"]
-            inventory_raw = _read_prefix_inventory(physical, pin)
-            local_inventory = json.loads(inventory_raw)
-            local_root = _relative(physical.manifest["components"]["factor_meta"]["path"]).parent
+            local_inventory, local_root = legacy_factor_inventory(physical)
         else:
             local_inventory, local_root = inventory, factor_root
         relative = local_root / f"{dataset}.h5"
@@ -243,7 +268,8 @@ def append_legacy_factor_aggregate(
     logical_predecessor = ensure_sha256(logical_predecessor_manifest_sha256 or prefix.manifest_sha256,
                                         field="logical monthly predecessor")
     month_start = target_cutoff.replace(day=1)
-    if prefix.cutoff != month_start - date.resolution:
+    previous_month = month_start - date.resolution
+    if (prefix.cutoff.year, prefix.cutoff.month) != (previous_month.year, previous_month.month):
         raise LegacyMonthlyPrefixError("legacy factor cutoff is not the preceding month")
     _plain_chain(target_root)
     _plain_chain(source_root)
@@ -254,24 +280,9 @@ def append_legacy_factor_aggregate(
         raise LegacyMonthlyPrefixError("legacy factor target overlaps predecessor")
     if output_root.is_relative_to(input_root) or input_root.is_relative_to(output_root):
         raise LegacyMonthlyPrefixError("legacy factor target overlaps sealed month source")
-    pins = prefix.manifest["components"]
-    pin = pins.get("factor_content_manifest")
-    meta = pins.get("factor_meta")
-    if not isinstance(pin, Mapping) or not isinstance(meta, Mapping):
-        raise LegacyMonthlyPrefixError("legacy factor manifest pins are missing")
-    inventory_path = prefix.root / _relative(pin.get("path"))
-    _plain_chain(inventory_path)
-    before_inventory = _signature(inventory_path)
-    if before_inventory[2] != pin.get("size") or before_inventory[2] > 16 * 1024 * 1024:
-        raise LegacyMonthlyPrefixError("legacy factor inventory dimensions differ")
-    raw = inventory_path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != pin.get("sha256") or _signature(inventory_path) != before_inventory:
-        raise LegacyMonthlyPrefixError("legacy factor inventory bytes differ")
-    inventory = json.loads(raw.decode("utf-8"))
-    if inventory.get("schema_version") != "qe_factor_component_pin_inventory_v1" or not isinstance(inventory.get("files"), list):
-        raise LegacyMonthlyPrefixError("legacy factor inventory schema differs")
+    inventory, factor_root = legacy_factor_inventory(prefix)
     extension = "parquet" if dataset == "static_factors" else "h5"
-    relative = _relative(meta.get("path")).parent / f"{dataset}.{extension}"
+    relative = factor_root / f"{dataset}.{extension}"
     entries = [item for item in inventory["files"] if isinstance(item, Mapping) and item.get("path") == relative.as_posix()]
     if len(entries) != 1:
         raise LegacyMonthlyPrefixError("legacy factor aggregate pin is missing/ambiguous")
@@ -419,23 +430,46 @@ def append_legacy_factor_aggregate(
                         for frame in month_frames():
                             output.append("data", frame, format="table", data_columns=["datetime", "instrument"], index=False, min_itemsize={"instrument": 16})
         else:
-            inherited = pq.ParquetFile(old_path)
-            bind_storage_template(pa.Table.from_batches([], schema=inherited.schema_arrow).to_pandas())
-            writer = pq.ParquetWriter(temporary, inherited.schema_arrow)
-            try:
+            with ExitStack() as readers:
+                inherited = pq.ParquetFile(old_path)
+                readers.callback(inherited.close)
+                bind_storage_template(pa.Table.from_batches([], schema=inherited.schema_arrow).to_pandas())
+                auxiliary = []
+                for name in ("bak_basic", "cyq_perf", "margin_detail"):
+                    path = old_path.with_name(name + ".h5")
+                    relative_aux = path.relative_to(prefix.root).as_posix()
+                    pinned = [v for v in inventory["files"] if v.get("path") == relative_aux]
+                    _plain_chain(path)
+                    if len(pinned) != 1 or path.stat().st_size != pinned[0]["size"]:
+                        raise LegacyMonthlyPrefixError("static source H5 pin is missing or differs")
+                    source_signatures[path] = _signature(path)
+                    auxiliary.append((name, readers.enter_context(pd.HDFStore(path, "r"))))
+                writer = pq.ParquetWriter(temporary, inherited.schema_arrow)
+                readers.callback(writer.close)
                 for batch in inherited.iter_batches(batch_size=max_rows):
                     pulse()
                     inherited_rows += batch.num_rows
-                    writer.write_table(pa.Table.from_batches([batch]), row_group_size=max_rows)
+                    frame = pa.Table.from_batches([batch]).to_pandas()
+                    stamps = frame.index.get_level_values("datetime")
+                    # Reproject dated auxiliary columns while performing the
+                    # existing prefix serialization. No history DB scan, factor
+                    # formula calculation, or inherited price re-export occurs.
+                    for name, store in auxiliary:
+                        fields = list(FACTOR_H5_SCHEMAS[name])
+                        frame.loc[:, fields] = np.nan
+                        where = [f"datetime >= {stamps.min().isoformat()!r}",
+                                 f"datetime <= {stamps.max().isoformat()!r}"]
+                        for facts in store.select("data", where=where, columns=fields, chunksize=max_rows):
+                            common = frame.index.intersection(facts.index)
+                            frame.loc[common, fields] = facts.loc[common, fields].astype(
+                                {field: storage_dtypes[field] for field in fields}).to_numpy()
+                    writer.write_table(pa.Table.from_pandas(frame, preserve_index=True), row_group_size=max_rows)
                     inherited_rows_serialized += batch.num_rows
                 for frame in month_frames():
                     table = pa.Table.from_pandas(frame, preserve_index=True)
                     if not table.schema.equals(inherited.schema_arrow, check_metadata=False):
                         raise LegacyMonthlyPrefixError("legacy static physical schema differs")
                     writer.write_table(table, row_group_size=max_rows)
-            finally:
-                writer.close()
-                inherited.close()
         # Read back the serialized MONTH only. Existing H5 rows/Parquet groups
         # are skipped by physical row offset, not scanned for business QA.
         if extension == "h5":
@@ -494,6 +528,10 @@ def append_legacy_factor_aggregate(
             "validation_scope": "month_delta", "month_output_values_verified": True,
             "database_read": False, "database_write": False,
             "exact_field_repair_readback": exact_repair_readback,
+            "historical_static_projection": (
+                {"contract": "exact_date_provider_facts_v2", "datasets": ["bak_basic", "cyq_perf", "margin_detail"],
+                 "rows": inherited_rows, "source": "same_release_frozen_h5", "database_read": False}
+                if dataset == "static_factors" else None),
         }
         # Hardlink is an atomic create-exclusive publish, not os.replace.
         os.link(temporary, target)

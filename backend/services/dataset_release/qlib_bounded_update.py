@@ -22,7 +22,7 @@ import tempfile
 import time
 from typing import Callable, Iterable, Mapping, Sequence
 
-from .monthly_legacy_prefix import LegacyMonthlyPrefix, load_legacy_prefix
+from .monthly_legacy_prefix import LegacyMonthlyPrefix, load_legacy_prefix, resolve_legacy_component_pin
 from .stock_schema import QLIB_STOCK_FIELDS
 
 
@@ -371,7 +371,7 @@ def extend_qlib_dataset(
             expected_cutoff=inherited_prefix.cutoff, expected_release_id=inherited_prefix.release_id,
         )
         pin_key = "day_meta_export" if frequency == "day" else "minute_meta_export"
-        pin = inherited_prefix.manifest["components"].get(pin_key)
+        pin = resolve_legacy_component_pin(inherited_prefix, pin_key)
         if not isinstance(pin, Mapping) or not isinstance(pin.get("path"), str):
             raise QlibBoundedUpdateError("manifest-bound Qlib provider metadata is missing")
         relative = PurePosixPath(pin["path"])
@@ -543,6 +543,24 @@ def extend_qlib_dataset(
                 os.replace(temporary, commit_target)
             finally:
                 temporary.unlink(missing_ok=True)
+        quote_catalog = None
+        if frequency == "1min":
+            from backend.qlib_exporter.quote_catalog import build_minute_quote_catalog
+
+            # A quote catalog is not a buy-universe sidecar. In particular,
+            # inherited real quotes remain visible after a stock exits PIT.
+            physical = build_minute_quote_catalog(target, checkpoint=checkpoint)
+            descriptor, raw = tempfile.mkstemp(prefix=".all.", suffix=".tmp", dir=instruments_target.parent)
+            temporary = Path(raw)
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(physical.payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, instruments_target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            quote_catalog = {**physical.receipt(), "input_instruments_sha256": hashlib.sha256(instruments_payload).hexdigest()}
     except Exception:
         # A private, unpublished target may be removed by the caller's exact
         # operation cleanup.  Do not delete it here; it is resume evidence.
@@ -567,6 +585,7 @@ def extend_qlib_dataset(
         "instruments_sha256": sha256_file(target / "instruments" / "all.txt"),
         "calendar_signature": list(_file_signature(target / "calendars" / calendar_name)),
         "instruments_signature": list(_file_signature(target / "instruments" / "all.txt")),
+        **({"quote_catalog": quote_catalog} if quote_catalog is not None else {}),
         "feature_receipts": feature_receipts,
         "bounded_memory_unit": "one_instrument_csv",
         "baseline_mutated": False,

@@ -269,7 +269,7 @@ def _plan_change_applicability(
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = yaml.load(path.read_text(encoding="utf-8"), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
     if not isinstance(data, dict):
         raise IssueFlowError(f"YAML root must be a mapping: {_repo_path(path)}")
     return data

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,6 +21,7 @@ from backend.services.simulation_execution.localsim.models import (
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
     LocalSimMarketMarkV1,
+    LocalSimMarketMarkProvenance,
     LocalSimPersistenceResult,
     LocalSimProjectionOutboxStatus,
     LocalSimProjectionOutboxV1,
@@ -1156,6 +1157,7 @@ class LocalSimPersistenceCoordinator:
         execution: Any,
         context: Any,
         valuation_refresh: bool = False,
+        valuation_as_of_time: datetime | None = None,
     ) -> LocalSimPersistenceResult | None:
         if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM or execution.status != "SUBMITTED":
             return None
@@ -1205,12 +1207,42 @@ class LocalSimPersistenceCoordinator:
                     states=execution_states,
                 )
                 self._validate_snapshot_for_progress(run=run, execution=execution, orders=orders)
-            else:
+            elif not valuation_refresh:
                 self._validate_snapshot_for_success(
                     run=run, execution=execution, orders=orders, fills=fills, cash_entries=cash_entries
                 )
 
             paper_repository = self._paper_repository_for(binding=binding, run=run, context=context)
+            if valuation_refresh:
+                if fills or events or cash_entries:
+                    raise DataUnavailableError(
+                        "LocalSim close valuation cannot submit new economic facts",
+                        context={"reason_code": "LOCALSIM_CLOSE_VALUATION_NEW_EFFECTS", "run_id": run.run_id},
+                    )
+                self._validate_snapshot_for_progress(run=run, execution=execution, orders=orders)
+                if run.run_payload_json.get("local_sim_projection_outbox_v1") is not None:
+                    self._existing_projection_result(
+                        run_id=run.run_id, paper_repository=paper_repository,
+                        observed_positions=positions, observed_account=account,
+                    )
+                else:
+                    no_order_close = (
+                        run.status == type(run.status).SUCCEEDED
+                        and not execution.execution_plan.intents and not orders and not execution_states
+                        and run.run_payload_json.get("broker_called") is False
+                        and (run.run_payload_json.get("no_rebalance_required") is True
+                             or bool(run.run_payload_json.get("pre_trade_blocked_order_generation")))
+                        and not run.run_payload_json.get("local_sim_economic_generation")
+                        and not run.run_payload_json.get("local_sim_economic_receipts_v1")
+                        and paper_repository.get_run_by_portfolio_date(
+                            str(context.portfolio_id or execution.execution_plan.portfolio_id), run.trade_date
+                        ) is None
+                    )
+                    if not no_order_close:
+                        raise DataUnavailableError(
+                            "LocalSim close valuation needs an original projection or a proven no-order day",
+                            context={"reason_code": "LOCALSIM_CLOSE_VALUATION_ORIGIN_UNPROVEN", "run_id": run.run_id},
+                        )
             self.replay_pending_projection(
                 run_id=run.run_id,
                 paper_repository=paper_repository,
@@ -1268,7 +1300,7 @@ class LocalSimPersistenceCoordinator:
                 market_data_source=context.market_data_source,
             )
             if valuation_refresh:
-                snapshot_time = context.local_broker.scheduler_as_of_time
+                snapshot_time = valuation_as_of_time or context.local_broker.scheduler_as_of_time
             cash = float(getattr(account, "cash")) if account is not None else self._cash_after(cash_entries, context)
             historical_residual = (
                 self._historical_residual_payload(run=run, orders=orders) if not execution_states else None
@@ -1329,6 +1361,19 @@ class LocalSimPersistenceCoordinator:
                     contract=contract,
                     mark_error=exc,
                 )
+            if valuation_refresh:
+                close_time = self._normalize_time(snapshot_time)
+                suspended = {LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
+                             LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE}
+                if (close_time.date() != run.trade_date or close_time.time() != time(15, 0)
+                        or any(record.provenance not in suspended
+                               and (self._normalize_time(record.as_of_time).date() != run.trade_date
+                                    or self._normalize_time(record.as_of_time).time() != time(15, 0))
+                               for record in mark_records.values())):
+                    raise DataUnavailableError(
+                        "LocalSim close valuation requires authoritative closing marks",
+                        context={"reason_code": "LOCALSIM_CLOSE_MARKS_MISSING", "run_id": run.run_id},
+                    )
             market_value = sum(int(position.quantity) * marks[position.symbol] for position in positions.values())
             account_snapshot = AccountSnapshot(
                 portfolio_id=str(context.portfolio_id or execution.execution_plan.portfolio_id),
@@ -1364,6 +1409,9 @@ class LocalSimPersistenceCoordinator:
                 "last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED",
             }
             if valuation_refresh:
+                payload_patch["broker_called"] = run.run_payload_json.get("broker_called") is True
+                payload_patch["submitted_intents"] = run.run_payload_json.get("submitted_intents", len(orders))
+                payload_patch["failed_intents"] = run.run_payload_json.get("failed_intents", 0)
                 payload_patch["local_sim_close_valuation_v1"] = {
                     "schema_version": "local_sim_close_valuation_v1",
                     "snapshot_time": snapshot_time.isoformat(),

@@ -178,6 +178,7 @@ def prepare_database_daily_inputs(
     effective: date,
     calendar: list[date],
     shared_code_to_id: dict[str, int],
+    classification_rows: list[dict[str, Any]],
     membership_rows: list[dict[str, Any]],
     sector_rows: list[dict[str, Any]],
     official_quote_rows: list[dict[str, Any]],
@@ -191,6 +192,7 @@ def prepare_database_daily_inputs(
         validate_release_sw_l2_code_map,
     )
     from backend.services.dataset_release.sw_l2_quote_policy import (
+        SWL2QuotePolicyError,
         build_quote_availability_payload,
         quote_publication_policy_identity,
     )
@@ -243,18 +245,6 @@ def prepare_database_daily_inputs(
         authority_sha256=authority_sha,
     )
     code_map = validate_release_sw_l2_code_map(payload)
-    quote_payload = build_quote_availability_payload(code_map=code_map, required_start=history_start, cutoff=effective)
-    availability = {
-        row["canonical_l2_code"]: tuple(
-            (date.fromisoformat(s["start_date"]), date.fromisoformat(s["end_date"])) for s in row["availability_spans"]
-        )
-        for row in quote_payload["entries"]
-    }
-    output_codes = set(maps[effective.isoformat()].values())
-    quoted = sorted(code for code in output_codes if _quote_is_available(availability, code, effective))
-    unavailable = sorted(output_codes - set(quoted))
-    if not quoted:
-        _fail("no quote-available output industries")
     # A frozen-release coefficient scope is not a prohibition on authentic
     # historical DB facts. Verify them against the official series in this
     # same read snapshot; never turn excluded context into coefficient eligibility.
@@ -281,6 +271,36 @@ def prepare_database_daily_inputs(
             {"sector_code": code, "trade_date": day.isoformat(), **dict(zip(QUOTE_COLUMNS, values))}
         )
     canonical_quotes.sort(key=lambda r: (r["sector_code"], r["trade_date"]))
+    # The shared authority consumes the publication catalog and positive dated
+    # evidence. Never infer an unpublished industry's next-day eligibility from
+    # yesterday's authentic quote, or use membership as publication evidence.
+    if not isinstance(classification_rows, list) or any(not isinstance(r, dict) for r in classification_rows):
+        _fail("invalid publication catalog records")
+    publication_evidence: dict[str, Any] = {}
+    try:
+        quote_payload = build_quote_availability_payload(
+            code_map=code_map,
+            required_start=history_start,
+            cutoff=effective,
+            classification_rows=classification_rows,
+            quote_observations=[
+                {"l2_code_id": code_map.code_to_id[r["sector_code"]], **r} for r in canonical_quotes
+            ],
+            evidence=publication_evidence,
+        )
+    except SWL2QuotePolicyError as exc:
+        _fail(f"publication authority invalid: {exc}")
+    availability = {
+        row["canonical_l2_code"]: tuple(
+            (date.fromisoformat(s["start_date"]), date.fromisoformat(s["end_date"])) for s in row["availability_spans"]
+        )
+        for row in quote_payload["entries"]
+    }
+    output_codes = set(maps[effective.isoformat()].values())
+    quoted = sorted(code for code in output_codes if _quote_is_available(availability, code, effective))
+    unavailable = sorted(output_codes - set(quoted))
+    if not quoted:
+        _fail("no quote-available output industries")
     sectors: dict[str, dict[date, dict[str, Any]]] = {}
     canonical_sectors = []
     excluded_context_cells = 0
@@ -341,6 +361,7 @@ def prepare_database_daily_inputs(
             "market_volume": [[d.isoformat(), volumes[d]] for d in calendar],
             "mapping_sha256": authority_sha,
             "quote_availability": quote_payload,
+            "publication_catalog_sha256": publication_evidence["classification_catalog_digest"],
             "official_sw_daily": canonical_quotes,
         }
     )
@@ -356,6 +377,7 @@ def prepare_database_daily_inputs(
         "completion_statuses": completion["completion_statuses"],
         "mapping_authority": dict(code_map.mapping_authority),
         "quote_policy_sha256": quote_publication_policy_identity(),
+        "publication_catalog_sha256": publication_evidence["classification_catalog_digest"],
         "official_quote_authority": "market.sw_daily",
         "official_quote_sha256": fingerprint(canonical_quotes),
         "excluded_coefficient_quote_context_cells": excluded_context_cells,
@@ -418,6 +440,11 @@ def read_database_daily_inputs(
             (start, as_of),
         )
         calendar = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            "SELECT index_code,src,level,is_pub FROM market.sw_index_classify "
+            "WHERE src='SW2021' AND level='L2' ORDER BY index_code"
+        )
+        classification_rows = [dict(zip(("index_code", "src", "level", "is_pub"), row)) for row in cur.fetchall()]
         cur.execute(
             "SELECT ts_code,l2_code,in_date,out_date FROM market.sw_index_member WHERE in_date<=%s AND (out_date IS NULL OR out_date>=%s) ORDER BY ts_code,in_date,l2_code",
             (effective, start),
@@ -487,6 +514,7 @@ def read_database_daily_inputs(
         effective=effective,
         calendar=calendar,
         shared_code_to_id=load_sw_l2_code_map(connection),
+        classification_rows=classification_rows,
         membership_rows=members,
         sector_rows=rows,
         official_quote_rows=official_quote_rows,

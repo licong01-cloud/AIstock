@@ -20,7 +20,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 ## Feature Workflow
 
 1. Classify `F0`, `F1`, or `F2`.
-2. Keep the approved Feature Card/design in the project docs path required by the tier.
+2. Reuse the approved authoritative Feature Card/design in the required docs path; keep the acceptance matrix in that same file when practical, without a duplicate design/card.
 3. Maintain an acceptance matrix: `design_item`, `implementation_refs`, `test_or_evidence`, `status`, `gap_or_exception`.
 4. Run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` before PR or merge.
 5. Stop if any row has an unapproved gap, simplified/POC/mock-only/static success, partial implementation, or silent fallback.
@@ -42,3 +42,8 @@ No silent fallback, fake success, default price/cash/holdings, daily-mode fallba
 ## Report
 
 Include design acceptance summary, implementation refs, local validation evidence, delegated/nightly receipt or deferred modules, production gates, runtime/DB impact, and residual risks.
+
+## 最小文档与自动交付
+
+- 按唯一规范 `DOC-MINIMUM-001`：默认零额外说明文件，复用已有任务/Issue/PR/回执；Context Pack Markdown 按需，必要设计和真实证据完整保留。
+- 按 `AUTO-REVIEW-DELIVERY-001`：当前 Agent 执行正确性与完整性审核、自动修复和最终版本复核；启用且有授权的源码交付连续执行，任务明确限制优先，不扩展到运行态、数据库、训练或删除。

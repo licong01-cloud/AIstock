@@ -467,6 +467,7 @@ def prepare_file_request(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(temp) / "months",
+            suspension_keys=suspension,
             window_start=SOURCE_START,
             window_end=SOURCE_END,
         )
@@ -571,7 +572,16 @@ def _l2_stock_facts(
     return _bounded_l2_stock_facts(frozen, source, start=start, end=end)
 
 
-def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_price_history: bool = False):
+def _bounded_l2_stock_facts(
+    frozen,
+    source,
+    *,
+    start: date,
+    end: date,
+    prewarm_price_history: bool = False,
+    release_binding=None,
+    expected_calendar_sha256=None,
+):
     """Shared source kernel; public dispatchers retain their distinct frozen boundaries."""
     from backend.services.hmm_risk import rotation_l1_input_bundle as reader
     from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, fail
@@ -582,17 +592,25 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_p
         security_identity_manifest=Path(source["security_identity_manifest"]),
         provider_absence_manifest=Path(source["provider_absence_manifest"]),
         data_window_end=end,
-        frozen_release_binding=frozen_release_binding(),
+        frozen_release_binding=frozen_release_binding() if release_binding is None else release_binding,
     )
     stamps = {key: (path.stat().st_size, path.stat().st_mtime_ns) for key, path in assets["files"].items()}
-    if assets["inventory"]["qlib"]["calendar_sha256"] != CALENDAR_SHA:
+    calendar_sha = CALENDAR_SHA if expected_calendar_sha256 is None else expected_calendar_sha256
+    reader._require_sha256(calendar_sha, "bounded L2 calendar SHA256")
+    if assets["inventory"]["qlib"]["calendar_sha256"] != calendar_sha:
         raise fail("effect calendar file changed", reason="identity_mismatch")
     calendar_all = tuple(reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt"))
     calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= end)
     if not calendar or start not in calendar or calendar[-1] != end:
         raise fail("effect source boundary is not an open session")
+    authority_options = {}
+    if frozen["industry_authority"].get("schema_version") == "hmm_risk_release_l2_classification_binding_v1":
+        authority_options = {
+            "candidate_root": assets["release_root"],
+            "release_binding": frozen_release_binding() if release_binding is None else release_binding,
+        }
     adapter = reader._industry_adapter(
-        frozen["industry_authority"], forbidden_roots=(Path(__file__).resolve().parents[3],)
+        frozen["industry_authority"], forbidden_roots=(Path(__file__).resolve().parents[3],), **authority_options
     )
     _, l2 = reader._canonical_sector_codes(adapter)
     if list(l2) != frozen["catalog"]:
@@ -676,6 +694,7 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_p
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(temp) / "months",
+            suspension_keys=suspension,
             window_start=start,
             window_end=end,
         )
@@ -724,6 +743,8 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_p
         )
     if any((path.stat().st_size, path.stat().st_mtime_ns) != stamps[key] for key, path in assets["files"].items()):
         raise fail("effect source changed while read", reason="identity_mismatch")
+    if callable(getattr(adapter, "unchanged", None)):
+        adapter.unchanged()
     # Tuple keys are internal only and never passed to canonical JSON.
     return assets, window, aggregates["L2"], identity
 

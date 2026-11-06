@@ -1,5 +1,6 @@
 """Publication/recovery contracts with no provider calls or database access."""
 import datetime as dt
+from contextlib import nullcontext
 from datetime import date
 from types import SimpleNamespace
 import uuid
@@ -160,8 +161,9 @@ def test_shared_upsert_preserves_nullable_late_facts_without_changing_adj_factor
     import backend.services.tushare_sync_engine as module
 
     captured = []
-    monkeypatch.setattr(module.pgx, "execute_values", lambda _cur, sql, vals: captured.append((sql, vals)))
-    conn = SimpleNamespace(cursor=lambda: nullcontext(None))
+    monkeypatch.setattr(module.pgx, "execute_values", lambda _cur, sql, vals, **_kwargs: captured.append((sql, vals)) or [])
+    monkeypatch.setattr("backend.services.data_integrity.repository.mark_changed", lambda *args, **kwargs: {})
+    conn = SimpleNamespace(autocommit=False, cursor=lambda: nullcontext(None))
     TushareSyncEngine()._upsert_plain_batch(conn, spec, [{"trade_date": "20261013", "ts_code": "000001.SZ"}])
     assert ("COALESCE(EXCLUDED." in captured[0][0]) == (spec is not ADJ_FACTOR)
     assert None in captured[0][1][0]
@@ -201,6 +203,8 @@ def test_go_watcher_timeout_preserves_async_job_identity(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     actions = []
     def fetch(sql, _params=()):
+        if "dataset_date_refresh_audit" in sql:
+            return []
         if "trading_calendar" in sql:
             return [{"latest": dt.date(2026, 10, 13)}]
         if "stock_basic" in sql:
@@ -254,12 +258,84 @@ def test_raw_completeness_query_is_exact_date_and_uses_china_clock():
         calls.append((sql, params))
         if "kline_daily_raw" in sql:
             return [{"ts_code": "000001.SZ", "volume_hand": 10, "volume_shares": 1000}]
-        return [{"ts_code": "000001.SZ", "bars": 239, "bad_bars": 0, "traded": True}]
+        return [{"ts_code": "000001.SZ", "freq": "1m", "bars": 239, "bad_bars": 0,
+                 "traded": True, "data_max_at": dt.datetime(2026, 10, 8, 15)}]
     scheduler._fetchall = fetch
     assert scheduler._raw_date_completeness("kline_minute_raw", dt.date(2026, 10, 8))["incomplete_symbols"] == 1
     assert "Asia/Shanghai" in calls[1][0]
     assert "trade_date=%s" in calls[0][0]
     assert all("JOIN" not in call[0] for call in calls)
+
+
+@pytest.mark.parametrize("dataset", ["kline_minute_raw", "kline_daily_raw"])
+@pytest.mark.parametrize("defect", [None, "missing", "bad_bars", "empty", "no_expected"])
+def test_raw_audit_reuses_bounded_observation_without_range_rescan(monkeypatch, dataset, defect):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    day = dt.date(2026, 10, 16)
+    latest = dt.datetime(2026, 10, 16, 15, 5, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    scheduler._recent_trading_floor = lambda _n: day
+    scheduler._go_provider_codes = lambda *_: ([] if defect == "no_expected"
+                                               else ["000001.SZ", "600000.SH"])
+    calls, recorded = [], []
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000, "invalid_fact": False}
+             for code in ["000001.SZ", "600000.SH"]]
+    minute = [{"ts_code": row["ts_code"], "freq": "1m", "bars": 240,
+               "bad_bars": int(defect == "bad_bars" and i == 1),
+               "traded": True, "data_max_at": latest - dt.timedelta(minutes=5)}
+              for i, row in enumerate(daily)]
+    # Audit totals must still include non-1m rows; completeness must not.
+    minute.append({**minute[0], "freq": "5m", "bars": 48, "data_max_at": latest})
+    if defect == "no_expected":
+        if dataset == "kline_minute_raw":
+            daily.clear()
+        else:
+            minute.clear()
+    if defect in {"missing", "empty"}:
+        source = minute if dataset == "kline_minute_raw" else daily
+        source[:] = source[:1] if defect == "missing" else []
+
+    def fetch(sql, params=()):
+        calls.append((sql, params))
+        assert "GROUP BY trade_time::date" not in sql
+        assert "GROUP BY trade_date::date" not in sql
+        if "market.trading_calendar" in sql:
+            return [{"cal_date": day}]
+        if "market.stock_basic" in sql:
+            return [{"ts_code": code} for code in ["000001.SZ", "600000.SH"]]
+        if "market.suspend_d" in sql:
+            return []
+        if "market.kline_daily_raw" in sql:
+            assert "trade_date=%s" in sql
+            return daily
+        assert "market.kline_minute_raw" in sql and "trade_time >= %s" in sql
+        assert "GROUP BY ts_code,freq" in sql
+        assert params[0].tzinfo is not None and params[1] - params[0] == dt.timedelta(days=1)
+        return minute
+
+    class Repo:
+        def record_success(self, **kw):
+            recorded.append((True, kw))
+
+        def record_failure(self, **kw):
+            recorded.append((False, kw))
+
+    scheduler._fetchall = fetch
+    monkeypatch.setattr(scheduler_module, "DataRefreshAuditRepository", Repo)
+    monkeypatch.setattr(scheduler_module, "_get_conn", lambda _cfg: nullcontext(object()))
+    ready = defect is None or (dataset == "kline_daily_raw" and defect == "bad_bars")
+    assert scheduler._record_refresh_audit_from_table_range(
+        dataset=dataset, job_id=None, start_date=day, end_date=day, data_source="tdx_api",
+    ) is ready
+    passed, receipt = recorded[0]
+    assert passed is ready
+    count = sum(row["bars"] for row in minute) if dataset == "kline_minute_raw" else len(daily)
+    assert receipt["written_rows"] == count
+    if passed:
+        assert receipt["row_count"] == count
+        assert receipt["data_max_at"] == (latest if dataset == "kline_minute_raw" else None)
+    assert sum("market.kline_minute_raw" in sql for sql, _ in calls) == int(dataset == "kline_minute_raw")
+    assert sum("market.kline_daily_raw" in sql for sql, _ in calls) == 1
 
 
 def test_completed_etf_repair_has_source_bound_publication_readback():

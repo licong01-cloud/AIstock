@@ -1,0 +1,365 @@
+{
+  "actual": "Minute ANY parameters are untyped text arrays; auto range and Go incremental paths use physical MAX and an unbounded fallback.",
+  "allowed_write_scope": [
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1992",
+  "closed_at": "2026-10-19T19:02:30.296166Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T17:40:19.057092Z",
+  "description": "Minute ANY parameters are untyped text arrays; auto range and Go incremental paths use physical MAX and an unbounded fallback.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-33f061ba5392",
+      "timestamp": "2026-10-19T17:40:19.057092Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Use native character(9) stock predicates and committed full-population completeness evidence for cursor advancement; replay incomplete dates without unbounded minute-table scans.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "factor_library",
+        "paper_v2",
+        "local_data",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/qlib_exporter/authoritative_bin_exporter.py",
+          "impact_modules": [
+            "qe.core",
+            "factor_library",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_data_pipeline"
+        },
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_qlib_export_stock_universe_filters.py",
+          "impact_modules": [
+            "qe.core",
+            "factor_library",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_data_pipeline"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ]
+  },
+  "first_seen_at": "2026-10-19T17:40:19.057092Z",
+  "fix_branch": null,
+  "fix_commit": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+  "fixed_at": "2026-10-19T18:22:15Z",
+  "github_issue_number": 6376,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6376",
+  "last_seen_at": "2026-10-19T17:40:19.057092Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6378",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "RED: six targeted minute export/query and cursor tests failed on the previous source. GREEN: native bpchar scalar/array predicates, bounded replay-start cursor, same-day/future/bootstrap handling and non-minute compatibility passed.",
+      "Fresh-process related matrix: 197 passed, 1 skipped across exporter, scheduler, Go integration and daily recovery tests. Changed-file Ruff and git diff --check passed.",
+      "Existing aistock_dev minute_perf_20261019 fixtures only: 18 alternating old/new SQL cases over identical 28024330-row September datasets, including 336 compressed chunks. All actual rows and result SHA256 values matched. Read-only repeatable-read transaction rolled back; no DDL, DML, collector or service control.",
+      "DEV median month/4-stock export: compressed 137.262 to 31.161 ms; 7-day chunks 1727.627 to 26.892 ms; 30-day chunks 1560.260 to 27.713 ms. Larger compressed batches and cursor execution are not universally faster; full plan/timing evidence remains in X:/AIstock_temp/BUG-1992-minute-sql-20261020/dev-sql-comparison.json.",
+      "Legacy audit success is not adopted as a committed completeness watermark. Both minute range routes reuse a bounded timestamp-index probe and replay the observed date; exact requested windows, persisted repair targets and existing completion/conflict/precision checks remain unchanged. No full-history minute MAX fallback. Runtime application remains pending user restart.",
+      "Fresh Python process loaded the persistent task checkout and exercised all three minute query entries plus both cursor paths. Existing DEV SQL executions used repeatable-read readonly sessions. Runtime update still pending user restart.",
+      "Fresh Python process loaded the task checkout, exercised three real query entry points and both cursor paths; no runtime deployment or service control.",
+      "197 tests passed in fresh Python process loading the task source. Separately, X:/AIstock_temp/BUG-1992-minute-sql-20261020/dev-sql-comparison.json records 18 read-only existing DEV SQL result-equality cases including compressed chunks; no collector or runtime deployment. Disabled minute configuration regression reproduced RED and passed GREEN after preserving the original enabled-configuration check.",
+      "Final fresh Python process: 197 tests passed, 1 skipped, including RED to GREEN disabled-configuration compatibility. Existing DEV read-only 18-case SQL equivalence and compressed-data benchmark unchanged by branch relocation. No production DML, collector, dataset export or process control."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1992/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1992",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-19T19:00:58.119652Z",
+      "mode": "read_only",
+      "observed_identity": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a4f77fae7350f9d46e570cbb7a2c979bac05aefcc5db9e78907ba17b5aded93f",
+      "receipt_sha256": "98764df09e3cde1f1e15203608c15018b612690b08ca9fc7ed129df43f743747",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c689014882d639cb6687b3df1fc0f576974bec923111a09dca9520516761f64a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1992",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5294df96b5c0896b",
+    "recorded_at": "2026-10-19T18:22:51.770604Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0afbdd3d6f82aec85703d3a79130bf673a199e65",
+    "source_merge_commit": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6378",
+    "validation_evidence": [
+      "validation-receipt: id=7f8f331df109c500 commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=pytest plan=direct status=passed command=`pytest backend/tests/test_qlib_export_stock_universe_filters.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py -q` result=`passed: 197 passed, 1 skipped`",
+      "validation-receipt: id=77561d817f785efd commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- backend/ingestion/tdx_scheduler.py backend/qlib_exporter/authoritative_bin_exporter.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_qlib_export_stock_universe_filters.py tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json` result=`passed: 0 blocking findings`"
+    ],
+    "validation_evidence_digest": "fbc69a136b50235b5f52d54e754b24bd96a492b396359404ab468d9685e23c8b"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Minute exporter text-array casts and unsafe raw MAX cursors defeat indexed incremental reads",
+  "trigger_condition": {
+    "fingerprint": "33f061ba539256914c05a5ef",
+    "source_event_id": "FE-20261019-33f061ba5392"
+  },
+  "validation_evidence": [
+    "DEV source identities: BUG-1984 merge 75889488293951f2cecdf83ff5b2fb090f41b8ad is already contained in origin/main; Go writer and public CI/workflow are unchanged by this BUG.",
+    "Review 1: all three actual minute query entries exercise native bpchar predicates with unchanged half-open Shanghai timestamp bounds and data columns. No typmod means overlength code parameters are not silently truncated.",
+    "Review 2: exact-window Go path bypasses cursor, latest partially ingested date is replayed, future facts rejected, no unbounded minute fallback, non-minute audit/date behavior preserved. Already committed data is not deleted or re-exported.",
+    "Review 3: 18 DEV SQL result-equality cases and 196-pass related regression, Ruff and diff checks. No reduction in completeness/conflict/precision validation. No new gate, approval, schema, dependency or service.",
+    "Review 4: detected a disabled-dataset compatibility regression in the minute auto-range branch, added a failing regression test and moved the branch after the existing enabled configuration check. GREEN: 197 passed, 1 skipped; disabled/missing configuration stays inactive without querying minute facts.",
+    "DESIGN-COMPLIANCE-001: complete requested shared SQL repair; genuine errors remain visible; model/pool/units and publication contracts unchanged; no additional approvals or resource gates. Source/PR/CI/runtime states reported independently.",
+    "validation-receipt: id=7f8f331df109c500 commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=pytest plan=direct status=passed command=`pytest backend/tests/test_qlib_export_stock_universe_filters.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py -q` result=`passed: 197 passed, 1 skipped`",
+    "validation-receipt: id=77561d817f785efd commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- backend/ingestion/tdx_scheduler.py backend/qlib_exporter/authoritative_bin_exporter.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_qlib_export_stock_universe_filters.py tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json` result=`passed: 0 blocking findings`",
+    "Read-only post-restart-verify matched backend-main identity 2db54e36fb3997b6061c8f08acff5cbc19110238 and passed health/business smoke. No process control or database writes."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

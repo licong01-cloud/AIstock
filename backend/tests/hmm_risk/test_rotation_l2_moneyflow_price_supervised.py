@@ -43,7 +43,7 @@ def reference_assets(completed, tmp_path_factory):
 
 
 @pytest.fixture
-def price_panel(panel, completed, reference_assets, monkeypatch):
+def price_panel(panel, completed, reference_assets, monkeypatch, price_panel_cache):
     old_first, _, _, acceptance = completed
     reference = reference_assets
     pins = {k: acceptance[k] for k in subject.REFERENCE_PINS if k != "prediction_sha256"}
@@ -58,6 +58,8 @@ def price_panel(panel, completed, reference_assets, monkeypatch):
     # Synthetic unit/subprocess fixtures use the test interpreter, not the
     # separately authorized Conda-base formal experiment environment.
     monkeypatch.setattr(subject, "APPROVED_NUMERIC", {k: environment[k] for k in ("python", "versions")})
+    if "bundle" in price_panel_cache:
+        return deepcopy(price_panel_cache["bundle"])
     source = deepcopy(panel["source"])
     binding = source["evaluation_source_binding"]
     binding.update(
@@ -83,7 +85,7 @@ def price_panel(panel, completed, reference_assets, monkeypatch):
         ],
         "benchmark_close": [{"trade_date": day, "close": 1000.0 + j} for j, day in enumerate(source["calendar"][:-1])],
     }
-    return reseal(
+    price_panel_cache["bundle"] = reseal(
         {
             "schema_version": subject.INPUT_SCHEMA,
             "contract": subject.CONTRACT,
@@ -93,6 +95,30 @@ def price_panel(panel, completed, reference_assets, monkeypatch):
             "reference": {"path": str(reference / "acceptance.json"), "pins": pins, "input_identity": identity},
         }
     )
+    return deepcopy(price_panel_cache["bundle"])
+
+
+@pytest.fixture(scope="module")
+def price_panel_cache():
+    # Immutable synthetic construction only; every consumer gets its own tree.
+    return {}
+
+
+def test_warm_price_fixture_keeps_case_isolation_and_restores_authority(monkeypatch):
+    cache = {"bundle": {"mutable": [1]}}
+    panel = {"source": {"identity": {key: "fixture" for key in subject.APPROVED_INPUT}}}
+    completed = ({"prediction_sha256": "a" * 64}, None, None,
+                 {key: "b" * 64 for key in subject.REFERENCE_PINS})
+    monkeypatch.setattr(subject, "numeric_environment", lambda: {"python": "fixture", "versions": {}})
+    monkeypatch.setattr(sys.modules[__name__], "reseal", lambda _: pytest.fail("warm fixture rebuilt input"))
+    with pytest.MonkeyPatch.context() as patches:
+        first = price_panel.__wrapped__(panel, completed, Path("unused"), patches, cache)
+        first["mutable"].append(2)
+        assert subject.REFERENCE_PINS["prediction_sha256"] == "a" * 64
+    with pytest.MonkeyPatch.context() as patches:
+        second = price_panel.__wrapped__(panel, completed, Path("unused"), patches, cache)
+        assert second == cache["bundle"] == {"mutable": [1]}
+        assert subject.APPROVED_INPUT == panel["source"]["identity"]
 
 
 def test_formal_numeric_contract_remains_fixed():

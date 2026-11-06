@@ -69,6 +69,16 @@
 9. merge finalizer 在 runtime/client 推断前先幂等同步 canonical `main` 到已验证 merge commit；相同输入可安全重试，旧 root snapshot 不得触发业务窗口重新执行或抢占客户端 owner。
 10. source PR 创建和 close-sync PR 创建遇到 GitHub GraphQL/TLS/EOF 等传输错误时，只允许对已推送且 SHA 已验证的 head 使用一次 REST 创建或读回；先查询同 head 的现有 open PR，创建后再次校验 head/base。权限、参数、冲突或策略错误不得降级，也不得重复创建 PR 或要求用户重新授权。
 
+<a id="rule-auto-review-delivery-001"></a>
+### 2.4.1 [AUTO-REVIEW-DELIVERY-001] 自动审核、修复和源码交付
+
+1. 所有 BUG 修复和代码修改完成后，由当前执行 Agent 自动进行正确性审核和完整性/回归审核。检查真实调用、边界、异常、兼容性、业务语义、需求覆盖、测试有效性及验收合同；在原授权范围内发现问题直接修复并复核受影响部分。最终结论绑定实际交付版本；后续修改使受影响结论失效，不能复用旧 HEAD 的绿灯。自审不冒充独立审核，不自动启动子代理，也不替代分支保护要求的真实审核。
+2. 用户已批准本仓库在授权实施任务中默认自动提交、push、创建或更新同一 PR、满足现有条件后合入源码、同步必要 BUG/metadata 和主目录；派生 YAML 的 `agent_execution_defaults.source_delivery` 保存开关、授权引用和动作范围。后续任务的只分析、暂不提交、不创建 PR、不合入等明确限制优先，Agent 在已有任务记录的 `execution_restrictions` 中记录 `analysis_only`、`no_commit`、`no_pr`、`no_merge`；未启用或无授权引用时不推导源码交付授权。CLI 展示策略和执行现有命令，审核与修复由当前 Agent 执行，不能由 CLI 自动声明审核通过。
+3. 自动交付继续满足最小本地验证、scope、设计符合性、精确当前 HEAD 的 required CI、分支保护和合入条件，不使用 bypass/admin、不弱化测试或 runtime 合同，不新增独立审批、检查上下文、服务或后台调度器。已有完整授权不重复询问；PR 更新复用同一任务分支和 PR。
+4. 失败先恢复失败测试或受影响检查；同一根因连续三次修复尝试无进展时停止空转并报告实际阻断。网络和 runner 故障采用现有有限重试，保留可恢复状态，不盲目重提 PR、无限 watch 或请求重复授权。需要改变需求/设计/业务语义或执行未授权动作时，只澄清缺失决策。
+5. 源码交付不授权服务启停、生产 DDL/DML、依赖安装、运行激活、训练、部署或删除；这些动作与结果继续独立处理。运行态 BUG 保留 `fixed_source_pending_user_restart` 等真实状态，源码合入不等于业务验收。
+6. 各轮问题、处理结果、最终版本和验证引用只写已有任务记录或 PR；不生成逐轮审核、修复、通过或交付报告。
+
 <a id="rule-worktree-cleanup-evidence-001"></a>
 ### 2.5 [WORKTREE-CLEANUP-EVIDENCE-001] worktree 临时证据终结与清理
 
@@ -244,6 +254,15 @@ PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 Gr
 ### 6.14 [DOC-LOCATION-001] 文档归属
 
 规范位于 `docs/standards/`，设计位于 `docs/architecture/`，分析位于 `docs/analysis/`，运维位于 `docs/operations/`，用户说明位于 `docs/user_guides/`，验证历史位于 `tests/aistock_validation/history/`。同主题保留一个主文档，其他文件引用主文档。
+
+<a id="rule-doc-minimum-001"></a>
+### 6.14.1 [DOC-MINIMUM-001] 最小文档默认
+
+1. 除用户明确要求外，不新增非必要说明文件：若不生成该文字/文件仍可完整执行、验收、复现、恢复和交接，就不生成。分析、问答、只读排查和状态检查直接在对话回答；普通 BUG/维护复用 BUG/Issue、PR 和必要回执，额外计划、过程、审核、总结和完成报告默认零份。不因复杂、阶段切换、换窗口或成功而自动叠加文档，也不为少写文档增加审批或审计报告。
+2. 一个事实保留一个权威载体；优先更新已有相关段落，其他位置用引用。功能设计复用已有权威设计，必要新设计只保留一份，验收矩阵可放同一文件；保持 F0/F1/F2、Design Acceptance Index、逐项验收和证据完整，不以最小文档绕过设计，也不另建重复 Feature Card/验收文件。
+3. 机器必需的 BUG、state/events、数据身份、manifest、冻结研究约束、验证/运行态回执与负面或 UNKNOWN 证据不属于可删除的说明副本；最小化重复字段和响应正文，但不能损害恢复、审计、科学复现或业务合同。完整日志按既有证据生命周期保留，默认不重复读入上下文。
+4. 任务卡是默认日常视图；Context Pack Markdown 按需生成，PR 正文只在实际消费时生成并更新同一文件，复盘 Markdown 默认不落盘。跨窗口先使用已有任务状态和恢复摘要，无法承载必要下一步时才保留一份持续更新的短交接，不创建 plan/findings/progress/review/summary/handoff 成套文件或叙述性版本快照。
+5. 最小范围按用途和语义确定，不用固定行数/token 上限截断必要内容。已有规范按摘要变化和任务相关性读取，成功命令使用紧凑输出；历史文件不因本规则生效自动删除。用户明确要求的文档按指定范围交付。
 
 <a id="rule-memory-dataframe-001"></a>
 ### 6.15 [MEMORY-DATAFRAME-001] 数据规模边界

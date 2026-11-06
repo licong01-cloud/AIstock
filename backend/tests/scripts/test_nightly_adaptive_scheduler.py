@@ -8,6 +8,37 @@ import pytest
 from scripts import nightly_adaptive_scheduler as scheduler
 
 
+@pytest.mark.parametrize("full_run", [False, True])
+def test_retired_simulation_cannot_enter_nightly_from_changes_or_retry(monkeypatch, full_run):
+    retired = scheduler.RETIRED_SIMULATION_PLANS
+    keys = {*retired, "simulation_core_l2", "localsim_unattended_l3"}
+    plans = {key: dict(enabled=True, runner_enabled=True, nox_session=key, max_duration_seconds=300)
+             for key in keys}
+    monkeypatch.setattr(scheduler.issue_flow, "_plans_by_key", lambda: plans)
+    monkeypatch.setattr(scheduler.issue_flow, "select_validation", lambda _: {
+        "required_plans": list(keys), "ownership": {},
+    })
+    plan = scheduler.build_nightly_execution_plan(
+        ["backend/services/simulation_runtime/models.py"], full_run=full_run,
+        retry_context={"failed_sessions": list(keys)},
+    )
+    assert set(plan["selected_sessions"]) == {"simulation_core_l2", "localsim_unattended_l3"}
+    assert set(plan["excluded_retired_simulation_retry_sessions"]) == retired
+
+
+def test_exhausted_transport_cli_records_failure_without_fabricating_sessions(tmp_path):
+    import subprocess
+    import sys
+    proc = subprocess.run([sys.executable, str(scheduler.ROOT / "scripts/ci_failure_issue_summary.py"),
+                           "--artifact-transport-output", "tmp/validation/nightly_failure_issue/artifact-transport.json",
+                           "--run-id", "9001", "--commit", "a" * 40,
+                           "--download-outcome", "failure", "--retry-download-outcome", "failure"], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 1
+    assert (tmp_path / "tmp/validation/nightly_failure_issue/artifact-transport.json").is_file()
+    assert not list(tmp_path.rglob("session-results.json"))
+
+
 def test_nightly_adaptive_scheduler_baseline_without_changes_or_failures(tmp_path: Path) -> None:
     output = tmp_path / "scheduler.json"
     markdown = tmp_path / "scheduler.md"
@@ -652,7 +683,9 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
 
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow)
-    dispatch = parsed.get("on", parsed.get(True))["workflow_dispatch"]["inputs"]
+    triggers = parsed.get("on", parsed.get(True))
+    dispatch = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch["llm_triage_mode"]["options"] == ["off", "warning_only", "opt_in_auto_file"]
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "--provider github_models" not in workflow
@@ -666,42 +699,41 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "Build Nightly LLM design drift audit" in workflow
     assert "scripts/nightly_design_drift_audit.py --json" in workflow
     assert "--invoke-llm `\n            --fail-on-llm-error `\n            --run-id" in workflow
-    assert "--fail-on-llm-error" in workflow
     assert "design-drift-audit.json" in workflow
     assert "design-drift-audit.md" in workflow
-    assert "LLM design drift audit failed; retrying deterministic fallback." not in workflow
     assert "retrying deterministic fallback" not in workflow
     assert "Build Nightly LLM silent degradation audit" in workflow
     assert "scripts/nightly_silent_degradation_audit.py --json" in workflow
     assert "silent-degradation-audit.json" in workflow
     assert "silent-degradation-audit.md" in workflow
-    assert "LLM silent degradation audit failed; retrying deterministic fallback." not in workflow
     assert 'nightly_discovery_input_pack.py `\n            --run-id "${{ github.run_id }}"' in workflow
     assert '--codegraph-freshness-json "$outDir/codegraph-freshness.json"' in workflow
     assert "Build Nightly BugCandidate draft queue" in workflow
     assert "scripts/nightly_bug_candidate_queue.py --json build" in workflow
     assert "bug-candidates" in workflow
-    assert "Promote ready Nightly BugCandidates to Issue workflow" in workflow
-    assert "github.event_name == 'schedule' ||" in workflow
-    assert "inputs.llm_triage_mode == 'opt_in_auto_file'" in workflow
-    assert "inputs.llm_auto_file_opt_in" in workflow
+    assert "schedule" not in triggers
+    assert triggers["repository_dispatch"]["types"] == ["aistock_nightly"]
+    promotion = next(step for job in parsed["jobs"].values() for step in job.get("steps", [])
+                     if step.get("name") == "Promote ready Nightly BugCandidates to Issue workflow")
+    assert promotion["if"] == (
+        "steps.background_window.outputs.background_admitted == 'true' && "
+        "(github.event_name != 'workflow_dispatch' || (github.event_name == 'workflow_dispatch' && "
+        "inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))"
+    )
     assert "issues: write" in workflow
     assert "promote-nightly-candidate" in workflow
     assert '$extraArgs = @()' in workflow
     assert "--opt-in-auto-file" in workflow
     assert "--create-registry-worktree" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
-    assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
     assert "--codegraph-freshness-json" in workflow
     assert "--code-intelligence-json" in workflow
-    assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
     assert "llm-value-summary" in workflow
     assert "llm-value-summary.md" in workflow
     assert "LLM + Code Intelligence Value" in workflow
     assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
-    assert "full_nightly_run:" in workflow
     assert dispatch["run_nightly_l3"]["default"] is True
     assert dispatch["full_nightly_run"]["default"] is False
     assert "Build receipt-watermark Nightly execution plan" in workflow
@@ -760,7 +792,7 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "steps.download_nightly_l3.outcome == 'failure'" in workflow
     assert "id: retry_download_nightly_l3" in workflow
     assert "Materialize exhausted Nightly artifact transport receipt" in workflow
-    assert '"failure_kind": "artifact_transport"' in workflow
+    assert "--artifact-transport-output" in workflow
     assert "id: upload_nightly_failure_context" in workflow
     assert "steps.upload_nightly_failure_context.outcome == 'failure'" in workflow
     assert "id: upload_nightly_bug_promotion" in workflow

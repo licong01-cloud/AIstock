@@ -70,6 +70,8 @@ SOURCE_ASSET_SCHEMA_VERSION = "hmm_risk_dataset_release_asset_binding_v1"
 SOURCE_INVENTORY_SCHEMA_VERSION = "hmm_risk_rotation_l1_source_inventory_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1 = "hmm_risk_qe_direct_v2_dataset_identity_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v3"
+MONTHLY_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_monthly_dataset_identity_v1"
+MONTHLY_SOURCE_REVISION = "hmm-risk-monthly-file-source-v1"
 DIRECT_V2_STATE_SCHEMA_VERSION_V2 = "qe_direct_monthly_state_v2"
 DIRECT_V2_STATE_SCHEMA_VERSION = "qe_direct_monthly_state_v3"
 DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS = frozenset(
@@ -691,7 +693,9 @@ def _fixed_h5_inventory(
         }
 
 
-def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ...]]:
+def _parse_instrument_spans(
+    path: Path, *, allowed_nonstock_codes: Sequence[str] = ()
+) -> dict[str, tuple[tuple[date, date], ...]]:
     spans: dict[str, list[tuple[date, date]]] = defaultdict(list)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -703,7 +707,7 @@ def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ..
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument row schema differs", line=line_number)
         symbol = parts[0].strip().upper()
         _ascii(symbol, "instrument.symbol", width=16)
-        if _STOCK_CODE.fullmatch(symbol) is None:
+        if _STOCK_CODE.fullmatch(symbol) is None and symbol not in allowed_nonstock_codes:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument symbol is outside canonical sh/sz scope")
         start = _as_date(parts[1], "instrument.start")
         end = _as_date(parts[2], "instrument.end")
@@ -744,6 +748,7 @@ def _read_qlib_stock_rows(
     symbol: str,
     calendar: Sequence[date],
     active_spans: Sequence[tuple[date, date]],
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
 ) -> np.ndarray:
@@ -781,11 +786,18 @@ def _read_qlib_stock_rows(
         if window_start <= day <= window_end
         and any(span_start <= day <= span_end for span_start, span_end in active_spans)
     ]
-    positions = [index for index in expected_positions if start_index <= index < start_index + length]
-    if positions != expected_positions:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"Qlib stock feature omits active span dates: {symbol}")
-    calendar_positions = np.asarray(positions, dtype=np.int64)
-    local_positions = calendar_positions - start_index
+    # Selection PIT eligibility can outlive the physical quote range during a
+    # full-day suspension. Keep those exact, authority-backed dates as quote NA;
+    # neither truncate the PIT span nor invent a quote. Unproven gaps still fail.
+    for index in expected_positions:
+        if not start_index <= index < start_index + length and (calendar[index], symbol) not in suspension_keys:
+            raise _fail(
+                REASON_SOURCE_RANGE_INCOMPLETE,
+                f"Qlib stock feature omits active span dates: {symbol}/{calendar[index]}",
+            )
+    calendar_positions = np.asarray(expected_positions, dtype=np.int64)
+    physical = (calendar_positions >= start_index) & (calendar_positions < start_index + length)
+    local_positions = calendar_positions[physical] - start_index
     result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
     result["trade_date"] = np.fromiter(
         (
@@ -797,10 +809,13 @@ def _read_qlib_stock_rows(
     )
     result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
     for field in QLIB_STOCK_FIELDS:
+        result[field] = np.nan
+        if not len(local_positions):
+            continue
         path, _field_start, field_length = inventories[field]
         mapped = np.memmap(path, dtype="<f4", mode="r", offset=4, shape=(field_length,))
         try:
-            result[field] = np.asarray(mapped[local_positions], dtype="<f4")
+            result[field][physical] = np.asarray(mapped[local_positions], dtype="<f4")
         finally:
             del mapped
     return result
@@ -876,14 +891,295 @@ def _preflight_qlib_feature_inventory(
     }
 
 
-def _raw_qlib_values(raw: np.void) -> dict[str, float]:
+def _float32_source_interval(value: float) -> tuple[float, float]:
+    """Conservative pre-cast bounds, not a configurable return tolerance."""
+    encoded = np.float32(value)
+    with np.errstate(over="ignore"):
+        previous = float(np.nextafter(encoded, np.float32(-np.inf)))
+        following = float(np.nextafter(encoded, np.float32(np.inf)))
+    lower, upper = (previous + value) / 2, (value + following) / 2
+    if not (math.isfinite(lower) and math.isfinite(upper) and lower > 0):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib price/factor has no bounded positive float32 interval")
+    return lower, upper
+
+
+def _raw_qlib_price(value: float, factor_bounds: tuple[float, float]) -> float:
+    """Recover the unique integer-li source price (exporter unit: 1/1000 CNY).
+
+    Both adjusted OHLC and factor are independently rounded to float32.
+    A wider interval must not be resolved by choosing the nearest price.
+    Outward float64 rounding also keeps boundary cases conservative.
+    """
+    lower, upper = _float32_source_interval(value)
+    factor_lower, factor_upper = factor_bounds
+    lower = math.nextafter(lower / factor_upper, -math.inf)
+    upper = math.nextafter(upper / factor_lower, math.inf)
+    lower = math.nextafter(lower * 1000, -math.inf)
+    upper = math.nextafter(upper * 1000, math.inf)
+    if not (math.isfinite(lower) and math.isfinite(upper)):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib raw-price interval is non-finite")
+    first, last = math.ceil(lower), math.floor(upper)
+    if first != last or first <= 0:
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib raw price is not uniquely recoverable in integer li")
+    return first / 1000
+
+
+def _float32_rebase_predecessors(value: float, scale: float, *, allow_empty: bool = False) -> tuple[float, ...]:
+    """Invert the writer's float64 multiply / float32 cast, not price rounding."""
+    if not math.isfinite(scale) or scale <= 0:
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix scale must be finite and positive")
+    if value < float(np.finfo(np.float32).tiny):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib rebased encoding lost normal float32 precision")
+    lower, upper = _float32_source_interval(value)
+    lower = math.nextafter(lower / scale, -math.inf)
+    upper = math.nextafter(upper / scale, math.inf)
+    if not (0 < lower <= upper < float(np.finfo(np.float32).max)):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix inverse has no bounded float32 interval")
+    item = np.float32(lower)
+    if float(item) < lower:
+        item = np.nextafter(item, np.float32(np.inf))
+    result = []
+    while float(item) <= upper:
+        if float(item) > 0 and np.float32(float(item) * scale) == np.float32(value):
+            result.append(float(item))
+        item = np.nextafter(item, np.float32(np.inf))
+    if not result and not allow_empty:
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix has no exact serialization predecessor")
+    return tuple(result)
+
+
+def _raw_rebased_qlib_price(value: float, factor: float, scale: float | tuple[float, ...]) -> float:
+    """Union ALL possible old float32 encodings; never select the nearest one."""
+    scales = scale if isinstance(scale, tuple) else (scale,)
+
+    def predecessors(item):
+        values = {item}
+        for step in scales:
+            values = {old for v in values for old in _float32_rebase_predecessors(v, step, allow_empty=True)}
+        if not values:
+            raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib prefix chain has no exact serialization predecessor")
+        return values
+
+    prices, factors = predecessors(value), predecessors(factor)
+    candidates: set[int] = set()
+    for old_price in prices:
+        pl, pu = _float32_source_interval(old_price)
+        for old_factor in factors:
+            fl, fu = _float32_source_interval(old_factor)
+            lower = math.nextafter(math.nextafter(pl / fu, -math.inf) * 1000, -math.inf)
+            upper = math.nextafter(math.nextafter(pu / fl, math.inf) * 1000, math.inf)
+            if not (math.isfinite(lower) and math.isfinite(upper)):
+                raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib rebased raw-price interval is non-finite")
+            first, last = math.ceil(lower), math.floor(upper)
+            if first > last:
+                continue
+            if first != last or first <= 0:
+                raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib rebased raw price is ambiguous in integer li")
+            candidates.add(first)
+    if len(candidates) != 1:
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib rebased raw price is not uniquely recoverable in integer li")
+    return candidates.pop() / 1000
+
+
+class _QlibPriceEncoding:
+    """Per-read provenance for the native monthly prefix serialization.
+
+    Old releases supply authenticated encoding METADATA only, never old prices.
+    A pinned writer locator identifies an exact sibling release, portable across
+    node-local stores; its canonical manifest must match before metadata is used.
+    Each intermediate float32 cast is preserved, including through scale=1 months.
+    """
+
+    def __init__(self, qlib_root: Path, calendar: Sequence[date], *,
+                 _expected: str | None = None, _ancestry: frozenset[str] = frozenset()):
+        self.prefixes: dict[str, tuple[int, int, float]] = {}
+        self.unbound_prefixes: dict[str, tuple[date, date]] = {}
+        self.changed_targets: set[str] = set()
+        self.verified: set[str] = set()
+        self.files = None
+        self.parent = None
+        root = qlib_root.parent.parent
+        if _expected is None and (
+            qlib_root != root / "components/daily_bin_candidate"
+            or not (root / "release_closure_receipt.json").is_file()
+        ):
+            return
+        from backend.services.hmm_risk.monthly_release_input import _Files, _manifest_pins
+
+        self.files = _Files(root)
+        manifest = self.files.read(self.files.path("qe_dataset_manifest.json"))
+        self.pins = _manifest_pins(manifest)
+        identity = manifest["dataset_manifest_sha256"]
+        if (manifest.get("schema_version") != "qe_dataset_manifest_v1"
+                or (_expected is not None and identity != _expected) or identity in _ancestry):
+            raise _fail(REASON_HASH_MISMATCH, "Qlib encoding ancestor identity differs or repeats")
+        relative = "daily_bin/materialization_receipt.json"
+        if relative not in self.pins and not (root / "release_closure_receipt.json").exists():
+            # Only a pinned direct exporter ends the cast chain. Missing monthly
+            # provenance is not silently interpreted as a single-cast export.
+            meta_ref = "components/daily_bin_candidate/meta_export.json"
+            if meta_ref not in self.pins:
+                raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib direct encoding provenance is missing")
+            meta = self.files.read(self.files.verify(self.pins[meta_ref]))
+            if meta.get("export_mode") != "authoritative_aistock_dump_bin":
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib encoding seed is not a supported direct export")
+            calendar_ref = "components/daily_bin_candidate/calendars/day.txt"
+            if calendar_ref not in self.pins:
+                raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib encoding seed calendar is unpinned")
+            self.full_calendar = _load_qlib_calendar(self.files.verify(self.pins[calendar_ref]))
+            return
+        calendar_ref = "components/daily_bin_candidate/calendars/day.txt"
+        if calendar_ref not in self.pins:
+            raise _fail(REASON_SOURCE_COMPONENT_MISSING, "monthly Qlib encoding calendar is unpinned")
+        full_calendar = _load_qlib_calendar(self.files.verify(self.pins[calendar_ref]))
+        if _expected is None and not set(calendar) <= set(full_calendar):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "monthly Qlib read dates escape the encoding calendar")
+        calendar = full_calendar
+        self.full_calendar = full_calendar
+        if relative not in self.pins:
+            raise _fail(REASON_SOURCE_COMPONENT_MISSING, "monthly Qlib materialization provenance is missing")
+        receipt = self.files.read(self.files.verify(self.pins[relative]))
+        writer = receipt.get("native_writer", {})
+        if (
+            receipt.get("schema_version") != "aistock_monthly_native_qlib_materialization_v1"
+            or receipt.get("status") != "PASS"
+            or not isinstance(writer, dict)
+            or writer.get("schema_version") != "aistock_qlib_bounded_update_receipt_v1"
+            or writer.get("frequency") != "day"
+            or writer.get("predecessor_manifest_sha256") != receipt.get("predecessor_manifest_sha256")
+            or type(writer.get("calendar_prefix_count")) is not int
+            or not 0 < writer["calendar_prefix_count"] <= len(calendar)
+            or not isinstance(writer.get("feature_receipts"), list)
+            or writer.get("calendar_sha256") != self.pins[calendar_ref][1]
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib encoding provenance differs")
+        _require_sha256(writer.get("predecessor_manifest_sha256"), "Qlib encoding predecessor")
+        self.calendar_positions = {day: i for i, day in enumerate(calendar)}
+        self.features = {}
+        for row in writer["feature_receipts"]:
+            if not isinstance(row, dict):
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib feature receipt is invalid")
+            if row.get("feature") not in {"open", "high", "low", "close", "factor"}:
+                continue
+            symbol = str(row.get("instrument", "")).upper()
+            key = (symbol, row["feature"])
+            if key in self.features:
+                raise _fail(REASON_DUPLICATE_KEY, "monthly Qlib encoding receipt repeats a feature")
+            self.features[key] = row
+        for (symbol, field), row in self.features.items():
+            scale = row.get("prefix_scale")
+            if type(scale) not in (float, int) or not math.isfinite(scale) or scale <= 0:
+                raise _fail(REASON_SOURCE_UNIT_INVALID, "monthly Qlib prefix scale is invalid")
+            start, end, count = (row.get(k) for k in ("start_index", "end_index", "written_value_count"))
+            if (
+                any(type(v) is not int for v in (start, end, count))
+                or not 0 <= start <= end < len(calendar)
+                or not 0 < count <= end - start + 1
+                or (end - count >= start and end - count >= writer["calendar_prefix_count"])
+                or (end - count < start and (scale != 1 or start < writer["calendar_prefix_count"]))
+                or type(row.get("target_size")) is not int
+                or row["target_size"] != 4 * (end - start + 2)
+                or (row.get("predecessor_manifest_sha256") != writer["predecessor_manifest_sha256"]
+                    and not (scale == 1 and row.get("predecessor_manifest_sha256") is None))
+            ):
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib prefix boundary differs")
+            prefix = (start, end - count, float(scale))
+            if row.get("predecessor_manifest_sha256") is None:
+                # Some benchmark prefixes have no inherited stock binding.
+                # Do not reject unrelated benchmark receipts, or assume their
+                # unproven historical encoding is safe for a stock consumer.
+                if prefix[1] >= start:
+                    self.unbound_prefixes[symbol] = (calendar[start], calendar[prefix[1]])
+                continue
+            if symbol in self.prefixes and self.prefixes[symbol] != prefix:
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib price/factor encoding differs")
+            self.prefixes[symbol] = prefix
+        if (
+            type(writer.get("qfq_basis_changed_instrument_count")) is not int
+            or sum(p[2] != 1 for p in self.prefixes.values()) != writer["qfq_basis_changed_instrument_count"]
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "monthly Qlib rebased instrument inventory differs")
+        for symbol, (start, end, scale) in self.prefixes.items():
+            for field in ("open", "high", "low", "close", "factor"):
+                row = self.features.get((symbol, field), {})
+                relative = f"components/daily_bin_candidate/features/{symbol.lower()}/{field}.day.bin"
+                pin = self.pins.get(relative)
+                if (
+                    row.get("prefix_scale") != scale or row.get("start_index") != start
+                    or type(row.get("end_index")) is not int or type(row.get("written_value_count")) is not int
+                    or row["end_index"] - row["written_value_count"] != end
+                    or pin is None
+                ):
+                    raise _fail(REASON_HASH_MISMATCH, "monthly Qlib price/factor provenance is incomplete or changed")
+                if pin[1:] != (row.get("target_sha256"), row.get("target_size")):
+                    if scale != 1:
+                        raise _fail(REASON_HASH_MISMATCH, "monthly Qlib rebased target provenance differs")
+                    self.changed_targets.add(symbol)
+
+        locator = writer.get("baseline_root")
+        if not isinstance(locator, str) or not locator or "\x00" in locator:
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib encoding predecessor locator is missing")
+        parts = locator.replace("\\", "/").rstrip("/").split("/")
+        if (len(parts) < 4 or any(p in {".", ".."} for p in parts)
+                or tuple(parts[-2:]) not in {("daily_bin", "qlib"), ("components", "daily_bin_candidate")}):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib encoding predecessor locator is invalid")
+        # Resolve one exact sibling, not latest/search/fallback. Only metadata
+        # is read here; all actual OHLC/factor bytes remain the current release.
+        parent_root = root.parent / parts[-3]
+        self.parent = _QlibPriceEncoding(
+            parent_root / "components/daily_bin_candidate", calendar,
+            _expected=writer["predecessor_manifest_sha256"], _ancestry=_ancestry | {identity})
+        if tuple(self.parent.full_calendar) != tuple(calendar[:writer["calendar_prefix_count"]]):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "Qlib encoding ancestor calendar is not the inherited prefix")
+
+    def _scales(self, symbol: str, day: date) -> tuple[float, ...]:
+        unbound = self.unbound_prefixes.get(symbol)
+        if unbound is not None and unbound[0] <= day <= unbound[1]:
+            raise _fail(REASON_SOURCE_COMPONENT_MISSING, "Qlib stock prefix has no encoding identity")
+        prefix = self.prefixes.get(symbol)
+        if prefix is None:
+            scales = self.parent._scales(symbol, day) if self.parent is not None else ()
+            if scales:
+                for field in ("open", "high", "low", "close", "factor"):
+                    relative = f"components/daily_bin_candidate/features/{symbol.lower()}/{field}.day.bin"
+                    if (relative not in self.pins or self.pins[relative] != self.parent.pins.get(relative)):
+                        raise _fail(REASON_HASH_MISMATCH, "Qlib inherited encoding has an unrecorded target change")
+            return scales
+        start, end, scale = prefix
+        position = self.calendar_positions.get(day)
+        if position is None or not start <= position <= end:
+            return ()
+        scales = (() if scale == 1 else (scale,)) + self.parent._scales(symbol, day)
+        # A scale=1 amendment irrelevant to any inherited cast needs no new
+        # decoding rule. Never apply a cast chain to an amended target whose
+        # encoding history has not been proven, even if only its suffix changed.
+        if scales and symbol in self.changed_targets:
+            raise _fail(REASON_HASH_MISMATCH, "Qlib inherited encoding target was amended")
+        return scales
+
+    def scale(self, symbol: str, day: date) -> float | tuple[float, ...]:
+        scales = self._scales(symbol, day)
+        if not scales:
+            return 1.0
+        if symbol not in self.verified:
+            for field in ("open", "high", "low", "close", "factor"):
+                relative = f"components/daily_bin_candidate/features/{symbol.lower()}/{field}.day.bin"
+                self.files.verify(self.pins[relative])
+            self.verified.add(symbol)
+        return scales[0] if len(scales) == 1 else scales
+
+    def unchanged(self) -> None:
+        if self.files is not None:
+            self.files.unchanged()
+        if self.parent is not None:
+            self.parent.unchanged()
+
+
+def _raw_qlib_values(raw: np.void, *, prefix_scale: float | tuple[float, ...] = 1.0) -> dict[str, float]:
     values = {field: float(raw[field]) for field in QLIB_STOCK_FIELDS}
     factor = values["factor"]
     if not math.isfinite(factor) or factor <= 0:
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib adjustment factor must be finite and positive")
-    for field in ("open", "high", "low", "close"):
-        values[field] = values[field] / factor
-    values["volume"] = values["volume"] * factor
     if any(not math.isfinite(values[field]) for field in QLIB_STOCK_FIELDS):
         raise _fail(REASON_NON_FINITE, "Qlib required stock values contain non-finite data")
     if any(
@@ -895,6 +1191,20 @@ def _raw_qlib_values(raw: np.void) -> dict[str, float]:
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib volume/amount must be non-negative")
     if values["limit_up"] not in (0.0, 1.0) or values["limit_down"] not in (0.0, 1.0):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib limit flags must be exact 0/1")
+    factor_bounds = _float32_source_interval(factor)
+    for field in ("open", "high", "low", "close"):
+        values[field] = (
+            _raw_qlib_price(values[field], factor_bounds) if prefix_scale == 1.0
+            else _raw_rebased_qlib_price(values[field], factor, prefix_scale)
+        )
+    # Reference prices are not necessarily on the order-price tick. Preserve
+    # their float32 encoding via its shortest round-trip decimal, not round(2).
+    # This is a representation rule, not recovery of arbitrary source digits.
+    for field in ("prev_close", "up_limit_price", "down_limit_price"):
+        values[field] = float(np.format_float_positional(np.float32(values[field]), unique=True, trim="-"))
+    values["volume"] = values["volume"] * factor
+    if not math.isfinite(values["volume"]):
+        raise _fail(REASON_NON_FINITE, "Qlib reconstructed volume is non-finite")
     return values
 
 
@@ -1247,27 +1557,45 @@ def _require_active_direct_v2_profile(
 
 
 def _require_direct_v2_manifest(
-    *, root: Path, state: Mapping[str, Any], release_cutoff: date, release_id: str
+    *,
+    root: Path,
+    state: Mapping[str, Any],
+    release_cutoff: date,
+    release_id: str,
+    frozen_binding: Mapping[str, str] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """One manifest validator shared by active and explicitly frozen consumers."""
 
     manifest_binding = state.get("manifest")
-    if not isinstance(manifest_binding, Mapping) or set(manifest_binding) != {
+    legacy_fields = {
         "dataset_manifest_sha256",
         "deployment_snapshot_id",
         "file_sha256",
         "path",
-    }:
+    }
+    shared_fields = {"dataset_manifest_sha256", "path", "sha256", "size"}
+    shared = isinstance(manifest_binding, Mapping) and set(manifest_binding) == shared_fields
+    if not isinstance(manifest_binding, Mapping) or not (
+        set(manifest_binding) == legacy_fields or (shared and frozen_binding is not None)
+    ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 state manifest binding is invalid")
     if manifest_binding.get("path") != "qe_dataset_manifest.json":
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest path differs")
     manifest_path = root / "qe_dataset_manifest.json"
     if _is_indirect_path(manifest_path) or not manifest_path.is_file():
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 dataset manifest is missing or indirect")
-    if _sha256_file(manifest_path) != _require_sha256(
-        manifest_binding.get("file_sha256"), "direct-v2 manifest file_sha256"
-    ):
+    file_hash = _require_sha256(
+        manifest_binding.get("sha256" if shared else "file_sha256"), "direct-v2 manifest file_sha256"
+    )
+    if _sha256_file(manifest_path) != file_hash:
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 dataset manifest file hash differs")
+    if shared and (
+        type(manifest_binding.get("size")) is not int
+        or manifest_binding["size"] != manifest_path.stat().st_size
+        or file_hash != frozen_binding["manifest_file_sha256"]
+        or manifest_binding["dataset_manifest_sha256"] != frozen_binding["manifest_sha256"]
+    ):
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 shared manifest differs from approved frozen pins")
     manifest = _read_json_object(manifest_path)
     dataset_manifest_sha256 = _require_sha256(
         manifest_binding.get("dataset_manifest_sha256"), "direct-v2 dataset_manifest_sha256"
@@ -1278,8 +1606,11 @@ def _require_direct_v2_manifest(
         or manifest.get("cutoff_trade_date") != release_cutoff.isoformat()
         or manifest.get("availability_status") != "CANDIDATE_READY"
         or manifest.get("dataset_manifest_sha256") != dataset_manifest_sha256
-        or manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id")
-        or state.get("revision") != manifest.get("revision")
+        # A shared successor can retain an older logical manifest revision.
+        # Only an explicit frozen identity/file pin permits this shape; the
+        # active/legacy path keeps its existing revision/snapshot checks.
+        or (not shared and manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id"))
+        or (not shared and state.get("revision") != manifest.get("revision"))
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest identity differs")
     return manifest_path, manifest
@@ -1325,11 +1656,11 @@ def _require_frozen_direct_v2_profile(
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen state root differs")
     manifest_path, manifest = _require_direct_v2_manifest(
-        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"]
+        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"], frozen_binding=binding
     )
     if (
         manifest.get("dataset_manifest_sha256") != binding["manifest_sha256"]
-        or state["manifest"]["file_sha256"] != binding["manifest_file_sha256"]
+        or state["manifest"].get("file_sha256", state["manifest"].get("sha256")) != binding["manifest_file_sha256"]
     ):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 frozen manifest differs from approved pins")
     return {**binding, "binding_sha256": canonical_sha256(binding)}, manifest_path, manifest
@@ -1642,6 +1973,18 @@ def load_rotation_l1_direct_v2_source_assets(
     except OSError as exc:
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 candidate root does not exist") from exc
     state_path = root / "direct_monthly_state.json"
+    # Native monthly releases close through a manifest/receipt DAG, not the
+    # retired exporter state. Never hide an existing, invalid legacy state.
+    if not state_path.exists() and not _is_indirect_path(state_path):
+        from backend.services.hmm_risk.monthly_release_input import load_monthly_l2_source_assets
+
+        return load_monthly_l2_source_assets(
+            root,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+            data_window_end=data_window_end,
+            frozen_release_binding=frozen_release_binding,
+        )
     state = _read_json_object(state_path)
     validation = state.get("validation")
     state_schema_version = state.get("schema_version")
@@ -1981,7 +2324,19 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
     return assets
 
 
-def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path]) -> HMMIndustryPitAdapter:
+def _industry_adapter(
+    authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path], candidate_root: Path | None = None,
+    release_binding: Mapping[str, Any] | None = None,
+) -> HMMIndustryPitAdapter:
+    if isinstance(authority, Mapping) and authority.get("schema_version") == "hmm_risk_release_l2_classification_binding_v1":
+        from backend.services.hmm_risk.release_industry_binding import ReleaseIndustryAdapter
+
+        if candidate_root is None or release_binding is None:
+            raise _fail(REASON_MANIFEST_INVALID, "release L2 authority requires an explicit matching file source")
+        if (Path(str(authority.get("candidate_root") or "")).resolve() != candidate_root.resolve()
+                or authority.get("release_binding") != release_binding):
+            raise _fail(REASON_MANIFEST_INVALID, "release L2 authority differs from the actual input source")
+        return ReleaseIndustryAdapter(authority, forbidden_roots=forbidden_roots)
     if not isinstance(authority, Mapping) or set(authority) != {
         "artifact_root",
         "identity",
@@ -2271,6 +2626,7 @@ def _spool_qlib_months(
     calendar: Sequence[date],
     spans: Mapping[str, Sequence[tuple[date, date]]],
     spool_root: Path,
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
     resource_started: float | None = None,
@@ -2292,6 +2648,7 @@ def _spool_qlib_months(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=active_spans,
+                suspension_keys=suspension_keys,
                 window_start=window_start,
                 window_end=window_end,
             )
@@ -2615,6 +2972,7 @@ def _strict_prior_price_state(
     if source_start > window_start or source_start not in calendar or window_start not in calendar:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "strictly prior price context boundary differs")
     prior_days = tuple(day for day in calendar if source_start <= day < window_start)
+    price_encoding = _QlibPriceEncoding(qlib_root, calendar)
     state: dict[str, tuple[date, tuple[tuple[date, float], ...]]] = {}
     for symbol, active_spans in sorted(spans.items()):
         current = [span for span in active_spans if span[0] <= window_start <= span[1]]
@@ -2633,13 +2991,14 @@ def _strict_prior_price_state(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=current,
+                suspension_keys=suspension_keys,
                 window_start=days[first],
                 window_end=days[cursor - 1],
             )
             for raw in reversed(rows):
                 day = _date_from_yyyymmdd(int(raw["trade_date"]), "qlib.trade_date")
                 missing = _qlib_row_is_fully_missing(raw)
-                values = None if missing else _raw_qlib_values(raw)
+                values = None if missing else _raw_qlib_values(raw, prefix_scale=price_encoding.scale(symbol, day))
                 # Match the unchanged forward kernel: suspension and all-field
                 # source NA never append a quote; invalid partial rows fail.
                 if (day, symbol) in suspension_keys or values is None:
@@ -2650,6 +3009,7 @@ def _strict_prior_price_state(
             cursor, batch_size = first, batch_size * 2
         if quotes:
             state[symbol] = (span_start, tuple(reversed(quotes)))
+    price_encoding.unchanged()
     return state
 
 
@@ -2726,6 +3086,7 @@ def _build_stock_fact_aggregates(
     industry_done: list[tuple[str, date, date, tuple[str, ...]]] = []
     status_active: dict[str, tuple[date, date, tuple[str, ...]]] = {}
     status_done: list[tuple[str, date, date, tuple[str, ...]]] = []
+    price_encoding = _QlibPriceEncoding(Path(assets["qlib_root"]), calendar) if month_paths else None
 
     for month_path in month_paths:
         if resource_started is not None:
@@ -2796,7 +3157,8 @@ def _build_stock_fact_aggregates(
                 basic_row = basic.get((day, daily_resolution.source_ts_code))
                 flow_row = moneyflow.get((day, flow_resolution.source_ts_code))
                 qlib_missing = _qlib_row_is_fully_missing(raw)
-                qlib = None if qlib_missing else _raw_qlib_values(raw)
+                assert price_encoding is not None
+                qlib = None if qlib_missing else _raw_qlib_values(raw, prefix_scale=price_encoding.scale(symbol, day))
                 g2a_above_ma20 = None
                 if not suspended and qlib is not None:
                     previous_g2a = g2a_history[symbol]
@@ -3062,6 +3424,8 @@ def _build_stock_fact_aggregates(
             for symbol, start, end, payload in _finish_intervals(status_active, status_done)
         ],
     }
+    if price_encoding is not None:
+        price_encoding.unchanged()
     return l1_aggregates, l2_aggregates, unavailable, interval_evidence
 
 
@@ -3288,6 +3652,7 @@ def build_rotation_l1_inputs_from_assets(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             resource_started=started,
         )
         resource_receipts.append(
@@ -3649,6 +4014,7 @@ def build_rotation_l1_single_date_source_from_assets(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             window_start=stock_history_calendar[0],
             window_end=as_of_date,
         )
@@ -4376,6 +4742,7 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
     if release_identity.get("schema_version") in {
         DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1,
         DIRECT_V2_IDENTITY_SCHEMA_VERSION,
+        MONTHLY_IDENTITY_SCHEMA_VERSION,
     } and value.get("source_binding_manifest_sha256") != canonical_sha256(release_identity):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 source binding identity hash differs")
     for field in (
@@ -4395,6 +4762,11 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
 
 def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, str]:
     direct_schema = value.get("schema_version") if isinstance(value, Mapping) else None
+    if direct_schema == MONTHLY_IDENTITY_SCHEMA_VERSION:
+        from backend.services.hmm_risk.monthly_release_input import validate_monthly_release_identity
+
+        identity = validate_monthly_release_identity(value)
+        return identity, DIRECT_V2_UNIVERSE_KEY, identity["rule_version"], MONTHLY_SOURCE_REVISION
     if direct_schema in {DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1, DIRECT_V2_IDENTITY_SCHEMA_VERSION}:
         expected = {
             "schema_version",

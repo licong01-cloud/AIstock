@@ -817,19 +817,26 @@ def load_frozen_coefficient_inputs(
         )
         raw_quote_values = [getattr(row, field) for field in quote_columns]
         is_burn_in = row.datetime < test_start
+        spans = quote_availability[row.sector_code]
+        # The authority can begin at the replay window, after valid historical
+        # warm-up quotes. Preserve that prefix, but do not extend this exception
+        # across a known publication cessation or a gap between published spans.
+        is_pre_authority_burn_in = is_burn_in and (not spans or row.datetime < spans[0][0])
+        if not quote_available and not is_pre_authority_burn_in:
+            if any(pd.notna(value) for value in raw_quote_values):
+                raise ValueError(
+                    "frozen sector_data contains quote values outside availability authority: "
+                    f"trade_date={row.datetime} sector={row.sector_code}"
+                )
+            # Membership and real moneyflow remain in the immutable release;
+            # this date has no published quote and contributes no observation.
+            continue
         if is_burn_in:
             if not all(pd.notna(value) for value in raw_quote_values):
                 raise ValueError(
                     "frozen sector_data contains incomplete burn-in quote values: "
                     f"trade_date={row.datetime} sector={row.sector_code}"
                 )
-        elif not quote_available:
-            if any(pd.notna(value) for value in raw_quote_values):
-                raise ValueError(
-                    "frozen sector_data contains quote values outside availability authority: "
-                    f"trade_date={row.datetime} sector={row.sector_code}"
-                )
-            continue
         record = {
             "trade_date": row.datetime,
             "l2_name": row.sector_code,

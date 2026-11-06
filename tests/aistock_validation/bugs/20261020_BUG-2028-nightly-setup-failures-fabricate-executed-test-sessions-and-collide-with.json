@@ -1,0 +1,294 @@
+{
+  "actual": "artifact_transport attributed to an unexecuted validation workflow session",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2028-nightly-setup-failures-fabricate-executed-test-sessions-and-collide-with.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2028",
+  "closed_at": "2026-10-20T10:16:22Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T08:59:47.392407Z",
+  "description": "artifact_transport attributed to an unexecuted validation workflow session",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-ad05fb787187",
+      "timestamp": "2026-10-20T08:59:47.392407Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Truthful infrastructure context without synthetic test execution or unrelated incident overwrite",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2028-nightly-setup-failures-fabricate-executed-test-sessions-and-collide-with.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2028-nightly-setup-failures-fabricate-executed-test-sessions-and-collide-with.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/nightly.yml",
+        "scripts/ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/nightly.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_github_workflows"
+        },
+        {
+          "file": "scripts/ci_failure_issue_summary.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_failure_issue_summary.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        ".github/workflows/nightly.yml",
+        "scripts/ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/nightly.yml",
+      "scripts/ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/nightly.yml",
+      "scripts/ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T08:59:47.392407Z",
+  "fix_branch": null,
+  "fix_commit": "4f28adb5ee17e7300ff67015523a8395289a5089",
+  "fixed_at": "2026-10-20T10:16:22Z",
+  "github_issue_number": 6466,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6466",
+  "last_seen_at": "2026-10-20T08:59:47.392407Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6473",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2028",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9f0ce51f573b3235",
+    "recorded_at": "2026-10-20T10:17:14.606600Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d7278e81001ee4074963f2cf641af3b80249b21b",
+    "source_merge_commit": "4f28adb5ee17e7300ff67015523a8395289a5089",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6473",
+    "validation_evidence": [
+      "validation-receipt: id=80e807133d9694aa commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py::test_nightly_setup_and_transport_failures_never_invent_test_sessions backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q` result=`8 passed`",
+      "validation-receipt: id=013f5767c92da170 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+      "validation-receipt: id=e316b76d13e2e0d7 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests zero findings`"
+    ],
+    "validation_evidence_digest": "365f117d26d1cb73f8cb95f08918e015d5b7c3e7eb02eaa89fbdc8f075f4b80f"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly setup failures fabricate executed test sessions and collide with test incidents",
+  "trigger_condition": {
+    "fingerprint": "ad05fb7871879ea7da8e34f3",
+    "source_event_id": "FE-20261020-ad05fb787187"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=80e807133d9694aa commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py::test_nightly_setup_and_transport_failures_never_invent_test_sessions backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q` result=`8 passed`",
+    "validation-receipt: id=013f5767c92da170 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=e316b76d13e2e0d7 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests zero findings`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

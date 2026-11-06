@@ -159,10 +159,13 @@ def infer_rotation(bundle, parameters):
     )
 
 
-def infer_risk(bundle, parameters):
+def infer_risk(bundle, parameters, *, contract=None, version=VERSION):
+    # A new explicitly approved consumer may reuse the frozen numerical
+    # inference without inheriting this historical study's independence claim.
+    contract = CONTRACT if contract is None else contract
     verify_receipt(bundle)
     require(
-        bundle["contract"] == CONTRACT and bundle["schema_version"] == VERSION + "_risk_features",
+        bundle["contract"] == contract and bundle["schema_version"] == version + "_risk_features",
         "risk feature contract differs",
     )
     plan, codes = schedule(bundle["calendar"]), bundle["catalog"]
@@ -186,8 +189,8 @@ def infer_risk(bundle, parameters):
     predictions, changed = risk.predictions_from_parameters(bundle["rows"], plan["days"], codes, parameters)
     return receipt(
         {
-            "schema_version": VERSION + "_risk_sealed",
-            "contract": CONTRACT,
+            "schema_version": version + "_risk_sealed",
+            "contract": contract,
             "input_sha256": bundle["receipt_sha256"],
             "predictions": predictions,
             "model_sha256": canonical_sha256(parameters),

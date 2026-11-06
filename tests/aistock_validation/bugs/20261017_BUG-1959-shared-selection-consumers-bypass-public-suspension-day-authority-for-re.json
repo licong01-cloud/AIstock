@@ -1,0 +1,435 @@
+{
+  "actual": "Original LSTM lsreplay_81ca085e8ec56e05 remains at Jan23 with reference-price missing while the public Jan22 day authority resolves full-day suspension; TCN continues original replay normally.",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/reference_prices.py",
+    "backend/services/selection_center/tradability.py",
+    "backend/tests/strategy_package/test_reference_price_availability.py",
+    "backend/tests/selection_center/test_tradability_provider_clocks.py",
+    "docs/contracts/strategy_package_reference_price_availability_v1.md",
+    "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+    "tests/aistock_validation/bugs/20261017_BUG-1959-shared-selection-consumers-bypass-public-suspension-day-authority-for-re.json",
+    "backend/services/selection_center/suspension_provider.py",
+    "backend/services/simulation_runtime/localsim_selection_signal.py",
+    "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+    "backend/tests/advisory_historical_range/test_selection_signal_kernel.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1959",
+  "closed_at": "2026-10-17T12:07:48.588394Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-17T10:29:45.861866Z",
+  "description": "Original LSTM lsreplay_81ca085e8ec56e05 remains at Jan23 with reference-price missing while the public Jan22 day authority resolves full-day suspension; TCN continues original replay normally.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261017-e8164b2977a0",
+      "timestamp": "2026-10-17T10:29:45.861847Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-post-restart-public-reference-gap-20261017-r1.json"
+  ],
+  "expected": "Officially resolved full-day suspension can retain the last real bounded close with a complete suspension proof; effective D eligibility uses the same authority. Unresolved contradictions and genuine missing price fail closed; complete scores and native TopK policy are preserved.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/selection_center/suspension_provider.py",
+      "backend/services/selection_center/tradability.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/tests/advisory_historical_range/test_selection_signal_kernel.py",
+      "backend/tests/selection_center/test_tradability_provider_clocks.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "tests/aistock_validation/bugs/20261017_BUG-1959-shared-selection-consumers-bypass-public-suspension-day-authority-for-re.json"
+    ],
+    "added_files": [
+      "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+      "backend/services/selection_center/suspension_provider.py"
+    ],
+    "changed_files": [
+      "backend/services/selection_center/suspension_provider.py",
+      "backend/services/selection_center/tradability.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/tests/advisory_historical_range/test_selection_signal_kernel.py",
+      "backend/tests/selection_center/test_tradability_provider_clocks.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "tests/aistock_validation/bugs/20261017_BUG-1959-shared-selection-consumers-bypass-public-suspension-day-authority-for-re.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/reference_prices.py",
+        "backend/services/selection_center/tradability.py",
+        "backend/tests/strategy_package/test_reference_price_availability.py",
+        "backend/tests/selection_center/test_tradability_provider_clocks.py",
+        "docs/contracts/strategy_package_reference_price_availability_v1.md",
+        "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment",
+        "hmm",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/reference_prices.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/selection_center/tradability.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_reference_price_availability.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/selection_center/test_tradability_provider_clocks.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "docs/contracts/strategy_package_reference_price_availability_v1.md",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/reference_prices.py",
+        "backend/services/selection_center/tradability.py",
+        "backend/tests/strategy_package/test_reference_price_availability.py",
+        "backend/tests/selection_center/test_tradability_provider_clocks.py",
+        "docs/contracts/strategy_package_reference_price_availability_v1.md",
+        "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/services/selection_center/tradability.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "backend/tests/selection_center/test_tradability_provider_clocks.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+      "backend/services/selection_center/suspension_provider.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/advisory_historical_range/test_selection_signal_kernel.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/services/selection_center/tradability.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "backend/tests/selection_center/test_tradability_provider_clocks.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md",
+      "backend/services/selection_center/suspension_provider.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/advisory_historical_range/test_selection_signal_kernel.py"
+    ]
+  },
+  "first_seen_at": "2026-10-17T10:29:45.861866Z",
+  "fix_branch": null,
+  "fix_commit": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+  "fixed_at": "2026-10-17T11:00:12Z",
+  "github_issue_number": 6248,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6248",
+  "implementation_review": {
+    "design_compliance_001": {
+      "no_silent_error": "PASS: unresolved events/real missing price/calendar gaps still fail, no default prices",
+      "no_simplified_delivery": "PASS: all phases explicit; runtime and full catch-up still pending, not declared complete",
+      "no_unapproved_gate": "PASS: no force/ack/whitelist or new manual approvals; user-owned restart unchanged",
+      "no_unapproved_semantic_change": "PASS: sole shared algorithms and original frozen account/policy/ledger semantics; corrected public authority integration documented"
+    },
+    "full_replay_acceptance": "PENDING_NOT_CLAIMED",
+    "l0": "PASS: 11 exact allowed files, quality findings=0; guardrail blocking=0; Ruff/diff checks passed",
+    "native_windows": "PASS read-only saved Jan20:4912/4918/6, Jan22:4914/4918/4, Jan23:4916/4920/4. Sole kernel, native Top50, full raw ranking and same-policy baseline parity; no model rerun or business writes.",
+    "performance_receipt": "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-unified-readonly-snapshot-20261017-r1.json",
+    "review_mode": "same_window_review_and_fix_not_independent_review",
+    "round_1": "Use the sole public projection, retain raw S/R and fail closed for unknown/duplicates; real C reference and complete suspension calendar proof remain required.",
+    "round_2": "Fix stale projection identity: include shared reference/filter/adapter, freeze process-loaded fingerprint; test old checkout mutation versus newly loaded code. Reject later disclosure in C reference proof.",
+    "round_3": "131 direct tests passed; fresh-process Jan23 real saved full inference passed with same legal priced-input native computation baseline; no production replay writes. Actual worker telemetry and native original-account prefix readback recorded separately.",
+    "rounds": 3,
+    "runtime_activation": "PENDING_USER_RESTART",
+    "targeted_tests": "131 passed, final related matrix; 3 focused loaded-source identity cases and failed old test adaptation validated"
+  },
+  "last_seen_at": "2026-10-17T10:29:45.861866Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6255",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_b46b1e4c2ab67080/terminal-evidence",
+    "fresh_process_evidence": [
+      "python -B X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-native-Jan23-check.py <task-worktree> <existing-owned-Jan23-scores> <receipt> -> PASS; actual public SelectionSignalKernel, C=2026-01-22 D/T=2026-01-23; 4916 scores / 4920 universe / 4 UNKNOWN; full raw ranking unchanged and native policy baseline parity; Top50 and 603616.SH D suspension exclusion; real quote 6.23 at 01-20; no model run, DB writes, replay/control or restart. Receipt X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-native-Jan23-receipt-r1.json."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-postrestart-native-gate-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1959",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_evidence",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "a271c55a1be4aff6c917251e3f408ad4f415bb6f8b84389670a30f1047d59142",
+      "expected_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T12:05:27.498644Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d9e89b620c3ba5f621a08cc85be7ce1f1dd6345bb66c7051944610f4a23ac562",
+      "receipt_sha256": "92215879f103d53b77d8abd9e4c86e6d82ef49de150a1ae576d6de2acaa259b3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "993ca68b6b7b202bd663716d10602d50c1ffd8b76831af080b4349b77adfedda",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_note": "Add one shared thin frozen-authority adapter for both public consumers; no data authority changes or duplicated suspension projection. User explicitly requested unified completion of all three phases. Include LocalSIM checkpoint code identity and its existing direct test: the old fingerprint omitted the shared providers and could reuse stale projections; freeze the actual process-loaded code identity. Update the existing shared-kernel checkpoint test to model a new process-loaded implementation instead of changing live checkout bytes; new consumer contract intentionally freezes actual loaded code.",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1959",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "458f6c6b2a4fcca5",
+    "recorded_at": "2026-10-17T11:04:08.910550Z",
+    "runtime_contract_digest": "0943de531b97450cda24de96ea571c0e7b57132b7380f064231db405a7f7e590",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "750b6d450db7c1923e48f829e4549f6c439ac7d1",
+    "source_merge_commit": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6255",
+    "validation_evidence": [
+      "python -m nox -s l0 --envdir X:/AIstock_temp/LOCALSIM/BUG-1959-nox -- backend/services/strategy_package/reference_prices.py backend/services/selection_center/tradability.py backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py docs/contracts/strategy_package_reference_price_availability_v1.md docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md tests/aistock_validation/bugs/20261017_BUG-1959-shared-selection-consumers-bypass-public-suspension-day-authority-for-re.json backend/services/selection_center/suspension_provider.py backend/services/simulation_runtime/localsim_selection_signal.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -> passed; 11 exact files, zero findings/blocking; artifacts on X drive",
+      "pytest backend/tests/strategy_package/test_reference_price_availability.py backend/tests/strategy_package/test_selection_computation.py backend/tests/selection_center/test_tradability_provider_clocks.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py backend/tests/simulation_execution/test_localsim_suspension_authority.py -q -> 131 passed; XML X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-direct-final-r2.xml",
+      "ruff check backend/services/selection_center/suspension_provider.py backend/services/selection_center/tradability.py backend/services/strategy_package/reference_prices.py backend/services/simulation_runtime/localsim_selection_signal.py backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "3430ac3bad9cbbc71b2f34d3177b65ded99d6f55b4fe318d37328a1d3fd6757a"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Shared selection consumers bypass public suspension-day authority for reference prices and eligibility",
+  "trigger_condition": {
+    "fingerprint": "e8164b2977a00b07b17416d8",
+    "source_event_id": "FE-20261017-e8164b2977a0"
+  },
+  "validation_evidence": [
+    "131 passed in 7 directly related test files; XML X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-direct-final-r2.xml",
+    "L0 explicit 11-file scan: zero findings/blocking; X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-l0-guardrail-r1.json",
+    "Fresh-process saved Jan23 full inference through sole SelectionSignalKernel: PASS; X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-native-Jan23-receipt-r1.json",
+    "Ruff changed Python and git diff --check passed; no production DB DDL/DML, QE training, service control or new replay",
+    "python -m nox -s l0 --envdir X:/AIstock_temp/LOCALSIM/BUG-1959-nox -- backend/services/strategy_package/reference_prices.py backend/services/selection_center/tradability.py backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py docs/contracts/strategy_package_reference_price_availability_v1.md docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md tests/aistock_validation/bugs/20261017_BUG-1959-shared-selection-consumers-bypass-public-suspension-day-authority-for-re.json backend/services/selection_center/suspension_provider.py backend/services/simulation_runtime/localsim_selection_signal.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -> passed; 11 exact files, zero findings/blocking; artifacts on X drive",
+    "pytest backend/tests/strategy_package/test_reference_price_availability.py backend/tests/strategy_package/test_selection_computation.py backend/tests/selection_center/test_tradability_provider_clocks.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py backend/tests/simulation_execution/test_localsim_suspension_authority.py -q -> 131 passed; XML X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-direct-final-r2.xml",
+    "ruff check backend/services/selection_center/suspension_provider.py backend/services/selection_center/tradability.py backend/services/strategy_package/reference_prices.py backend/services/simulation_runtime/localsim_selection_signal.py backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -> passed",
+    "git diff --check -> passed",
+    "python -B X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-native-Jan23-runtime-acceptance-20261017.py -> passed; original simrun_b46b1e4c2ab67080; complete 4916/4920/4 scores/rank/UNKNOWN, frozen identities and Top50 equal; native D suspension, true 6.23 quote Jan20, held valuation and no suspended-stock orders; receipt 20261017T120622Z",
+    "python -B X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-unified-economic-readback-20261017.py -> passed; original Jan23 24 orders/72 fills/72 cash ledger/51 positions; original Jan20-22 payload/timestamps/seven economic counts unchanged; receipt 20261017T120423Z; entire replay catch-up and formal LocalSIM activation remain pending",
+    "DESIGN-COMPLIANCE-001 -> passed for BUG-1959 native fix-point: full scoring/TopK verified, genuine gaps remain fail-closed, original accounting preserved, no added force/approval gate; full-history task not declared complete"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

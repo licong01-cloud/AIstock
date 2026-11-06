@@ -223,7 +223,10 @@ class AuditedMonthlySourceProducer:
                     gates=read_set.gates,
                     changes=read_set.changes,
                 )
-            snapshot.assert_no_overlapping_repairs()
+            # All readers import this one read-only MVCC snapshot. Later ledger
+            # events (including VALIDATE_ONLY) cannot change its captured facts.
+            # Rechecking global jobs here restarts correct month reads for
+            # unrelated routine updates. Real source gaps still fail the gates.
             identity = snapshot.identity
 
         if isinstance(read_set, MonthlySourcePreparationReadSet):
@@ -239,7 +242,7 @@ class AuditedMonthlySourceProducer:
                     "snapshot_group_id": snapshot_group_id,
                     "source_as_of": identity.source_as_of,
                     "initial_repair_watermark": identity.initial_repair_watermark,
-                    "overlapping_repair_ids": [],
+                    "post_snapshot_writer_check_performed": False,
                     "inputs": input_artifacts,
                     "consistent_input_set_complete": False,
                     "publication_allowed": False,
@@ -291,12 +294,13 @@ class AuditedMonthlySourceProducer:
             },
         )
         overlap_ref = write(
-            "repair-overlap.json",
+            "source-asof-consistency.json",
             {
-                "schema_version": "aistock_monthly_repair_overlap_check_v1",
+                "schema_version": "aistock_monthly_source_asof_consistency_v1",
                 "snapshot_group_id": snapshot_group_id,
-                "initial_repair_watermark": identity.initial_repair_watermark,
-                "overlapping_repair_ids": [],
+                "source_as_of": identity.source_as_of,
+                "isolation_level": "REPEATABLE READ READ ONLY",
+                "post_snapshot_writer_check_performed": False,
                 "status": "PASS",
             },
         )

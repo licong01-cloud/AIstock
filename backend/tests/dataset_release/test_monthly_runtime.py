@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from backend.services.dataset_release.monthly_runtime import (
     SubmissionOnlyPipeline,
 )
 from backend.services.dataset_release.monthly_unified import MonthlyReleaseRequest
+from backend.services.dataset_release.monthly_worker import MonthlyProducerError, _artifact_refs
 
 
 def _environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
@@ -60,6 +62,54 @@ def test_submission_runtime_cannot_execute_data_stage(
     assert isinstance(service.pipeline, SubmissionOnlyPipeline)
     with pytest.raises(MonthlyRuntimeConfigurationError, match="code-registered worker"):
         service.pipeline.run_stage()
+
+
+@pytest.mark.parametrize("observed,expected", [
+    ("2026-10-29T08:00:00+00:00", date(2026, 9, 30)),
+    ("2026-10-30T06:59:59+00:00", date(2026, 9, 30)),
+    ("2026-10-30T07:00:00+00:00", date(2026, 10, 30)),
+    ("2026-10-31T02:00:00+00:00", date(2026, 10, 30)),
+    ("2026-11-01T02:00:00+00:00", date(2026, 10, 30)),
+])
+def test_cutoff_uses_official_last_closed_trading_day(monkeypatch, observed, expected):
+    from backend.services.dataset_release import monthly_runtime
+    from backend.services.dataset_release import control_service
+    from backend.services import trading_calendar_status
+
+    monkeypatch.setattr(control_service, "resolve_previous_month_trading_cutoff",
+                        lambda value: date(2026, 10, 30) if value.month == 11 else date(2026, 9, 30))
+    monkeypatch.setattr(trading_calendar_status, "TradingCalendarStatusService", lambda: SimpleNamespace(
+        latest_trading_day_on_or_before=lambda end: date(2026, 10, 30) if end.month == 10 else date(2026, 11, 30)))
+    assert monthly_runtime.resolve_monthly_cutoff(datetime.fromisoformat(observed).astimezone(UTC)) == expected
+
+
+def test_cutoff_cannot_invent_missing_official_month(monkeypatch):
+    from backend.services.dataset_release.monthly_runtime import resolve_monthly_cutoff
+    from backend.services import trading_calendar_status
+
+    monkeypatch.setattr(trading_calendar_status, "TradingCalendarStatusService", lambda: SimpleNamespace(
+        latest_trading_day_on_or_before=lambda end: None))
+    with pytest.raises(MonthlyRuntimeConfigurationError, match="official calendar"):
+        resolve_monthly_cutoff(datetime(2026, 10, 30, 16))
+
+
+def test_worker_runtime_accepts_planned_profile_root_not_arbitrary_paths(monkeypatch, tmp_path):
+    roots = _environment(monkeypatch, tmp_path)
+    settings = MonthlyRuntimeSettings.from_env()
+    registry = SimpleNamespace(pipeline=lambda **kwargs: SimpleNamespace(**kwargs))
+    service = settings.worker_service(registry)
+    profile = roots["profiles"] / "candidate.json"
+    profile.write_bytes(b"{}\n")
+    refs, _ = _artifact_refs(
+        [{"id": profile.name, "path": str(profile)}],
+        roots=service.pipeline.artifact_roots, label="output",
+    )
+    assert refs[0]["id"] == profile.name
+    outside = tmp_path / "unplanned.json"
+    outside.write_bytes(b"{}\n")
+    with pytest.raises(MonthlyProducerError, match="escaped"):
+        _artifact_refs([{"id": outside.name, "path": str(outside)}],
+                       roots=service.pipeline.artifact_roots, label="output")
 
 
 def test_runtime_rejects_noncanonical_node_root(

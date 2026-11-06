@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { NAV_GROUPS } from "@/lib/navigation/nav-groups";
 import { useCallback, useEffect, useState } from "react";
 
@@ -11,9 +12,17 @@ const API_BASE = (
 ).replace(/\/api\/v1\/?$/, "");
 
 export default function Sidebar() {
+  const pathname = usePathname();
+  const advisoryActive = pathname === "/paper-v2/advisory" || pathname?.startsWith("/paper-v2/advisory/");
   // 管理每个一级目录的展开状态，默认全部折叠
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [alertCount, setAlertCount] = useState(0);
+
+  useEffect(() => {
+    if (!advisoryActive) return;
+    const group = NAV_GROUPS.find(group => group.items.some(item => item.href === "/paper-v2/advisory"));
+    if (group) setExpandedGroups(previous => new Set([...previous, group.title]));
+  }, [advisoryActive]);
 
   const fetchAlertCount = useCallback(async () => {
     try {
@@ -66,7 +75,9 @@ export default function Sidebar() {
               {isExpanded && (
                 <div className="sidebar-group-items">
                   {group.items.map((item) => (
-                    <Link key={item.href} href={item.href} className="sidebar-link">
+                    <Link key={item.href} href={item.href} className="sidebar-link"
+                      aria-current={item.href === "/paper-v2/advisory" && advisoryActive ? "page" : undefined}
+                      style={item.href === "/paper-v2/advisory" && advisoryActive ? { background: "#eff6ff", color: "#2563eb", fontWeight: 600 } : undefined}>
                       {item.label}
                       {item.href === "/local-data" && alertCount > 0 && (
                         <span

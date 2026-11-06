@@ -607,6 +607,397 @@ def test_qlib_row_accepts_only_all_field_na_as_missing_evidence() -> None:
     assert subject._qlib_row_is_fully_missing(np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]) is False
 
 
+def test_qlib_price_precision_restores_flat_and_preserves_real_moves() -> None:
+    # Match the exporter: float64 qfq multiplication, independent float32 storage.
+    # Non-cent reference prices must not be rounded to the A-share order tick.
+    for price, previous in ((4.54, 4.54), (4.49, 4.49), (4.55, 4.54),
+                            (4.53, 4.54), (4.541, 4.54), (4.54, 4.5405)):
+        for factor in (1.0, 0.73123456789, 0.123456789, 1e-6):
+            row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+            row['factor'] = factor
+            for field in ('open', 'high', 'low', 'close'):
+                row[field] = price * factor
+            row['prev_close'] = previous
+            row['up_limit_price'], row['down_limit_price'] = 4.99, 4.09
+            values = subject._raw_qlib_values(row)
+            assert values['close'] == price
+            assert values['prev_close'] == previous
+            assert (values['close'] > values['prev_close']) == (price > previous)
+            assert (values['close'] == values['prev_close']) == (price == previous)
+            for field in ('prev_close', 'up_limit_price', 'down_limit_price'):
+                assert np.float32(values[field]).tobytes() == row[field].tobytes()
+
+
+@pytest.mark.parametrize('price,factor', [(4.5405, 1.0), (100000.0, 1.0), (0.0001, 1.0)])
+def test_qlib_price_precision_rejects_off_grid_or_ambiguous_raw_price(price, factor) -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row['factor'] = factor
+    for field in ('open', 'high', 'low', 'close'):
+        row[field] = price * factor
+    row['prev_close'], row['up_limit_price'], row['down_limit_price'] = 4.54, 4.99, 4.09
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._raw_qlib_values(row)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+
+def test_qlib_price_precision_recovery_matches_exported_integer_li_population() -> None:
+    rng = np.random.default_rng(42)
+    for price_li, factor in zip(rng.integers(1, 3000000, size=200), rng.uniform(.01, 1.0, size=200)):
+        price = int(price_li) / 1000
+        encoded = float(np.float32(price * factor))
+        bounds = subject._float32_source_interval(float(np.float32(factor)))
+        assert subject._raw_qlib_price(encoded, bounds) == price
+
+
+def test_qlib_monthly_rebase_recovers_source_price_without_changing_reference_or_volume() -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row['factor'] = 0.8994452953338623
+    for field in ('open', 'high', 'low', 'close'):
+        row[field] = 10.325631141662598
+    row['prev_close'], row['up_limit_price'], row['down_limit_price'] = 11.4795, 12.63, 10.33
+    row['volume'], row['amount'] = 200, 1000
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._raw_qlib_values(row)
+    values = subject._raw_qlib_values(row, prefix_scale=0.9784479330245184)
+    assert [values[f] for f in ('open', 'high', 'low', 'close')] == [11.48] * 4
+    assert values['prev_close'] == 11.4795
+    assert values['volume'] == float(row['volume']) * float(row['factor'])
+    assert values['amount'] == 1000
+
+
+@pytest.mark.parametrize('price', [4.5405, 100000.0])
+def test_qlib_monthly_rebase_does_not_choose_nearest_or_ambiguous_price(price) -> None:
+    scale, factor = .9784479330245184, .9192571640014648
+    encoded = float(np.float32(float(np.float32(price * factor)) * scale))
+    encoded_factor = float(np.float32(float(np.float32(factor)) * scale))
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._raw_rebased_qlib_price(encoded, encoded_factor, scale)
+
+
+def test_qlib_monthly_rebase_roundtrip_population_and_invalid_scale() -> None:
+    rng = np.random.default_rng(2118)
+    for li, factor, scale in zip(rng.integers(1, 300000, 100), rng.uniform(.01, 1, 100),
+                                 rng.uniform(.5, 2, 100)):
+        price = int(li) / 1000
+        encoded = float(np.float32(float(np.float32(price * factor)) * scale))
+        encoded_factor = float(np.float32(float(np.float32(factor)) * scale))
+        assert subject._raw_rebased_qlib_price(encoded, encoded_factor, scale) == price
+    for scale in (0, -1, np.nan, np.inf):
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._raw_rebased_qlib_price(10, 1, scale)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._float32_rebase_predecessors(float(np.nextafter(np.float32(0), np.float32(1))), .5)
+
+
+@pytest.fixture
+def monthly_price_encoding(tmp_path: Path):
+    root = tmp_path / 'release'
+    qlib = root / 'components/daily_bin_candidate'
+    days = (subject.SOURCE_START, subject.SOURCE_END, date(2026, 9, 30))
+    pins, rows = {}, []
+    seed = tmp_path / 'seed'
+    seed_meta = seed / 'components/daily_bin_candidate/meta_export.json'
+    seed_meta.parent.mkdir(parents=True)
+    seed_meta.write_text(json.dumps({'export_mode': 'authoritative_aistock_dump_bin'}), encoding='utf-8')
+    seed_calendar = seed_meta.parent / 'calendars/day.txt'
+    seed_calendar.parent.mkdir()
+    seed_calendar.write_text('\n'.join(d.isoformat() for d in days[:2]) + '\n', encoding='utf-8')
+    seed_body = dict(schema_version='qe_dataset_manifest_v1', components={
+        'meta': dict(path='components/daily_bin_candidate/meta_export.json',
+                     sha256=subject._sha256_file(seed_meta), size=seed_meta.stat().st_size),
+        'calendar': dict(path='components/daily_bin_candidate/calendars/day.txt',
+                         sha256=subject._sha256_file(seed_calendar), size=seed_calendar.stat().st_size)})
+    seed_sha = canonical_sha256(seed_body)
+    (seed / 'qe_dataset_manifest.json').write_text(
+        json.dumps({**seed_body, 'dataset_manifest_sha256': seed_sha}), encoding='utf-8')
+
+    def pin(path):
+        relative = path.relative_to(root).as_posix()
+        pins[relative] = {'path': relative, 'size': path.stat().st_size, 'sha256': subject._sha256_file(path)}
+
+    calendar = qlib / 'calendars/day.txt'
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text('\n'.join(d.isoformat() for d in days) + '\n', encoding='utf-8')
+    pin(calendar)
+    for field in subject.QLIB_STOCK_FIELDS:
+        path = qlib / 'features/000001.sz' / f'{field}.day.bin'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        value = (0.8994452953338623 if field == 'factor' else
+                 10.325631141662598 if field in ('open', 'high', 'low', 'close') else
+                 0.0 if field in ('limit_up', 'limit_down') else 11.48)
+        np.asarray([0, value, value, value], dtype='<f4').tofile(path)
+        pin(path)
+        if field in ('open', 'high', 'low', 'close', 'factor'):
+            rows.append(dict(instrument='000001.sz', feature=field, start_index=0, end_index=2,
+                             written_value_count=1, prefix_scale=.9784479330245184,
+                             predecessor_manifest_sha256=seed_sha,
+                             target_sha256=subject._sha256_file(path), target_size=path.stat().st_size))
+    receipt = dict(schema_version='aistock_monthly_native_qlib_materialization_v1', status='PASS',
+                   predecessor_manifest_sha256=seed_sha,
+                   native_writer=dict(schema_version='aistock_qlib_bounded_update_receipt_v1',
+                                      frequency='day', predecessor_manifest_sha256=seed_sha,
+                                      baseline_root=str(seed / 'components/daily_bin_candidate'),
+                                      calendar_sha256=subject._sha256_file(calendar),
+                                      qfq_basis_changed_instrument_count=1,
+                                      calendar_prefix_count=2, feature_receipts=rows))
+    materialization = root / 'daily_bin/materialization_receipt.json'
+    materialization.parent.mkdir()
+
+    def seal():
+        materialization.write_text(json.dumps(receipt), encoding='utf-8')
+        pin(materialization)
+        body = dict(schema_version='qe_dataset_manifest_v1', components=pins)
+        (root / 'qe_dataset_manifest.json').write_text(
+            json.dumps({**body, 'dataset_manifest_sha256': canonical_sha256(body)}), encoding='utf-8')
+
+    (root / 'release_closure_receipt.json').write_text('{}', encoding='utf-8')
+    seal()
+    return qlib, days, receipt, seal
+
+
+def test_qlib_monthly_encoding_pins_prefix_and_uses_full_not_read_calendar(monthly_price_encoding):
+    root, days, _, _ = monthly_price_encoding
+    encoding = subject._QlibPriceEncoding(root, days[1:2])
+    assert encoding.scale('000001.SZ', days[1]) == .9784479330245184
+    assert encoding.scale('000001.SZ', days[2]) == 1
+    # Exercise the production warmup caller, not just standalone arithmetic.
+    state = subject._strict_prior_price_state(
+        root, calendar=days, spans={'000001.SZ': ((days[0], days[-1]),)}, suspension_keys=frozenset(),
+        source_start=days[0], window_start=days[-1])
+    assert state['000001.SZ'][1] == ((days[0], 11.48), (days[1], 11.48))
+    encoding.unchanged()
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'schema', 'scale', 'duplicate', 'boundary', 'hash', 'size',
+                                     'all_features_missing', 'calendar', 'invalid_writer'])
+def test_qlib_monthly_encoding_rejects_missing_or_conflicting_provenance(monthly_price_encoding, mutation):
+    root, days, receipt, seal = monthly_price_encoding
+    rows = receipt['native_writer']['feature_receipts']
+    if mutation == 'missing':
+        rows.pop()
+    elif mutation == 'schema':
+        receipt['native_writer']['schema_version'] = 'unknown'
+    elif mutation == 'scale':
+        rows[0]['prefix_scale'] = 1
+    elif mutation == 'duplicate':
+        rows.append(dict(rows[0]))
+    elif mutation == 'boundary':
+        rows[0]['written_value_count'] = 0
+    elif mutation == 'hash':
+        rows[0]['target_sha256'] = 'b' * 64
+    elif mutation == 'size':
+        rows[0]['target_size'] += 4
+    elif mutation == 'all_features_missing':
+        rows.clear()
+    elif mutation == 'calendar':
+        receipt['native_writer']['calendar_sha256'] = 'c' * 64
+    else:
+        receipt['native_writer'] = None
+    seal()
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._QlibPriceEncoding(root, days)
+
+
+def test_qlib_monthly_encoding_rejects_unpinned_receipt_and_changed_bin(monthly_price_encoding):
+    root, days, _, seal = monthly_price_encoding
+    receipt_path = root.parent.parent / 'daily_bin/materialization_receipt.json'
+    receipt_path.write_text('{}', encoding='utf-8')
+    with pytest.raises(subject.RotationL1InputBundleError, match='pinned file differs'):
+        subject._QlibPriceEncoding(root, days)
+    seal()
+    encoding = subject._QlibPriceEncoding(root, days)
+    binary = root / 'features/000001.sz/open.day.bin'
+    binary.write_bytes(binary.read_bytes() + b'\x00' * 4)
+    with pytest.raises(subject.RotationL1InputBundleError, match='pinned file differs'):
+        encoding.scale('000001.SZ', days[0])
+
+
+def _encoding_successor(monthly_price_encoding, *, scale=1.0):
+    """A real additional cast with a pinned predecessor, not duplicated history."""
+    old_qlib, old_days, _, _ = monthly_price_encoding
+    old_root = old_qlib.parent.parent
+    old_manifest = json.loads((old_root / 'qe_dataset_manifest.json').read_text(encoding='utf-8'))
+    root = old_root.parent / 'successor'
+    qlib = root / 'components/daily_bin_candidate'
+    days = (*old_days, date(2026, 10, 30))
+    pins, rows = {}, []
+
+    def pin(path):
+        relative = path.relative_to(root).as_posix()
+        pins[relative] = dict(path=relative, size=path.stat().st_size, sha256=subject._sha256_file(path))
+
+    calendar = qlib / 'calendars/day.txt'
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text('\n'.join(d.isoformat() for d in days) + '\n', encoding='utf-8')
+    pin(calendar)
+    for field in ('open', 'high', 'low', 'close', 'factor'):
+        path = qlib / 'features/000001.sz' / f'{field}.day.bin'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = np.fromfile(old_qlib / 'features/000001.sz' / path.name, dtype='<f4')
+        values = (old[1:].astype(np.float64) * scale).astype('<f4')
+        np.concatenate((old[:1], values, values[-1:])).astype('<f4').tofile(path)
+        pin(path)
+        rows.append(dict(instrument='000001.sz', feature=field, start_index=0, end_index=3,
+                         written_value_count=1, prefix_scale=scale,
+                         predecessor_manifest_sha256=old_manifest['dataset_manifest_sha256'],
+                         target_sha256=subject._sha256_file(path), target_size=path.stat().st_size))
+    receipt = dict(schema_version='aistock_monthly_native_qlib_materialization_v1', status='PASS',
+                   predecessor_manifest_sha256=old_manifest['dataset_manifest_sha256'],
+                   native_writer=dict(schema_version='aistock_qlib_bounded_update_receipt_v1',
+                                      frequency='day', baseline_root=str(old_root / 'daily_bin/qlib'),
+                                      predecessor_manifest_sha256=old_manifest['dataset_manifest_sha256'],
+                                      calendar_prefix_count=3, calendar_sha256=subject._sha256_file(calendar),
+                                      qfq_basis_changed_instrument_count=int(scale != 1), feature_receipts=rows))
+    materialization = root / 'daily_bin/materialization_receipt.json'
+    materialization.parent.mkdir()
+
+    def seal():
+        materialization.write_text(json.dumps(receipt), encoding='utf-8')
+        pin(materialization)
+        for relative in tuple(pins):
+            pin(root / relative)
+        body = dict(schema_version='qe_dataset_manifest_v1', components=pins)
+        (root / 'qe_dataset_manifest.json').write_text(
+            json.dumps({**body, 'dataset_manifest_sha256': canonical_sha256(body)}), encoding='utf-8')
+
+    (root / 'release_closure_receipt.json').write_text('{}', encoding='utf-8')
+    seal()
+    return qlib, days, receipt, seal
+
+
+@pytest.mark.parametrize('scale', [1.0, 1.123456789])
+def test_qlib_monthly_encoding_preserves_ancestor_casts_and_append_boundaries(monthly_price_encoding, scale):
+    qlib, days, _, _ = _encoding_successor(monthly_price_encoding, scale=scale)
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        row[field] = (np.fromfile(qlib / 'features/000001.sz' / f'{field}.day.bin', dtype='<f4')[1]
+                      if field in ('open', 'high', 'low', 'close', 'factor') else
+                      0 if field in ('limit_up', 'limit_down') else 11.48)
+    assert subject._raw_qlib_values(row, prefix_scale=encoding.scale('000001.SZ', days[0]))['close'] == 11.48
+    assert encoding.scale('000001.SZ', days[-1]) == 1
+    assert encoding.scale('000001.SZ', days[-2]) == scale
+    encoding.unchanged()
+
+
+@pytest.mark.parametrize('mutation', ['identity', 'missing', 'locator', 'seed', 'unknown_schema', 'calendar'])
+def test_qlib_monthly_encoding_requires_authenticated_ancestry(monthly_price_encoding, mutation):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    old_root = monthly_price_encoding[0].parent.parent
+    if mutation == 'identity':
+        receipt['predecessor_manifest_sha256'] = 'f' * 64
+        receipt['native_writer']['predecessor_manifest_sha256'] = 'f' * 64
+        for row in receipt['native_writer']['feature_receipts']:
+            row['predecessor_manifest_sha256'] = 'f' * 64
+    elif mutation == 'missing':
+        (old_root / 'qe_dataset_manifest.json').unlink()
+    elif mutation == 'locator':
+        receipt['native_writer']['baseline_root'] = '../release'
+    elif mutation == 'unknown_schema':
+        receipt['native_writer']['schema_version'] = 'future'
+    elif mutation == 'calendar':
+        receipt['native_writer']['calendar_prefix_count'] = 2
+    else:
+        (old_root.parent / 'seed/components/daily_bin_candidate/meta_export.json').write_text('{}', encoding='utf-8')
+    seal()
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._QlibPriceEncoding(qlib, days)
+
+
+def test_qlib_encoding_ancestor_metadata_never_reads_old_price_bins(monthly_price_encoding, monkeypatch):
+    qlib, days, _, _ = _encoding_successor(monthly_price_encoding)
+    old_qlib = monthly_price_encoding[0]
+    old_sha = subject._sha256_file
+
+    def forbid_old_prices(path):
+        assert not (Path(path).is_relative_to(old_qlib / 'features')), 'old price fallback'
+        return old_sha(path)
+
+    monkeypatch.setattr(subject, '_sha256_file', forbid_old_prices)
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    assert encoding.scale('000001.SZ', days[0]) == .9784479330245184
+    encoding.unchanged()
+    seed_meta = old_qlib.parent.parent.parent / 'seed/components/daily_bin_candidate/meta_export.json'
+    seed_meta.write_text('{}', encoding='utf-8')
+    with pytest.raises(subject.RotationL1InputBundleError, match='changed during readback'):
+        encoding.unchanged()
+
+
+def test_qlib_encoding_unbound_prefix_is_not_silently_single_cast(monthly_price_encoding):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    for row in receipt['native_writer']['feature_receipts']:
+        row['predecessor_manifest_sha256'] = None
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    with pytest.raises(subject.RotationL1InputBundleError, match='no encoding identity'):
+        encoding.scale('000001.SZ', days[0])
+    assert encoding.scale('000001.SZ', days[-1]) == 1
+
+
+def test_qlib_encoding_new_instrument_has_no_inherited_cast(monthly_price_encoding):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    # IPO only in the appended window: no old encoding, nonzero Bin start.
+    for row in receipt['native_writer']['feature_receipts']:
+        row.update(start_index=3, written_value_count=1, predecessor_manifest_sha256=None, target_size=8)
+        path = qlib / 'features/000001.sz' / f'{row["feature"]}.day.bin'
+        value = np.fromfile(path, dtype='<f4')[-1]
+        np.asarray([3, value], dtype='<f4').tofile(path)
+        row['target_sha256'] = subject._sha256_file(path)
+    # No cast will consume these fields, but reseal the actual current files.
+    seal()
+    assert subject._QlibPriceEncoding(qlib, days).scale('000001.SZ', days[-1]) == 1
+
+
+def test_qlib_encoding_amended_identity_target_cannot_use_ancestor_cast(monthly_price_encoding):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    receipt['native_writer']['feature_receipts'][0]['target_sha256'] = 'a' * 64
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    with pytest.raises(subject.RotationL1InputBundleError, match='target was amended'):
+        encoding.scale('000001.SZ', days[0])
+
+
+@pytest.mark.parametrize('unchanged', [True, False])
+def test_qlib_encoding_no_append_instrument_inherits_only_identical_files(monthly_price_encoding, unchanged):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    receipt['native_writer']['feature_receipts'].clear()
+    if unchanged:
+        for field in ('open', 'high', 'low', 'close', 'factor'):
+            relative = f'features/000001.sz/{field}.day.bin'
+            (qlib / relative).write_bytes((monthly_price_encoding[0] / relative).read_bytes())
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    if unchanged:
+        assert encoding.scale('000001.SZ', days[0]) == .9784479330245184
+    else:
+        with pytest.raises(subject.RotationL1InputBundleError, match='unrecorded target change'):
+            encoding.scale('000001.SZ', days[0])
+
+
+def test_qlib_encoding_real_000001_august_high_and_multiple_cast_population():
+    # Exact October bytes: high 12.75 after an inherited September rebase.
+    assert subject._raw_rebased_qlib_price(10.22513484954834, .801971435546875,
+                                          .9784479330245184) == 12.75
+    rng = np.random.default_rng(2179)
+    for li, factor in zip(rng.integers(1, 300000, 40), rng.uniform(.1, 1, 40)):
+        p, f = np.float32(int(li) / 1000 * factor), np.float32(factor)
+        scales = (.9784479330245184, 1.123456789)
+        for scale in scales:
+            p, f = np.float32(float(p) * scale), np.float32(float(f) * scale)
+        assert subject._raw_rebased_qlib_price(float(p), float(f), tuple(reversed(scales))) == int(li) / 1000
+
+
+@pytest.mark.parametrize('value', [0.0, -1.0, np.inf, np.nan])
+def test_qlib_price_precision_keeps_invalid_price_fail_closed(value) -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row['factor'] = 1.0
+    for field in ('open', 'high', 'low', 'close', 'prev_close', 'up_limit_price', 'down_limit_price'):
+        row[field] = 4.54
+    row['close'] = value
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._raw_qlib_values(row)
+
+
 def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: Path) -> None:
     qlib = tmp_path / "qlib"
     feature_root = qlib / "features" / "000001.sz"
@@ -688,6 +1079,84 @@ def test_qlib_stock_reader_validates_release_range_but_materializes_only_develop
 
     assert rows["trade_date"].tolist() == [20200730, 20260331]
     assert 999_999.0 not in rows["close"].tolist()
+
+
+@pytest.fixture
+def suspended_quote_edges(tmp_path: Path):
+    root, symbol = tmp_path / "qlib", "601028.SH"
+    calendar = tuple(date(2025, 3, 24) + timedelta(days=i) for i in range(5))
+    feature_root = root / "features" / symbol.lower()
+    feature_root.mkdir(parents=True)
+    for i, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        values = (0.0, 0.0) if field in {"limit_up", "limit_down"} else (1.0, 1.0) if field == "factor" else (i, i + 1)
+        np.asarray([1.0, *values], dtype="<f4").tofile(feature_root / f"{field}.day.bin")
+    suspension = frozenset((calendar[i], symbol) for i in (0, 3, 4))
+    return root, symbol, calendar, suspension
+
+
+def test_qlib_spool_keeps_authority_backed_edge_suspension_as_na_without_dropping_pit(
+    suspended_quote_edges, tmp_path, monkeypatch
+):
+    root, symbol, calendar, suspension = suspended_quote_edges
+    paths = subject._spool_qlib_months(
+        root,
+        calendar=calendar,
+        spans={symbol: ((calendar[0], calendar[-1]),)},
+        suspension_keys=suspension,
+        spool_root=tmp_path / "months",
+        window_start=calendar[0],
+        window_end=calendar[-1],
+    )
+    rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert rows["trade_date"].tolist() == [20250324, 20250325, 20250326, 20250327, 20250328]
+    assert set(rows["symbol"]) == {symbol.encode("ascii")}
+    for field in subject.QLIB_STOCK_FIELDS:
+        original = np.fromfile(root / "features" / symbol.lower() / f"{field}.day.bin", dtype="<f4")[1:]
+        np.testing.assert_equal(rows[field], [np.nan, *original, np.nan, np.nan])
+    assert all(subject._qlib_row_is_fully_missing(rows[i]) for i in (0, 3, 4))
+    state = subject._strict_prior_price_state(
+        root,
+        calendar=calendar,
+        spans={symbol: ((calendar[0], calendar[-1]),)},
+        suspension_keys=suspension,
+        source_start=calendar[0],
+        window_start=calendar[-1],
+    )
+    close_index = subject.QLIB_STOCK_FIELDS.index("close") + 1
+    assert state[symbol] == (calendar[0], ((calendar[1], float(close_index)), (calendar[2], float(close_index + 1))))
+    monkeypatch.setattr(subject.np, "memmap", lambda *_a, **_kw: pytest.fail("all-suspended window read quote values"))
+    only_na = subject._read_qlib_stock_rows(
+        root,
+        symbol=symbol,
+        calendar=calendar,
+        active_spans=((calendar[0], calendar[-1]),),
+        suspension_keys=suspension,
+        window_start=calendar[3],
+        window_end=calendar[4],
+    )
+    assert len(only_na) == 2 and all(subject._qlib_row_is_fully_missing(row) for row in only_na)
+
+
+@pytest.mark.parametrize("proof", ["none", "one_date_missing", "other_symbol"])
+def test_qlib_quote_edge_gap_without_exact_full_day_suspension_still_fails(suspended_quote_edges, proof):
+    root, symbol, calendar, suspension = suspended_quote_edges
+    if proof == "none":
+        suspension = frozenset()
+    elif proof == "one_date_missing":
+        suspension = suspension - {(calendar[-1], symbol)}
+    else:
+        suspension = frozenset((day, "000001.SZ") for day, _ in suspension)
+    with pytest.raises(subject.RotationL1InputBundleError) as error:
+        subject._read_qlib_stock_rows(
+            root,
+            symbol=symbol,
+            calendar=calendar,
+            active_spans=((calendar[0], calendar[-1]),),
+            suspension_keys=suspension,
+            window_start=calendar[0],
+            window_end=calendar[-1],
+        )
+    assert error.value.reason_code == subject.REASON_SOURCE_RANGE_INCOMPLETE
 
 
 def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
@@ -1129,7 +1598,7 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
     monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=dates,
         spans={symbol: ((dates[0], dates[-1]),)},
         adapter=Adapter(),
@@ -1218,7 +1687,7 @@ def test_pit_entry_uses_prior_authoritative_circ_mv_without_future_fill(
     monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=dates,
         spans={symbol: ((active_dates[0], active_dates[-1]),)},
         adapter=Adapter(),
@@ -1302,7 +1771,7 @@ def test_latest_invalid_circ_mv_is_not_silently_replaced_by_older_value(
     monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=dates,
         spans={symbol: ((dates[-1], dates[-1]),)},
         adapter=Adapter(),
@@ -1951,6 +2420,77 @@ def test_frozen_binding_cannot_fall_back_to_active_or_accept_rehashed_manifest(t
                 release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
                 binding=changed_binding,
             )
+
+
+def _shared_frozen_successor(tmp_path):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    manifest_path = root / "qe_dataset_manifest.json"
+    digest = subject._sha256_file(manifest_path)
+    state.update(generation="approved-v18-successor", revision="20261015-successor", profile=subject.DIRECT_V2_PROFILE)
+    state["manifest"] = {
+        "dataset_manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "path": manifest_path.name,
+        "sha256": digest,
+        "size": manifest_path.stat().st_size,
+    }
+    binding = {
+        **{k: state[k] for k in ("generation", "release_id", "revision", "cutoff")},
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": digest,
+    }
+    return root, security, provider, state, binding
+
+
+def test_shared_frozen_successor_reads_pinned_manifest_with_inherited_revision(tmp_path, monkeypatch):
+    root, security, provider, state, binding = _shared_frozen_successor(tmp_path)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    _stub_direct_source_preflights(monkeypatch)
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    before = {
+        path.name: path.read_bytes() for path in (root / "direct_monthly_state.json", root / "qe_dataset_manifest.json")
+    }
+    assets = subject.load_rotation_l1_direct_v2_source_assets(
+        root, security_identity_manifest=security, provider_absence_manifest=provider, frozen_release_binding=binding
+    )
+    assert assets["release_identity"]["frozen_release_generation"] == binding["generation"]
+    assert assets["release_identity"]["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert all((root / name).read_bytes() == content for name, content in before.items())
+
+
+@pytest.mark.parametrize("drift", ("hash", "size", "bool_size", "mixed", "identity", "revision", "rehashed_content"))
+def test_shared_frozen_successor_still_rejects_binding_drift(tmp_path, drift):
+    root, _, _, state, binding = _shared_frozen_successor(tmp_path)
+    if drift == "hash":
+        state["manifest"]["sha256"] = "a" * 64
+    elif drift == "size":
+        state["manifest"]["size"] += 1
+    elif drift == "bool_size":
+        state["manifest"]["size"] = True
+    elif drift == "mixed":
+        state["manifest"]["file_sha256"] = state["manifest"]["sha256"]
+    elif drift == "identity":
+        state["manifest"]["dataset_manifest_sha256"] = "a" * 64
+    elif drift == "revision":
+        state["revision"] = "unapproved"
+    else:
+        path = root / "qe_dataset_manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["revision"] = "forged"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        state["manifest"].update(sha256=subject._sha256_file(path), size=path.stat().st_size)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_frozen_direct_v2_profile(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+        )
+
+
+def test_shared_inherited_manifest_requires_explicit_frozen_pins(tmp_path):
+    root, _, _, state, _ = _shared_frozen_successor(tmp_path)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_direct_v2_manifest(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, release_id=state["release_id"]
+        )
 
 
 def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(
@@ -2842,7 +3382,7 @@ def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     monkeypatch.setattr(subject, "_append_day_level_aggregates", capture)
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
-        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        assets={"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
         calendar=(*prior_dates, *dates),
         spans={symbol: ((prior_dates[0], dates[-1]),)},
         adapter=Adapter(),

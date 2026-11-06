@@ -9,7 +9,6 @@ import pytest
 
 from backend.services.dataset_release.monthly_snapshot import (
     MonthlySnapshotCoordinator,
-    MonthlySnapshotError,
 )
 from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence
 from backend.services.dataset_release.monthly_source_producer import (
@@ -143,7 +142,7 @@ def test_source_worker_warning_cannot_waive_physical_gaps_or_unapproved_drift(tm
 
 
 @pytest.mark.parametrize("overlap", [False, True])
-def test_private_source_is_sealed_only_after_repair_overlap_check(tmp_path, overlap):
+def test_private_source_keeps_actual_gap_despite_later_ledger_updates(tmp_path, overlap):
     source = tmp_path / "partial-source.json"
     source.write_text("{}\n", encoding="utf-8")
     calls = []
@@ -188,18 +187,13 @@ def test_private_source_is_sealed_only_after_repair_overlap_check(tmp_path, over
         plan={"target_cutoff": "2026-09-30", "predecessor": {"cutoff": "2026-08-31"}},
         prior_receipts={},
     )
-    if overlap:
-        with pytest.raises(MonthlySnapshotError, match="repairs overlapped"):
-            producer.produce(context)
-        assert calls == []
-    else:
-        with pytest.raises(MonthlyReleaseSourceBlocked) as error:
-            producer.produce(context)
-        assert len(calls) == 1
-        assert error.value.context["consistent_input_set_complete"] is False
-        assert error.value.context["publication_allowed"] is False
-        assert error.value.context["component_preparation_execution"] == "SOURCE_PREPARED_UNPUBLISHED"
-        assert not (tmp_path / "monthly" / context.operation_id / "source" / "attempt-1" / "source-audit.json").exists()
+    with pytest.raises(MonthlyReleaseSourceBlocked) as error:
+        producer.produce(context)
+    assert len(calls) == 1
+    assert error.value.context["consistent_input_set_complete"] is False
+    assert error.value.context["publication_allowed"] is False
+    assert error.value.context["component_preparation_execution"] == "SOURCE_PREPARED_UNPUBLISHED"
+    assert not (tmp_path / "monthly" / context.operation_id / "source" / "attempt-1" / "source-audit.json").exists()
 
 
 class Cursor:
@@ -391,7 +385,7 @@ def test_audited_source_producer_rejects_unpinned_change_receipt(tmp_path: Path)
         )
 
 
-def test_audited_source_producer_commits_adapter_only_after_overlap_seal(tmp_path: Path) -> None:
+def test_audited_source_producer_seals_coherent_asof_without_global_drift_check(tmp_path: Path) -> None:
     source = tmp_path / "inputs" / "source.json"
     source.parent.mkdir()
     source.write_text("{}\n", encoding="utf-8")
@@ -428,8 +422,7 @@ def test_audited_source_producer_commits_adapter_only_after_overlap_seal(tmp_pat
             overlapping_repair_reader=lambda _connection, _watermark: ("repair-2",),
         ),
     )
-    with pytest.raises(MonthlySnapshotError, match="repairs overlapped"):
-        producer.produce(
+    evidence = producer.produce(
             ProducerContext(
                 stage="SOURCE",
                 operation_id=f"dmr_{'4' * 32}",
@@ -442,5 +435,16 @@ def test_audited_source_producer_commits_adapter_only_after_overlap_seal(tmp_pat
                 },
                 prior_receipts={},
             )
-        )
-    assert sealed == []
+    )
+    assert sealed == [seal_marker]
+    import json
+    ref = evidence["scope"]["repair_overlap_check_refs"][0]
+    proof = json.loads((tmp_path / ref["id"]).read_bytes())
+    assert proof == {
+        "schema_version": "aistock_monthly_source_asof_consistency_v1",
+        "snapshot_group_id": evidence["scope"]["snapshot_group_id"],
+        "source_as_of": evidence["scope"]["source_as_of"],
+        "isolation_level": "REPEATABLE READ READ ONLY",
+        "post_snapshot_writer_check_performed": False,
+        "status": "PASS",
+    }

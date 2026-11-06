@@ -67,7 +67,7 @@ def shared(sector, monkeypatch):  # noqa: F811 - imported pytest fixture
 
     # Synthetic taxonomy is limited to this logic unit test. The actual
     # production publication policy is never weakened or patched on disk.
-    def test_quote_policy(*, code_map, required_start, cutoff):
+    def test_quote_policy(*, code_map, required_start, cutoff, **_kwargs):
         entries = [
             {
                 "canonical_l2_code": code,
@@ -102,6 +102,53 @@ def run(shared, component):
         sector_membership_start=date(2026, 9, 29),
         max_rows_in_memory=2,
     )
+
+
+@pytest.mark.parametrize("buy_codes", [("000001.SZ",), ("000002.SZ",)])
+def test_membership_keeps_classified_facts_independently_of_buy_pit(shared, buy_codes):
+    snapshot = shared[1]
+    snapshot.pit_snapshot.spans = tuple(
+        span for span in snapshot.pit_snapshot.spans if span.ts_code in buy_codes
+    )
+    selected_before = snapshot.pit_snapshot.spans
+    result = run(shared, "sector_context")
+    membership = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    assert set(membership.instrument) == {"000001.SZ", "000002.SZ"}
+    assert membership.start_date.eq(date(2026, 9, 29)).all()
+    assert membership.end_date.eq(date(2026, 9, 30)).all()
+    assert snapshot.pit_snapshot.spans == selected_before
+    assert result["domain_counts"]["factual_classification_stock_day_count"] == 4
+    assert result["domain_counts"]["selection_required_stock_day_count"] == len(buy_codes) * 2
+
+
+def test_nonbuy_factual_membership_does_not_bridge_missing_date(shared):
+    shared[1].pit_snapshot.spans = shared[1].pit_snapshot.spans[:1]
+    shared[5][:] = [row for row in shared[5]
+                    if not (row["ts_code"] == "000002.SZ" and row["trade_date"] == "2026-09-30")]
+    run(shared, "sector_context")
+    membership = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    stock = membership.loc[membership.instrument == "000002.SZ"]
+    assert len(stock) == 1
+    assert stock.iloc[0].start_date == stock.iloc[0].end_date == date(2026, 9, 29)
+
+
+def test_unknown_nonbuy_classification_is_reported_not_assigned(shared):
+    shared[1].pit_snapshot.spans = shared[1].pit_snapshot.spans[:1]
+    for row in shared[5]:
+        if row["ts_code"] == "000002.SZ":
+            row["l2_code_id"] = -1
+    result = run(shared, "sector_context")
+    membership = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    assert set(membership.instrument) == {"000001.SZ"}
+    assert result["domain_counts"]["unclassified_factual_stock_day_count"] == 2
+
+
+def test_quote_gap_error_identifies_stock_day_code_and_fields(shared):
+    for row in shared[5]:
+        if row["ts_code"] == "000001.SZ":
+            row["sw2_amount"] = None
+    with pytest.raises(ComponentPreparationError, match=r"SW_L2_QUOTE_FACTS_MISSING instrument=000001.SZ trade_date=2026-09-29 canonical_l2_code=801000.SI l2_code_id=0 fields=\['sw2_amount'\]"):
+        run(shared, "sector_context")
 
 
 @pytest.mark.parametrize("component", ["stock_pools", "benchmark", "suspend", "sector_context"])
@@ -146,6 +193,65 @@ def test_missing_available_sector_quotes_are_not_filled(shared):
     with pytest.raises(ComponentPreparationError, match="quote-available"):
         run(shared, "sector_context")
     assert not (shared[4] / "sector_context" / "sector_membership_spans.parquet").exists()
+
+
+def test_versioned_nonpublication_runs_real_shared_policy_without_losing_membership(shared, monkeypatch):
+    from backend.services.dataset_release import monthly_preparation_shared as producer
+    from backend.services.dataset_release import sw_l2_quote_policy as policy
+
+    codes = [f"801{number:03d}.SI" for number in range(131)]
+    monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
+    original = producer._source_rows
+
+    def source_rows(cas, snapshot, dataset):
+        rows = original(cas, snapshot, dataset)
+        if dataset == "sw_index_classify":
+            return [dict(row, src="SW2021", is_pub="0" if row["index_code"] == codes[1] else "1") for row in rows]
+        return rows
+
+    monkeypatch.setattr(producer, "_source_rows", source_rows)
+    monkeypatch.setattr(producer, "build_quote_availability_payload", policy.build_quote_availability_payload)
+    result = run(shared, "sector_context")
+    counts = result["domain_counts"]
+    assert counts["membership_gap_count"] == counts["quote_gap_count"] == 0
+    assert counts["publication_evidence"]["nonpublished_catalog_codes"] == [codes[1]]
+    assert counts["publication_evidence"]["dated_observation_count"] == 0
+    frame = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    assert set(frame.instrument) == {"000001.SZ", "000002.SZ"}
+
+
+@pytest.mark.parametrize("field", ["sw2_pct_change", "sw2_vol", "sw2_amount"])
+def test_missing_quote_error_identifies_frozen_source_key_and_field(shared, field):
+    for row in shared[-1]:
+        if row["ts_code"] == "000001.SZ":
+            row[field] = None
+    with pytest.raises(ComponentPreparationError) as failure:
+        run(shared, "sector_context")
+    message = str(failure.value)
+    for value in ("SW_L2_QUOTE_FACTS_MISSING", "000001.SZ", "2026-09-29", "801000.SI", field):
+        assert value in message
+    assert "l2_code_id=0" in message
+    assert not (shared[4] / "sector_context" / "sector_quote_availability.json").exists()
+
+
+@pytest.mark.parametrize("value,reason", [(float("inf"), "SW_L2_QUOTE_NONFINITE"),
+                                          (float("-inf"), "SW_L2_QUOTE_NONFINITE")])
+def test_nonfinite_quote_error_preserves_source_identity(shared, value, reason):
+    shared[-1][0]["sw2_amount"] = value
+    with pytest.raises(ComponentPreparationError) as failure:
+        run(shared, "sector_context")
+    assert all(item in str(failure.value) for item in (reason, "000001.SZ", "2026-09-29", "801000.SI", "sw2_amount"))
+
+
+def test_unexpected_stopped_quote_error_does_not_rewrite_availability(shared):
+    for row in shared[-1]:
+        if row["ts_code"] == "000002.SZ":
+            row["sw2_vol"] = 12.0
+    with pytest.raises(ComponentPreparationError) as failure:
+        run(shared, "sector_context")
+    assert all(item in str(failure.value) for item in (
+        "SW_L2_QUOTE_OUTSIDE_AUTHORITY", "000002.SZ", "2026-09-29", "801001.SI", "sw2_vol"))
+    assert not (shared[4] / "sector_context" / "sector_quote_availability.json").exists()
 
 
 @pytest.mark.parametrize("change", ["stopped_quote", "available_nan", "conflicting_quote"])
@@ -288,6 +394,17 @@ def test_shared_effective_input_drift_creates_a_new_checkpoint(shared):
     )
     assert first["identity_digest"] != second["identity_digest"]
     assert first["component_root"] != second["component_root"]
+
+
+@pytest.mark.parametrize("component", ["suspend", "stock_pools"])
+def test_suspension_authority_pin_invalidates_only_suspend_preparation(shared, component):
+    from backend.services.dataset_release.monthly_preparation_shared import shared_preparation_identity
+    _executor, _context, snapshot, _audit, _catalog = checkpoint_fixture(shared, component)
+    kwargs = dict(profile=shared[3], component=component, predecessor_sha256="f" * 64,
+                  sector_membership_start=date(2026, 9, 29))
+    old = shared_preparation_identity(snapshot=replace(snapshot, suspension_day_authority_sha256="a" * 64), **kwargs)
+    new = shared_preparation_identity(snapshot=replace(snapshot, suspension_day_authority_sha256="b" * 64), **kwargs)
+    assert (old.effective_source_sha256 != new.effective_source_sha256) == (component == "suspend")
 
 
 def complete_snapshot(cas, private):

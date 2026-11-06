@@ -12,15 +12,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 # 加载环境变量
 from dotenv import load_dotenv
-dotenv_path = Path(__file__).parent.parent / '.env'
-load_dotenv(dotenv_path)
 
 import pandas as pd
 import tushare as ts
 import psycopg2
 from psycopg2.extras import execute_values
+
+dotenv_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path)
 
 
 # 配置
@@ -164,11 +168,14 @@ def fetch_cyq_perf_for_date(pro, trade_date: str, job_id: Optional[uuid.UUID] = 
                 _log_job(conn, job_id, "ERROR", f"cyq_perf {trade_date} 第{page+1}页获取失败: {e}")
             raise
     
-    return all_data
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    return filter_stock_rows(all_data)
 
 
 def upsert_cyq_perf(conn, records: List[Dict], job_id: Optional[uuid.UUID] = None) -> int:
     """批量插入或更新cyq_perf数据"""
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    records = filter_stock_rows(records)
     if not records:
         return 0
     
@@ -332,6 +339,9 @@ def fetch_cyq_chips_for_stock(
     按股票获取cyq_chips数据
     单只股票一段时间的数据可能超过2000条，需要分页
     """
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    if not is_supported_stock_code(ts_code):
+        return []
     all_data = []
     offset = 0
     limit = CYQ_CHIPS_LIMIT
@@ -368,6 +378,8 @@ def fetch_cyq_chips_for_stock(
 
 def upsert_cyq_chips(conn, records: List[Dict], job_id: Optional[uuid.UUID] = None) -> int:
     """批量插入或更新cyq_chips数据"""
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    records = filter_stock_rows(records)
     if not records:
         return 0
     

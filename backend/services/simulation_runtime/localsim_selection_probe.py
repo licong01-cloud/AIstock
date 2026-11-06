@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date
 import hashlib
 import json
@@ -138,6 +138,7 @@ def main():
     parser.add_argument("--asset-root", default="F:/Dev/AIstock/rdagent_assets/package_assets")
     parser.add_argument("--modes", nargs="+", choices=("optimized", "reference"), default=["optimized", "reference"])
     parser.add_argument("--baseline-root", help="Explicit read-only reference probe for comparison; never a production input")
+    parser.add_argument("--dataset-binding", help="Explicit frozen file input JSON; never changes a production replay")
     args = parser.parse_args()
     load_dotenv(args.env_file, override=False)
     os.environ["PGOPTIONS"] = "-c default_transaction_read_only=on"
@@ -152,6 +153,8 @@ def main():
     from backend.services.simulation_runtime.localsim_selection_signal import (
         LocalSimSelectionSignalService, LocalSimReadOnlyHmmRuntime, LocalSimReadOnlyHmmSnapshots,
     )
+    from backend.services.simulation_runtime.localsim_file_inputs import localsim_file_inputs
+    file_binding = json.loads(Path(args.dataset_binding).read_text(encoding="utf-8-sig")) if args.dataset_binding else None
     from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
     from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService
     from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
@@ -179,7 +182,10 @@ def main():
         "selection_signal_kernel", "alpha158_batch", "inference_session", "inference_inputs", "inference_features", "factor_input_materialization")]
     source_paths += [source_root / "backend/services/strategy_package" / (name + ".py") for name in (
         "selection_computation", "selection_artifact", "runtime", "live_inference", "multi_alpha_live")]
-    source_paths += [source_root / "backend/services/simulation_signal/strategy_package_selection.py"]
+    source_paths += [source_root / "backend/services/simulation_signal/strategy_package_selection.py",
+                     source_root / "backend/data_service/frozen_dataset.py",
+                     source_root / "backend/services/simulation_data/frozen_file_adapters.py",
+                     Path(__file__).with_name("localsim_file_inputs.py")]
     before = {str(p.relative_to(source_root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
     reader = SimulationRuntimeRepository(conn_factory=read_only_connection)
     binding = reader.get_simulation_release_binding(args.binding_id)
@@ -191,6 +197,8 @@ def main():
     package_reader = StrategyPackageRepository(conn_factory=read_only_connection)
     progress = {"status": "RUNNING", "package_id": binding.package_id, "release_hash": release.release_hash,
                 "consumer_scope": "LOCALSIM", "source_hashes": before, "modes": {}, "equivalence": "PENDING"}
+    if file_binding is not None:
+        progress["file_binding_hash"] = file_binding["binding_hash"]
     baseline_root = None
     if args.baseline_root:
         baseline_root = Path(args.baseline_root).resolve(strict=True)
@@ -222,10 +230,11 @@ def main():
                 _atomic_json(root / "progress.json", progress)
                 started = time.perf_counter()
                 kwargs = dict(package_ids=[binding.package_id], mode=SelectionMode.SINGLE_PACKAGE, trade_date=day,
-                              data_source="DB_HISTORICAL", runtime_config=config, runtime_release=release,
+                              data_source="DATASET_FILES" if file_binding else "DB_HISTORICAL", runtime_config=config, runtime_release=release,
                               created_by="localsim_shared_selection_readonly_probe")
                 injected_recovery = False
-                with _OwnedDiskSampler(root / mode) as sampler:
+                file_scope = localsim_file_inputs(file_binding, run_id=f"probe:{mode}:{day}") if file_binding else nullcontext()
+                with file_scope, _OwnedDiskSampler(root / mode) as sampler:
                     try:
                         result = service.run_selection(**kwargs)
                     except ProbeCommitCrash:
@@ -260,7 +269,9 @@ def main():
                 # Exact retry exercises the real consumer's native readback,
                 # never another consumer's output or a mocked model invocation.
                 retry_started = time.perf_counter()
-                retry = service.run_selection(**kwargs)
+                retry_scope = localsim_file_inputs(file_binding, run_id=f"probe-retry:{mode}:{day}") if file_binding else nullcontext()
+                with retry_scope:
+                    retry = service.run_selection(**kwargs)
                 if retry.aggregate_results != result.aggregate_results or retry.evidence_by_package != result.evidence_by_package:
                     raise ValueError("LocalSIM exact retry changed its own committed selection")
                 measurements[-1].update(recovery_seconds=time.perf_counter() - retry_started,

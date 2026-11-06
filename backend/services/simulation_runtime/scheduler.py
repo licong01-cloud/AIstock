@@ -23,6 +23,7 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Mapping, Protocol
+from zoneinfo import ZoneInfo
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
@@ -196,9 +197,9 @@ _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT = 100
 # claim/clear writes on every scheduler tick. Present-but-non-dict carriers are NOT
 # skipped here; the isolated path keeps raising the typed invalid-carrier error. The
 # isolated path also validates the outbox before its carrier check, so a run with a
-# corrupt outbox AND a valid dict carrier is skipped by this hoist instead of raising;
-# that combination is unreachable because the carrier write implies a previously valid
-# outbox and nothing mutates the outbox afterwards.
+# corrupt outbox AND a valid dict carrier is skipped by this hoist instead of raising.
+# Durable carriers require an already validated outbox; the PIT-admission carrier is
+# instead written only after proving there was no plan, broker activity or economics.
 _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "local_sim_projection_readback_failure",
     "local_sim_projection_terminal_failure",
@@ -206,6 +207,8 @@ _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "localsim_historical_legacy_plan_terminalization_v1",
     "localsim_historical_failed_retryable_active_recovery_v1",
     "localsim_historical_failed_terminal_active_recovery_v1",
+    "localsim_historical_valuation_recovery_v1",
+    "localsim_historical_pit_admission_failure_v1",
 )
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
@@ -1119,6 +1122,20 @@ class ProductionSimulationRunContextProvider:
             )
         return marks
 
+    def load_historical_pre_trade_tradability(
+        self, *, symbols: list[str], trade_date: date, valuation_symbols: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        from backend.services.simulation_execution.localsim.suspension import LocalSimHistoricalSuspensionProvider
+
+        from .localsim_file_inputs import current_file_dataset, historical_suspension_provider
+        dataset = current_file_dataset()
+        if dataset is not None:
+            return historical_suspension_provider(dataset).load_statuses(
+                symbols=symbols, trade_date=trade_date, valuation_symbols=valuation_symbols)
+        return LocalSimHistoricalSuspensionProvider(
+            conn_factory=self._daily_trading_context_provider.conn_factory,
+        ).load_statuses(symbols=symbols, trade_date=trade_date, valuation_symbols=valuation_symbols)
+
     def load_pre_trade_tradability(
         self,
         *,
@@ -1561,14 +1578,8 @@ class ProductionSimulationRunContextProvider:
         data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
         if not isinstance(data_source, MinuteDataSource):
             data_source = MinuteDataSource(str(data_source))
-        from .localsim_native_context import LocalSimNativeAccountContext
-
-        # Replay's as_of_time is a causal cursor, not today's source authority.
-        current_trade_date = (
-            date.today()
-            if isinstance(portfolio, LocalSimNativeAccountContext)
-            else scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
-        )
+        # A historical causal cursor never grants access to today's realtime source.
+        current_trade_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
         if trade_date == current_trade_date:
             return MinuteDataSource.TDX_REALTIME
         return data_source
@@ -2691,6 +2702,11 @@ def _default_price_loader(symbols: list[str], trade_date: date) -> dict[str, flo
     unique_symbols = sorted({str(symbol).strip() for symbol in symbols if str(symbol).strip()})
     if not unique_symbols:
         return {}
+    from .localsim_file_inputs import current_file_dataset
+    dataset = current_file_dataset()
+    if dataset is not None:
+        from backend.services.simulation_data.frozen_file_adapters import file_reference_prices
+        return file_reference_prices(dataset, symbols=unique_symbols, as_of_date=trade_date)
     try:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -4034,6 +4050,8 @@ class SimulationLifecycleScheduler:
     ) -> Any:
         timeout_seconds = self._timeout_seconds_from_env(timeout_env_var, default_timeout_seconds)
         result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+        from .localsim_file_inputs import capture_file_input_worker
+        func = capture_file_input_worker(func, worker_id=f"stage:{stage}")
 
         def target() -> None:
             try:
@@ -4255,25 +4273,44 @@ class SimulationLifecycleScheduler:
                 )
                 results.append(self._finalize_binding_retry_result(result=binding_result, as_of_time=as_of_time))
             except Exception as exc:  # noqa: BLE001 - isolate one binding without starving later eligible bindings.
-                if raise_on_error:
+                if raise_on_error and (
+                    binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM
+                    or not isinstance(exc, _BindingRetryAttemptError)
+                ):
                     raise
                 retry_claim_token = exc.claim_token if isinstance(exc, _BindingRetryAttemptError) else None
                 retry_source_fingerprint = (
                     exc.source_fingerprint if isinstance(exc, _BindingRetryAttemptError) else None
                 )
                 original_exc = exc.original if isinstance(exc, _BindingRetryAttemptError) else exc
-                results.append(
-                    self._record_pre_run_binding_failure_result(
-                        binding=binding,
-                        trade_date=trade_date,
-                        data_source=data_source,
-                        created_by=created_by,
-                        exc=original_exc,
-                        as_of_time=as_of_time,
-                        retry_claim_token=retry_claim_token,
-                        retry_source_fingerprint=retry_source_fingerprint,
-                    )
+                failure_result = self._record_pre_run_binding_failure_result(
+                    binding=binding,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    created_by=created_by,
+                    exc=original_exc,
+                    as_of_time=as_of_time,
+                    retry_claim_token=retry_claim_token,
+                    retry_source_fingerprint=retry_source_fingerprint,
                 )
+                if raise_on_error:
+                    # Historical LocalSIM callers need the original typed failure,
+                    # after the durable retry claim and failure evidence are finalized.
+                    failed_payload = failure_result.run.run_payload_json if failure_result.run is not None else {}
+                    if failed_payload.get("broker_side_effect_state") == "UNKNOWN":
+                        raise InvalidStateTransitionError(
+                            "LocalSIM strict failure has unresolved broker side effects",
+                            context={
+                                "reason_code": "LOCALSIM_REPLAY_BROKER_SIDE_EFFECTS_UNKNOWN",
+                                "binding_id": binding.binding_id, "trade_date": trade_date.isoformat(),
+                                "broker_side_effect_state": "UNKNOWN",
+                                "original_error_type": type(original_exc).__name__,
+                            },
+                        ) from exc
+                    if original_exc is not exc:
+                        raise original_exc from exc
+                    raise
+                results.append(failure_result)
         unmatched_failure_result = self._unmatched_kernel_product_failure_result(
             failures=unmatched_kernel_product_tick_failures,
             data_source=data_source,
@@ -4468,6 +4505,22 @@ class SimulationLifecycleScheduler:
             raise AssertionError("simulation retry error evidence normalization must return an object")
         return normalized
 
+    def _simulation_retry_control_time(
+        self, *, run: SimulationDailyRun, as_of_time: datetime | None,
+    ) -> datetime:
+        market_time = self._scheduler_time(as_of_time)
+        if (
+            as_of_time is not None
+            and run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+            and market_time.date() == run.trade_date
+        ):
+            # Only operational retry deadlines advance. The historical market
+            # as-of and the frozen daily inputs remain on the replay date.
+            control_time = self._scheduler_time(self._scheduler_now())
+            if market_time.date() < control_time.date():
+                return control_time
+        return market_time
+
     def _record_simulation_retry_failure(
         self,
         *,
@@ -4531,7 +4584,7 @@ class SimulationLifecycleScheduler:
             failure_fingerprint=failure_fingerprint,
             failure_stage=failure_stage,
             error=normalized_error,
-            as_of_time=self._scheduler_time(as_of_time),
+            as_of_time=self._simulation_retry_control_time(run=run, as_of_time=as_of_time),
             base_delay_seconds=_SIMULATION_RETRY_BASE_DELAY_SECONDS,
             max_delay_seconds=_SIMULATION_RETRY_MAX_DELAY_SECONDS,
             expected_claim_token=expected_claim_token,
@@ -4685,6 +4738,8 @@ class SimulationLifecycleScheduler:
                     raise self._binding_tick_in_progress_error(entry)
                 return self._consume_or_report_binding_tick(entry)
             result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+            from .localsim_file_inputs import capture_file_input_worker
+            func = capture_file_input_worker(func, worker_id=f"binding:{binding.binding_id}")
 
             def target() -> None:
                 try:
@@ -6616,6 +6671,54 @@ class SimulationLifecycleScheduler:
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
 
+    def complete_localsim_replay_close(
+        self, *, run_id: str, trade_date: date, strategy_id: str, binding_id: str, release_id: str,
+    ) -> dict[str, Any]:
+        """Close only the original historical day; never drive another account or resubmit orders."""
+        run = self.repository.get_simulation_daily_run(run_id)
+        if (run.trade_date != trade_date or run.strategy_id != strategy_id or run.binding_id != binding_id
+                or run.release_id != release_id or run.broker_backend != SimulationBrokerBackend.LOCAL_SIM
+                or run.status not in {SimulationDailyRunStatus.SUCCEEDED, SimulationDailyRunStatus.FAILED_TERMINAL}):
+            raise DataUnavailableError(
+                "LocalSim replay close scope does not match the completed day",
+                context={"reason_code": "LOCALSIM_REPLAY_CLOSE_SCOPE_INVALID", "run_id": run_id},
+            )
+
+        def complete(candidate):
+            payload = candidate.run_payload_json
+            persisted = payload.get("local_sim_persistence") or {}
+            close = payload.get("local_sim_close_valuation_v1") or {}
+            outbox = payload.get("local_sim_projection_outbox_v1") or {}
+            if not all(isinstance(value, dict) for value in (persisted, close, outbox)):
+                return False
+            try:
+                stamp = self._scheduler_time(datetime.fromisoformat(persisted["snapshot_time"]))
+                return (
+                    persisted.get("terminal") is True and persisted.get("paper_v2_run_id") == run_id
+                    and stamp.date() == trade_date and stamp.time() == time(15, 0)
+                    and close.get("schema_version") == "local_sim_close_valuation_v1"
+                    and close.get("snapshot_time") == persisted["snapshot_time"]
+                    and close.get("parent_resubmitted") is False
+                    and outbox.get("run_id") == run_id and outbox.get("status") == "PROJECTED"
+                    and type(outbox.get("generation")) is int
+                    and outbox["generation"] == payload.get("local_sim_economic_generation")
+                )
+            except (KeyError, TypeError, ValueError):
+                return False
+
+        if not complete(run):
+            self._refresh_terminal_local_sim_valuation(run=run)
+            run = self.repository.get_simulation_daily_run(run_id)
+        if not complete(run):
+            raise DataUnavailableError(
+                "LocalSim replay day has no durable close valuation",
+                context={"reason_code": "LOCALSIM_REPLAY_CLOSE_NOT_COMPLETE", "run_id": run_id,
+                         "trade_date": trade_date.isoformat()},
+            )
+        return {"run_id": run_id, "trade_date": trade_date.isoformat(),
+                "snapshot_time": run.run_payload_json["local_sim_persistence"]["snapshot_time"],
+                "close_valuation_complete": True, "parent_resubmitted": False}
+
     def _refresh_post_close_local_sim_valuations(
         self, *, trade_date: date, strategy_id: str | None, limit: int, as_of_time: datetime | None
     ) -> list[dict[str, Any]]:
@@ -6660,13 +6763,13 @@ class SimulationLifecycleScheduler:
                 context={"reason_code": "LOCALSIM_CLOSE_VALUATION_ACTIVE_STATE", "run_id": run.run_id},
             )
         raw = context.local_broker.export_execution_snapshot()
+        orders = tuple(raw["orders"])
+        if context.market_data_source != MinuteDataSource.TDX_REALTIME.value:
+            paper_repository = self._paper_repository_for_local_sim(binding=binding, run=run, context=context)
+            orders = tuple(paper_repository.list_orders_for_run(run.run_id))
         snapshot = LocalSimExecutionSnapshot(
-            orders=tuple(raw["orders"]), fills=(), events=(), cash_entries=(),
+            orders=orders, fills=(), events=(), cash_entries=(),
             positions=dict(raw["positions"]), account=raw["account"], handle_statuses=tuple(raw["handle_statuses"]),
-        )
-        self._local_sim_existing_projection_result(
-            run_id=run.run_id,
-            observed_positions=snapshot.positions, observed_account=snapshot.account,
         )
         execution = SimulationExecutionResult(
             run=run, execution_plan=plan, broker_backend=binding.broker_backend, status="SUBMITTED",
@@ -6676,7 +6779,8 @@ class SimulationLifecycleScheduler:
             ),
         )
         self._local_sim_persistence_coordinator().persist_execution_result(
-            binding=binding, run=run, execution=execution, context=context, valuation_refresh=True
+            binding=binding, run=run, execution=execution, context=context,
+            valuation_refresh=True, valuation_as_of_time=close_time,
         )
         latest = self.repository.get_simulation_daily_run(run.run_id)
         return {"run_id": run.run_id, "trade_date": run.trade_date.isoformat(), "status": latest.status.value,
@@ -7103,6 +7207,124 @@ class SimulationLifecycleScheduler:
                     return terminalized
         return terminalized
 
+    def _terminalize_missed_localsim_pit_admission(
+        self, *, run: SimulationDailyRun, scheduler_trade_date: date,
+    ) -> dict[str, Any] | None:
+        """Close a missed live day as failed, never manufacture historical trades."""
+        if (scheduler_trade_date != self._scheduler_now().date()
+                or run.trade_date >= scheduler_trade_date
+                or not self._localsim_pit_failure_can_be_superseded(run)):
+            return None
+        from backend.services.selection_center.canonical_pit_runtime import (
+            CANONICAL_PIT_RUNTIME_LEASE_KEY, SelectionPitRuntimeLease,
+        )
+        from .localsim_input_source_plan import PLAN_KEY
+
+        binding = self.repository.get_simulation_release_binding(run.binding_id)
+        release = self.repository.get_strategy_runtime_release(run.release_id)
+        metadata = release.release_config_json.get("metadata") or {}
+        if PLAN_KEY in metadata or CANONICAL_PIT_RUNTIME_LEASE_KEY not in metadata:
+            return None
+        lease = SelectionPitRuntimeLease.from_mapping(metadata[CANONICAL_PIT_RUNTIME_LEASE_KEY])
+        if (binding.strategy_id != run.strategy_id or binding.release_id != run.release_id
+                or binding.release_hash != run.release_hash or release.release_hash != run.release_hash
+                or binding.binding_hash != run.binding_hash
+                or binding.package_id != run.package_id or release.package_id != run.package_id
+                or binding.manifest_sha256 != run.manifest_sha256
+                or release.manifest_sha256 != run.manifest_sha256
+                or binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM
+                or lease.coverage_end >= run.trade_date
+                or metadata.get("selection_runtime_config", {}).get(CANONICAL_PIT_RUNTIME_LEASE_KEY) != lease.as_dict()):
+            raise DataUnavailableError(
+                "Historical LocalSIM PIT failure does not match its frozen admission",
+                context={"reason_code": "LOCALSIM_HISTORICAL_PIT_FAILURE_IDENTITY_CONFLICT",
+                         "run_id": run.run_id},
+            )
+        audit = {
+            "schema_version": "localsim_historical_pit_admission_failure_v1",
+            "reason_code": "LOCALSIM_HISTORICAL_PIT_ADMISSION_MISSED",
+            "previous_status": run.status.value, "trade_date": run.trade_date.isoformat(),
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "binding_id": run.binding_id, "release_id": run.release_id,
+            "frozen_coverage_end": lease.coverage_end.isoformat(),
+            "broker_called": False, "submitted_intents": 0,
+            "historical_orders_backfilled": False,
+            "terminalized_at": self._scheduler_now().isoformat(),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id, status=SimulationDailyRunStatus.FAILED_TERMINAL,
+            payload_patch={"last_stage": "FAILED_TERMINAL",
+                           "localsim_historical_pit_admission_failure_v1": audit},
+        )
+        return {"run_id": updated.run_id, "trade_date": updated.trade_date.isoformat(),
+                "strategy_id": updated.strategy_id, "broker_backend": updated.broker_backend.value,
+                "previous_status": run.status.value, "status": updated.status.value,
+                "reason": "missed_live_day_pit_admission_without_economic_effects",
+                "reason_code": audit["reason_code"]}
+
+    def _recover_historical_localsim_pending_valuation(
+        self, *, run: SimulationDailyRun, outbox: LocalSimProjectionOutboxV1,
+        scheduler_trade_date: date,
+    ) -> dict[str, Any] | None:
+        """Complete frozen valuation only; never advance a historical execution."""
+        payload = outbox.projection_payload
+        if (scheduler_trade_date != self._scheduler_now().date() or run.trade_date >= scheduler_trade_date
+                or outbox.status not in {LocalSimProjectionOutboxStatus.PENDING, LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE}
+                or payload.get("schema_version") != "local_sim_valuation_pending_projection_payload_v1"
+                or payload.get("projection_kind") != "VALUATION_PENDING"
+                or (payload.get("completed_persistence") or {}).get("terminal") is not True):
+            return None
+        plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+        binding = self.repository.get_simulation_release_binding(run.binding_id)
+        release = self.repository.get_strategy_runtime_release(run.release_id)
+        self._validate_historical_localsim_recovery_identity(
+            run=run, plan=plan, binding=binding, runtime_release=release,
+        )
+        from .localsim_input_source_plan import PLAN_KEY
+        if PLAN_KEY in (release.release_config_json.get("metadata") or {}):
+            return None
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
+        if (not states or any(not state.is_terminal for state in states)
+                or len(states) != len(plan.intents)
+                or {state.intent_id for state in states} != {intent.intent_id for intent in plan.intents}):
+            return None
+        if any((state.run_id, state.binding_id, state.plan_id, state.trade_date) !=
+               (run.run_id, run.binding_id, plan.plan_id, run.trade_date) for state in states):
+            raise DataUnavailableError("Historical LocalSIM valuation state identity conflicts",
+                context={"reason_code": "LOCALSIM_HISTORICAL_VALUATION_STATE_CONFLICT", "run_id": run.run_id})
+        try:
+            frozen_time = datetime.fromisoformat(str(payload["valuation_snapshot_time"]))
+            if frozen_time.tzinfo is None or frozen_time.astimezone(ZoneInfo("Asia/Shanghai")).date() != run.trade_date:
+                raise ValueError("snapshot time must be on the frozen trade date")
+        except (KeyError, ValueError) as exc:
+            raise DataUnavailableError("Historical LocalSIM valuation timestamp is invalid",
+                context={"reason_code": "LOCALSIM_HISTORICAL_VALUATION_TIME_CONFLICT", "run_id": run.run_id}) from exc
+        recovered = self._recover_pending_local_sim_projection_if_needed(
+            binding=binding, run=run, plan=plan, runtime_release=release, trade_date=run.trade_date,
+            data_source=MinuteDataSource.DB_HISTORICAL.value, as_of_time=frozen_time,
+        )
+        if recovered is None:
+            return None
+        updated = self.repository.get_simulation_daily_run(run.run_id)
+        current = LocalSimProjectionOutboxV1.model_validate(updated.run_payload_json["local_sim_projection_outbox_v1"])
+        if current.status != LocalSimProjectionOutboxStatus.PROJECTED:
+            return {"run_id": run.run_id, "status": updated.status.value,
+                    "reason_code": "LOCALSIM_HISTORICAL_VALUATION_INPUT_NOT_READY",
+                    "terminalization_succeeded": False}
+        if current.outbox_hash != outbox.outbox_hash:
+            raise DataUnavailableError("Historical LocalSIM valuation changed its frozen generation",
+                context={"reason_code": "LOCALSIM_HISTORICAL_VALUATION_GENERATION_CONFLICT", "run_id": run.run_id})
+        audit = {"schema_version": "localsim_historical_valuation_recovery_v1", "run_id": run.run_id,
+                 "reason_code": "LOCALSIM_HISTORICAL_VALUATION_RECOVERED", "outbox_id": outbox.outbox_id,
+                 "generation": outbox.generation, "valuation_as_of_time": frozen_time.isoformat(),
+                 "parent_resubmitted": False, "durable_minute_loop_advanced": False,
+                 "verified_at": self._scheduler_now().isoformat()}
+        self.repository.update_simulation_daily_run(run.run_id, payload_patch={"localsim_historical_valuation_recovery_v1": audit})
+        return {"run_id": run.run_id, "trade_date": run.trade_date.isoformat(),
+                "strategy_id": run.strategy_id, "broker_backend": run.broker_backend.value,
+                "previous_status": run.status.value, "status": updated.status.value,
+                "reason_code": audit["reason_code"], "historical_valuation_recovered": True}
+
     def _terminalize_historical_localsim_durable_run_if_safe(
         self,
         *,
@@ -7110,6 +7332,11 @@ class SimulationLifecycleScheduler:
         scheduler_trade_date: date,
         as_of_time: datetime | None,
     ) -> dict[str, Any] | None:
+        missed_admission = self._terminalize_missed_localsim_pit_admission(
+            run=run, scheduler_trade_date=scheduler_trade_date,
+        )
+        if missed_admission is not None:
+            return missed_admission
         raw_outbox = run.run_payload_json.get("local_sim_projection_outbox_v1")
         if raw_outbox is None:
             return None
@@ -7126,7 +7353,9 @@ class SimulationLifecycleScheduler:
                 },
             ) from exc
         if outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-            return None
+            return self._recover_historical_localsim_pending_valuation(
+                run=run, outbox=outbox, scheduler_trade_date=scheduler_trade_date,
+            )
         for carrier_field in _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS:
             if carrier_field not in run.run_payload_json:
                 continue
@@ -7981,6 +8210,20 @@ class SimulationLifecycleScheduler:
                 "LOCALSIM_POST_CLOSE_CAPACITY_RESIDUAL_TERMINAL",
                 "failed_terminal_after_close",
             )
+        if persistence_status == "PERSISTED_WITH_RESIDUAL":
+            return (
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+                "localsim_post_close_execution_residual_terminal_failed",
+                "LOCALSIM_POST_CLOSE_EXECUTION_RESIDUAL_TERMINAL",
+                "failed_terminal_after_close",
+            )
+        if persistence_status == "PERSISTED_WITH_TERMINAL_FAILURE":
+            return (
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+                "localsim_post_close_persisted_execution_terminal_failed",
+                "LOCALSIM_POST_CLOSE_PERSISTED_EXECUTION_FAILURE",
+                "failed_terminal_after_close",
+            )
         if bool(payload.get("no_rebalance_required")) and not bool(payload.get("broker_called")):
             return (
                 SimulationDailyRunStatus.SUCCEEDED,
@@ -8375,6 +8618,17 @@ class SimulationLifecycleScheduler:
         rebased_bindings: list[SimulationReleaseBinding] = []
         for binding in bindings:
             try:
+                binding = self._renew_unattended_localsim_pit_binding(binding=binding, trade_date=trade_date)
+            except (RuntimeConfigInvalidError, InvalidStateTransitionError, DataUnavailableError) as exc:
+                if raise_on_error:
+                    raise
+                lifecycle_skips.append(self._record_pre_run_binding_failure_result(
+                    binding=binding, trade_date=trade_date, data_source=data_source,
+                    created_by=created_by, exc=exc,
+                ))
+                blocked_binding_keys.add((binding.strategy_id, binding.broker_backend))
+                continue
+            try:
                 rebased_bindings.append(
                     self._rebase_unattended_binding_to_authoritative_manifest(
                         binding=binding,
@@ -8530,6 +8784,92 @@ class SimulationLifecycleScheduler:
             if source_binding_id:
                 superseded_ids.add(source_binding_id)
         return [binding for binding in bindings if binding.binding_id not in superseded_ids]
+
+    def _renew_unattended_localsim_pit_binding(
+        self, *, binding: SimulationReleaseBinding, trade_date: date,
+    ) -> SimulationReleaseBinding:
+        """Expire an open live binding's PIT admission, not its account or model."""
+        if (binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM
+                or trade_date != self._scheduler_now().date()):
+            return binding
+        from backend.services.selection_center.canonical_pit_runtime import (
+            CANONICAL_PIT_RUNTIME_LEASE_KEY, SelectionPitRuntimeLease,
+        )
+        from .localsim_input_source_plan import PLAN_KEY
+
+        release = self.repository.get_strategy_runtime_release(binding.release_id)
+        metadata = (release.release_config_json or {}).get("metadata") or {}
+        saved = metadata.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
+        if saved is None or PLAN_KEY in metadata:
+            return binding
+        lease = SelectionPitRuntimeLease.from_mapping(saved)
+        # A business day already admitted under a sufficient frozen lease keeps
+        # its exact identity, even if the global pointer advances later.
+        if trade_date <= lease.coverage_end:
+            self._finish_localsim_pit_supersession(binding=binding, trade_date=trade_date)
+            return binding
+        if (binding.binding_config_json.get("metadata") or {}).get("disable_unattended_roll_forward") is True:
+            return binding
+        existing = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id, binding_id=binding.binding_id, trade_date=trade_date,
+        )
+        if existing is not None and not self._localsim_pit_failure_can_be_superseded(existing):
+            return binding
+        successor = self._roll_forward_unattended_binding(source=binding, trade_date=trade_date)
+        self._finish_localsim_pit_supersession(binding=successor, trade_date=trade_date)
+        return successor
+
+    @staticmethod
+    def _localsim_pit_failure_can_be_superseded(run: SimulationDailyRun) -> bool:
+        payload = run.run_payload_json or {}
+        failure = payload.get("pre_run_failure") or {}
+        return (
+            run.broker_backend is SimulationBrokerBackend.LOCAL_SIM
+            and run.status is SimulationDailyRunStatus.FAILED_RETRYABLE
+            and run.execution_plan_id is None and run.selection_evidence_id is None
+            and payload.get("last_stage") == "PRE_RUN_FAILED"
+            and isinstance(failure, dict)
+            and failure.get("reason_code") == "CANONICAL_PIT_RUNTIME_INVALID"
+            and failure.get("broker_called") is False
+            and type(failure.get("submitted_intents")) is int
+            and failure.get("submitted_intents") == 0
+            and not SimulationLifecycleScheduler._run_has_broker_side_effect_evidence(run)
+            and not payload.get("local_sim_persistence")
+            and not payload.get("orders") and not payload.get("fills")
+        )
+
+    def _finish_localsim_pit_supersession(
+        self, *, binding: SimulationReleaseBinding, trade_date: date,
+    ) -> None:
+        """Retry a published successor's audit step without rerunning economics."""
+        release = self.repository.get_strategy_runtime_release(binding.release_id)
+        metadata = (release.release_config_json or {}).get("metadata") or {}
+        renewal = metadata.get("localsim_daily_pit_renewal_v1") or {}
+        if (renewal.get("trade_date") != trade_date.isoformat()
+                or renewal.get("previous_coverage_end", trade_date.isoformat()) >= trade_date.isoformat()):
+            return
+        source_id = metadata.get("extends_binding_id")
+        if not source_id:
+            return
+        old = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id, binding_id=source_id, trade_date=trade_date,
+        )
+        if old is None or old.status is SimulationDailyRunStatus.CANCELLED:
+            return
+        if not self._localsim_pit_failure_can_be_superseded(old):
+            raise InvalidStateTransitionError(
+                "LocalSIM PIT predecessor cannot be superseded after a plan or broker activity",
+                context={"reason_code": "LOCALSIM_PIT_SUPERSESSION_REQUIRES_RECONCILIATION",
+                         "run_id": old.run_id},
+            )
+        self.repository.update_simulation_daily_run(old.run_id, status=SimulationDailyRunStatus.CANCELLED,
+            payload_patch={"last_stage": "CANCELLED", "localsim_daily_pit_supersession_v1": {
+                "schema_version": "localsim_daily_pit_supersession_v1",
+                "reason_code": "LOCALSIM_PIT_EXPIRED_PRE_RUN_SUPERSEDED",
+                "previous_status": old.status.value, "source_binding_id": source_id,
+                "successor_binding_id": binding.binding_id, "successor_release_id": binding.release_id,
+                "trade_date": trade_date.isoformat(), "broker_called": False,
+            }})
 
     def _rebase_unattended_binding_to_authoritative_manifest(
         self,
@@ -8908,6 +9248,12 @@ class SimulationLifecycleScheduler:
     ) -> dict[str, Any]:
         config = source_release.release_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        if source_binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+            from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
+            from .localsim_pit_migration import POLICY_KEY, refresh_daily_pit
+
+            if POLICY_KEY in metadata or CANONICAL_PIT_RUNTIME_LEASE_KEY in metadata:
+                metadata = refresh_daily_pit(metadata, trade_date=trade_date)
         created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
         purpose = SimulationLifecycleScheduler._roll_forward_purpose(source_binding.broker_backend)
         metadata.update(
@@ -9121,6 +9467,7 @@ class SimulationLifecycleScheduler:
     ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None, str | None, str | None]:
         if not submit or not self._run_requires_binding_retry_control(run):
             return run, None, None, None
+        control_time = self._simulation_retry_control_time(run=run, as_of_time=as_of_time)
         source_fingerprint = self._simulation_retry_source_fingerprint(
             run=run,
             retry_key=_SIMULATION_BINDING_RETRY_KEY,
@@ -9129,7 +9476,7 @@ class SimulationLifecycleScheduler:
             run=run,
             retry_key=_SIMULATION_BINDING_RETRY_KEY,
             source_fingerprint=source_fingerprint,
-            as_of_time=self._scheduler_time(as_of_time),
+            as_of_time=control_time,
             lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
         )
         if decision is None:
@@ -9137,7 +9484,7 @@ class SimulationLifecycleScheduler:
                 run_id=run.run_id,
                 retry_key=_SIMULATION_BINDING_RETRY_KEY,
                 source_fingerprint=source_fingerprint,
-                as_of_time=self._scheduler_time(as_of_time),
+                as_of_time=control_time,
                 lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
             )
         if decision.should_execute:
@@ -9925,13 +10272,17 @@ class SimulationLifecycleScheduler:
         shared_selection_keys: set[tuple[Any, ...]] | None,
         as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
+        from .localsim_replay_recovery import RECOVERY_KEY, recovery_rebuild_receipt
+
+        recovery = recovery_rebuild_receipt(run)
         context = self._load_run_context(
             runtime_release=runtime_release,
             binding=binding,
             trade_date=trade_date,
             as_of_time=as_of_time,
         )
-        selection = self._run_selection_once_per_release(
+        selection = self._run_localsim_recovery_selection(
+            run=run, recovery=recovery,
             binding=binding,
             runtime_release=runtime_release,
             trade_date=trade_date,
@@ -9985,8 +10336,12 @@ class SimulationLifecycleScheduler:
                     "localsim_context_diagnostics": context.context_diagnostics,
                     "broker_called": False,
                     "submitted_intents": 0,
+                    **({"localsim_replay_recovery_applied_v1": {
+                        "recovery": recovery, "new_plan_id": build_result.execution_plan.plan_id,
+                        "new_evidence_id": build_result.selection_evidence.evidence_id,
+                    }} if recovery else {}),
                 },
-                payload_unset=("submit_failure",),
+                payload_unset=("submit_failure", RECOVERY_KEY) if recovery else ("submit_failure",),
             ),
         )
         if not submit:
@@ -11379,6 +11734,30 @@ class SimulationLifecycleScheduler:
             return False
         if not submit:
             return False
+        from .localsim_replay_recovery import recovery_rebuild_receipt
+
+        recovery = recovery_rebuild_receipt(run)
+        if recovery is not None:
+            if run.status != SimulationDailyRunStatus.FAILED_RETRYABLE or run.trade_date != trade_date:
+                raise InvalidStateTransitionError(
+                    "LocalSIM recovery cannot rebuild a completed or different day",
+                    context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID"},
+                )
+            self.repository.require_localsim_side_effect_free_rebuild(run)
+            return True
+        failure = run.run_payload_json.get("submit_failure")
+        if (
+            run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+            and run.run_payload_json.get("broker_order_handles")
+            and isinstance(failure, dict)
+            and failure.get("stage") == "LOCAL_SIM_MARK_VALIDATION_FAILED"
+            and (failure.get("context") or {}).get("reason_code") == "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"
+        ):
+            raise DataUnavailableError(
+                "LocalSim rolled-back suspended-mark batch requires formal recovery before retry",
+                context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_REQUIRED", "run_id": run.run_id,
+                         "trade_date": trade_date.isoformat()},
+            )
         if bool(run.run_payload_json.get("broker_called")):
             return False
         if run.status == SimulationDailyRunStatus.SUCCEEDED and isinstance(
@@ -11527,6 +11906,29 @@ class SimulationLifecycleScheduler:
             )
         return receipt
 
+    def _run_localsim_recovery_selection(self, *, run, recovery, **kwargs):
+        if recovery is not None:
+            evidence = self.repository.get_daily_selection_evidence(run.selection_evidence_id or "")
+            if evidence.artifact_hash != run.selection_artifact_hash:
+                raise InvalidStateTransitionError(
+                    "LocalSIM recovery evidence changed",
+                    context={"reason_code": "LOCALSIM_FROZEN_RAW_EVIDENCE_CONFLICT"},
+                )
+            if "localsim_signal_run" in evidence.evidence_payload_json:
+                from .localsim_selection_signal import LocalSimSelectionSignalService
+
+                with self._selection_inference_lock:
+                    if self._localsim_selection_service is None:
+                        self._localsim_selection_service = LocalSimSelectionSignalService(repository=self.repository)
+                    service = self._localsim_selection_service
+                return service.run_selection(
+                    package_ids=[kwargs["binding"].package_id], mode=SelectionMode.SINGLE_PACKAGE,
+                    trade_date=kwargs["trade_date"], data_source=kwargs["data_source"],
+                    runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(kwargs["runtime_release"]),
+                    runtime_release=kwargs["runtime_release"], created_by=kwargs["created_by"], recovery_evidence=evidence,
+                )
+        return self._run_selection_once_per_release(**kwargs)
+
     def _run_selection_once_per_release(
         self,
         *,
@@ -11670,8 +12072,9 @@ class SimulationLifecycleScheduler:
                     data_source=data_source,
                     runtime_config=runtime_config,
                 )
+                from .localsim_file_inputs import capture_file_input_worker
                 future = self._selection_inference_executor.submit(
-                    self._run_selection_sync,
+                    capture_file_input_worker(self._run_selection_sync, worker_id="selection"),
                     binding=binding,
                     runtime_release=runtime_release,
                     trade_date=trade_date,
@@ -12562,7 +12965,8 @@ class SimulationLifecycleScheduler:
         snapshot_time: datetime,
     ) -> tuple[dict[str, float], dict[str, LocalSimMarketMarkV1]]:
         source = str(context.market_data_source or "").strip()
-        if positions and source not in {MinuteDataSource.TDX_REALTIME.value, MinuteDataSource.DB_HISTORICAL.value}:
+        if positions and source not in {MinuteDataSource.TDX_REALTIME.value, MinuteDataSource.DB_HISTORICAL.value,
+                                        MinuteDataSource.DATASET_FILES.value}:
             raise DataUnavailableError(
                 "LocalSim market mark source is missing or unsupported",
                 context={
@@ -12686,6 +13090,18 @@ class SimulationLifecycleScheduler:
                 )
             tradability = context.pre_trade_tradability.get(symbol)
             suspended = pre_trade_tradability_is_suspended(tradability, symbol=symbol)
+            if suspended and isinstance(tradability, Mapping) and any(
+                key in tradability
+                for key in ("localsim_suspended_native_pre_close_v1", "localsim_suspension_reference_v1")
+            ):
+                SimulationLifecycleScheduler._validate_local_sim_historical_suspended_mark(
+                    record=record, tradability=tradability, trade_date=execution.run.trade_date,
+                    snapshot_time=snapshot_time, source=source,
+                    historical_terminalization=historical_terminalization,
+                )
+                accepted[symbol] = float(record.price)
+                records[symbol] = record
+                continue
             if suspended:
                 daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
                 raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
@@ -12772,6 +13188,48 @@ class SimulationLifecycleScheduler:
             accepted[symbol] = float(record.price)
             records[symbol] = record
         return accepted, records
+
+    @staticmethod
+    def _validate_local_sim_historical_suspended_mark(
+        *, record: LocalSimMarketMarkV1, tradability: Mapping[str, Any], trade_date: date,
+        snapshot_time: datetime, source: str, historical_terminalization: bool,
+    ) -> None:
+        from backend.services.simulation_execution.localsim.suspension import (
+            NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY, validate_suspended_native_pre_close,
+            validate_suspension_reference,
+        )
+
+        keys = [key for key in (NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY) if key in tradability]
+        if source not in {MinuteDataSource.DB_HISTORICAL.value, MinuteDataSource.DATASET_FILES.value} or len(keys) != 1:
+            raise DataUnavailableError(
+                "LocalSim historical suspended mark requires one frozen valuation authority",
+                context={"reason_code": "LOCALSIM_SUSPENDED_MARK_AUTHORITY_CONFLICT", "symbol": record.symbol},
+            )
+        if keys[0] == NATIVE_PRE_CLOSE_KEY:
+            reference = validate_suspended_native_pre_close(
+                tradability[NATIVE_PRE_CLOSE_KEY], symbol=record.symbol, trade_date=trade_date, price=record.price,
+            )
+            expected_provenance = LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+            expected_source = reference["price_source"] + ":frozen_historical_suspension"
+        else:
+            reference = validate_suspension_reference(
+                tradability[REFERENCE_KEY], symbol=record.symbol, trade_date=trade_date, price=record.price,
+            )
+            expected_provenance = LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE
+            expected_source = reference["reference_source"] + ":strategy_package_reference_price_availability_v1"
+        if (
+            record.suspension_reference != reference
+            or record.provenance != expected_provenance
+            or record.source != expected_source
+            or record.as_of_time.date() != trade_date
+            or (not historical_terminalization
+                and record.as_of_time.replace(tzinfo=None) != snapshot_time.replace(tzinfo=None))
+        ):
+            raise DataUnavailableError(
+                "LocalSim suspended mark does not match its frozen valuation evidence",
+                context={"reason_code": "LOCALSIM_SUSPENDED_MARK_EVIDENCE_CONFLICT", "symbol": record.symbol,
+                         "trade_date": trade_date.isoformat()},
+            )
 
     @staticmethod
     def _previous_local_sim_mark_records(run: SimulationDailyRun) -> dict[str, dict[str, Any]]:
@@ -15530,6 +15988,7 @@ class SimulationLifecycleScheduler:
             require_realtime_quote=require_realtime_quote,
             as_of_time=as_of_time,
         )
+        context.pre_trade_tradability.update(pre_trade_tradability)
         snapshot = SignalSnapshot(
             package_id=binding.package_id,
             manifest_sha256=evidence.manifest_sha256,
@@ -15647,6 +16106,12 @@ class SimulationLifecycleScheduler:
         if not symbols:
             return {}
         daily_loader = getattr(self.context_provider, "load_daily_trading_context", None)
+        if (binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                and context.market_data_source in {MinuteDataSource.DB_HISTORICAL.value, MinuteDataSource.DATASET_FILES.value}
+                and getattr(self.context_provider, "provider_mode", None) == "production"):
+            return self.context_provider.load_historical_pre_trade_tradability(
+                symbols=symbols, trade_date=trade_date, valuation_symbols=list(context.current_positions),
+            )
         frozen_daily_statuses: dict[str, dict[str, Any]] = {}
         planning_as_of = scheduler_time(as_of_time)
         requires_live_daily_context = trade_date == planning_as_of.date() and (

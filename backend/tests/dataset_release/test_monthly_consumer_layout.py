@@ -22,7 +22,7 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _fixture(tmp_path: Path):  # type: ignore[no-untyped-def]
+def _fixture(tmp_path: Path, *, native_writer: bool = False):  # type: ignore[no-untyped-def]
     root = tmp_path / "candidate"
     day = root / "daily_bin" / "qlib"
     minute = root / "minute_bin" / "qlib"
@@ -39,13 +39,26 @@ def _fixture(tmp_path: Path):  # type: ignore[no-untyped-def]
         (provider / "features" / "sz000001" / f"close.{frequency}.bin").write_bytes(
             b"bin"
         )
-    (day / "instruments" / "index.txt").write_text(
-        "".join(
-            f"{item.daily_code}\t{item.required_from.isoformat()}\t2024-07-05\n"
-            for item in DOMESTIC_INDEX_DEFINITIONS
-        ),
-        encoding="utf-8",
-    )
+    if native_writer:
+        # Real incremental writers retain predecessor metadata, but no index.txt.
+        (day / "instruments" / "stock_universe.txt").write_text(
+            "000001.SZ\t2024-07-01\t2024-07-04\n", encoding="utf-8"
+        )
+        (day / "instruments" / "benchmark.txt").write_text(
+            "000300.SH\t2018-08-01\t2024-07-04\n", encoding="utf-8"
+        )
+        for provider in (day, minute):
+            (provider / "meta_export.json").write_text(
+                '{"end":"2024-07-04","writer_metadata":true}\n', encoding="utf-8"
+            )
+    else:
+        (day / "instruments" / "index.txt").write_text(
+            "".join(
+                f"{item.daily_code}\t{item.required_from.isoformat()}\t2024-07-05\n"
+                for item in DOMESTIC_INDEX_DEFINITIONS
+            ),
+            encoding="utf-8",
+        )
     factor = root / "factor_bundle"
     factor.mkdir()
     for dataset in FACTOR_H5_DATASETS:
@@ -61,6 +74,9 @@ def _fixture(tmp_path: Path):  # type: ignore[no-untyped-def]
     (index / "index_daily.h5").write_bytes(b"index")
     pools = root / "stock_pools"
     pools.mkdir()
+    (pools / "benchmark.txt").write_text(
+        "000300.SH\t2024-07-01\t2024-07-05\n", encoding="utf-8"
+    )
     sidecars = {}
     filenames = {
         "stock_universe": "stock_universe.txt",
@@ -103,8 +119,21 @@ def _fixture(tmp_path: Path):  # type: ignore[no-untyped-def]
     return root, profile, st_pit, validation
 
 
-def test_publish_consumer_layout_creates_shared_hardlink_release(tmp_path: Path) -> None:
-    root, profile, st_pit, validation = _fixture(tmp_path)
+@pytest.mark.parametrize("native_writer", [False, True], ids=["legacy", "native"])
+def test_publish_consumer_layout_creates_shared_hardlink_release(tmp_path: Path, native_writer: bool) -> None:
+    root, profile, st_pit, validation = _fixture(tmp_path, native_writer=native_writer)
+    writer_files = {
+        path: (path.read_bytes(), path.stat().st_ino)
+        for provider in ("daily_bin", "minute_bin")
+        for path in (root / provider).rglob("*") if path.is_file()
+    }
+    pins = {}
+    for path in writer_files:
+        state = path.stat()
+        pins[path.relative_to(root).as_posix()] = {
+            "sha256": _sha(path), "size": state.st_size,
+            "signature": [state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns],
+        }
 
     result = publish_consumer_layout(
         root=root,
@@ -113,6 +142,7 @@ def test_publish_consumer_layout_creates_shared_hardlink_release(tmp_path: Path)
         release_id="qe_hmm_full_v2_20240705",
         st_pit_manifest=st_pit,
         validation_authority=validation,
+        verified_output_files=pins,
     )
 
     day_close = root / "components/daily_bin_candidate/features/sz000001/close.day.bin"
@@ -126,11 +156,66 @@ def test_publish_consumer_layout_creates_shared_hardlink_release(tmp_path: Path)
     )
     assert (
         root / "components/daily_bin_candidate/instruments/benchmark.txt"
-    ).read_text(encoding="utf-8") == "000300.SH\t2018-08-01\t2024-07-05\n"
+    ).read_text(encoding="utf-8") == "000300.SH\t2024-07-01\t2024-07-05\n"
     coverage = json.loads(result.coverage_receipt_path.read_bytes())
     assert set(coverage["pools"]) == set(st_pit["index_membership_sidecars"])
     assert all(value["gaps"] == [] for value in coverage["pools"].values())
     assert all(path.is_file() and not path.is_symlink() for path in result.required_files)
+    assert os.path.samefile(
+        root / "components/daily_bin_candidate/instruments/stock_universe.txt",
+        root / st_pit["index_membership_sidecars"]["stock_universe"]["path"],
+    )
+    for provider in ("daily_bin_candidate", "minute_bin_candidate"):
+        metadata = json.loads((root / "components" / provider / "meta_export.json").read_bytes())
+        assert metadata["end"] == "2024-07-05"
+        assert "writer_metadata" not in metadata
+    assert {path: (path.read_bytes(), path.stat().st_ino) for path in writer_files} == writer_files
+
+
+@pytest.mark.parametrize("payload", [
+    None,
+    "000300.SH\t2024-07-01\t2024-07-04\n",
+    "000300.SH\t2018-08-01\t2024-07-05\n",
+    "000300.SH\t2024-07-01\t2024-07-05\n000001.SH\t2024-07-01\t2024-07-05\n",
+    "",
+])
+def test_consumer_layout_rejects_invalid_frozen_benchmark(tmp_path, payload):
+    root, profile, st_pit, validation = _fixture(tmp_path)
+    source = root / "stock_pools/benchmark.txt"
+    if payload is None:
+        source.unlink()  # A valid legacy index.txt must not mask a missing authority.
+    else:
+        source.write_text(payload, encoding="utf-8")
+    with pytest.raises(MonthlyConsumerLayoutError, match="benchmark authority"):
+        publish_consumer_layout(
+            root=root, profile=profile, cutoff=date(2024, 7, 5), release_id="qe_hmm_full_v2_20240705",
+            st_pit_manifest=st_pit, validation_authority=validation,
+        )
+
+
+def test_native_consumer_layout_rejects_changed_frozen_stock_pool(tmp_path):
+    root, profile, st_pit, validation = _fixture(tmp_path, native_writer=True)
+    (root / "stock_pools/stock_universe.txt").write_text(
+        "000002.SZ\t2024-07-01\t2024-07-05\n", encoding="utf-8"
+    )
+    with pytest.raises(MonthlyConsumerLayoutError, match="stock-universe bytes differ"):
+        publish_consumer_layout(
+            root=root, profile=profile, cutoff=date(2024, 7, 5), release_id="qe_hmm_full_v2_20240705",
+            st_pit_manifest=st_pit, validation_authority=validation,
+        )
+
+
+def test_consumer_layout_does_not_skip_link_checks_on_owned_metadata(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_consumer_layout as module
+    root, profile, st_pit, validation = _fixture(tmp_path, native_writer=True)
+    unsafe = root / "daily_bin/qlib/meta_export.json"
+    original = module._is_link
+    monkeypatch.setattr(module, "_is_link", lambda path: path == unsafe or original(path))
+    with pytest.raises(MonthlyConsumerLayoutError, match="link"):
+        publish_consumer_layout(
+            root=root, profile=profile, cutoff=date(2024, 7, 5), release_id="qe_hmm_full_v2_20240705",
+            st_pit_manifest=st_pit, validation_authority=validation,
+        )
 
 
 def test_consumer_layout_reuses_actual_writer_hashes(tmp_path, monkeypatch):

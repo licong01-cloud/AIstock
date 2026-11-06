@@ -38,6 +38,42 @@ def test_explicit_db_configuration_has_no_legacy_defaults(monkeypatch: pytest.Mo
     assert "TDX_DB_HOST" in error.value.context["missing_configuration"]
 
 
+def test_control_plane_pool_reuses_connections_and_resets_readonly(monkeypatch):
+    from backend.services.advisory_historical_range import composition
+    events = []
+
+    class Connection:
+        closed = False
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, *_):
+            events.append("rollback" if exc_type else "commit")
+        def rollback(self):
+            events.append("reset_transaction")
+        def set_session(self, **kwargs):
+            events.append(kwargs)
+
+    class Pool:
+        def __init__(self, *_args, **_kwargs):
+            self.connection = Connection()
+            events.append("create_pool")
+        def getconn(self):
+            return self.connection
+        def putconn(self, conn, *, close):
+            assert conn is self.connection and not close
+
+    monkeypatch.setattr(composition, "ThreadedConnectionPool", Pool)
+    pool = composition._HistoricalRangeConnectionPool(dsn="test-dsn", capacity=1)
+    with pool.connection() as first:
+        pass
+    with pytest.raises(ValueError, match="business error"), pool.connection() as second:
+        assert second is first
+        raise ValueError("business error")
+    assert events.count("create_pool") == 1
+    assert "commit" in events and "rollback" in events
+    assert events[-1] == {"readonly": False, "autocommit": False, "isolation_level": "READ COMMITTED"}
+
+
 def test_mutation_composition_fails_before_any_business_write(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {
         "TDX_DB_HOST": "127.0.0.1",

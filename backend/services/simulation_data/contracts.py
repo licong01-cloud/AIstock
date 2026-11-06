@@ -77,6 +77,7 @@ class MinuteDataSource(str, Enum):
 
     TDX_REALTIME = "TDX_REALTIME"
     DB_HISTORICAL = "DB_HISTORICAL"
+    DATASET_FILES = "DATASET_FILES"
     MINIQMT_REALTIME = "MINIQMT_REALTIME"
 
 
@@ -84,7 +85,7 @@ class MinuteDataSource(str, Enum):
 # (Strategy Engine design 2026-05-08 鎼?.6.4, R-Q9 D3). Cross-pairing is a
 # fail-fast invariant; do NOT add a fallback path.
 ALLOWED_MARKET_SOURCES: dict[str, set[MinuteDataSource]] = {
-    "local_sim": {MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL},
+    "local_sim": {MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES},
     "minqmt_sim": {MinuteDataSource.MINIQMT_REALTIME},
     "minqmt_live": {MinuteDataSource.MINIQMT_REALTIME},
 }
@@ -615,8 +616,8 @@ class HistoricalMinuteBatch(BaseModel):
 
     @model_validator(mode="after")
     def _completed_day_boundary(self) -> "HistoricalMinuteBatch":
-        if self.source is not MinuteDataSource.DB_HISTORICAL:
-            raise ValueError("HistoricalMinuteBatch requires DB_HISTORICAL")
+        if self.source not in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES}:
+            raise ValueError("HistoricalMinuteBatch requires an explicit historical source")
         if self.trade_date >= self.current_trading_date:
             raise ValueError("historical minute source is forbidden for the current or future trading day")
         timestamps = [bar.bar_time for bar in self.bars]

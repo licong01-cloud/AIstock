@@ -36,7 +36,14 @@ export default function RiskL2Panel({ initialRunId = "" }: { initialRunId?: stri
     setLoading(true);
     getRiskL2Overview(runId).then((value) => {
       if (!current) return;
-      if (value.run_id !== runId || value.dates.length !== 424 || !value.dates.includes(value.trade_date)) {
+      const historical = value.validation_basis === "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT";
+      const inferred = value.validation_basis === "CAUSAL_DATE_INFERENCE_NO_OUTCOMES";
+      if (value.run_id !== runId || (!historical && !inferred)
+        || (historical && (value.dates.length !== 424 || !value.compact_summary.overall || !value.compact_summary.hac))
+        || (inferred && (value.dates.length === 0 || value.effect_status !== "NOT_EVALUATED_FOR_INFERENCE_DATES"
+          || value.dates.some((day) => !/^\d{4}-\d{2}-\d{2}$/.test(day))
+          || value.compact_summary.model_identity?.model_sha256 !== value.model_hash || !value.input_identity))
+        || !value.dates.includes(value.trade_date) || new Set(value.dates).size !== value.dates.length) {
         throw new Error("hmm_risk_risk_l2_readback_failed：版本或历史日期身份不一致");
       }
       setOverview(value); setTradeDate(value.trade_date);
@@ -56,6 +63,14 @@ export default function RiskL2Panel({ initialRunId = "" }: { initialRunId?: stri
       if (value.run_id !== runId || value.trade_date !== tradeDate || value.model_hash !== overview.model_hash
         || value.input_hash !== overview.input_hash || value.rows.length !== 131
         || value.mapping_hash !== overview.mapping_hash || value.as_of_date >= tradeDate
+        || value.validation_basis !== overview.validation_basis || value.acceptance_hash !== overview.acceptance_hash
+        || (value.validation_basis === "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT"
+          && (!value.compact_summary.overall || !value.compact_summary.hac))
+        || (value.validation_basis === "CAUSAL_DATE_INFERENCE_NO_OUTCOMES"
+          && (value.effect_status !== "NOT_EVALUATED_FOR_INFERENCE_DATES"
+            || value.rows.some((r) => r.outcome_status !== "OUTCOME_NOT_EVALUATED"
+              || r.event !== null || r.realized_drawdown !== null || r.realized_return !== null)
+            || value.compact_summary.model_identity?.model_sha256 !== value.model_hash || !value.input_identity))
         || value.forward_confirmation !== "NOT_STARTED" || value.advisory_status !== "NOT_AVAILABLE"
         || new Set(value.rows.map((r) => r.sector_code)).size !== 131
         || value.rows.some((r) => r.run_id !== runId || r.trade_date !== tradeDate || r.as_of_date !== value.as_of_date)
@@ -88,7 +103,7 @@ export default function RiskL2Panel({ initialRunId = "" }: { initialRunId?: stri
 
   return (
     <section aria-label="申万二级行业风险研究" className="space-y-4 rounded-lg border border-border bg-card p-4 text-card-foreground">
-      <h1 className="text-xl font-semibold">L2 历史风险研究</h1>
+      <h1 className="text-xl font-semibold">L2 风险研究与指定日期推断</h1>
       <p>研究输出，未完成前瞻确认；不是今日预警、买卖建议或已验证的收益增益。</p>
       <p>目标：未来 10 交易日绝对路径回撤 ≤ -8%；固定报警概率阈值 0.20。分类模型输出未经独立概率校准，低概率不代表安全。</p>
       <form onSubmit={(e) => { e.preventDefault(); setRunId(inputRun.trim()); }} className="flex flex-wrap gap-2">
@@ -110,13 +125,19 @@ export default function RiskL2Panel({ initialRunId = "" }: { initialRunId?: stri
         </dl>
         <p>完整目录 131；可用 {detail.day_summary.available_count}；不可用 {detail.day_summary.unavailable_count}；未知报警 {detail.day_summary.unknown_warning_count}。</p>
         <p data-testid="warning-summary">全部报警 {detail.day_summary.warning_count}；当前显示报警 {shownWarnings}；隐藏报警 {detail.day_summary.warning_count - shownWarnings}。</p>
-        <details open>
+        {detail.validation_basis === "CAUSAL_DATE_INFERENCE_NO_OUTCOMES" ? <details open>
+          <summary>指定日期风险推断：本次未评价效果</summary>
+          <p>本次未读取标签或未来收益，未应用交易策略；不能由历史模型效果推导本日期有效，更不代表实时行情已接通。</p>
+          <p className="break-all">模型训练输入：{detail.compact_summary.model_identity!.training_input_sha256}；训练 PIT：{detail.compact_summary.model_identity!.training_pit_bundle_sha256}</p>
+          <p className="break-all">本次数据：{detail.input_identity!.release_identity.frozen_release_generation}；cutoff={detail.input_identity!.release_identity.cutoff}；manifest={detail.input_identity!.release_identity.dataset_manifest_sha256}</p>
+          <p>本次可用比例={detail.compact_summary.prediction_coverage}；完整131目录；事后收益/事件均未评价，不填0或沿用原标签。</p>
+        </details> : <details open>
           <summary>历史 development 效果与误报/漏报代价（不是交易 PnL）</summary>
-          <p>precision={detail.compact_summary.overall.precision}；base rate={detail.compact_summary.overall.base_rate}；lift={detail.compact_summary.overall.precision_lift}；recall={detail.compact_summary.overall.recall}；合法 M={detail.compact_summary.overall.M}；Brier={detail.compact_summary.overall.brier}</p>
-          <p>已知报警 FP={detail.compact_summary.overall.FP} / {detail.compact_summary.overall.known_warnings}；漏报 FN={detail.compact_summary.overall.FN}；错误报警未来收益均值={detail.compact_summary.overall.false_alert_return_mean}；漏报回撤均值={detail.compact_summary.overall.missed_drawdown_mean}。不等于可避免亏损。</p>
+          <p>precision={detail.compact_summary.overall!.precision}；base rate={detail.compact_summary.overall!.base_rate}；lift={detail.compact_summary.overall!.precision_lift}；recall={detail.compact_summary.overall!.recall}；合法 M={detail.compact_summary.overall!.M}；Brier={detail.compact_summary.overall!.brier}</p>
+          <p>已知报警 FP={detail.compact_summary.overall!.FP} / {detail.compact_summary.overall!.known_warnings}；漏报 FN={detail.compact_summary.overall!.FN}；错误报警未来收益均值={detail.compact_summary.overall!.false_alert_return_mean}；漏报回撤均值={detail.compact_summary.overall!.missed_drawdown_mean}。不等于可避免亏损。</p>
           <p>总体 coverage={detail.compact_summary.prediction_coverage}；成熟日期有效占比={detail.compact_summary.valid_mature_day_share}；标签成熟/合法 NA：{Object.entries(detail.compact_summary.outcome_status_counts).map(([k, n]) => `${k}=${n}`).join("；")}</p>
-          <div aria-label="原HAC区间及原因"><HACSummary values={detail.compact_summary.hac} /></div>
-        </details>
+          <div aria-label="原HAC区间及原因"><HACSummary values={detail.compact_summary.hac!} /></div>
+        </details>}
         <div className="flex flex-wrap gap-3">
           <label>最高概率数量 <input aria-label="最高概率数量" type="number" min="0" max="30" value={top} onChange={(e) => setTop(e.target.value)} className="w-20 rounded border border-input bg-background p-1" /></label>
           <label>最低概率数量 <input aria-label="最低概率数量" type="number" min="0" max="30" value={bottom} onChange={(e) => setBottom(e.target.value)} className="w-20 rounded border border-input bg-background p-1" /></label>

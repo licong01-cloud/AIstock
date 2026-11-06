@@ -117,6 +117,11 @@ def validate_input(bundle: Mapping[str, Any]) -> dict[str, Any]:
     source = bundle.get("source")
     if not isinstance(source, Mapping):
         raise fail("source is absent")
+    return validate_training_source(source)
+
+
+def validate_training_source(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Shared fixed-window source authority; no estimator/schema impersonation."""
     validated = baseline.validate_input_bundle(source)
     schedule(list(validated["calendar"]))
     if source.get("outcome_bounds") != {"start": TRAIN_START.isoformat(), "end": TRAIN_OUTCOME_END.isoformat()}:
@@ -184,12 +189,25 @@ def training_matrix(
     if type(raw_return_target) is not bool:
         raise fail("target variant must be an explicit boolean")
     parsed = validate_input(bundle)
+    return training_matrix_for_source(bundle["source"], parsed, rows, raw_return_target=raw_return_target)
+
+
+def training_matrix_for_source(
+    source: Mapping[str, Any],
+    parsed: Mapping[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    raw_return_target: bool,
+) -> dict[str, Any]:
+    """Original date-equal training algebra for an already validated source."""
+    if type(raw_return_target) is not bool:
+        raise fail("target variant must be an explicit boolean")
     train, _ = schedule(list(parsed["calendar"]))
     train_rows = [row for row in rows if date.fromisoformat(row["trade_date"]) in set(train)]
     evaluated = baseline.evaluate_predictions_for_calendar(
         calendar=parsed["calendar"],
-        sector_returns=bundle["source"]["sector_returns"],
-        benchmark_close=bundle["source"]["benchmark_close"],
+        sector_returns=source["sector_returns"],
+        benchmark_close=source["benchmark_close"],
         predictions=train_rows,
         decision_start=TRAIN_START,
         decision_end=TRAIN_END,
@@ -391,17 +409,24 @@ def run_process(bundle: Mapping[str, Any], *, process_index: int, variant: Any =
 
 
 def read_evaluation_facts(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    parsed = validate_input(bundle)
+    return read_evaluation_for_source(bundle["source"], parsed, input_hash=bundle["input_hash"], version=VERSION)
+
+
+def read_evaluation_for_source(
+    source: Mapping[str, Any], parsed: Mapping[str, Any], *, input_hash: str, version: str
+) -> dict[str, Any]:
+    """Bounded label reader, invoked only after a caller's child closure."""
     from backend.services.hmm_risk.rotation_l2_input import _require_file, _sector_returns, bounded_benchmark_close
 
-    parsed = validate_input(bundle)
-    binding = bundle["source"]["evaluation_source_binding"]
+    binding = source["evaluation_source_binding"]
     root = Path(binding["root"])
     if not root.is_absolute():
         raise fail("evaluation root is not absolute")
     files = {name: _require_file(root, binding[name]["path"], binding[name]["sha256"]) for name in ("sector", "index")}
     facts = {
-        "schema_version": VERSION + "_outcomes",
-        "input_hash": bundle["input_hash"],
+        "schema_version": version + "_outcomes",
+        "input_hash": input_hash,
         "sector_returns": _sector_returns(
             files["sector"],
             id_to_code={int(k): v for k, v in binding["id_to_code"].items()},

@@ -154,7 +154,8 @@ def _rotation_source(request):
     return original, references, root, manifest, files, code_map, quote, calendar, stamps
 
 
-def _risk_source(request):
+def _risk_model_source(request):
+    """Validate the original model carrier, without reading its numeric release."""
     risk = history.risk
     source_path = Path(request["source_request_path"])
     require(
@@ -197,12 +198,19 @@ def _risk_source(request):
         == source["frozen"]["industry_authority"]["identity"]["bundle_hash"],
         "risk PIT identity differs",
     )
+    require(_stamp(source_path) == source_stamp, "risk source request changed while read")
+    return source, features, sealed["parameters"]
+
+
+def _risk_source(request):
+    before = _stamp(request["source_request_path"])
+    source, features, parameters = _risk_model_source(request)
     root = Path(source["source"]["candidate_root"])
     calendar_path = reader._require_file(root, "components/daily_bin_candidate/calendars/day.txt", history.CALENDAR_SHA)
     calendar = [d.isoformat() for d in reader._parse_calendar(calendar_path) if d <= history.END]
     history.schedule(calendar)
-    require(_stamp(source_path) == source_stamp, "risk source request changed while read")
-    return source, features, sealed["parameters"], calendar
+    require(_stamp(request["source_request_path"]) == before, "risk source request changed while read")
+    return source, features, parameters, calendar
 
 
 def prepare(request, source_commit):

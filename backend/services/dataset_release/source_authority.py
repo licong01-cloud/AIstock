@@ -52,6 +52,7 @@ from .source_manifest import (
     SourceManifest,
 )
 from .monthly_snapshot import SNAPSHOT_ID_RE
+from .monthly_repair_journal import TERMINAL_JOB_STATUSES
 from .source_pool import ReadOnlySourcePool
 from .source_rows_codec import (
     SOURCE_ROWS_CODEC,
@@ -326,6 +327,29 @@ class SourceQuerySpec:
                 )
         if self.code_column is not None:
             clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
+        if self.query_id == "kline_daily_raw":
+            # An issuance/reference quote is not an exchange trading bar. Keep
+            # raw storage intact and exclude only a flat, zero-turnover record
+            # proven earlier than the issuer's listing. Prior observed quotes
+            # or factor facts protect historical/relisting/alias lifecycles.
+            # This is not an IPO-age or PIT buy-eligibility filter.
+            clauses.append("""NOT COALESCE((
+                source_row.volume_hand=0 AND source_row.amount_li=0
+                AND source_row.open_li>0
+                AND source_row.open_li=source_row.high_li
+                AND source_row.high_li=source_row.low_li
+                AND source_row.low_li=source_row.close_li
+                AND EXISTS (SELECT 1 FROM market.stock_basic AS stock
+                    WHERE stock.ts_code=source_row.ts_code
+                      AND stock.list_date > source_row.trade_date)
+                AND NOT EXISTS (SELECT 1 FROM market.kline_daily_raw AS prior_quote
+                    WHERE prior_quote.ts_code=source_row.ts_code
+                      AND prior_quote.trade_date < source_row.trade_date
+                      AND (prior_quote.volume_hand>0 OR prior_quote.amount_li>0))
+                AND NOT EXISTS (SELECT 1 FROM market.adj_factor AS prior_factor
+                    WHERE prior_factor.ts_code=source_row.ts_code
+                      AND prior_factor.trade_date <= source_row.trade_date)
+            ), FALSE)""")
         if self.code_policy == "profile_index_codes":
             clauses.append(
                 f"{self.date_expression} >= (%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
@@ -499,6 +523,7 @@ def _query(
         query_version=(
             f"{query_id}_canonical_row_code_major_v3"
             + (":share_precision_v1" if query_id in {"kline_daily_raw", "kline_minute_raw"} else "")
+            + (":prelisting_reference_v1" if query_id == "kline_daily_raw" else "")
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
             + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
@@ -997,7 +1022,13 @@ ORDER BY ts_code,eligible_start,eligible_end,entry_reason,exit_reason,semantic_p
 _REFRESH_AUDIT_SQL = """
 SELECT dataset,trade_date,data_source,job_id,status,row_count,refreshed_at,
        error_message,data_max_at,written_rows,expected_rows,coverage_ratio,
-       quality_status,failure_category,metadata::text AS metadata_json
+       quality_status,failure_category,metadata::text AS metadata_json,
+       (to_jsonb(source_row)->>'data_revision')::bigint AS data_revision,
+       (to_jsonb(source_row)->>'validated_revision')::bigint AS validated_revision,
+       to_jsonb(source_row)->>'validation_status' AS validation_status,
+       to_jsonb(source_row)->>'validation_id' AS validation_id,
+       to_jsonb(source_row)->>'scope_version' AS scope_version,
+       to_jsonb(source_row)->>'rule_version' AS rule_version
 FROM market.dataset_date_refresh_audit AS source_row
 WHERE dataset = ANY(%(datasets)s)
   AND trade_date >= %(start)s AND trade_date <= %(end)s
@@ -1046,7 +1077,7 @@ WITH normalized_ingestion_job AS (
            attempt.attempt_id,attempt.target_id,attempt.attempt_no,
            attempt.status,attempt.created_at,attempt.started_at,
            attempt.finished_at,attempt.error_message,attempt.context_json,
-           target.dataset,target.data_source
+           target.dataset,target.data_source,attempt.job_id
     FROM market.data_sync_attempts AS attempt
     JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
     WHERE target.dataset = ANY(%(datasets)s)
@@ -1055,11 +1086,12 @@ WITH normalized_ingestion_job AS (
              attempt.created_at DESC,attempt.attempt_id DESC
 )
 SELECT ledger_kind,ledger_identity,status,created_at,started_at,finished_at,
-       opaque_payload
+       opaque_payload,owner_status,owner_finished_at
 FROM (
     SELECT 'ingestion_jobs'::text AS ledger_kind,
            job_id::text AS ledger_identity,status::text,
-           created_at,started_at,finished_at,summary::text AS opaque_payload
+           created_at,started_at,finished_at,summary::text AS opaque_payload,
+           NULL::text AS owner_status,NULL::timestamptz AS owner_finished_at
     FROM relevant_ingestion_job
     UNION ALL
     SELECT 'data_sync_attempts'::text AS ledger_kind,
@@ -1071,8 +1103,9 @@ FROM (
                'data_source',attempt.data_source,
                'error_message',attempt.error_message,
                'context_json',attempt.context_json
-           )::text AS opaque_payload
+           )::text AS opaque_payload,owner.status AS owner_status,owner.finished_at AS owner_finished_at
     FROM latest_data_sync_attempt AS attempt
+    LEFT JOIN market.ingestion_jobs AS owner ON owner.job_id::text=attempt.job_id
     WHERE (attempt.created_at >= %(start)s OR attempt.status='started')
 ) AS writer_ledger
 ORDER BY ledger_kind,ledger_identity
@@ -1121,6 +1154,8 @@ _WRITER_LEDGER_REQUIRED = (
     "started_at",
     "finished_at",
     "opaque_payload",
+    "owner_status",
+    "owner_finished_at",
 )
 
 
@@ -1232,6 +1267,7 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
                         "finished_at",
                         "error_message",
                         "context_json",
+                        "job_id",
                     ),
                 ),
                 self._describe_table(
@@ -1587,6 +1623,7 @@ class FrozenSourceAuthoritySnapshot:
     artifact_ready_provenance_root: str | None = None
     provider_receipt_refs: tuple[CASRef, ...] = ()
     artifact_ready_derived_source_receipt_refs: tuple[CASRef, ...] = ()
+    suspension_day_authority_sha256: str | None = None
 
     @property
     def source_content_root(self) -> str:
@@ -1676,6 +1713,7 @@ class SourceRefreshAuditLedger:
     trading_dates: tuple[date, ...]
     eligible_sources: Mapping[str, tuple[str, ...]]
     eligible_quality_statuses: Mapping[str, tuple[str, ...]]
+    consumer_partition_projections: Mapping[tuple[str, date], Mapping[str, Any]] | None = None
 
     def as_receipt(self, *, profile: str, cutoff: date) -> dict[str, Any]:
         return {
@@ -1698,6 +1736,14 @@ class SourceRefreshAuditLedger:
                 )
             ],
             "safety": _zero_safety(),
+            "integrity_revision_pins": [
+                {"dataset": dataset, "fact_date": str(day), **dict(row["integrity_revision"])}
+                for (dataset, day), audit_rows in sorted(self.rows.items())
+                for row in audit_rows if row.get("integrity_revision") is not None
+            ],
+            **({"consumer_partition_projections": [dict(value) for _, value in
+                sorted(self.consumer_partition_projections.items())]}
+               if self.consumer_partition_projections else {}),
         }
 
     def partition_digest(self, dataset: str, start: date, end: date) -> str:
@@ -1705,7 +1751,28 @@ class SourceRefreshAuditLedger:
         observed = {
             day: audit_rows for (name, day), audit_rows in self.rows.items() if name == dataset and start <= day <= end
         }
-        missing = [value.isoformat() for value in expected_dates if value not in observed]
+        projections = {}
+        for value in expected_dates:
+            proof = (self.consumer_partition_projections or {}).get((dataset, value))
+            if not proof:
+                continue
+            audit_sha = digest_named_fields("monthly_partition_audits_v1", {"rows": list(observed.get(value, ()))})
+            reasons = {"trading_calendar": "official_calendar_same_snapshot_complete",
+                       "index_daily": "fixed_release_indices_same_snapshot_complete",
+                       "bak_basic": "verified_source_gaps_outside_release_consumer_scope",
+                       "cyq_perf": "verified_source_gaps_outside_release_consumer_scope"}
+            if (proof.get("schema_version") != "aistock_monthly_required_fact_projection_v1"
+                    or proof.get("dataset") != dataset or proof.get("trade_date") != value.isoformat()
+                    or proof.get("audit_rows_sha256") != audit_sha
+                    or dataset not in reasons or proof.get("reason") != reasons[dataset]
+                    or proof.get("global_source_state_preserved") is not True
+                    or any(re.fullmatch(r"[0-9a-f]{64}", str(proof.get(key, ""))) is None
+                           for key in ("required_scope_sha256", "evidence_sha256"))
+                    or type(proof.get("unexplained_gap_count")) is not int
+                    or proof["unexplained_gap_count"] != 0):
+                raise SourceAuditIncomplete("monthly required-fact projection differs from its source partition")
+            projections[value] = proof
+        missing = [value.isoformat() for value in expected_dates if value not in observed and value not in projections]
         if not expected_dates or missing:
             raise SourceAuditIncomplete(
                 "dataset/date refresh audit coverage is incomplete",
@@ -1721,7 +1788,19 @@ class SourceRefreshAuditLedger:
         eligible_quality = set(self.eligible_quality_statuses.get(dataset, ()))
         unusable = []
         for value in expected_dates:
+            if value in projections:
+                continue  # Same-snapshot consumer proof; global verdict remains recorded unchanged.
             audit_rows = observed[value]
+            canonical = [r for r in audit_rows if r.get("data_source") == "canonical_db"]
+            if canonical:
+                from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+                from backend.services.data_integrity.contracts import effective_partition
+                row = canonical[0]
+                effective = effective_partition(row.get("integrity_revision"),
+                    scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
+                if not effective["source_complete"]:
+                    unusable.append(value.isoformat())
+                continue  # canonical physical verdict is the sole partition authority
             if not any(
                 str(row.get("data_source")) in eligible_sources
                 and str(row.get("status", "")).lower() == "success"
@@ -1759,8 +1838,9 @@ class SourceRefreshAuditLedger:
                                 "quality_status": str(row.get("quality_status", "")).lower(),
                                 "audit_payload_sha256": str(row["audit_payload_sha256"]),
                             }
-                            for row in observed[value]
+                            for row in observed.get(value, ())
                         ],
+                        **({"consumer_projection": projections[value]} if value in projections else {}),
                     }
                     for value in expected_dates
                 ],
@@ -1780,6 +1860,7 @@ class MonthlySourceAuthority:
         mvcc_reuse_capability: bool = MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED,
         sector_source_policy: str = P3A_SECTOR_SOURCE_POLICY,
         monthly_sector_mapping: Mapping[str, Any] | None = None,
+        fact_stock_codes: tuple[str, ...] = (),
     ) -> None:
         if sector_source_policy not in {P3A_SECTOR_SOURCE_POLICY, MONTHLY_SECTOR_SOURCE_POLICY}:
             raise ValueError("unsupported sector source policy")
@@ -1789,6 +1870,14 @@ class MonthlySourceAuthority:
         self._mvcc_reuse_capability = bool(mvcc_reuse_capability)
         self._sector_source_policy = sector_source_policy
         self._monthly_sector_mapping = monthly_sector_mapping
+        if (fact_stock_codes != tuple(sorted(set(fact_stock_codes)))
+                or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in fact_stock_codes)):
+            raise SourceProviderContractError("source fact population must contain sorted unique SH/SZ codes")
+        self._fact_stock_codes = fact_stock_codes
+
+    def _stock_source_codes(self, pit_snapshot: FrozenPitSnapshot) -> tuple[str, ...]:
+        # PIT is a consumption policy, not a filter on authoritative facts.
+        return tuple(sorted(set(self._fact_stock_codes).union(span.ts_code for span in pit_snapshot.spans)))
 
     @property
     def uses_p3a_sector_source(self) -> bool:
@@ -2323,6 +2412,8 @@ class MonthlySourceAuthority:
             sector_receipt_ref,
             core_index_membership_receipt_ref,
         )
+        from backend.data_service.suspension_day_authority import load_authority
+        suspension_day_authority = load_authority()
         manifest_payload = {
             "schema_version": SOURCE_MANIFEST_ARTIFACT_SCHEMA,
             "authority_policy_version": SOURCE_AUTHORITY_POLICY_VERSION,
@@ -2332,6 +2423,7 @@ class MonthlySourceAuthority:
             "source_content_root": manifest.source_content_root,
             "partitions": [item.as_build_input() for item in sorted(sealed, key=lambda value: value.spec.identity)],
             "safety": _zero_safety(),
+            "suspension_day_authority": suspension_day_authority,
             **({"monthly_sector_mapping": dict(self._monthly_sector_mapping)}
                if self._monthly_sector_mapping is not None else {}),
         }
@@ -2452,6 +2544,7 @@ class MonthlySourceAuthority:
             snapshot_tokens=tokens,
             observation_provenance_root=observation_provenance_root,
             source_cas_usage=budget.as_dict(),
+            suspension_day_authority_sha256=sha256_hex(canonical_json_bytes(suspension_day_authority)),
         )
 
     def _capture_control_snapshot(
@@ -2574,7 +2667,18 @@ class MonthlySourceAuthority:
                 "opaque_payload_sha256": _opaque_audit_digest(row.get("opaque_payload")),
             }
             rows.append(safe)
-            if status in {"queued", "pending", "running", "started"}:
+            # A late/unclosed callback is not a live writer once its exact
+            # owning execution is terminal. This proves liveness only: preserve
+            # the original attempt status and all negative completeness facts.
+            owner_terminal = False
+            if kind == "data_sync_attempts" and status == "started":
+                safe["owner_status"] = row.get("owner_status")
+                safe["owner_finished_at"] = _audit_timestamp_text(
+                    row.get("owner_finished_at"), field="writer.owner_finished_at", optional=True,
+                )
+                owner_terminal = (safe["owner_status"] in TERMINAL_JOB_STATUSES
+                                  and safe["owner_finished_at"] is not None)
+            if status in {"queued", "pending", "running", "started"} and not owner_terminal:
                 active.append(safe)
             if row_number % read_chunk_rows == 0:
                 checkpoint()
@@ -2921,10 +3025,10 @@ class MonthlySourceAuthority:
                 {item.daily_code: item.required_from.isoformat() for item in self.profile.indices}
             ).decode("utf-8")
         elif query.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}:
-            pit_codes = tuple(sorted({span.ts_code for span in pit_snapshot.spans}))
-            codes = list(selected_stock_codes or pit_codes)
-            if not set(codes).issubset(pit_codes):
-                raise SourceProviderContractError("source sample instruments escape the frozen PIT snapshot")
+            source_codes = self._stock_source_codes(pit_snapshot)
+            codes = list(selected_stock_codes or source_codes)
+            if not set(codes).issubset(source_codes):
+                raise SourceProviderContractError("source sample instruments escape the frozen fact population")
             if not codes:
                 raise SourceRequiredDatasetEmpty("frozen PIT has no stock instruments")
         if query.start_policy == "timeless":
@@ -3779,6 +3883,11 @@ def load_source_stage_receipt(
     ):
         raise SourceAuditIncomplete("source-stage referenced receipt graph is inconsistent")
     content_rows = manifest_payload.get("partitions")
+    from backend.data_service.suspension_day_authority import load_authority
+    suspension_payload = manifest_payload.get("suspension_day_authority")
+    suspension_sha = None
+    if suspension_payload is not None:
+        suspension_sha = sha256_hex(canonical_json_bytes(load_authority(suspension_payload)))
     reuse_rows = reuse_payload.get("partitions")
     if not isinstance(content_rows, list) or not isinstance(reuse_rows, list):
         raise SourceAuditIncomplete("source-stage partition manifests are invalid")
@@ -4087,6 +4196,7 @@ def load_source_stage_receipt(
         artifact_ready_provenance_root=artifact_provenance_root,
         provider_receipt_refs=provider_refs,
         artifact_ready_derived_source_receipt_refs=artifact_derived_refs,
+        suspension_day_authority_sha256=suspension_sha,
     )
 
 
@@ -5083,6 +5193,15 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
         "metadata_sha256": _opaque_audit_digest(metadata),
         "audit_payload_sha256": sha256_hex(canonical_json_bytes(raw_identity)),
         **({"provider_publication": dict(proof)} if proof is not None else {}),
+        **({"integrity_revision": {key: row.get(key) for key in
+            ("data_revision", "validated_revision", "validation_status", "validation_id", "scope_version", "rule_version")}}
+            if row.get("data_source") == "canonical_db" and row.get("data_revision") is not None else {}),
+        **({"source_validation": {
+            "counts": structured_metadata["validation"].get("counts"),
+            "gaps": structured_metadata["validation"].get("gaps"),
+            "checks": {"coverage_basis": (structured_metadata["validation"].get("checks") or {}).get("coverage_basis")},
+        }} if row.get("data_source") == "canonical_db" and isinstance(structured_metadata, Mapping)
+            and isinstance(structured_metadata.get("validation"), Mapping) else {}),
     }
 
 

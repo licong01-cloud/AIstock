@@ -20,6 +20,22 @@ from scripts.ci_workflow_policy_scan import (
 )
 
 
+def test_hmm_nox_bounds_parent_threads_without_reducing_verification(monkeypatch, tmp_path):
+    calls = []
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setattr(noxfile, "_env", lambda extra: {"OPENBLAS_NUM_THREADS": "24", **extra})
+    noxfile.hmm_risk_backend(Session())
+    args, kwargs = next(call for call in calls if "pytest" in call[0])
+    assert all(kwargs["env"].get(key) == "1" for key in (
+        "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"))
+    assert {"backend/tests/hmm_risk", "--cov-branch", "--cov-fail-under=70", "--durations=10"} <= set(args)
+    assert "not integration" in args and "-x" not in args
+
+
 def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary() -> None:
     jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
     l3, summary = jobs["nightly-l3"], jobs["full-summary"]
@@ -33,7 +49,10 @@ def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary
     assert "needs.dr-snapshot.result == 'failure'" in failure["if"]
     assert "needs.dr-validate.result == 'failure'" in failure["if"]
     for key, job in (("L3_RESULT", "nightly-l3"), ("DR_RESULT", "dr-snapshot"), ("DR_VALIDATE_RESULT", "dr-validate")):
-        assert failure["env"][key] == ("${{ needs." + job + ".outputs.background_admitted == 'false' && 'deferred' || needs."
+        # L3 additionally preserves exhausted artifact transport as a failure.
+        transport = "steps.exhausted_nightly_transport.outcome == 'failure' && 'failure' || " if key == "L3_RESULT" else ""
+        assert failure["env"][key] == ("${{ " + transport + "needs." + job
+                                      + ".outputs.background_admitted == 'false' && 'deferred' || needs."
                                       + job + ".result }}")
 
 

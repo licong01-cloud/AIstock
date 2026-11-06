@@ -13,6 +13,7 @@ from .registry import register
 class TWAPAlgo(BaseExecutionAlgo):
     ALGO_CODE = "TWAP"
     HANDLES_LIMIT_STATE = True
+    HANDLES_ZERO_VOLUME = True
 
     def __init__(self, config: Dict[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -49,6 +50,11 @@ class TWAPAlgo(BaseExecutionAlgo):
         if not math.isfinite(volume) or volume < 0 or volume != int(volume):
             raise ValueError("TWAP requires finite non-negative integral minute volume")
         available_volume = int(volume)
+        if available_volume == 0:
+            self._last_no_fill_reason = "ZERO_VOLUME"
+            self._last_no_fill_context = {"symbol": state.symbol, "volume": 0}
+            state.step += 1
+            return None
 
         # 最后一步：强制执行全部剩余
         is_final_step = state.step >= self.split_count - 1

@@ -19,6 +19,20 @@ sys.modules[_ROUTER_SPEC.name] = validation
 _ROUTER_SPEC.loader.exec_module(validation)
 
 
+def test_overview_snapshot_route_does_not_instantiate_broad_services(monkeypatch):
+    payload = {'schema_version': 'aistock_pipeline_overview_v1', 'sections': {'ci': {'state': 'loading'}}}
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(validation, 'overview_snapshot', SimpleNamespace(read=lambda: payload))
+    app = FastAPI()
+    app.include_router(validation.router, prefix='/api/v1')
+    def forbidden():
+        raise AssertionError('first paint must not construct broad dependencies')
+    app.dependency_overrides[validation.get_pipeline_center_service] = forbidden
+    with TestClient(app) as client:
+        assert client.get('/api/v1/validation/overview/snapshot').json()['data'] == payload
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

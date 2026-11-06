@@ -40,6 +40,88 @@ SHA = "a" * 64
 MANIFEST = "b" * 64
 
 
+def test_build_resume_verifies_manifest_anchor_not_bulk_bytes(tmp_path, monkeypatch):
+    producer = SimpleNamespace(produce=lambda context: None)
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    manifest = tmp_path / "candidate" / "qe_dataset_manifest.json"
+    manifest.parent.mkdir()
+    manifest.write_bytes(b"manifest\n")
+    anchor = {"id": "candidate/qe_dataset_manifest.json", "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+              "size": manifest.stat().st_size}
+    bulk = manifest.parent / "large.bin"
+    bulk.write_bytes(b"exported")
+    receipt = {"scope": {"dataset_manifest_ref": anchor}, "input_refs": [], "output_refs": [anchor,
+        {"id": "candidate/large.bin", "sha256": hashlib.sha256(bulk.read_bytes()).hexdigest(), "size": 8}]}
+    real_hash = hashlib.sha256
+    reads = []
+    def hashed(path):
+        reads.append(path)
+        assert path != bulk, "resume must not repeat the full BUILD content audit"
+        return real_hash(path.read_bytes()).hexdigest()
+    monkeypatch.setattr("backend.services.dataset_release.monthly_worker._file_sha256", hashed)
+    assert pipeline.checkpoint_is_valid("BUILD", receipt)
+    assert reads == [manifest]
+    manifest.write_bytes(b"changed!\n")
+    with pytest.raises(MonthlyProducerError, match="retained"):
+        pipeline.checkpoint_is_valid("BUILD", receipt)
+
+
+@pytest.mark.parametrize("failure", ["missing", "outside", "unlisted"])
+def test_build_resume_bad_anchor_stops_without_invalidating_exports(tmp_path, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("completed exports must not run"))
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    anchor = {"id": "missing.json" if failure == "missing" else "../outside.json",
+              "sha256": "a" * 64, "size": 1}
+    receipt = {"scope": {"dataset_manifest_ref": anchor}, "input_refs": [],
+               "output_refs": [] if failure == "unlisted" else [anchor]}
+    with pytest.raises(MonthlyProducerError, match="retained"):
+        pipeline.checkpoint_is_valid("BUILD", receipt)
+
+
+def test_local_resume_checks_outputs_without_rereading_upstream_inventory(tmp_path, monkeypatch):
+    producer = SimpleNamespace(produce=lambda context: None)
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    profile = tmp_path / "profile.json"
+    profile.write_bytes(b"{}\n")
+    ref = {"id": profile.name, "sha256": hashlib.sha256(profile.read_bytes()).hexdigest(), "size": 3}
+    calls = []
+    monkeypatch.setattr("backend.services.dataset_release.monthly_worker._file_sha256",
+                        lambda path: calls.append(path) or ref["sha256"])
+    assert pipeline.checkpoint_is_valid("LOCAL_VALIDATE", {
+        "input_refs": [{"id": "large.bin", "sha256": "b" * 64, "size": 10**9}], "output_refs": [ref],
+    })
+    assert calls == [profile]
+
+
+@pytest.mark.parametrize("group", ["input_refs", "output_refs"])
+@pytest.mark.parametrize("failure", [None, "missing", "changed"])
+def test_derive_resume_verifies_frozen_artifacts_without_regeneration(tmp_path, group, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("sealed DERIVE must not rerun"))
+    pipeline = RegisteredMonthlyPipeline(
+        {stage: producer for stage in ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    artifact = tmp_path / "sealed.json"
+    artifact.write_bytes(b"sealed\n")
+    ref = {"id": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "size": 7}
+    receipt = {"input_refs": [], "output_refs": [], group: [ref]}
+    if failure == "missing":
+        artifact.unlink()
+    elif failure == "changed":
+        artifact.write_bytes(b"drift!\n")
+    if failure is None:
+        assert pipeline.checkpoint_is_valid("DERIVE", receipt)
+    else:
+        with pytest.raises(MonthlyProducerError, match="retained"):
+            pipeline.checkpoint_is_valid("DERIVE", receipt)
+
+
 def test_registered_pipeline_delivers_stage_control_and_checks_before_validation(tmp_path):
     events = []
 
@@ -459,6 +541,46 @@ def test_pipeline_computes_hashes_from_registered_artifacts(tmp_path: Path) -> N
     artifact = tmp_path / receipt["output_refs"][0]["id"]
     assert receipt["output_refs"][0]["size"] == artifact.stat().st_size
     assert receipt["output_refs"][0]["sha256"] != SHA
+
+
+@pytest.mark.parametrize("mutation", [None, "time", "snapshot", "isolation", "performed", "integer", "missing", "unknown"])
+def test_source_asof_consistency_proof_is_exact_and_legacy_proofs_remain_supported(tmp_path, mutation):
+    from backend.services.dataset_release.canonical import canonical_json_bytes
+
+    def replace_proof(scope):
+        proof = {
+            "schema_version": "aistock_monthly_source_asof_consistency_v1",
+            "snapshot_group_id": scope["snapshot_group_id"],
+            "source_as_of": scope["source_as_of"],
+            "isolation_level": "REPEATABLE READ READ ONLY",
+            "post_snapshot_writer_check_performed": False,
+            "status": "PASS",
+        }
+        if mutation == "time":
+            proof["source_as_of"] = "2026-10-02T00:00:00+00:00"
+        elif mutation == "snapshot":
+            proof["snapshot_group_id"] = "another-snapshot"
+        elif mutation == "isolation":
+            proof["isolation_level"] = "READ COMMITTED"
+        elif mutation == "performed":
+            proof["post_snapshot_writer_check_performed"] = True
+        elif mutation == "integer":
+            proof["post_snapshot_writer_check_performed"] = 0
+        elif mutation == "missing":
+            proof.pop("post_snapshot_writer_check_performed")
+        elif mutation == "unknown":
+            proof["skip_missing"] = True
+        reference = scope["repair_overlap_check_refs"][0]
+        path = tmp_path / reference["id"]
+        data = canonical_json_bytes(proof) + b"\n"
+        path.write_bytes(data)
+        reference.update(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+
+    if mutation is None:
+        assert _run(_pipeline(tmp_path, mutate=replace_proof), "SOURCE")["status"] == "PASS"
+    else:
+        with pytest.raises(MonthlyProducerError, match="source repair overlap artifact differs"):
+            _run(_pipeline(tmp_path, mutate=replace_proof), "SOURCE")
 
 
 def test_pipeline_rejects_caller_style_pass_without_full_scope(tmp_path: Path) -> None:

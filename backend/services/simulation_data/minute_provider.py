@@ -204,7 +204,7 @@ class SimulationMinuteMarketDataProvider:
     ) -> MinuteExecutionMarketInput:
         """Load a completed historical day with no realtime fallback."""
 
-        if source != MinuteDataSource.DB_HISTORICAL:
+        if source not in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES}:
             raise DataUnavailableError(
                 "completed-day minute feed requires an explicit historical DB source",
                 context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": source.value},

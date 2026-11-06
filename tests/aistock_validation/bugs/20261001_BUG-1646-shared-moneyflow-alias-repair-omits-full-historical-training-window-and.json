@@ -1,0 +1,328 @@
+{
+  "actual": "Frozen v15 manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc exports only 120 historical 300114.SZ moneyflow rows for canonical 302132.SZ. Read-only production confirms 1090 historical source rows in 2020-07-30..2025-04-30 including 591 finite-price training dates. Previous audit starts 2024-08-13 and enumerates source/absence rows rather than all required frozen trading dates. Generic immutable successor repair only; no DB write, active switch, HMM/QE source, runtime or merge authorized.",
+  "allowed_write_scope": [
+    "scripts/audit_qe_moneyflow_alias_coverage.py",
+    "scripts/repair_qe_moneyflow_alias_candidate.py",
+    "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+    "tests/aistock_validation/bugs/20261001_BUG-1646-shared-moneyflow-alias-repair-omits-full-historical-training-window-and.json",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1646",
+  "closed_at": "2026-10-17T16:03:15Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-01T06:26:01.856894Z",
+  "description": "Frozen v15 manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc exports only 120 historical 300114.SZ moneyflow rows for canonical 302132.SZ. Read-only production confirms 1090 historical source rows in 2020-07-30..2025-04-30 including 591 finite-price training dates. Previous audit starts 2024-08-13 and enumerates source/absence rows rather than all required frozen trading dates. Generic immutable successor repair only; no DB write, active switch, HMM/QE source, runtime or merge authorized.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261001-120b03bd3e7a",
+      "timestamp": "2026-10-01T06:26:01.856870Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261001-r8-unified-moneyflow2-candidate/reports/moneyflow_alias_repair_full_history.json",
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261001-r8-unified-moneyflow2-candidate/reports/moneyflow_alias_coverage_full_history.json",
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261001-r8-unified-moneyflow2-candidate/qe_dataset_manifest.json"
+  ],
+  "expected": "Shared source-specific moneyflow aliases are audited against every frozen PIT session over 2020-07-30..2025-04-30, including training and validation; one immutable successor closes real omissions without DB/profile/model writes.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1646-shared-moneyflow-alias-repair-omits-full-historical-training-window-and.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "scripts/repair_qe_moneyflow_alias_candidate.py"
+    ],
+    "changed_files": [
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1646-shared-moneyflow-alias-repair-omits-full-historical-training-window-and.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/audit_qe_moneyflow_alias_coverage.py",
+        "scripts/repair_qe_moneyflow_alias_candidate.py",
+        "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "local_data",
+        "qe.core",
+        "hmm",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/audit_qe_moneyflow_alias_coverage.py",
+          "impact_modules": [
+            "local_data",
+            "qe.core",
+            "hmm"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_moneyflow_source_identity"
+        },
+        {
+          "file": "scripts/repair_qe_moneyflow_alias_candidate.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/audit_qe_moneyflow_alias_coverage.py",
+        "scripts/repair_qe_moneyflow_alias_candidate.py",
+        "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
+  },
+  "first_seen_at": "2026-10-01T06:26:01.856894Z",
+  "fix_branch": null,
+  "fix_commit": "12d97ab63dd3f1e303c7e08c3255db2fa0663b7b",
+  "fixed_at": "2026-10-17T16:03:15Z",
+  "github_issue_number": 5175,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5175",
+  "last_seen_at": "2026-10-01T06:26:01.856894Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5177",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/audit_qe_moneyflow_alias_coverage.py --candidate-root <frozen-v15-root> --security-identity-manifest <v15-factor>/security_source_identity.json --provider-absence-manifest backend/services/hmm_risk/manifests/provider_absence_v1.json --start-date 2020-07-30 --end-date 2025-04-30 --env-file F:/Dev/AIstock/.env",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "resolution_note": "续审已同步最新main。第一轮确认完整冻结日历/共享历史代码和原有CNY/股数合同；第二轮RED复现局部moneyflow修复把BLOCKED前驱提升为READY、同名回执被硬链接复用两项问题，修复为保留前驱状态及私有写入回执；第三轮17项定向测试、8项模块登记和8项目录完整性测试通过，Ruff及diff检查通过。真实候选未重建，未写DB、profile或运行态。此工具仅生成文件候选；正式发布/激活仍通过既有adopt及CAS流程，不替代READY operation或授权资产。DESIGN-COMPLIANCE-001：不以局部通过清除其他阻断，不吞错，不改PIT/单位/模型，不增加审批门禁。",
+  "risk_area": "bug",
+  "root_cause": "Original canonical export omitted pre-renaming provider rows. BUG-1611 restored only the requested 120 dates starting 2024-08-13; its observed-source-row audit and narrow receipt did not prove full training history. Source DB already contains all 1142 required facts; 10 no-price sessions have frozen full-day suspension evidence.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1646",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "960081f6cc218377",
+    "recorded_at": "2026-10-17T16:04:36.729003Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cd69894f4a7f4629834672e89f4718c317dc22b3",
+    "source_merge_commit": "12d97ab63dd3f1e303c7e08c3255db2fa0663b7b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5177",
+    "validation_evidence": [
+      "validation-receipt: id=372960d3e7b5d42c commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py backend/tests/data_service/test_security_source_identity.py -q --basetemp=X:/AIstock_temp/BUG-1646-review-20261017-green` result=`passed; 17 tests`",
+      "validation-receipt: id=4c9fac845525e435 commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-install` result=`passed; 8+8 tests; findings=0`",
+      "validation-receipt: id=a810caf92dec63c2 commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-install` result=`passed; 8+8 tests; findings=0`",
+      "validation-receipt: id=5aaa8c5d65a1ab8c commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=ruff plan=direct status=passed command=`python -m ruff check scripts/audit_qe_moneyflow_alias_coverage.py scripts/repair_qe_moneyflow_alias_candidate.py backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py` result=`passed`",
+      "validation-receipt: id=7bd38572248d1444 commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=compile plan=direct status=passed command=`python -m compileall -q scripts/audit_qe_moneyflow_alias_coverage.py scripts/repair_qe_moneyflow_alias_candidate.py backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py` result=`passed`",
+      "validation-receipt: id=30dc445637e5dc8d commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "1cc436bdcdf640f7396a87eb7ec236987aed5fac09a8cc7b52c5c8b6c85fd883"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Shared moneyflow alias repair omits full historical training window and audit misses absent dates",
+  "trigger_condition": {
+    "fingerprint": "120b03bd3e7a252bd4a8dfd7",
+    "source_event_id": "FE-20261001-120b03bd3e7a"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=372960d3e7b5d42c commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py backend/tests/data_service/test_security_source_identity.py -q --basetemp=X:/AIstock_temp/BUG-1646-review-20261017-green` result=`passed; 17 tests`",
+    "validation-receipt: id=4c9fac845525e435 commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-install` result=`passed; 8+8 tests; findings=0`",
+    "validation-receipt: id=a810caf92dec63c2 commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-install` result=`passed; 8+8 tests; findings=0`",
+    "validation-receipt: id=5aaa8c5d65a1ab8c commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=ruff plan=direct status=passed command=`python -m ruff check scripts/audit_qe_moneyflow_alias_coverage.py scripts/repair_qe_moneyflow_alias_candidate.py backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py` result=`passed`",
+    "validation-receipt: id=7bd38572248d1444 commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=compile plan=direct status=passed command=`python -m compileall -q scripts/audit_qe_moneyflow_alias_coverage.py scripts/repair_qe_moneyflow_alias_candidate.py backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py` result=`passed`",
+    "validation-receipt: id=30dc445637e5dc8d commit=cd69894f4a7f4629834672e89f4718c317dc22b3 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_notes": [
+    "RED: four calendar/identity/parity/absence tests failed before implementation. GREEN: 15 direct audit + shared source identity tests passed; Ruff, py_compile and diff-check passed.",
+    "Review round 1: strict calendar/PIT expectation, exact suspension exclusion and provider-absence contradictions.",
+    "Review round 2: all 18 fields finite, canonical/source coexistence fail-closed, source units unchanged, exclusive sibling/COW publication; integration RED found NumPy nrows serialization and GREEN fixed it.",
+    "Review round 3: full-window source DB readback, formal shared+HMM identity resolution, 1142 finite file facts, 0 duplicates, unchanged source/profile SHA; catalog validates direct CI mapping.",
+    "validation_module_registry_l0: 8 passed; validation_catalog_integrity: 16 passed + findings=0; no dependencies installed.",
+    "Successor generation 20261001-v16-unified-moneyflow2; manifest identity fcc90ff0df761511c7e4d431da8a9bddf04e1c66c70c8780c6359e876f247098; manifest bytes 7f242fcf3100969ad5e4057fac457c09ec195972d3e8befb1e192cb7725f88a0.",
+    "970 real records appended (2020-07-30..2024-08-12). Full source window: 1152 sessions, 1142 facts, 10 suspended, provider_absence=0, unexplained=0. Train: 601/591/10/0. Validation: 182/182/0/0.",
+    "moneyflow.h5 SHA b2d687e1594c91e3e8bb1760902b52edbf4506242c256e8e8c01de28b0b0d972; HMM file-only preflight can resume after owner-approved frozen input identity update; full HMM model/training readiness is not asserted.",
+    "56 non-repair manifest pins unchanged, 125180 reused files are same-inode byte reuse, 11 unchanged factor inventory files preserve SHA. Active generation remains 20260928-v15-unified-moneyflow1; active bytes SHA 56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f.",
+    "Source merge, active switch, database write, HMM/QE source modification, training, experiments, services, process control, network provider fetch and dependency install were not performed."
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -283,6 +283,13 @@ def _nodes() -> MonthlyNodeRuntimeSettings:
     )
 
 
+def test_node_identity_defaults_use_deployed_api_port_and_keep_node_ids():
+    assert dict(_nodes().dataset_identity_urls()) == {
+        "wsl2-5080": "http://127.0.0.1:9000/api/v1/qe_workspace/dataset-identity",
+        "rdagent-node1": "http://rdagent-node1:9000/api/v1/qe_workspace/dataset-identity",
+    }
+
+
 def test_node_runtime_builds_exact_code_owned_deploy_and_probe_capabilities(tmp_path: Path) -> None:
     runtime = _base(tmp_path)
     nodes = _nodes()

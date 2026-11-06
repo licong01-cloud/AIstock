@@ -11,7 +11,7 @@ CONDITION_FIELDS = ("research_role", "hypothesis_family", "input_fields", "horiz
                     "dataset_ref", "universe_ref", "evaluation_ref")
 # Same choices as comparison.validate_comparison_spec; no label arithmetic here.
 FILTER_CHOICES = {"research_role": {"predictive_increment", "replacement", "conditional"},
-                  "horizons": {"1d", "5d", "10d", "20d"}}
+                  "horizons": {"1d", "5d", "10d", "20d", "40d", "60d", "120d", "240d"}}
 NOTE_TEXT = ("observation", "interpretation", "reason", "next_evidence")
 HYPOTHESIS_TEXT = ("basis", "statement", "competing_explanation", "observable_difference", "falsifier", "proxy_limitations")
 

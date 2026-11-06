@@ -50,6 +50,8 @@ def test_revision_marker_requires_source_transaction_and_retains_racing_future_d
             calls.append((sql, params))
 
         def fetchone(self):
+            if "to_regprocedure" in calls[-1][0]:
+                return (False,)  # legacy schema fixture; canonical writer is covered by DEV tests
             return (date(2026, 7, 3),)
 
     class Connection:
@@ -65,7 +67,7 @@ def test_revision_marker_requires_source_transaction_and_retains_racing_future_d
     assert not calls
     connection.autocommit = False
     mark_revision_dates(connection, [date(2026, 7, 1), date(2026, 7, 1), date(2026, 7, 6)], "sw_daily")
-    assert calls[-1][1] == ("sw_daily", [date(2026, 7, 1), date(2026, 7, 6)])
+    assert any(params == ("sw_daily", [date(2026, 7, 1), date(2026, 7, 6)]) for _, params in calls)
 
 
 def test_dated_projection_rejects_source_hash_drift_and_never_reopens_history():
@@ -122,6 +124,44 @@ def test_pit_geometry_extension_marks_only_tail_and_label_changes_mark_nothing()
     assert eligibility_revision_spans([previous], [dict(previous, eligible_end="2026-09-30")]) == [
         (date(2026, 9, 1), date(2026, 9, 30))
     ]
+
+
+@pytest.mark.parametrize("universe_key,expected", [
+    ("aistock_equity_pit_canonical_v2", []),
+    ("shsz_st_pit_active_v1", None),
+    ("shsz_st_pit_qe_dataset_old_frozen", None),
+])
+def test_pit_revision_capture_follows_global_pointer_not_legacy_names(universe_key, expected):
+    from backend.services.sector_data_repair import capture_sector_pit_spans
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return ("aistock_equity_pit_canonical_v2", "shsz_a_252td_st_delist_asof_v2")
+
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    calls = []
+    assert capture_sector_pit_spans(Connection(), universe_key) == expected
+    assert "stock_universe_pit_authority_pointer" in calls[0][0]
+    if expected is not None:
+        assert "rule_version=%s" in calls[1][0]
+        assert calls[1][1] == (universe_key, "shsz_a_252td_st_delist_asof_v2")
+    else:
+        assert len(calls) == 1
 
 
 def test_pit_geometry_detects_real_removed_dates_and_ignores_equivalent_splits():

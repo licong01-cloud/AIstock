@@ -8,6 +8,7 @@ import pytest
 
 from backend.services.factor_research.comparison import (
     _daily_rank_ic,
+    _hac,
     _last_available_price_position,
     _mature_dates,
     _partial_rank_daily,
@@ -20,6 +21,18 @@ from backend.services.factor_research import runner
 from backend.tests.factor_research.test_contracts import spec as run_spec
 
 SYMBOLS = [f"{index:06d}.SZ" for index in range(1, 11)]
+
+
+def test_hac_interval_preserves_bandwidth_and_contiguous_date_boundaries():
+    dates = pd.bdate_range("2024-01-02", periods=8)
+    values = [{"date": str(day.date()), "value": value} for day, value in zip(dates, [1, 3, 2, 4, 2, 5, 1, 6])]
+    for lag in (0, 2):
+        row = _hac(values, lag, dates)["segments"][0]
+        assert row["mean_ci95_normal"] == pytest.approx([3 - 1.959963984540054 * row["standard_error"], 3 + 1.959963984540054 * row["standard_error"]])
+        assert row["hac_maxlags"] == lag and row["serial_correlation_adjusted"] == (lag > 0)
+    split = _hac(values[:3] + values[4:], 3, dates)
+    assert split["overall_t_value"] is None and split["segments"][0]["mean_ci95_normal"] is None
+    assert len(split["segments"]) == 2
 
 
 @pytest.mark.parametrize("missing", [np.nan, np.inf, -np.inf])

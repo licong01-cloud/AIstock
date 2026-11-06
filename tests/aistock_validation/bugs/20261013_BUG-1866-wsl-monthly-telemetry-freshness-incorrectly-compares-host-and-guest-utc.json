@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1866",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:24:36.748626Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-13T03:41:16.453028Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "476feee50e32c2fddda4b77302fbd816998f2ff9",
+  "fixed_at": "2026-10-13T03:55:38Z",
   "github_issue_number": 5957,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5957",
   "last_seen_at": "2026-10-13T03:41:16.453028Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5963",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,9 +135,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1866/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1866",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "476feee50e32c2fddda4b77302fbd816998f2ff9",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:44.108012Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "02a47ac921b9f8f1315ab6fac4de78c6b3d6d60e7a914e8ffeb52bcbd6a9b888",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c5131ff0683e2eea4c793c1359bf4a3fbc6172c36aa979da365ee0c2ccb17d85",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -146,7 +170,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1866",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "facc460ed0fd6753",
+    "recorded_at": "2026-10-13T03:56:14.496097Z",
+    "runtime_contract_digest": "154bf8c81a9b44d225b306ca6f5d44a2b6a028bb420b884cddcd7ebfb469388b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6709e16728c4a4d10c3d91994985f862414bd869",
+    "source_merge_commit": "476feee50e32c2fddda4b77302fbd816998f2ff9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5963",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py backend/tests/dataset_release/test_wsl_cgroup.py backend/tests/dataset_release/test_monthly_supervised_build.py -q -> passed (57 cases)",
+      "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py -q -k new_wsl_execution/invalid_identity -> passed (3 added/changed nodes)",
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed (8 tests, zero findings)",
+      "rtk ruff check backend/services/dataset_release/resource_supervisor.py backend/tests/dataset_release/test_resource_supervisor.py noxfile.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "e1db56bc89b101276021ecfd1a649a06997d8ef86a0240985a7bad1a058dc423"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -155,6 +205,15 @@
     "fingerprint": "d693ebe301737df046fe495d",
     "source_event_id": "FE-20261013-d693ebe30173"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py backend/tests/dataset_release/test_wsl_cgroup.py backend/tests/dataset_release/test_monthly_supervised_build.py -q -> passed (57 cases)",
+    "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py -q -k new_wsl_execution/invalid_identity -> passed (3 added/changed nodes)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed (8 tests, zero findings)",
+    "rtk ruff check backend/services/dataset_release/resource_supervisor.py backend/tests/dataset_release/test_resource_supervisor.py noxfile.py -> passed",
+    "git diff --check -> passed",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt facc460ed0fd6753"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

@@ -1,0 +1,264 @@
+{
+  "actual": "Formal zero-fit generation reached window validation and failed invalid PIT membership span; no coefficient asset was published or registered.",
+  "allowed_write_scope": [
+    "backend/services/hmm_data_source/coefficient_extension.py",
+    "backend/tests/hmm_data_source/test_coefficient_extension.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2004-hmm-frozen-coefficient-extension-rejects-canonical-producer-membership-s.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2004",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T02:39:47.758170Z",
+  "description": "Formal zero-fit job f4531a11-3779-407a-97f9-a9a29fed271b generated canonical start_date/end_date/sector_code membership spans, but the extension reader and its fabricated fixture expected from/to. The producer completed; the consumer failed before publication or registration. Review also found that the admission key bound only the producer, so a reader-only fix would reuse the terminal FAILED job. Bind the reviewed reader source without retrying or rewriting that job.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-4b3fc5da5dd2",
+      "timestamp": "2026-10-20T02:39:47.758153Z"
+    }
+  ],
+  "evidence_uris": [
+    "http://127.0.0.1:8001/api/v1/hmm-training/daily-coefficients/jobs/f4531a11-3779-407a-97f9-a9a29fed271b"
+  ],
+  "expected": "Accept canonical start_date/end_date/sector_code spans from the real HMM coefficient producer; validate and clip without losing PIT semantics; fail closed for malformed, overlapping, future or inconsistent membership. A reviewed reader revision receives a distinct admission key, recorded in the plan, artifact and registration; existing terminal jobs stay immutable. No fallback, dataset rewrite, new model or automatic terminal-job retry.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_data_source/coefficient_extension.py",
+        "backend/tests/hmm_data_source/test_coefficient_extension.py"
+      ],
+      "impacted_modules": [
+        "hmm",
+        "qe.core",
+        "selection_center",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_data_source/coefficient_extension.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_coefficient_extension.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_data_source/coefficient_extension.py",
+        "backend/tests/hmm_data_source/test_coefficient_extension.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T02:39:47.758170Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6401,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6401",
+  "last_seen_at": "2026-10-20T02:39:47.758170Z",
+  "module": "hmm",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Read formal job f4531a11-3779-407a-97f9-a9a29fed271b and pass build_stock_sector_membership_spans output into window_payload",
+  "required_verification": [
+    "l0",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/configs/fc0683a9-6ca0-4d55-b053-17c2360c3c40/coefficient-extension",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B -I - isolated stdin smoke -> PASS on Python 3.12.12; task-root sys.path and module-path assertions loaded backend.routers.hmm_training, backend.routers.health, HMM coefficient_extension and the real producer; canonical membership crop/readback passed; reader SHA256=038e63911abf56a94c0ac8e295a49d0aaedb5454b3eb37afb09a28f2939831be; poisoned database/network, attempts=0; fits=0; production writes=0; runtime_verified=false",
+      "wsl.exe -d Ubuntu --cd /mnt/f/Dev/AIstock_worktrees/BUG-2004-hmm-frozen-coefficient-extension-rejects-canonic-20261020 --exec /home/lc999/miniconda3/envs/rdagent-gpu/bin/python -B -I - producer-only stdin smoke -> PASS on Python 3.10.19; real canonical membership builder, entrant and interval readback; database/network attempts=0; fits=0; writes=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm"
+  ],
+  "title": "HMM frozen coefficient extension rejects canonical producer membership spans",
+  "trigger_condition": {
+    "fingerprint": "4b3fc5da5dd23c53ab4de7ff",
+    "source_event_id": "FE-20261020-4b3fc5da5dd2"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "verification_notes": [
+    "RED: the real producer membership fixture reproduced the production defect in test_crop_preserves_legal_unavailable_and_does_not_materialize_stock_day_panel and test_executor_uses_file_only_worker_and_registers_all_exact_windows: 2 failed before the reader fix.",
+    "GREEN: the two failing nodes, canonical turnover/crop, and nine malformed membership cases: 12 passed. Reader revision identity, five persisted-plan tamper cases and existing terminal-job worker semantics: 10 passed.",
+    "Ruff check and format --check passed; py_compile for both changed Python files passed; git diff --check passed; validation_module_registry_l0: 8 passed; l0: 0 blocking findings.",
+    "Review round 1 found reader-only repairs would reuse an old terminal key; fixed by binding extension_reader_sha256 and adding a regression without expanding retry semantics. Review round 2 checked canonical producer/reader/crop/registration closure, malformed/overlap rejection, source identity, unchanged fail-closed behavior and allowed scope: no blocking finding.",
+    "DESIGN-COMPLIANCE-001: complete canonical contract, no simplified delivery or placeholder; typed failures and no silent fallback; model, preset, seed, input release, calibration boundaries, quote-availability semantics and coefficient algorithm unchanged; no additional user approval or resource gate introduced.",
+    "The producer SHA256 remains 90f35c9856ab41279029f087c6172f0e9594ec0891361e2698bbe7f27a2abd9a, so this reader-only fix does not invalidate the approved monthly producer authority. Existing failed job and BUG-1978 business acceptance remain pending.",
+    "An optional WSL Python 3.10 full-backend import probe exposed pre-existing datetime.UTC incompatibility in backend/services/data_refresh_audit.py. That file was not changed: the deployed contract uses Windows Python 3.12 for the backend reader and WSL Python 3.10 only for the producer; both actual roles passed isolated smoke. No dependency installation or unrelated compatibility change."
+  ],
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -33,7 +33,7 @@ from backend.services.advisory_historical_range.source_roles import (
     DECISION_MARK_SOURCE_ROLES_V1,
     select_day_source_roles,
 )
-from backend.services.strategy_package.advisory_input_projection import SELECTION_PIT_UNIVERSE_KEY
+from backend.services.advisory_historical_range.requirement_planner import program_pit_universe_key
 
 
 DECISION_MARK_PROVIDER_CONTRACT_VERSION = "advisory_historical_range_decision_mark_provider_v1"
@@ -222,8 +222,23 @@ class HistoricalRangeDecisionMarkProvider:
         if initial_refs != expected_refs:
             raise ValueError("pre-read decision-mark source refs differ from the sealed role selection")
 
-        binding = program.admitted_package_projection.canonical_pit_binding
-        universe_key = binding.frozen_universe_key if binding is not None else SELECTION_PIT_UNIVERSE_KEY
+        universe_key = program_pit_universe_key(program)
+        state_members = tuple(
+            member for member in selection.decision_mark_members
+            if member.source_role == "decision_mark_market_state"
+        )
+        if len(state_members) != 1:
+            raise ValueError("decision marks require exactly one sealed market-state source")
+        parameters = state_members[0].bound_parameters or {}
+        sealed_universe_key = parameters.get("universe_key")
+        if (
+            (program.selection_input_source_plan is not None or sealed_universe_key is not None)
+            and (
+                sealed_universe_key != universe_key
+                or parameters.get("trade_date") != decision_trade_date.isoformat()
+            )
+        ):
+            raise ValueError("decision-mark PIT universe/date differs from the sealed market-state source")
         market_rows, state_rows, observed_at = self._reader.read(
             decision_trade_date=decision_trade_date,
             universe_key=universe_key,

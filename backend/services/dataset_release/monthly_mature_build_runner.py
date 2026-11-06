@@ -235,9 +235,35 @@ class MatureMonthlyPhysicalBuildRunner:
                 )
                 finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
                 resume.save("finalize-bins", finalized_ref, roots=("daily_bin", "minute_bin", "index_context", "factor_bundle"))
-            finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
+            # A retry may retain obsolete packaging from an unpublished attempt.
+            # Preserve it before corrections; completed physical exports stay put.
+            resume.begin_finalization()
+            from .monthly_quote_catalog import refresh_retained_quote_catalog
+            from .monthly_prev_close_repair import apply_prev_close_corrections
+            finalized = apply_prev_close_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
             from .monthly_industry_history import apply_retained_history
             prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)
+            from .monthly_fact_correction import apply_factor_repairs
+            prepare = apply_factor_repairs(resume, prepare=prepare, plan=context.plan, cas=self.cas)
+            from .monthly_quote_fact_correction import apply_quote_repairs
+            from .monthly_construction_facts import daily_catalog_repair_plan
+            quote_plan = daily_catalog_repair_plan(context.plan, resume=resume, prepare=prepare,
+                build_inputs=compiled.physical_plan.get('build_inputs',{}), cas=self.cas)
+            finalized = apply_quote_repairs(resume, finalized=finalized, prepare=prepare, plan=quote_plan, cas=self.cas)
+            if quote_plan.get('monthly_quote_fact_repairs') is not None:
+                finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
+            # Historical minute construction reads these daily factors and raw
+            # references. Materialize missing daily identities before minutes.
+            from .monthly_minute_repair import apply_minute_corrections
+            from .monthly_minute_coverage import automatic_repair_plan
+            minute_plan = automatic_repair_plan(context.plan,
+                build_inputs=compiled.physical_plan.get("build_inputs", {}), cas=self.cas,
+                operation_id=context.operation_id)
+            finalized = apply_minute_corrections(resume, finalized=finalized, cas=self.cas, plan=minute_plan)
+            finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
+            from .monthly_index_repair import apply_index_repairs
+            prepare, finalized = apply_index_repairs(resume, prepare=prepare, finalized=finalized, plan=context.plan, cas=self.cas)
+            finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             prepare_ref = self._seal_stage(prepare, expected="prepare")
             finalize_prerequisites["prepare"] = prepare_ref.sha256
             smoke = tools.consumer_smoke.execute(
@@ -261,7 +287,6 @@ class MatureMonthlyPhysicalBuildRunner:
             )
         )
         validated_ref = self._seal_stage(validated, expected="validate")
-        resume.begin_finalization()
         return self.finalizer.execute(
             context=context,
             staging_root=staging_root,
@@ -404,6 +429,12 @@ class MatureMonthlyPhysicalBuildRunner:
             source_receipt_sha256=compiled.source_bundle_sha256,
             qfq_basis_changes=bases, checkpoint=context.checkpoint, progress=context.progress,
         )
+        if dataset == "daily_bin":
+            from .monthly_index_corrections import correct_index_bins, index_correction_rows
+            rows = index_correction_rows(context.plan.get("monthly_repair_inputs"), before=prefix.cutoff)
+            if rows:
+                receipt = {**receipt, "receipt": correct_index_bins(
+                    root / "daily_bin/qlib", rows, native=receipt["receipt"])}
         unchanged_inputs()
         context.progress({"phase": "BUILD_NATIVE_QLIB_APPEND_DONE", "dataset": dataset, "instrument_count": len(instruments)})
         return {**receipt, "preparation_ref": dict(operation["preparation_ref"])}

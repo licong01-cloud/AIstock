@@ -6,8 +6,96 @@ The TushareSyncEngine consumes these specs to replace per-dataset scripts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+def stk_limit_prices_valid(row: Any) -> bool:
+    """Same-day CNY reference and limits, shared by ingestion and monthly SOURCE.
+
+    NULLs remain legal source facts for some non-trading securities, but do not
+    satisfy a consumer's required-price contract. No reference is derived here.
+    """
+    try:
+        raw = [row.get(name) for name in ("pre_close", "up_limit", "down_limit")]
+        if any(value is None or isinstance(value, bool) for value in raw):
+            return False
+        reference, upper, lower = [Decimal(str(value)) for value in raw]
+        return (all(value.is_finite() and value > 0 for value in (reference, upper, lower))
+                and lower <= reference <= upper)
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+
+
+def complete_stk_limit_daily_references(rows, daily_rows, trade_date):
+    """Supplement only invalid references with the same day's official daily fact.
+
+    This is NOT a shifted close: daily.pre_close already contains the provider's
+    ex-right reference. Keep finite original references and every limit intact.
+    The proof is shared by ingestion, bounded repair and frozen corrections.
+    """
+    day = str(trade_date).replace("-", "")
+
+    def positive(value):
+        try:
+            number = Decimal(str(value))
+            return not isinstance(value, bool) and number.is_finite() and number > 0
+        except (InvalidOperation, ValueError, TypeError):
+            return False
+
+    def number(value):
+        return None if value is None else format(Decimal(str(value)).normalize(), "f")
+
+    def keyed(items):
+        result = {}
+        for row in items:
+            code = row.get("ts_code")
+            if (not isinstance(code, str) or not code or code in result
+                    or str(row.get("trade_date")).replace("-", "") != day
+                    or "pre_close" not in row):
+                raise ValueError("same-day reference source key/date differs or is duplicated")
+            result[code] = row
+        return result
+
+    source, references = keyed(rows), keyed(daily_rows)
+    output, facts = [], []
+    for code, original in source.items():
+        row = dict(original)
+        daily = references.get(code)
+        if not positive(original.get("pre_close")) and daily is not None:
+            candidate = {**original, "pre_close": daily["pre_close"]}
+            if positive(daily["pre_close"]) and stk_limit_prices_valid(candidate):
+                row["pre_close"] = daily["pre_close"]
+                facts.append({"ts_code": code, "trade_date": day,
+                              "original_pre_close": number(original.get("pre_close")),
+                              "pre_close": number(daily["pre_close"]),
+                              "up_limit": number(row["up_limit"]), "down_limit": number(row["down_limit"])})
+        output.append(row)
+    return output, {"schema_version": "stk_limit_daily_reference_enrichment_v1",
+                    "trade_date": str(trade_date), "source_api": "tushare.daily",
+                    "source_field": "pre_close", "filled_reference_count": len(facts),
+                    "unresolved_reference_count": sum(not positive(row.get("pre_close")) for row in output),
+                    "facts": sorted(facts, key=lambda row: row["ts_code"])}
+
+
+def validate_stk_limit_daily_reference_proof(proof, source_rows, trade_date):
+    """Reproduce a mixed-source repair instead of relabeling it as stk_limit."""
+    if (not isinstance(proof, dict) or proof.get("schema_version") != "stk_limit_daily_reference_enrichment_v1"
+            or proof.get("source_api") != "tushare.daily" or proof.get("source_field") != "pre_close"
+            or proof.get("trade_date") != str(trade_date) or not proof.get("facts")):
+        raise ValueError("daily reference enrichment proof differs")
+    facts = proof["facts"]
+    original = [{**row, "pre_close": row["original_pre_close"]} for row in facts]
+    merged, repeated = complete_stk_limit_daily_references(original, facts, trade_date)
+    if repeated["facts"] != facts or repeated["filled_reference_count"] != proof.get("filled_reference_count"):
+        raise ValueError("daily reference enrichment facts do not reproduce")
+    by_key = {(row["ts_code"], row["trade_date"]): row for row in source_rows}
+    for row in merged:
+        published = by_key.get((row["ts_code"], row["trade_date"]))
+        if published is None or any(Decimal(str(row[key])) != Decimal(str(published[key]))
+                                    for key in ("pre_close", "up_limit", "down_limit")):
+            raise ValueError("daily reference enrichment differs from published facts")
 
 
 class QueryMode(str, Enum):
@@ -53,6 +141,7 @@ class DatasetSpec:
     # retry-target -> 23:00 auto-retry chain re-fetches the day via upsert.
     # None (default) keeps the historical behavior (any non-empty day is "ok").
     min_expected_rows: Optional[int] = None
+    required_for_daily_complete: bool = True  # optional research feeds never block A-share readiness
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +173,30 @@ DAILY_BASIC = DatasetSpec(
         "free_share": "numeric",
         "total_mv": "numeric",
         "circ_mv": "numeric",
+        "limit_status": "smallint",
     },
     batch_sleep=0.12,
     rate_per_minute=500,
     trading_day_only=True,
+)
+
+VIX_INDEX = DatasetSpec(
+    name="vix_index", tushare_api="vix_index", target_table="market.vix_index",
+    primary_keys=["trade_date"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "close": "numeric", "pct_change": "numeric"},
+    row_limit=300, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", incremental_cursor_from_audit=True,
+    required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
+)
+
+STOCK_DAILY_AFTERHOURS = DatasetSpec(
+    name="stock_daily_afterhours", tushare_api="daily", target_table="market.stock_daily_afterhours",
+    primary_keys=["trade_date", "ts_code"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "ts_code": "text", "ah_vol": "numeric", "ah_amount": "numeric"},
+    row_limit=6000, rate_per_minute=500, batch_sleep=0.12, trading_day_only=True,
+    initial_start_date="2026-07-06", required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
 )
 
 ADJ_FACTOR = DatasetSpec(
@@ -159,9 +268,8 @@ STOCK_BASIC = DatasetSpec(
         "is_hs": "text",
     },
     single_call_param_sets=[
-        {"exchange": "", "list_status": "L"},
-        {"exchange": "", "list_status": "D"},
-        {"exchange": "", "list_status": "P"},
+        {"exchange": exchange, "list_status": status}
+        for exchange in ("SSE", "SZSE") for status in ("L", "D", "P")
     ],
     supports_incremental=False,
     date_column="list_date",
@@ -176,11 +284,11 @@ STOCK_ST = DatasetSpec(
     columns={
         "ann_date": "date",
         "ts_code": "text",
-        "start_date": "date",
-        "end_date": "date",
-        "market": "text",
-        "exchange": "text",
     },
+    # The current API publishes daily ST snapshot membership, not dated ST
+    # intervals or exchange metadata. Retain legacy DB columns untouched; do
+    # not invent NULLs for fields omitted by the provider. Event effective
+    # dates continue to come from the separate stock_st_events authority.
     api_field_map={"ann_date": "trade_date"},  # Tushare returns "trade_date", DB column is "ann_date"
     date_column="ann_date",
     batch_sleep=0.3,
@@ -381,6 +489,7 @@ STK_LIMIT = DatasetSpec(
     batch_sleep=0.3,
     rate_per_minute=200,
     trading_day_only=True,
+    fetch_params={"limit": 5000, "max_pages": 10},
 )
 
 SUSPEND_D = DatasetSpec(
@@ -616,6 +725,8 @@ SW_DAILY = DatasetSpec(
 DATASET_REGISTRY: Dict[str, DatasetSpec] = {
     s.name: s
     for s in [
+        VIX_INDEX,
+        STOCK_DAILY_AFTERHOURS,
         DAILY_BASIC,
         ADJ_FACTOR,
         INDEX_DAILY,

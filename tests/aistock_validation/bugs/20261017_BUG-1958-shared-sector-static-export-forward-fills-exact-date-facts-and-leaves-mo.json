@@ -1,0 +1,366 @@
+{
+  "actual": "sector_data在_static_asof_frame被groupby ffill，造成冻结组件同键报价不一致。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/factor_materializer.py",
+    "backend/services/dataset_release/monthly_industry_history.py",
+    "backend/services/dataset_release/monthly_industry_facts.py",
+    "backend/tests/dataset_release/test_factor_materializer.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/services/test_sector_data_builder.py",
+    "tests/aistock_validation/bugs/20261017_BUG-1958-shared-sector-static-export-forward-fills-exact-date-facts-and-leaves-mo.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1958",
+  "closed_at": "2026-10-17T12:00:01.889407Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-17T10:29:40.269537Z",
+  "description": "sector_data在_static_asof_frame被groupby ffill，造成冻结组件同键报价不一致。",
+  "design_compliance_review": [
+    "DESIGN-COMPLIANCE-001.1: 本次为共享行业导出BUG修复，不把私有Parquet验证声明为月更release完成；601238.SH/2026-09-15停牌依据仍是独立交付阻断。",
+    "DESIGN-COMPLIANCE-001.2: 精确日期源缺失保留NaN/-1未知标志；不前填、不默认赋行业、不伪造报价；身份漂移和不完整输出继续明确失败。",
+    "DESIGN-COMPLIANCE-001.3: 不修改QE/HMM、股票池、因子公式、阈值或分类历史语义；生产数据库和已发布数据集不变。",
+    "DESIGN-COMPLIANCE-001.4: 复用既有CAS、receipt、resume和原子提交，不新增框架、审批或发布门禁；只检查本次行业修复与最新月数据。"
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261017-53249798945f",
+      "timestamp": "2026-10-17T10:29:40.269537Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/.staging/.industry-history-9e528e580f4a2a34795194fa64ee1c7c1e73c028b3512a509fafbaf34e321dbe/projection_receipt.json"
+  ],
+  "expected": "sector字段按真实日期和历史PIT归属连接；共享H5/Parquet一致；停发不造行情；后续月更不继承前填。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_factor_materializer.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1958-shared-sector-static-export-forward-fills-exact-date-facts-and-leaves-mo.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_factor_materializer.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1958-shared-sector-static-export-forward-fills-exact-date-facts-and-leaves-mo.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/services/dataset_release/monthly_industry_history.py",
+        "backend/services/dataset_release/monthly_industry_facts.py",
+        "backend/tests/dataset_release/test_factor_materializer.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/factor_materializer.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_industry_history.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_industry_facts.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_factor_materializer.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/services/dataset_release/monthly_industry_history.py",
+        "backend/services/dataset_release/monthly_industry_facts.py",
+        "backend/tests/dataset_release/test_factor_materializer.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_industry_facts.py",
+      "backend/tests/dataset_release/test_factor_materializer.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_industry_facts.py",
+      "backend/tests/dataset_release/test_factor_materializer.py"
+    ]
+  },
+  "first_seen_at": "2026-10-17T10:29:40.269537Z",
+  "fix_branch": null,
+  "fix_commit": "c248886e2c76faae518b9ccc6d944f6d5d54b2c3",
+  "fix_summary": "sector_data改为exact-date输入；月更历史物化同时对齐月增量行业字段；接纳已完成历史修复并仅原子替换需要修正的Parquet，复用日线、分钟线及行业H5，不覆盖active v18。",
+  "fixed_at": "2026-10-17T10:57:45Z",
+  "github_issue_number": 6247,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6247",
+  "last_seen_at": "2026-10-17T10:29:40.269537Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6253",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "root_cause": "共享静态导出器将按日行业报价、资金流和行业ID当作慢变属性执行groupby ffill；历史PIT已修复不代表静态月增量同步按精确日期连接。旧v18中PIT sidecar与行业特征的全市场物化不一致由BUG-1843历史修复链处理；本BUG修复9月精确日期连接与旧worker保留输出的接续。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python imported tracked BUG-1958 producers and read the actual September retained staging through CAS receipts; _materialize_static_tail completed 103128 aligned month rows / 210 changes in 52.08s and read back exact-date H5/Parquet equality; output SHA256 bcb6355b0ac16b737785e587993066c3a08cc93ba400e0a0ad2c3149206ba79c; source H5/Parquet pins unchanged; candidate_commit=false, database_write=false, active_profile_write=false. This is pre-merge fresh-process proof, not running worker activation."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1958-post-restart-20261017-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1958",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "c248886e2c76faae518b9ccc6d944f6d5d54b2c3",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T11:58:47.521226Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "a5745c7b936b957620567c1ea6306688644c331efe1b0cc765542301035e4930",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "78def0f80c92a54a8bc699edb73b3209f34a29e0d1fe2184ae1f607aa32c969e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1958",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4d96a1bc548138ce",
+    "recorded_at": "2026-10-17T10:58:39.055314Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c628a83734ab87baa4e5c197ac3fdd007be901a3",
+    "source_merge_commit": "c248886e2c76faae518b9ccc6d944f6d5d54b2c3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6253",
+    "validation_evidence": [
+      "validation-receipt: id=b84437ab1efb4198 commit=c628a83734ab87baa4e5c197ac3fdd007be901a3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/factor_materializer.py backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/services/test_sector_data_builder.py` result=`passed`",
+      "validation-receipt: id=d9ea2586aa6a9649 commit=c628a83734ab87baa4e5c197ac3fdd007be901a3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/services/test_sector_data_builder.py backend/tests/dataset_release/test_monthly_preparation_sector.py backend/tests/dataset_release/test_monthly_legacy_factor.py -q` result=`passed 102, skipped 1; review delta transaction matrix passed 11`",
+      "validation-receipt: id=9fd73b25c73feede commit=c628a83734ab87baa4e5c197ac3fdd007be901a3 kind=ruff plan=direct status=passed command=`rtk ruff check changed files; python -m py_compile changed Python files; git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "946ee16ed770bf60fb23301b2a36a80179123a5341ffcb8decdb5b0d99cd0cc9"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Shared sector static export forward-fills exact-date facts and leaves monthly H5/Parquet inconsistent",
+  "trigger_condition": {
+    "fingerprint": "53249798945f5cc9c466fdd4",
+    "source_event_id": "FE-20261017-53249798945f"
+  },
+  "validation_evidence": [
+    "RED: test_sector_static_uses_exact_date_facts_not_forward_fill -> 2 failed before source fix",
+    "GREEN: 5 direct producer/history/daily-builder regression cases passed",
+    "Final related matrix -> 102 passed, 1 skipped; no broad historical price audit",
+    "Review delta: native factor receipt transaction/recovery matrix -> 11 passed, including old uncommitted output and static backup/publish/journal interruptions",
+    "Changed-file Ruff, py_compile, git diff --check and nox l0 -> passed",
+    "Fresh AIstock Python process: September private Parquet correction verified; 103128 month rows aligned; 210 changed sector cells; 52.08 seconds; SHA256=bcb6355b0ac16b737785e587993066c3a08cc93ba400e0a0ad2c3149206ba79c; original pinned inputs unchanged; no candidate commit, DB/profile/runtime writes",
+    "validation-receipt: id=b84437ab1efb4198 commit=c628a83734ab87baa4e5c197ac3fdd007be901a3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/factor_materializer.py backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/services/test_sector_data_builder.py` result=`passed`",
+    "validation-receipt: id=d9ea2586aa6a9649 commit=c628a83734ab87baa4e5c197ac3fdd007be901a3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/services/test_sector_data_builder.py backend/tests/dataset_release/test_monthly_preparation_sector.py backend/tests/dataset_release/test_monthly_legacy_factor.py -q` result=`passed 102, skipped 1; review delta transaction matrix passed 11`",
+    "validation-receipt: id=9fd73b25c73feede commit=c628a83734ab87baa4e5c197ac3fdd007be901a3 kind=ruff plan=direct status=passed command=`rtk ruff check changed files; python -m py_compile changed Python files; git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1958 --target worker-scheduler --expected-identity c248886e2c76faae518b9ccc6d944f6d5d54b2c3 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

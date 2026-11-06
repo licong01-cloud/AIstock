@@ -1,0 +1,67 @@
+{
+  "scope": "TCN/F24+quality_capex_efficiency/h20 recipe only; not a global model policy",
+  "decision": "keep_mse_no_automatic_loss_comparison",
+  "source_task": "qe_20261017_045950_e4f3",
+  "source_mse_loops": [
+    1,
+    4,
+    7
+  ],
+  "model_id": "__seed_TCN_10D_d02__",
+  "factor_names": [
+    "FundamentalEpsIndustryMomentum",
+    "bb_cp_momentum",
+    "roe_stability_score",
+    "book_value_price_ratio",
+    "neg_funds_flow_efficiency_ratio",
+    "dynamic_valuation_factor",
+    "neg_momentum_price_volume",
+    "m_turnover_percentile_250d",
+    "neg_high_amount_turnover_momentum_5d",
+    "industry_stock_momentum_diff_10d",
+    "m_ind_pb_rel_mom",
+    "m_ind_neutral_rev_5d",
+    "m_turnover_abnormal_20d",
+    "m_turnover_zscore_60d",
+    "m_atr_compression",
+    "m_free_turnover_ind_neutral",
+    "dynamic_flow_volatility_sentiment",
+    "neg_volatility_breakout_momentum_v2",
+    "ChipWinnerRateEliteBuyIntensity",
+    "LargeOrder_Cost_Interaction",
+    "m_ind_rel_turnover",
+    "m_free_turnover_rate",
+    "Industry_Volatility_Liquidity_Cross_Factor",
+    "neg_TurnoverVolatilityEnhancement",
+    "quality_capex_efficiency"
+  ],
+  "factor_digest": "57285ccc34d29f03d462610f0d1c986968c9b283b728f04ec7763620725f83c1",
+  "seeds": [
+    42,
+    2024,
+    2026
+  ],
+  "label_type": "close",
+  "label_horizon": 20,
+  "request_model_params_override": {
+    "loss": "mse",
+    "ltr_loss_mode": "mse"
+  },
+  "expected_final_model": {
+    "class": "GeneralPTNN",
+    "module_path": "qlib.contrib.model.pytorch_general_nn",
+    "loss": "mse",
+    "ltr_parameters": "removed by existing composer"
+  },
+  "other_models": "preserve original approved objective; LGBM B/A/C keep original MSE",
+  "log_decision": "retain optional stable implementation and artifacts; risk clue only, no automatic tuning",
+  "pair_decision": "retain evidence; no further batch for this recipe",
+  "data_policy": "new task resolves active once; historical runs and retry binding immutable",
+  "changes": {
+    "production_code": 0,
+    "database_writes": 0,
+    "historical_task_mutations": 0,
+    "new_experiments": 0
+  },
+  "not_a_complete_submission_payload": true
+}

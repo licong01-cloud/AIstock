@@ -1,11 +1,33 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 from scripts import ci_failure_issue_summary as summary
+
+
+def _github_json(payload):
+    return {"ok": True, "stdout": json.dumps(payload), "stderr": ""}
+
+
+def _cli_options(**options):
+    return [part for name, value in options.items() if value is not False
+            for part in (["--" + name.replace("_", "-")]
+                         + ([] if value is True else [str(value)]))]
+
+
+def _actions_run_response(**overrides):
+    return _github_json({
+        "databaseId": 300, "workflowName": "AIstock CI", "displayTitle": "CI",
+        "event": "pull_request", "headBranch": "bug/example", "headSha": "abcdef1234567890",
+        "status": "in_progress", "conclusion": None,
+        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
+        "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
+        **overrides,
+    })
 
 def _ci_summary(failed_jobs, *, run_id="26378872481", commit="62dc1b12", **overrides):
     return summary.finalize_summary({
@@ -37,6 +59,17 @@ def _nightly_input(run_id, *, status_overrides=None, include_url=True, **extra):
 def _runner_outage_input():
     return {"runner-preflight": "failure", "dr-snapshot": "skipped", "dr-validate": "skipped",
             "nightly-l3": "skipped", "paper-v2-live": "skipped"}
+
+
+def _write_failed_status(path, *, include_url=False):
+    payload = _nightly_input("9001", include_url=include_url)
+    payload["statuses"].pop("codeIntelligence")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _nightly_cli(status_path, output_path, *extra):
+    return summary.main(["--nightly-status-json", str(status_path), "--output", str(output_path),
+                         "--stdout-format", "compact", *extra])
 
 
 
@@ -87,6 +120,144 @@ def test_parse_job_log_extracts_pytest_failure_details() -> None:
     assert any("market.trading_calendar" in line for line in parsed["key_log_excerpt"])
     assert parsed["key_log_excerpt_omitted_count"] == 0
     assert parsed["suspected_module"] == "paper_v2"
+
+
+def _group_issue_body(module="local_data", session="local_data_integrity_ui"):
+    fingerprint = hashlib.sha256(f"module={module}|group_kind=module".encode()).hexdigest()[:16]
+    return (f"<!-- aistock-nightly-failure:nightly-group-{fingerprint} -->\n"
+            "<!-- aistock-issue-on-test-fail:40566184878 -->\n"
+            f"- Commit: `{'a' * 40}`\n## Nightly Failure Groups\n"
+            f"- module=`{module}`; sessions=`{session}`\n")
+
+
+SCOPED_NIGHTLY_LOG = """
+nox > Running session simulation_core_l2
+nox > Session simulation_core_l2 failed.
+nox > Running session local_data_integrity_ui
+nox > Session local_data_integrity_ui failed.
+NIGHTLY_SESSION_START session=simulation_core_l2 timeout_seconds=300
+FAILED backend/tests/simulation_runtime/test_daily_trading_context.py::test_dev_daily_context_query_budget_is_dataset_constant - DataUnavailableError: required dataset refresh did not succeed
+1 failed, 17 passed in 18.75s
+NIGHTLY_SESSION_END session=simulation_core_l2 result=failure
+NIGHTLY_SESSION_START session=local_data_integrity_ui timeout_seconds=300
+Error: Advisory mocked UI requires preconfigured writable X-only TEMP
+NIGHTLY_SESSION_END session=local_data_integrity_ui result=failure
+"""
+
+
+def _mock_scoped_actions(monkeypatch, log=SCOPED_NIGHTLY_LOG):
+    monkeypatch.setattr(summary, "_run", lambda *_a, **_kw: {
+        "ok": True, "stdout": json.dumps({
+            "databaseId": "40566184878", "workflowName": "AIstock Nightly L3 + DR",
+            "headBranch": "main", "headSha": "a" * 40, "status": "completed",
+            "conclusion": "failure", "jobs": [{"databaseId": 99,
+                "name": "Nightly L3 (paper_v2 + qe_archive + qe_read)", "conclusion": "failure"}],
+        }), "stderr": ""})
+    monkeypatch.setattr(summary, "locate_last_green_run", lambda payload, **_: summary._last_green_payload(payload, status="not_requested"))
+    return lambda sessions: summary.summarize_actions_run(
+        repo="licong01-cloud/AIstock", run_id="40566184878", nox_sessions=sessions,
+        log_provider=lambda *_: log)
+
+
+@pytest.mark.parametrize("module,session,expected,excluded", [
+    ("local_data", "local_data_integrity_ui", "writable X-only TEMP", "test_dev_daily_context"),
+    ("paper_v2_selection_center", "simulation_core_l2", "test_dev_daily_context", "writable X-only TEMP"),
+])
+def test_nightly_issue_intake_isolates_buffered_session_logs(monkeypatch, module, session, expected, excluded):
+    collect = _mock_scoped_actions(monkeypatch)
+    group = summary.nightly_issue_group(_group_issue_body(module, session))
+    payload = summary.bind_nightly_issue_group(collect([session]), group)
+    context = summary.build_context_pack(payload, github_issue_number=6782)
+    assert payload["suspected_modules"] == [module]
+    assert expected in json.dumps(context)
+    assert excluded not in json.dumps(context)
+    assert payload["nightly_failed_sessions"] == [session]
+    assert payload["nightly_fingerprint"] == group["nightly_fingerprint"]
+    assert "backend/db/init_schema.py" not in payload["suspected_files"]
+    if module == "local_data":
+        assert payload["suspected_files"] == ["frontend/tests/local-data/daily-integrity-calendar.spec.ts"]
+        assert payload["failed_jobs"][0]["failed_tests"] == []
+    else:
+        assert payload["suspected_files"] == ["backend/tests/simulation_runtime/test_daily_trading_context.py"]
+        assert payload["failed_jobs"][0]["pytest_summary"] == "1 failed, 17 passed in 18.75s"
+
+
+@pytest.mark.parametrize("old,new,suffix", [
+    (hashlib.sha256(b"module=local_data|group_kind=module").hexdigest()[:16], "0" * 16, ""),
+    ("module=`local_data`", "module=`qe_archive`", ""),
+    ("local_data_integrity_ui", "simulation_core_l2", ""),
+    ("40566184878", "unknown", ""), ("a" * 40, "a" * 8, ""),
+    ("", "", "- module=`local_data`; sessions=`local_data_integrity_ui`\n"),
+    ("nightly-group-", "nightly-group-invalid-", ""),
+    ("", "", "<!-- aistock-issue-on-test-fail:40566184879 -->\n"),
+    ("", "", f"- Commit: `{'b' * 40}`\n"),
+    ("", "", _group_issue_body().splitlines()[0] + "\n"),
+], ids=["fingerprint", "module", "session", "missing_run", "short_sha", "ambiguous", "malformed", "duplicate_run", "duplicate_commit", "duplicate_marker"])
+def test_nightly_issue_group_rejects_invalid_published_identity(old, new, suffix):
+    body = _group_issue_body().replace(old, new) + suffix
+    with pytest.raises(ValueError):
+        summary.nightly_issue_group(body)
+
+
+def test_nightly_issue_group_preserves_generic_and_infrastructure_triage():
+    assert summary.nightly_issue_group("ordinary CI Issue") is None
+    assert summary.nightly_issue_group(_group_issue_body("validation.runner", "unknown")) is None
+
+
+@pytest.mark.parametrize("change", ["run", "commit", "groups", "foreign_session", "unisolated", "no_failure"])
+def test_nightly_issue_binding_rejects_mismatched_or_unscoped_summary(monkeypatch, change):
+    payload = _mock_scoped_actions(monkeypatch)(["local_data_integrity_ui"])
+    group = summary.nightly_issue_group(_group_issue_body())
+    if change == "run":
+        payload["run_id"] = "40566184879"
+    elif change == "commit":
+        payload["commit"] = "b" * 40
+    elif change == "groups":
+        payload["nightly_failure_groups"] = [{"module": "qe_archive", "sessions": ["qe_archive_l3"]}]
+    elif change == "foreign_session":
+        payload["failed_jobs"][0].update(nox_session="l0", failed_step="local_data_integrity_ui")
+    elif change == "unisolated":
+        payload["failed_jobs"][0].pop("nightly_diagnostic_session")
+    else:
+        payload["failed_jobs"][0].update(failed_tests=[], error_signature=None, command="python -m pytest successful.py")
+    with pytest.raises(ValueError):
+        summary.bind_nightly_issue_group(payload, group)
+
+
+def test_nightly_session_log_legacy_headers_and_absent_session_fail_closed(monkeypatch):
+    assert "missing schema version" in summary._nightly_session_log(MIXED_NIGHTLY_LOG, ["qe_archive_data_quality"])
+    assert "paper_v2_l3" not in summary._nightly_session_log(MIXED_NIGHTLY_LOG, ["qe_archive_data_quality"])
+    payload = _mock_scoped_actions(monkeypatch, MIXED_NIGHTLY_LOG)(["local_data_integrity_ui"])
+    with pytest.raises(ValueError, match="do not isolate"):
+        summary.bind_nightly_issue_group(payload, summary.nightly_issue_group(_group_issue_body()))
+
+
+def test_nightly_workflow_triage_and_promotion_keep_own_group_scope(monkeypatch, tmp_path):
+    from scripts import aistock_issue_workflow as workflow
+
+    _mock_scoped_actions(monkeypatch)
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda _: {
+        "number": 6782, "body": _group_issue_body(), "title": "UI Nightly failure", "state": "OPEN"})
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda _: None)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda _: None)
+    # Exercise real Actions parsing through the canonical triage entrypoint.
+    original = summary.summarize_actions_run
+    monkeypatch.setattr(summary, "summarize_actions_run", lambda **kw: original(**kw, log_provider=lambda *_: SCOPED_NIGHTLY_LOG))
+    plan = workflow.build_triage_ci_issue_plan(issue_number=6782)
+    assert plan["suggested_bug"]["module"] == "local_data"
+    assert plan["suggested_bug"]["allowed_write_scope"] == ["frontend/tests/local-data/daily-integrity-calendar.spec.ts"]
+    assert "test_dev_daily_context" not in json.dumps(plan)
+    own_test = tmp_path / plan["suggested_bug"]["allowed_write_scope"][0]
+    own_test.parent.mkdir(parents=True)
+    own_test.touch()
+    monkeypatch.setattr(workflow, "_github_actions_registry_pr_capability", lambda: {"allowed": True})
+    submissions = []
+    monkeypatch.setattr(workflow, "build_submit_bug_plan", lambda **kw: submissions.append(kw) or {"next_command": "continue"})
+    promoted = workflow.build_promote_ci_issue_plan(issue_number=6782, apply=True, create_registry_worktree=True)
+    assert promoted["workflow_gate"] == "promoted"
+    assert submissions[0]["module"] == "local_data"
+    assert submissions[0]["changed_files"] == ["frontend/tests/local-data/daily-integrity-calendar.spec.ts"]
 
 
 def test_parse_job_log_prefers_failed_session_over_mixed_job_name() -> None:
@@ -216,6 +387,30 @@ def test_deferred_promotion_keeps_local_intake_visible_without_allocating(monkey
     assert "--issue 197 --create-registry-worktree --apply" in compact["local_intake"]["next_command"]
 
 
+@pytest.mark.parametrize("paths,expected", [
+    (["backend/tests/scripts", "backend/tests/scripts/test_failure.py"], ["backend/tests/scripts/test_failure.py"]),
+    (["backend/tests/scripts", "backend/tests/missing.py"], []),
+    (["backend/tests/scripts/test_failure.py"], ["backend/tests/scripts/test_failure.py"]),
+])
+def test_promotion_uses_exact_files_without_expanding_diagnostic_roots(monkeypatch, tmp_path, paths, expected):
+    from scripts import aistock_issue_workflow as workflow
+    test = tmp_path / "backend/tests/scripts/test_failure.py"
+    test.parent.mkdir(parents=True)
+    test.touch()
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: {
+        "classification_recommendation": "real_regression_candidate", "summary": _ci_summary([]),
+        "suggested_bug": {"title": "regression", "module": "validation", "severity": "P1", "allowed_write_scope": paths}})
+    monkeypatch.setattr(workflow, "_github_actions_registry_pr_capability", lambda: {"allowed": True})
+    submissions = []
+    monkeypatch.setattr(workflow, "build_submit_bug_plan", lambda **kw: submissions.append(kw) or {"next_command": "continue"})
+    result = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, create_registry_worktree=True)
+    assert result["excluded_scope_paths"] == [path for path in paths if path not in expected]
+    assert [call["changed_files"] for call in submissions] == ([expected] if expected else [])
+    assert result["workflow_gate"] == ("promoted" if expected else "blocked_exact_file_scope_required")
+    assert workflow._compact_promote_ci_issue(result)["excluded_scope_paths"] == result["excluded_scope_paths"]
+
+
 def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     log_path = tmp_path / "job.log"
     output_path = tmp_path / "summary.json"
@@ -224,17 +419,9 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
     context_markdown_path = tmp_path / "context-pack.md"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main([
-        *_log_cli_args(log_path),
-        "--output",
-        str(output_path),
-        "--markdown-output",
-        str(markdown_path),
-        "--context-output",
-        str(context_path),
-        "--context-markdown-output",
-        str(context_markdown_path),
-    ]) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        output=output_path, markdown_output=markdown_path,
+        context_output=context_path, context_markdown_output=context_markdown_path)]) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     file_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -275,13 +462,8 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     issue_payload_path = tmp_path / "issue-payload.json"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main([
-        *_log_cli_args(log_path),
-        "--run-id",
-        "26378872481",
-        "--github-issue-payload-output",
-        str(issue_payload_path),
-    ]) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        run_id="26378872481", github_issue_payload_output=issue_payload_path)]) == 0
 
     capsys.readouterr()
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -297,20 +479,9 @@ def test_cli_llm_rollout_preserves_deterministic_issue_payload(
     issue_payload_path = tmp_path / "issue-payload.json"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main(
-        [
-            *_log_cli_args(log_path),
-            "--run-id",
-            "26378872481",
-            "--llm-triage-mode",
-            mode,
-            *(["--llm-auto-file-opt-in"] if mode == "opt_in_auto_file" else []),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        run_id="26378872481", llm_triage_mode=mode, llm_auto_file_opt_in=mode == "opt_in_auto_file",
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")]) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -331,30 +502,9 @@ def test_cli_llm_rollout_preserves_deterministic_issue_payload(
 def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     status_path = tmp_path / "nightly-status.json"
     output_path = tmp_path / "summary.json"
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_failed_status(status_path)
 
-    assert summary.main([
-        "--nightly-status-json",
-        str(status_path),
-        "--output",
-        str(output_path),
-        "--stdout-format",
-        "compact",
-    ]) == 0
+    assert _nightly_cli(status_path, output_path) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -406,18 +556,7 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
         lambda **_kwargs: pytest.fail("same-run GitHub Actions read must not occur"),
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--run-id",
-            "9001",
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path, "--run-id", "9001") == 0
 
     capsys.readouterr()
     payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -441,17 +580,66 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
     }
 
 
+def _completed_nightly_receipts():
+    return {
+        "statuses": {"nightlyL3": "failure"}, "run_id": "9001", "commit": "a" * 40,
+        "nightly_session_results": [
+            {"session": "advisory_modeling_backend", "result": "failure", "failure_kind": "timeout",
+             "duration_seconds": 182.0, "timeout_seconds": 180, "return_code": None},
+            {"session": "simulation_core_l2", "result": "failure", "failure_kind": "nonzero_exit",
+             "duration_seconds": 44.0, "timeout_seconds": 300, "return_code": 1},
+        ],
+    }
+
+
+def test_completed_nightly_receipts_round_trip_into_each_issue_without_foreign_diagnostics():
+    combined = summary.summarize_nightly_status(_completed_nightly_receipts())
+    issues = summary.build_github_issue_payloads(combined)
+    assert len(issues) == 2
+    for issue in issues:
+        group = summary.nightly_issue_group(issue["body"])
+        scoped = summary.bind_nightly_issue_group(combined, group)
+        assert len(scoped["failed_jobs"]) == 1
+        job = scoped["failed_jobs"][0]
+        assert job["nightly_diagnostic_session"] == group["sessions"][0]
+        foreign = ({"advisory_modeling_backend", "simulation_core_l2"} - set(group["sessions"])).pop()
+        assert foreign not in issue["body"]
+        assert foreign not in json.dumps(summary.build_context_pack(scoped))
+        assert job["nightly_diagnostic_source"]["commit"] == "a" * 40
+
+
+@pytest.mark.parametrize("changes", [
+    {"duration_seconds": 1}, {"return_code": 0}, {"timeout_seconds": 0},
+    {"duration_seconds": float("nan")}, {"duration_seconds": True},
+])
+def test_completed_nightly_receipt_rejects_contradictory_timeout(changes):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][0].update(changes)
+    with pytest.raises(ValueError):
+        summary.summarize_nightly_status(payload)
+
+
+@pytest.mark.parametrize("field,value", [("return_code", 0), ("return_code", True), ("session", "unregistered_session")])
+def test_completed_nightly_receipt_rejects_invalid_failure_identity(field, value):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][1][field] = value
+    with pytest.raises(ValueError):
+        summary.summarize_nightly_status(payload)
+
+
+@pytest.mark.parametrize("field", ["run_id", "commit", "session"])
+def test_nightly_receipt_binding_rejects_foreign_provenance(field):
+    payload = summary.summarize_nightly_status(_completed_nightly_receipts())
+    issue = summary.build_github_issue_payloads(payload)[0]
+    group = summary.nightly_issue_group(issue["body"])
+    row = next(j for j in payload["failed_jobs"] if j.get("nox_session") in group["sessions"])
+    row["nightly_diagnostic_source"][field] = "foreign"
+    with pytest.raises(ValueError, match="provenance"):
+        summary.bind_nightly_issue_group(payload, group)
+
+
 def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads() -> None:
-    payload = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9001",
-            "nightly_session_results": [
-                {"session": "position_timing_backend", "result": "failure"},
-                {"session": "paper_v2_l3", "result": "failure"},
-            ],
-        }
-    )
+    payload = _failed_nightly_sessions("9001", "position_timing_backend", "paper_v2_l3")
 
     assert len(payload["nightly_failure_groups"]) == 2
     assert payload["issue_creation_policy"] == {
@@ -472,17 +660,8 @@ def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads()
     assert len({item["dedupe"]["nightly_marker"] for item in issue_payloads}) == 2
     assert all(item["synthetic"] is False for item in issue_payloads)
 
-    changed_sessions = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9002",
-            "nightly_session_results": [
-                {"session": "position_timing_backend", "result": "failure"},
-                {"session": "position_timing_first_release", "result": "failure"},
-                {"session": "paper_v2_l3", "result": "failure"},
-            ],
-        }
-    )
+    changed_sessions = _failed_nightly_sessions(
+        "9002", "position_timing_backend", "position_timing_first_release", "paper_v2_l3")
     changed_payloads = summary.build_github_issue_payloads(changed_sessions)
     marker_by_module = {
         item["title"].split("][", 1)[1].split("]", 1)[0]: item["dedupe"]["nightly_marker"]
@@ -496,23 +675,17 @@ def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads()
     assert changed_marker_by_module["paper_v2_selection_center"] == marker_by_module["paper_v2_selection_center"]
 
 
+def _failed_nightly_sessions(run_id: str, *sessions: str):
+    return summary.summarize_nightly_status({
+        "statuses": {"nightlyL3": "failure"},
+        "run_id": run_id,
+        "nightly_session_results": [{"session": session, "result": "failure"} for session in sessions],
+    })
+
+
 def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy_match() -> None:
-    advisory_summary = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9010",
-            "nightly_session_results": [
-                {"session": "advisory_historical_range_backend", "result": "failure"},
-            ],
-        }
-    )
-    paper_summary = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9011",
-            "nightly_session_results": [{"session": "paper_v2_l3", "result": "failure"}],
-        }
-    )
+    advisory_summary = _failed_nightly_sessions("9010", "advisory_historical_range_backend")
+    paper_summary = _failed_nightly_sessions("9011", "paper_v2_l3")
 
     advisory_payloads = summary.build_github_issue_payloads(advisory_summary)
     paper_payloads = summary.build_github_issue_payloads(paper_summary)
@@ -574,6 +747,78 @@ def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> 
     assert "missing_session_receipt" not in issue_payload["body"]
 
 
+@pytest.mark.parametrize("stage,outcome,expected", [
+    ("workspace", "failure", "workspace_preparation_failed"),
+    ("environment", "failure", "environment_preparation_failed"),
+    ("plan", "failure", "plan_preparation_failed"),
+    ("sessions", "failure", "artifact_transport"),
+    ("sessions", "cancelled", "sessions_interrupted"),
+    ("sessions", "skipped", "sessions_not_started"),
+    ("mismatch", "failure", "invalid_execution_diagnostic"),
+])
+def test_nightly_setup_and_transport_failures_never_invent_test_sessions(stage, outcome, expected):
+    execution = {"run_id": "9001", "head_commit": "a" * 40,
+                 "workspace": "success", "environment": "success", "plan": "success", "sessions": "skipped"}
+    if stage == "mismatch":
+        execution["head_commit"] = "b" * 40
+    else:
+        execution[stage] = outcome
+    payload = summary.summarize_nightly_status({
+        "statuses": {"nightlyL3": "failure", "drSnapshot": "failure"},
+        "run_id": "9001", "commit": "a" * 40, "nightly_l3_execution": execution,
+    })
+    assert payload["nightly_failed_sessions"] == []
+    group = payload["nightly_failure_groups"][0]
+    assert group["sessions"] == [] and group["failure_kinds"] == [expected]
+    issue = summary.build_github_issue_payloads(payload)[0]
+    real = summary.build_github_issue_payloads(_failed_nightly_sessions("9000", "validation_workflow_automation"))[0]
+    assert issue["dedupe"]["nightly_marker"] != real["dedupe"]["nightly_marker"]
+    assert not issue["dedupe"].get("legacy_nightly_marker")
+    assert "validation_workflow_automation" not in issue["title"]
+
+
+def test_nightly_workflow_exports_setup_outcomes_without_fabricating_results():
+    import yaml
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[3] / ".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    l3 = workflow["jobs"]["nightly-l3"]
+    steps = {step.get("id"): step for step in l3["steps"] if step.get("id")}
+    for name in ("prepare_workspace", "verify_environment", "build_plan", "execute_sessions"):
+        assert name in steps
+        assert any(f"steps.{name}.outcome" in value for value in l3["outputs"].values())
+    summary_steps = workflow["jobs"]["full-summary"]["steps"]
+    transport = next(step for step in summary_steps if step.get("id") == "exhausted_nightly_transport")
+    assert "retry_download_nightly_l3.outcome == 'failure'" in transport['if']
+    build = next(step for step in summary_steps if step.get("name") == "Build Nightly failure issue context")
+    assert '"nightly_l3_execution"' in build["run"]
+    assert "needs.nightly-l3.outputs.workspace_result" in build["env"]["L3_WORKSPACE_RESULT"]
+
+
+@pytest.mark.parametrize("first,retry", [("success", "skipped"), ("failure", "success"), ("skipped", "skipped")])
+def test_recovered_or_unattempted_transport_does_not_materialize_failure(tmp_path, first, retry):
+    output = tmp_path / "artifact-transport.json"
+    assert summary.materialize_artifact_transport_failure(
+        output, run_id="9001", head_commit="a" * 40,
+        download_outcome=first, retry_download_outcome=retry,
+    ) is None
+    assert not output.exists()
+
+
+def test_transport_receipt_keeps_real_failures_and_rejects_foreign_run(tmp_path):
+    payload = {"run_id": "9001", "commit": "a" * 40, "statuses": {"nightlyL3": "failure"},
+               "nightly_session_results": [{"session": "advisory_modeling_backend", "result": "failure"}]}
+    receipt = summary.materialize_artifact_transport_failure(
+        tmp_path / "artifact-transport.json", run_id="9001", head_commit="a" * 40,
+        download_outcome="failure", retry_download_outcome="failure",
+    )
+    payload["nightly_artifact_transport"] = receipt
+    groups = summary._nightly_failure_groups(payload)
+    assert any(group["sessions"] == ["advisory_modeling_backend"] for group in groups)
+    assert any(group["failure_kinds"] == ["artifact_transport"] for group in groups)
+    receipt["run_id"] = "9000"
+    assert any(group["failure_kinds"] == ["invalid_transport_diagnostic"]
+               for group in summary._nightly_failure_groups(payload))
+
+
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
     sessions = [
         "factor_research_backend",
@@ -583,15 +828,7 @@ def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> Non
         "qe_long_trend_phase2_backend",
         "qe_sector_risk_overlay_backend",
     ]
-    payload = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9002",
-            "nightly_session_results": [
-                {"session": session, "result": "failure"} for session in sessions
-            ],
-        }
-    )
+    payload = _failed_nightly_sessions("9002", *sessions)
 
     issue_payloads = summary.build_github_issue_payloads(payload)
 
@@ -625,19 +862,8 @@ def test_nightly_cli_writes_issue_payload_manifest_for_heterogeneous_groups(
         encoding="utf-8",
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--no-candidate-history",
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path, "--github-issue-payload-output",
+                        str(issue_payload_path), "--no-candidate-history") == 0
 
     issue_document = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_document["schema_version"] == "aistock_ci_failure_github_issue_payload_manifest_v1"
@@ -652,33 +878,9 @@ def test_cli_persists_tmp_failure_candidate_history(
     output_path = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "summary.json"
     history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates"
     monkeypatch.setattr(summary, "_default_candidate_history_dir", lambda: history_dir)
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_failed_status(status_path, include_url=True)
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     history_path = Path(stdout_payload["artifacts"]["candidate_history"])
@@ -725,24 +927,7 @@ def test_actions_run_wait_defers_issue_when_logs_not_ready(monkeypatch: pytest.M
 
     def fake_run(args: list[str], **_: object) -> dict[str, object]:
         calls.append(args)
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 300,
-                    "workflowName": "AIstock CI",
-                    "displayTitle": "CI",
-                    "event": "pull_request",
-                    "headBranch": "bug/example",
-                    "headSha": "abcdef1234567890",
-                    "status": "in_progress",
-                    "conclusion": None,
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
-                }
-            ),
-            "stderr": "",
-        }
+        return _actions_run_response()
 
     monkeypatch.setattr(summary, "_run", fake_run)
     payload = summary.summarize_actions_run(
@@ -776,41 +961,16 @@ def test_actions_run_transport_failures_fall_back_to_rest_run_jobs_and_log(
         if args[:3] == ["gh", "run", "view"]:
             return {"ok": False, "stdout": "", "stderr": "Post graphql: EOF"}
         if args[:2] == ["gh", "api"] and args[2].endswith("/actions/runs/300"):
-            return {
-                "ok": True,
-                "stdout": json.dumps(
-                    {
-                        "id": 300,
-                        "name": "AIstock CI",
-                        "display_title": "failure",
-                        "event": "pull_request",
-                        "head_branch": "bug/test",
-                        "head_sha": "a" * 40,
-                        "status": "completed",
-                        "conclusion": "failure",
-                        "html_url": "https://github.example/actions/runs/300",
-                    }
-                ),
-                "stderr": "",
-            }
+            return _github_json({
+                "id": 300, "name": "AIstock CI", "display_title": "failure", "event": "pull_request",
+                "head_branch": "bug/test", "head_sha": "a" * 40, "status": "completed",
+                "conclusion": "failure", "html_url": "https://github.example/actions/runs/300",
+            })
         if args[:2] == ["gh", "api"] and "/actions/runs/300/jobs?" in args[2]:
-            return {
-                "ok": True,
-                "stdout": json.dumps(
-                    {
-                        "total_count": 1,
-                        "jobs": [
-                            {
-                                "id": 9,
-                                "name": "paper_v2_l3",
-                                "conclusion": "failure",
-                                "html_url": "https://github.example/jobs/9",
-                            }
-                        ],
-                    }
-                ),
-                "stderr": "",
-            }
+            return _github_json({"total_count": 1, "jobs": [{
+                "id": 9, "name": "paper_v2_l3", "conclusion": "failure",
+                "html_url": "https://github.example/jobs/9",
+            }]})
         if args[:2] == ["gh", "api"] and args[2].endswith("/actions/jobs/9/logs"):
             return {"ok": True, "stdout": PAPER_V2_PLAYWRIGHT_LOG, "stderr": ""}
         raise AssertionError(args)
@@ -847,24 +1007,7 @@ def test_actions_run_defers_issue_when_job_log_is_unavailable(monkeypatch: pytes
                 "stdout": "",
                 "stderr": "run 300 is still in progress; logs will be available when it is complete",
             }
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 300,
-                    "workflowName": "AIstock CI",
-                    "displayTitle": "CI",
-                    "event": "pull_request",
-                    "headBranch": "bug/example",
-                    "headSha": "abcdef1234567890",
-                    "status": "in_progress",
-                    "conclusion": None,
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
-                }
-            ),
-            "stderr": "",
-        }
+        return _actions_run_response()
 
     monkeypatch.setattr(summary, "_run", fake_run)
     payload = summary.summarize_actions_run(repo="licong01-cloud/AIstock", run_id="300")
@@ -889,24 +1032,7 @@ def test_actions_run_retries_job_log_until_available(monkeypatch: pytest.MonkeyP
                     "stderr": "run 300 is still in progress; logs will be available when it is complete",
                 }
             return {"ok": True, "stdout": CI_LOG, "stderr": ""}
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 300,
-                    "workflowName": "AIstock CI",
-                    "displayTitle": "CI",
-                    "event": "pull_request",
-                    "headBranch": "bug/example",
-                    "headSha": "abcdef1234567890",
-                    "status": "completed",
-                    "conclusion": "failure",
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                    "jobs": [{"databaseId": 301, "name": "Backend tests (paper_v2_backend)", "conclusion": "failure"}],
-                }
-            ),
-            "stderr": "",
-        }
+        return _actions_run_response(status="completed", conclusion="failure")
 
     monkeypatch.setattr(summary, "_run", fake_run)
     monkeypatch.setattr(summary.time, "sleep", lambda _: None)
@@ -932,38 +1058,14 @@ def test_cli_deferred_summary_skips_github_issue_payload(
     issue_payload_path = tmp_path / "github-issue-payload.json"
 
     def fake_summary(**_: object) -> dict[str, object]:
-        return summary.finalize_summary(
-            {
-                "schema_version": "aistock_ci_failure_summary_v1",
-                "generated_at": "2026-06-02T00:00:00Z",
-                "severity": "P1",
-                "workflow": "AIstock CI",
-                "run_id": "300",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                "branch": "bug/example",
-                "commit": "abcdef1234567890",
-                "failed_jobs": [],
-                "extraction_errors": [
-                    "run 300 is still in progress after 1 check(s); logs will be available when it is complete"
-                ],
-                "defer_issue_creation": True,
-            }
-        )
+        return _ci_summary([], run_id="300", branch="bug/example", commit="abcdef1234567890",
+            generated_at="2026-06-02T00:00:00Z", defer_issue_creation=True,
+            extraction_errors=["run 300 is still in progress after 1 check(s); logs will be available when it is complete"])
 
     monkeypatch.setattr(summary, "summarize_actions_run", fake_summary)
 
-    assert summary.main(
-        [
-            "--run-id",
-            "300",
-            "--output",
-            str(output_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(run_id="300", output=output_path,
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -1010,24 +1112,10 @@ def test_partial_unactionable_summary_blocks_payload_and_bug_promotion() -> None
 def test_manual_summary_issue_is_triage_only_not_bug_promotion(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue_payload_path = tmp_path / "github-issue-payload.json"
 
-    assert summary.main(
-        [
-            "--run-id",
-            "302",
-            "--run-url",
-            "https://github.com/licong01-cloud/AIstock/actions/runs/302",
-            "--manual-summary",
-            "manual P1 failure report needs triage",
-            "--branch",
-            "main",
-            "--commit",
-            "abcdef1234567890",
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(
+        run_id="302", run_url="https://github.com/licong01-cloud/AIstock/actions/runs/302",
+        manual_summary="manual P1 failure report needs triage", branch="main", commit="abcdef1234567890",
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -1063,31 +1151,14 @@ def test_locate_last_green_run_finds_previous_success() -> None:
 
     def fake_run(args: list[str], **_: object) -> dict[str, object]:
         assert args[:3] == ["gh", "run", "list"]
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                [
-                    {
-                        "databaseId": 200,
-                        "workflowName": "AIstock CI",
-                        "headSha": "abcdef1234567890",
-                        "headBranch": "main",
-                        "conclusion": "failure",
-                        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
-                    },
-                    {
-                        "databaseId": 198,
-                        "workflowName": "AIstock CI",
-                        "headSha": "1234567890abcdef",
-                        "headBranch": "main",
-                        "conclusion": "success",
-                        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/198",
-                        "createdAt": "2026-06-01T00:00:00Z",
-                    },
-                ]
-            ),
-            "stderr": "",
-        }
+        return _github_json([
+            {"databaseId": 200, "workflowName": "AIstock CI", "headSha": "abcdef1234567890",
+             "headBranch": "main", "conclusion": "failure",
+             "url": "https://github.com/licong01-cloud/AIstock/actions/runs/200"},
+            {"databaseId": 198, "workflowName": "AIstock CI", "headSha": "1234567890abcdef",
+             "headBranch": "main", "conclusion": "success", "createdAt": "2026-06-01T00:00:00Z",
+             "url": "https://github.com/licong01-cloud/AIstock/actions/runs/198"},
+        ])
 
     locator = summary.locate_last_green_run(payload, repo="licong01-cloud/AIstock", run_provider=fake_run)
 
@@ -1128,26 +1199,11 @@ def test_locate_last_green_run_transport_failure_uses_rest() -> None:
         commands.append(args)
         if args[:3] == ["gh", "run", "list"]:
             return {"ok": False, "stdout": "", "stderr": "TLS handshake timeout"}
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "workflow_runs": [
-                        {
-                            "id": 99,
-                            "name": "AIstock CI",
-                            "head_sha": "b" * 40,
-                            "head_branch": "main",
-                            "conclusion": "success",
-                            "status": "completed",
-                            "html_url": "https://github.example/actions/runs/99",
-                            "created_at": "2026-08-27T00:00:00Z",
-                        }
-                    ]
-                }
-            ),
-            "stderr": "",
-        }
+        return _github_json({"workflow_runs": [{
+            "id": 99, "name": "AIstock CI", "head_sha": "b" * 40, "head_branch": "main",
+            "conclusion": "success", "status": "completed",
+            "html_url": "https://github.example/actions/runs/99", "created_at": "2026-08-27T00:00:00Z",
+        }]})
 
     locator = summary.locate_last_green_run(
         {"run_id": "100", "workflow": "AIstock CI", "branch": "main", "commit": "a" * 40},
@@ -1245,20 +1301,8 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
         encoding="utf-8",
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--run-id",
-            "28973219723",
-            "--output",
-            str(summary_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, summary_path, "--run-id", "28973219723",
+                        "--github-issue-payload-output", str(issue_payload_path)) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -1336,20 +1380,8 @@ def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
 
     monkeypatch.setattr(llm_provider_adapter, "build_test_plan_advice", fake_test_plan_advice)
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--code-intelligence-json",
-            str(code_refs_path),
-            "--llm-triage-mode",
-            "warning_only",
-            "--output",
-            str(summary_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(nightly_status_json=status_path, code_intelligence_json=code_refs_path,
+        llm_triage_mode="warning_only", output=summary_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -1617,7 +1649,7 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
     assert dispatch_inputs["run_dr"]["default"] is False
     assert dispatch_inputs["run_nightly_l3"]["default"] is True
-    assert dispatch_inputs["run_paper_v2_live"]["default"] is False
+    assert "run_paper_v2_live" not in dispatch_inputs
     assert dispatch_inputs["run_code_intelligence"]["default"] is False
     assert dispatch_inputs["llm_triage_mode"]["default"] == "warning_only"
     assert dispatch_inputs["llm_auto_file_opt_in"]["default"] is False
@@ -1628,8 +1660,7 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "inputs.run_dr" not in l3_condition  # DR opt-out must not suppress independent L3.
     assert "always()" in l3_condition
     assert "needs.runner-preflight.result == 'success'" in l3_condition
-    assert "inputs.run_nightly_l3 && inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
-    assert "inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
+    assert "paper-v2-live" not in workflow["jobs"]
     code_steps = "\n".join(step.get("run", "") for step in workflow["jobs"]["code-intelligence-weekly"]["steps"])
     assert "triage-quality-smoke" in code_steps
     assert "llm-triage-quality.json" in code_steps

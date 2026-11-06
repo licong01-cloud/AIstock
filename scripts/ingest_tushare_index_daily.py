@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Ingest Tushare index_daily (指数日线行情) into market.index_daily.
 
 - 支持 init / incremental 两种模式。
@@ -10,10 +8,14 @@ from __future__ import annotations
 - 使用 ingestion_jobs / ingestion_logs 记录任务状态，方便任务监视器展示。
 """
 
+from __future__ import annotations
+
 import argparse
 import datetime as dt
 import json
+import math
 import os
+from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -22,7 +24,12 @@ import psycopg2.extras as pgx
 from dotenv import load_dotenv
 
 
-load_dotenv(override=True)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+# Explicit DEV/operator environment always wins over the production dotenv.
+load_dotenv(REPO_ROOT / ".env", override=False)
 pgx.register_uuid()
 
 
@@ -189,14 +196,16 @@ def _fetch_index_codes(
 def _upsert_index_daily(conn, rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
+    fields = ("close", "open", "high", "low", "pre_close", "change", "pct_chg", "vol", "amount")
+    merged = [f"COALESCE(EXCLUDED.{field},index_daily.{field})" for field in fields]
     sql = (
         "INSERT INTO market.index_daily (ts_code, trade_date, close, open, high, low, pre_close, "
         "change, pct_chg, vol, amount) "
         "VALUES %s "
         "ON CONFLICT (ts_code, trade_date) DO UPDATE SET "
-        "close=EXCLUDED.close, open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-        "pre_close=EXCLUDED.pre_close, change=EXCLUDED.change, pct_chg=EXCLUDED.pct_chg, "
-        "vol=EXCLUDED.vol, amount=EXCLUDED.amount"
+        + ", ".join(f"{field}={expression}" for field, expression in zip(fields, merged))
+        + " WHERE ROW(" + ",".join(f"index_daily.{field}" for field in fields)
+        + ") IS DISTINCT FROM ROW(" + ",".join(merged) + ") RETURNING trade_date"
     )
 
     def _to_date(val: Any) -> Optional[dt.date]:
@@ -206,19 +215,14 @@ def _upsert_index_daily(conn, rows: List[Dict[str, Any]]) -> int:
             return val
         return _parse_ymd(str(val))
 
+    def finite(value):
+        return value if value is not None and not isinstance(value, bool) and math.isfinite(float(value)) else None
+
     values = [
         (
             (r.get("ts_code") or "").strip(),
             _to_date(r.get("trade_date")),
-            r.get("close"),
-            r.get("open"),
-            r.get("high"),
-            r.get("low"),
-            r.get("pre_close"),
-            r.get("change"),
-            r.get("pct_chg"),
-            r.get("vol"),
-            r.get("amount"),
+            *(finite(r.get(field)) for field in fields),
         )
         for r in rows
         if r.get("ts_code") and _to_date(r.get("trade_date")) is not None
@@ -226,9 +230,54 @@ def _upsert_index_daily(conn, rows: List[Dict[str, Any]]) -> int:
     if not values:
         return 0
 
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.services.data_integrity.writes import changed_values
+    return changed_values(conn, sql, values, dataset="index_daily", source="ingest_tushare_index_daily")
+
+
+def _record_index_scans(conn, rows_by_day, *, start_date, end_date, codes, markets, job_id):
+    """Bind a completed request scope only AFTER every code/page succeeded.
+
+    Empty responses do not invent quotes or publication intervals. Only returned
+    identities are certified; nonempty catalogue membership is not a quote.
+    """
+    from backend.services.data_integrity.contracts import digest
+    from backend.services.data_integrity.provider import provider_scan
+    from backend.services.data_refresh_audit import DataRefreshAuditRepository
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+
+    owns = conn.autocommit
+    if owns:
+        conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT cal_date FROM market.trading_calendar WHERE is_trading=TRUE AND cal_date BETWEEN %s AND %s ORDER BY cal_date", (start_date, end_date))
+            days = [r[0] for r in cur.fetchall()]
+            cur.execute(INDEX_DAILY.code_source_sql)
+            required_requests = {str(r[0]).strip() for r in cur.fetchall()}
+        if not days or set(rows_by_day)-set(days):
+            raise ValueError("index response dates differ from the official requested trading calendar")
+        requested = {str(code).strip() for code, _market in codes}
+        complete = bool(required_requests) and required_requests <= requested
+        params = {"start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
+                  "index_markets": markets, "requested_codes_sha256": digest(sorted(requested)),
+                  "requested_code_count": len(requested)}
+        audit = DataRefreshAuditRepository()
+        for day in days:
+            facts = rows_by_day.get(day, [])
+            audit.record_success(dataset="index_daily", trade_date=day, row_count=len(facts),
+                written_rows=len(facts), data_source="tushare", job_id=job_id,
+                quality_status="ok" if facts else "empty_valid", conn=conn,
+                metadata={"mode": "by_code", "provider_query_scope_complete": complete,
+                    "provider_scan": provider_scan(INDEX_DAILY, facts, parameters=params)})
+        if owns:
+            conn.commit()
+    except BaseException:
+        if owns:
+            conn.rollback()
+        raise
+    finally:
+        if owns:
+            conn.autocommit = True
 
 
 def _get_global_max_trade_date(conn) -> Optional[dt.date]:
@@ -276,6 +325,7 @@ def run_ingestion(
     done_ts = 0
     failed_ts = 0
     inserted_rows = 0
+    scan_rows_by_day: Dict[dt.date, List[Dict[str, Any]]] = {}
 
     # Tushare index_daily 要求日期为 YYYYMMDD
     start_ymd = start_date.strftime("%Y%m%d")
@@ -314,6 +364,11 @@ def run_ingestion(
                         }
                     )
 
+                for row in rows:
+                    day = row["trade_date"] if isinstance(row["trade_date"], dt.date) else _parse_ymd(str(row["trade_date"]))
+                    if day is None or not start_date <= day <= end_date or row["ts_code"] != ts_code:
+                        raise ValueError("index provider returned an unexpected code or date")
+                    scan_rows_by_day.setdefault(day, []).append({"ts_code": ts_code, "trade_date": day})
                 inserted = _upsert_index_daily(conn, rows)
                 inserted_rows += inserted
                 done_ts += 1
@@ -354,16 +409,16 @@ def run_ingestion(
                         )
                     conn.commit()
                 except Exception:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
+                    conn.rollback()
+                    raise  # A commit/progress failure must not become a completed query.
 
         if batch_sleep > 0:
             import time
 
             time.sleep(batch_sleep)
 
+    _record_index_scans(conn, scan_rows_by_day, start_date=start_date, end_date=end_date,
+                        codes=codes, markets=markets, job_id=job_id)
     return {
         "total_ts": total_ts,
         "done_ts": done_ts,

@@ -1,0 +1,258 @@
+{
+  "actual": "Startup routed tabs to Codex via wt -w 0, rejected genuinely stale TDX builds without preparation, and waited silently/serially. User requires the original invoking console and no manual window configuration; shared prefixed console output is accepted instead of tabs. Valid cache must execute directly; only missing/stale inputs trigger one offline build in the independent TDX child. Corrupt receipts remain blocked. No DB writes or service process control.",
+  "allowed_write_scope": [
+    "scripts/start_ai_stock.py",
+    "backend/tests/platform_api/test_windows_launcher.py",
+    "docs/operations/windows_runtime_startup.md",
+    "tests/aistock_validation/bugs/20261022_BUG-2056-windows-startup-routes-service-tabs-to-unrelated-mru-window-and-waits-si.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2056",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T03:13:15.221937Z",
+  "description": "Fix original-console routing, conditional offline TDX build preparation and independent bounded readiness with visible progress. User explicitly accepted original-console shared output rather than manual window IDs or a new service window. Scope remains startup orchestration/tests/runbook only; no application services are started by development validation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-f78b96bcd544",
+      "timestamp": "2026-10-22T03:13:15.221937Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/start_ai_stock.py",
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "scripts/start_ai_stock.py",
+        "backend/tests/platform_api/test_windows_launcher.py",
+        "docs/operations/windows_runtime_startup.md"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.config",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/start_ai_stock.py",
+          "impact_modules": [
+            "platform.config"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "aistock_windows_runtime_orchestration"
+        },
+        {
+          "file": "backend/tests/platform_api/test_windows_launcher.py",
+          "impact_modules": [],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api_tests"
+        },
+        {
+          "file": "docs/operations/windows_runtime_startup.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/start_ai_stock.py",
+        "backend/tests/platform_api/test_windows_launcher.py",
+        "docs/operations/windows_runtime_startup.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/start_ai_stock.py",
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/start_ai_stock.py",
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md"
+    ]
+  },
+  "first_seen_at": "2026-10-22T03:13:15.221937Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6560,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6560",
+  "last_seen_at": "2026-10-22T03:13:15.221937Z",
+  "module": "platform.api",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "AIstock Python -B fresh-process import and compile scripts/start_ai_stock.py -> PASS; no application service started. Direct launcher/TDX matrix -> 40 passed; original-console process inheritance, parallel readiness, UTF-8, cache reuse, conditional offline build, corrupt receipt and build failure checked. Actual UI/service startup remains pending user action."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "platform.api"
+  ],
+  "title": "Windows startup routes service tabs to unrelated MRU window and waits silently after TDX cache rejection",
+  "trigger_condition": {
+    "fingerprint": "f78b96bcd544971a027c29c2",
+    "source_event_id": "FE-20261022-f78b96bcd544"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "platform.api",
+        "platform_api"
+      ],
+      "plans": [
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "platform.api",
+          "platform_api"
+        ],
+        "plans": [
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

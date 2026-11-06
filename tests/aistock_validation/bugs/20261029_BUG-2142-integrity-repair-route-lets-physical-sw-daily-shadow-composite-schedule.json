@@ -1,0 +1,307 @@
+{
+  "actual": "Live sw_daily exact-date repair target repeatedly fails schedule_owner_missing although sw_sector is enabled. DailyIntegrityWorker stamps schedule_dataset=sw_daily; TDXScheduler returns explicit owner before applying existing physical-to-schedule aliases. Source facts are currently available and DEV native upsert readback passed. Normalize both newly produced and existing metadata routing without changing fact validation, PIT membership or success verdicts. Add RED-GREEN retry routing tests.",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2142",
+  "closed_at": "2026-10-29T17:27:54.579381Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T15:56:27.957624Z",
+  "description": "Live sw_daily exact-date repair target repeatedly fails schedule_owner_missing although sw_sector is enabled. DailyIntegrityWorker stamps schedule_dataset=sw_daily; TDXScheduler returns explicit owner before applying existing physical-to-schedule aliases. Source facts are currently available and DEV native upsert readback passed. Normalize both newly produced and existing metadata routing without changing fact validation, PIT membership or success verdicts. Add RED-GREEN retry routing tests.",
+  "design_compliance_review": {
+    "existing_automatic_mode_preserved": true,
+    "no_business_semantic_or_validation_relaxation": true,
+    "no_new_manual_gate_or_framework": true,
+    "requested_scope_complete": true,
+    "runtime_acceptance": "pending_user_restart"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-5a226953912d",
+      "timestamp": "2026-10-29T15:56:27.957624Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/BUG-2142-repair-routing-20261030/dev-validation.json"
+  ],
+  "expected": "Normalize physical sw_daily metadata to its existing sw_sector schedule owner; exact dated sector repairs must honor their ordered window and must not process unrelated revision history. Preserve automatic append/revision mode when no explicit dates were requested.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261029_BUG-2142-integrity-repair-route-lets-physical-sw-daily-shadow-composite-schedule.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-29T15:56:27.957624Z",
+  "fix_branch": null,
+  "fix_commit": "692f57fe538928c364f972206160bd1c25919d25",
+  "fixed_at": "2026-10-29T16:09:13Z",
+  "github_issue_number": 6898,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6898",
+  "last_seen_at": "2026-10-29T15:56:27.957624Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6899",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_sw_daily_target_uses_sw_sector_schedule_owner -q --no-cov",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "review_rounds": [
+    "Round 1: production target reproduces stale physical owner; RED 2 routing cases, GREEN all 10 owner cases; unknown/custom owners remain unchanged.",
+    "Round 2: exact sector date options were ignored; RED all 5 range cases, GREEN all 5; invalid/partial/reversed windows fail without building any history.",
+    "Round 3: 214 related scheduler/recovery tests passed, 1 skipped; existing DEV real metadata dry-run routes once, no actual job or production write; L0/Ruff/diff checks passed."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/DATA_PREPARATION/BUG-2142-repair-routing-20261030/validate_dev.py -> passed worktree-isolated real target route replay in existing DEV; one dry-run dispatch; effects rolled back; no production writes",
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_daily_sync_recovery.py -q --no-cov -> 214 passed, 1 skipped"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2142-close-sync-20261029\\tmp\\issue_workflow\\BUG-2142\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2142",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "692f57fe538928c364f972206160bd1c25919d25",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-29T17:25:24.719329Z",
+      "mode": "read_only",
+      "observed_identity": "1f3592d14f2dee3abdd7e5c5117c07532ebcedb0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3e426e75d0fe4a5c51267e4548f770ee711021c02d056d236e2316f2b287b693",
+      "receipt_sha256": "9b4b13d20303a52ed2882292ec96fc3ba6c4801daff90ee36a40f169a85a2d44",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3d6be228410f6095a50eb338e160079d413f521e41c938bc8acb529018c16b52",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2142",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "63194e1425c2a47d",
+    "recorded_at": "2026-10-29T16:10:04.944046Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0b24b44c6ae78fddf599b77440a857b96d3c3761",
+    "source_merge_commit": "692f57fe538928c364f972206160bd1c25919d25",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6899",
+    "validation_evidence": [
+      "214 passed, 1 skipped; L0/Ruff passed; existing DEV real metadata routing replay passed and rolled back; exact-date repair excludes unrelated history"
+    ],
+    "validation_evidence_digest": "65de6224bf603b881795ada038dd6b9204612bdf8742ffa6650fe10de4c641ff"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Integrity repair route lets physical sw_daily shadow composite schedule owner",
+  "trigger_condition": {
+    "fingerprint": "5a226953912d73a3004f778f",
+    "source_event_id": "FE-20261029-5a226953912d"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:local_data",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
+  },
+  "validation_evidence": [
+    "214 passed, 1 skipped; L0/Ruff passed; existing DEV real metadata routing replay passed and rolled back; exact-date repair excludes unrelated history",
+    "post-restart-verify -> passed runtime identity and read-only business smoke"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -17,6 +17,27 @@ from .qe_active_dataset_profile import is_pure_star50_universe
 from .qe_run_registry import qe_registration_summary
 from .qe_sector_blacklist_policy import SECTOR_BLACKLIST_POLICY_PARAM
 
+
+def loop_summary_sql_projection() -> str:
+    """Read projection only: omit stock display payloads, retain metric authority.
+
+    Legacy position summaries can require stock_trades and curve dates. Keep those
+    inputs until compact_loop_row derives the same scalars; never change stored JSON.
+    """
+    return """
+        loop_id, task_id, loop_index, action_type, config_json,
+        CASE WHEN jsonb_typeof(metrics_json->'enhanced_metrics') = 'object'
+             THEN jsonb_set(
+                 metrics_json, '{enhanced_metrics}',
+                 (metrics_json->'enhanced_metrics')
+                   - 'all_stocks' - 'top_stocks' - 'bottom_stocks'
+                   - 'feature_importance' - 'factor_analysis'
+                   - 'ic_diagnostics'
+             )
+             ELSE metrics_json END AS metrics_json,
+        is_sota, status, node_id, experiment_id, created_at, updated_at
+    """
+
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "ic": ("ic", "IC"),
     "icir": ("icir", "ICIR"),

@@ -12,6 +12,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeOutcomeProjection,
     HistoricalRangeOutcomeRefreshRequestV1,
     HistoricalRangeOutcomeRevisionReason,
+    HistoricalRangeOutcomeStatus,
     HistoricalRangeOutcomeSubjectType,
 )
 from backend.services.advisory_historical_range.outcome_planner import (
@@ -431,3 +432,82 @@ def test_planner_does_not_reapply_an_already_completed_calculation_correction() 
 
     assert result.items == ()
     assert result.exhausted
+
+
+@pytest.mark.parametrize("pending_tail", [0, 30])
+@pytest.mark.parametrize("correction", [None, "SOURCE_CORRECTION", "CALCULATION_CORRECTION"])
+def test_reused_seed_pages_advance_without_omitting_later_work(pending_tail, correction):
+    seeds = tuple(
+        _seed(HistoricalRangeOutcomeSubjectType.CANDIDATE, f"candidate-{i:03d}",
+              _ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "c"))
+        for i in range(100)
+    )
+    payload = _request().model_dump(mode="python", exclude={"request_hash"})
+    if correction is not None:
+        payload.update(correction_reason=correction,
+                       correction_evidence_ref=_ref(HistoricalRangeArtifactKind.REQUEST, "f"))
+    request = HistoricalRangeOutcomeRefreshRequestV1.model_validate(payload)
+    provider = _Seeds(seeds)
+    baseline = HistoricalRangeOutcomePlanner(
+        subject_provider=provider, calendar=_Calendar(), producer_code_hash="b" * 64,
+        outcome_contract_version="r4_v1",
+    )
+    cursor, original = None, []
+    for _ in range(20):
+        page = baseline.plan_slice(request=_request(), cursor=cursor, limit=50)
+        original.extend(page.items)
+        if page.exhausted:
+            break
+        cursor = page.next_cursor
+    assert len(original) == 400
+    reused_subjects = {seed.subject_id for seed in seeds[:100 - pending_tail]}
+    predecessors = {
+        item.outcome_logical_id: SimpleNamespace(
+            source_revision_set_hash=item.source_revision_set_hash,
+            producer_code_hash=item.producer_code_hash,
+            outcome_contract_version=item.outcome_contract_version,
+            maturity_status=HistoricalRangeOutcomeStatus.COMPLETE,
+        )
+        for item in original if item.subject_id in reused_subjects
+    }
+    cursor, actual = None, []
+    for index in range(20):
+        # A fresh planner at every checkpoint must resume without hidden state.
+        planner = HistoricalRangeOutcomePlanner(
+            subject_provider=provider, calendar=_Calendar(), producer_code_hash="b" * 64,
+            outcome_contract_version="r4_v1", latest_outcome=predecessors.get,
+        )
+        page = planner.plan_slice(request=request, cursor=cursor, limit=50)
+        if index == 0:
+            assert page.items == () and not page.exhausted
+        actual.extend(page.items)
+        if page.exhausted:
+            break
+        assert page.next_cursor is not None
+        assert cursor is None or tuple(page.next_cursor["key"]) > tuple(cursor["key"])
+        cursor = page.next_cursor
+    else:
+        pytest.fail("reused seed pages did not terminate")
+    assert actual == [item for item in original if item.subject_id not in reused_subjects]
+    assert all(limit <= 51 for limit in provider.requested_limits)
+
+
+def test_targeted_cursor_retains_remaining_work_in_the_same_subject():
+    seed = _seed(HistoricalRangeOutcomeSubjectType.CANDIDATE, "candidate-1",
+                 _ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "c"))
+    planner = HistoricalRangeOutcomePlanner(
+        subject_provider=_Seeds((seed,)), calendar=_Calendar(), producer_code_hash="b" * 64,
+        outcome_contract_version="r4_v1",
+    )
+    expected = planner.plan_slice(request=_request(), cursor=None, limit=50).items
+    payload = _request().model_dump(mode="python", exclude={"request_hash"})
+    payload["requested_outcome_logical_ids"] = tuple(sorted(str(item.outcome_logical_id) for item in expected))
+    request = HistoricalRangeOutcomeRefreshRequestV1.model_validate(payload)
+    cursor, actual = None, []
+    for _ in range(5):
+        page = planner.plan_slice(request=request, cursor=cursor, limit=1)
+        actual.extend(page.items)
+        if page.exhausted:
+            break
+        cursor = page.next_cursor
+    assert tuple(actual) == expected

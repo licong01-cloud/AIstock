@@ -10,14 +10,12 @@ import {
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 
-import LogsPanel from "./components/LogsPanel";
-import LogTerminal from "../components/LogTerminal";
-import ParamSchemaForm from "./components/ParamSchemaForm";
-import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
+import LogsPanel, { createLogStore, BackendLogPanel } from "./components/LogsPanel";
+import { QEReadCache, mergeTaskUpdates } from "../components/read-cache";
+import { useActiveRefresh, isExecutingTask } from "../components/use-active-refresh";
 import TopologyPanel from "./components/TopologyPanel";
 import LoopDetailPanel, { getTaskStatusInfo } from "./components/LoopDetailPanel";
 import EvolutionWorkspaceShell from "./components/EvolutionWorkspaceShell";
-import MultiAlphaEvolutionWorkspace from "./components/MultiAlphaEvolutionWorkspace";
 import type { Loop } from "./components/TopologyPanel";
 import { qeArchiveApi, type ArchiveSourceStatus, type ArchiveTaskStatus, type BackfillReport } from "@/lib/qe-archive/api";
 import {
@@ -28,12 +26,15 @@ import {
 
 const FactorList = dynamic(() => import("../components/FactorList"), { ssr: false });
 const ModelList = dynamic(() => import("../components/ModelList"), { ssr: false });
+const MultiAlphaEvolutionWorkspace = dynamic(() => import("./components/MultiAlphaEvolutionWorkspace"), { ssr: false });
+const ParamSchemaForm = dynamic(() => import("./components/ParamSchemaForm"), { ssr: false });
+const SectorBlacklistPanel = dynamic(() => import("../components/SectorBlacklistPanel"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const EVOLUTION_TASK_DETAIL_FULL = "detail=full";
 const EXPERIMENT_DETAIL_FULL = "detail=full";
 const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
-const EVOLUTION_TASK_LIST_PAGE_SIZE = 200;
+const EVOLUTION_TASK_LIST_PAGE_SIZE = 50;
 const TERMINAL_LOG_STATUSES = new Set([
   "completed",
   "failed",
@@ -245,14 +246,14 @@ function normalizeSummaryLoop(loop: Loop): Loop {
     ...metricsSummary,
     ...rawMetricsJson,
     enhanced_metrics: (rawMetricsJson as any).enhanced_metrics ?? (metricsSummary as any).enhanced_metrics,
-    IC: metricsSummary.ic ?? (loop as any).ic,
-    ICIR: metricsSummary.icir ?? (loop as any).icir,
-    Rank_IC: metricsSummary.rank_ic ?? (loop as any).rank_ic,
-    Rank_ICIR: metricsSummary.rank_icir ?? (loop as any).rank_icir,
-    annualized_return: metricsSummary.annualized_return ?? (loop as any).annualized_return,
-    max_drawdown: metricsSummary.max_drawdown ?? (loop as any).max_drawdown,
-    information_ratio: metricsSummary.information_ratio ?? (loop as any).information_ratio,
-    sharpe: metricsSummary.sharpe ?? (loop as any).sharpe,
+    IC: metricsSummary.ic ?? rawMetricsJson.IC ?? rawMetricsJson.ic ?? (loop as any).ic,
+    ICIR: metricsSummary.icir ?? rawMetricsJson.ICIR ?? rawMetricsJson.icir ?? (loop as any).icir,
+    Rank_IC: metricsSummary.rank_ic ?? rawMetricsJson.Rank_IC ?? rawMetricsJson.rank_ic ?? (loop as any).rank_ic,
+    Rank_ICIR: metricsSummary.rank_icir ?? rawMetricsJson.Rank_ICIR ?? rawMetricsJson.rank_icir ?? (loop as any).rank_icir,
+    annualized_return: metricsSummary.annualized_return ?? rawMetricsJson.annualized_return ?? (loop as any).annualized_return,
+    max_drawdown: metricsSummary.max_drawdown ?? rawMetricsJson.max_drawdown ?? (loop as any).max_drawdown,
+    information_ratio: metricsSummary.information_ratio ?? rawMetricsJson.information_ratio ?? (loop as any).information_ratio,
+    sharpe: metricsSummary.sharpe ?? rawMetricsJson.sharpe ?? (loop as any).sharpe,
   };
   return {
     ...loop,
@@ -277,6 +278,17 @@ function normalizeSummaryLoop(loop: Loop): Loop {
 
 function SingleAlphaEvolutionDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskOffset, setTaskOffset] = useState(0);
+  const [hasMoreTasks, setHasMoreTasks] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const reads = useRef(new QEReadCache());
+  const loopReads = useRef(new QEReadCache());
+  const loopSummaries = useRef<Loop[]>([]);
+  const [detailRevision, setDetailRevision] = useState(0);
+  const listGeneration = useRef(0);
+  const selectedTaskRef = useRef<string | null>(null);
+  const selectedDetailRead = useRef<(taskId: string) => Promise<void>>(async () => {});
+  useEffect(() => () => { reads.current.clear(); loopReads.current.clear(); }, []);
   const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
   const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
   const [archiveActionTaskId, setArchiveActionTaskId] = useState<string | null>(null);
@@ -875,20 +887,15 @@ function SingleAlphaEvolutionDashboard() {
   // Phase 3: 增强诊断状态
   const [enhancedMetrics, setEnhancedMetrics] = useState<any>(null);
   const [detailTab, setDetailTab] = useState<string>("overview");
-  const [rightPanelView, setRightPanelView] = useState<"loop" | "trajectory">("loop");
+  const [rightPanelView, setRightPanelView] = useState<"loop" | "trajectory">("trajectory");
 
-  const [logs, setLogs] = useState<string[]>([
+  const logStore = useMemo(() => createLogStore([
     "[System] 演进控制中心已启动...",
     "[System] 等待连接至 AIstock 演进调度引擎..."
-  ]);
+  ]), []);
   const [logsCollapsed, setLogsCollapsed] = useState(true);
   const [pageVisible, setPageVisible] = useState(true);
 
-  // 后端日志面板
-  const [backendLogsOpen, setBackendLogsOpen] = useState(false);
-  const [backendLogs, setBackendLogs] = useState<string[]>([]);
-  const [backendLogLevel, setBackendLogLevel] = useState("");
-  const backendLogsEndRef = useRef<HTMLDivElement>(null);
 
   // 因子验证弹窗状态
   const [factorValidation, setFactorValidation] = useState<{
@@ -913,11 +920,11 @@ function SingleAlphaEvolutionDashboard() {
         flushTimerRef.current = null;
         const buffered = logBufferRef.current.splice(0);
         if (buffered.length > 0) {
-          setLogs(prev => [...prev, ...buffered].slice(-200));
+          logStore.append(buffered);
         }
       }, 500);
     }
-  }, []);
+  }, [logStore]);
 
   // cleanup flush timer
   useEffect(() => {
@@ -941,9 +948,15 @@ function SingleAlphaEvolutionDashboard() {
         task_ids: taskIds,
         include_recommendation: true,
       });
-      setArchiveStatus(nextStatus);
+      setArchiveStatus(previous => ({
+        ...nextStatus,
+        tasks: { ...previous?.tasks, ...nextStatus.tasks },
+        loops: { ...previous?.loops, ...nextStatus.loops },
+        experiments: { ...previous?.experiments, ...nextStatus.experiments },
+      }));
     } catch (e) {
       console.error("Failed to fetch QE archive source status:", e);
+      setReadError(`数仓状态读取失败: ${String(e)}`);
     } finally {
       setArchiveStatusLoading(false);
     }
@@ -951,26 +964,24 @@ function SingleAlphaEvolutionDashboard() {
 
   // 获取任务列表
   const fetchTasks = useCallback(async () => {
+    const generation = ++listGeneration.current;
     try {
-      const allTasks: Task[] = [];
-      for (let offset = 0; offset < 10000; offset += EVOLUTION_TASK_LIST_PAGE_SIZE) {
-        const res = await fetch(`${API}/quantevolver/evolution/tasks?limit=${EVOLUTION_TASK_LIST_PAGE_SIZE}&offset=${offset}`);
-        const data = await res.json();
-        if (data.status !== "success" || !Array.isArray(data.data)) break;
-        allTasks.push(...(data.data as Task[]));
-        if (data.data.length < EVOLUTION_TASK_LIST_PAGE_SIZE) break;
-      }
-      setTasks(allTasks);
-      void loadArchiveStatusForTasks(allTasks);
+      const url = `${API}/quantevolver/evolution/tasks?limit=${EVOLUTION_TASK_LIST_PAGE_SIZE}&offset=${taskOffset}`;
+      const data = await reads.current.read(url, url, false);
+      if (generation !== listGeneration.current) return;
+      if (data.status !== "success" || !Array.isArray(data.data)) throw new Error("任务列表响应无效");
+      setTasks(data.data);
+      setHasMoreTasks(data.data.length === EVOLUTION_TASK_LIST_PAGE_SIZE);
+      setReadError(null);
+      void loadArchiveStatusForTasks(data.data);
     } catch (e) {
-      console.error("Failed to fetch tasks:", e);
+      if (generation === listGeneration.current) setReadError(String(e));
     }
-  }, [loadArchiveStatusForTasks]);
+  }, [loadArchiveStatusForTasks, taskOffset]);
 
   // 动态轮询: 仅当存在 active 任务时自动刷新；无 running/processing 时完全停止自动轮询
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasRunningTask = useMemo(
-    () => tasks.some(t => ACTIVE_POLL_STATUSES.has(String(t.status || "").toLowerCase())),
+    () => tasks.some(isExecutingTask),
     [tasks]
   );
   const taskVisibilitySummary = useMemo(() => {
@@ -988,7 +999,11 @@ function SingleAlphaEvolutionDashboard() {
   }, [tasks]);
 
   useEffect(() => {
-    const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
+    const updateVisibility = () => {
+      setPageVisible(document.visibilityState === "visible");
+      if (document.visibilityState !== "visible") loopReads.current.cancelPending();
+      else setDetailRevision(value => value + 1);
+    };
     updateVisibility();
     document.addEventListener("visibilitychange", updateVisibility);
     return () => document.removeEventListener("visibilitychange", updateVisibility);
@@ -998,13 +1013,24 @@ function SingleAlphaEvolutionDashboard() {
     fetchTasks();
   }, [fetchTasks]);
 
-  useEffect(() => {
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    pollIntervalRef.current = null;
-    if (!pageVisible || !hasRunningTask) return;
-    pollIntervalRef.current = setInterval(fetchTasks, 10_000);
-    return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
-  }, [pageVisible, hasRunningTask, fetchTasks]);
+  const executingTasks = tasks.filter(isExecutingTask);
+  useActiveRefresh(async () => {
+    const observed = executingTasks;
+    const query = new URLSearchParams();
+    observed.forEach(task => query.append("task_ids", task.task_id));
+    try {
+      const url = `${API}/quantevolver/evolution/tasks/status?${query}`;
+      const result = await reads.current.read(url, url, false);
+      if (result.missing_ids?.length) throw new Error(`任务状态不可用: ${result.missing_ids.join(", ")}`);
+      const terminalIds = new Set(result.data.filter((row: Task) => !isExecutingTask(row)).map((row: Task) => row.task_id));
+      const terminal = observed.filter(task => terminalIds.has(task.task_id));
+      if (terminal.length) await loadArchiveStatusForTasks(terminal);
+      const selected = selectedTaskRef.current;
+      if (selected && observed.some(task => task.task_id === selected)) await selectedDetailRead.current(selected);
+      setTasks(previous => mergeTaskUpdates(previous, result.data));
+      setReadError(null);
+    } catch (error) { setReadError(String(error)); throw error; }
+  }, pageVisible && hasRunningTask, executingTasks.map(task => task.task_id).sort().join("|"));
 
   useEffect(() => {
     fetch(`${API}/quantevolver/strategies?limit=100`)
@@ -1100,12 +1126,22 @@ function SingleAlphaEvolutionDashboard() {
   }, []);
 
   // 获取任务详情和 Loops
-  const fetchTaskDetail = useCallback(async (taskId: string) => {
+  const fetchTaskDetail = useCallback(async (taskId: string, strict = false) => {
     try {
-      const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
-      const data = await res.json();
+      const url = `${API}/quantevolver/evolution/tasks/${taskId}/loops/comparison`;
+      const data = await reads.current.read(url, url, false);
+      if (selectedTaskRef.current !== taskId) return;
       if (data.status === "success" && data.data) {
-        setLoops((data.data.loops || []).map(normalizeSummaryLoop));
+        const summaries = (data.data.loops || []).map(normalizeSummaryLoop);
+        loopSummaries.current = summaries;
+        setLoops(previous => summaries.map((loop: Loop) => {
+          const existing = previous.find(item => item.loop_id === loop.loop_id);
+          const version = `${loop.status}:${(loop as any).updated_at || ""}:${(loop as any).experiment_id || ""}`;
+          return existing && (existing as any)._detailVersion === version
+            ? { ...loop, config_json: existing.config_json, metrics_json: existing.metrics_json,
+                agent_analysis: existing.agent_analysis, _detailVersion: version }
+            : loop;
+        }));
         // 仅在需要自动选中时（首次加载/切换任务后）选中 loop
         if (autoSelectLoopRef.current && data.data.loops && data.data.loops.length > 0) {
           const sotaLoop = data.data.loops.find((l: Loop) => l.is_sota);
@@ -1115,9 +1151,12 @@ function SingleAlphaEvolutionDashboard() {
         }
       }
     } catch (e) {
-      console.error("Failed to fetch task detail:", e);
+      if (selectedTaskRef.current === taskId) setReadError(String(e));
+      if (strict) throw e;
     }
   }, []); // 无状态依赖，避免无限循环
+  selectedTaskRef.current = activeTaskId;
+  selectedDetailRead.current = taskId => fetchTaskDetail(taskId, true);
 
   // 监听 Task 选中切换；选中只读取详情，日志面板展开后才触碰 evolution.log。
   const activeTaskIdRef = useRef<string | null>(null);
@@ -1126,6 +1165,13 @@ function SingleAlphaEvolutionDashboard() {
     if (!activeTaskId) return null;
     return String(tasks.find(t => t.task_id === activeTaskId)?.status || "").toLowerCase() || null;
   }, [activeTaskId, tasks]);
+
+  useEffect(() => {
+    // Newly created/forked tasks belong on page one; paging itself clears selection.
+    if (activeTaskId && taskOffset > 0 && !tasks.some(task => task.task_id === activeTaskId)) {
+      setTaskOffset(0);
+    }
+  }, [activeTaskId, taskOffset, tasks]);
 
   useEffect(() => {
     if (!activeTaskId) {
@@ -1137,20 +1183,16 @@ function SingleAlphaEvolutionDashboard() {
     const taskChanged = lastSelectedTaskIdRef.current !== activeTaskId;
     lastSelectedTaskIdRef.current = activeTaskId;
     if (taskChanged) {
+      loopReads.current.clear();
+      loopSummaries.current = [];
+      setLoops([]);
+      setEnhancedMetrics(null);
       autoSelectLoopRef.current = true;
       setActiveLoopIndex(null);
       lastLogCursorRef.current = null;
     }
     fetchTaskDetail(activeTaskId);
   }, [activeTaskId, fetchTaskDetail]);
-
-  useEffect(() => {
-    if (!pageVisible || !activeTaskId || !selectedTaskStatus || !ACTIVE_POLL_STATUSES.has(selectedTaskStatus)) {
-      return;
-    }
-    const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 15000);
-    return () => clearInterval(detailInterval);
-  }, [pageVisible, activeTaskId, selectedTaskStatus, fetchTaskDetail]);
 
   // Log files are touched only after the operator expands the log panel.
   useEffect(() => {
@@ -1204,8 +1246,8 @@ function SingleAlphaEvolutionDashboard() {
     appendLogs([`[System] 正在打开任务 ${activeTaskId} 的实时日志流...`]);
 
     let reconnectCount = 0;
-    const MAX_RECONNECT = 200;
-    const RECONNECT_DELAY = 3000;
+    const MAX_RECONNECT = 5;
+    const RECONNECT_DELAY = 60000;
     const boundTaskId = activeTaskId;
 
     function createSSE(taskId: string) {
@@ -2051,72 +2093,38 @@ function SingleAlphaEvolutionDashboard() {
     [loops, activeLoopData]
   );
 
-  // Phase 3: 当选中 Loop 变化时，拉取增强指标（仅 completed 状态才请求）
-  const enhancedMetricsRef = useRef(enhancedMetrics);
-  enhancedMetricsRef.current = enhancedMetrics;
-
+  // Page-owned reads: selected loop only, never the cache-writing enhanced GET.
   useEffect(() => {
-    if (!activeLoopData?.loop_id || (activeLoopData.status !== "completed" && activeLoopData.status !== "failed")) {
-      // 仅在当前有值时才 set null，避免无谓 re-render
-      if (enhancedMetricsRef.current !== null) setEnhancedMetrics(null);
-      return;
-    }
+    if (!pageVisible || rightPanelView !== "loop" || !activeTaskId || !activeLoopData) { setEnhancedMetrics(null); return; }
+    const taskId = activeTaskId;
+    const index = activeLoopData.loop_index;
+    let cancelled = false;
+    const version = `${activeLoopData.status}:${(activeLoopData as any).updated_at || ""}:${(activeLoopData as any).experiment_id || ""}`;
+    setEnhancedMetrics(null);
+    const base = `${API}/quantevolver/evolution/tasks/${taskId}/loops/${index}`;
+    const previousLoop = loopSummaries.current.find(loop => loop.loop_index === index - 1);
+    const previousConfigUrl = previousLoop
+      ? `${API}/quantevolver/evolution/tasks/${taskId}/loops/${previousLoop.loop_index}/config` : null;
+    Promise.all([
+      ...["config", "metrics", "analysis"].map(kind => loopReads.current.read(`${base}/${kind}`, `${base}/${kind}:${version}`)),
+      previousConfigUrl ? loopReads.current.read(previousConfigUrl, `${previousConfigUrl}:${(previousLoop as any).updated_at || ""}`) : Promise.resolve(null),
+    ]).then(([config, metrics, analysis, previousConfig]) => {
+      if (cancelled || selectedTaskRef.current !== taskId) return;
+      const fullMetrics = metrics.data?.metrics_json || {};
+      setEnhancedMetrics(fullMetrics.enhanced_metrics || null);
+      setLoops(current => current.map(loop => loop.loop_index === index ? {
+        ...loop, config_json: config.data?.config_json ?? loop.config_json,
+        metrics_json: fullMetrics, agent_analysis: analysis.data?.agent_analysis ?? null, _detailVersion: version,
+      } : {
+        ...(loopSummaries.current.find(summary => summary.loop_id === loop.loop_id) || loop),
+        ...(loop.loop_index === index - 1 && previousConfig ? { config_json: previousConfig.data?.config_json } : {}),
+      }));
+    }).catch(error => {
+      if (!cancelled && error.name !== "AbortError") setReadError(`Loop ${index}: ${error.message}`);
+    });
+    return () => { cancelled = true; loopReads.current.cancelPending(); };
+  }, [pageVisible, rightPanelView, detailRevision, activeTaskId, activeLoopData?.loop_id, activeLoopData?.status, (activeLoopData as any)?.updated_at, (activeLoopData as any)?.experiment_id]);
 
-    // 清空旧数据（仅在有值时触发渲染）
-    if (enhancedMetricsRef.current !== null) setEnhancedMetrics(null);
-
-    // AbortController 防止快速切换 Loop 时竞态
-    const controller = new AbortController();
-    const loopPathId = `Loop${activeLoopData.loop_index}`;
-    fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${loopPathId}/enhanced-metrics`, {
-      signal: controller.signal,
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`Enhanced metrics request failed: ${res.status} ${res.statusText}`);
-        return res.json();
-      })
-      .then(json => {
-        if (json?.status === "success" && json?.data) {
-          setEnhancedMetrics(json.data);
-          setLoops(prev => prev.map(loop => (
-            loop.loop_index === activeLoopData.loop_index
-              ? {
-                  ...loop,
-                  metrics_json: {
-                    ...(loop.metrics_json || {}),
-                    enhanced_metrics: json.data,
-                  },
-                }
-              : loop
-          )));
-        }
-      })
-      .catch((e) => {
-        if (e.name !== "AbortError") {
-          console.error(`[QE] Enhanced metrics error for ${loopPathId}:`, e.message);
-        }
-      });
-
-    return () => controller.abort();
-  }, [activeLoopData?.loop_id, activeLoopData?.status, activeLoopData?.loop_index, activeTaskId]);
-
-  // 后端日志轮询（仅面板展开时运行）
-  useEffect(() => {
-    if (!backendLogsOpen || !pageVisible) return;
-    const fetchLogs = async () => {
-      try {
-        const res = await fetch(`${API}/quantevolver/evolution/system/logs?tail=150&level=${backendLogLevel}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const d = await res.json();
-        if (d.ok) setBackendLogs(d.lines);
-      } catch (e) {
-        console.error("[QE] Backend logs fetch error:", e);
-      }
-    };
-    fetchLogs();
-    const timer = setInterval(fetchLogs, 5000);
-    return () => clearInterval(timer);
-  }, [backendLogsOpen, backendLogLevel, pageVisible]);
 
   const configDiffLines = useMemo(() => {
     if (!activeLoopData?.config_json || !prevLoopData?.config_json) return [] as string[];
@@ -2401,38 +2409,7 @@ function SingleAlphaEvolutionDashboard() {
   };
 
   // ── 性能优化: useCallback 稳定引用（传给 React.memo 子组件） ──
-  const handleSelectLoop = useCallback((idx: number) => {
-    setActiveLoopIndex(idx);
-    if (!activeTaskId) return;
-    setLoops(prev => {
-      const selected = prev.find(loop => loop.loop_index === idx);
-      if (!selected || (selected.config_json && selected.metrics_json && selected.agent_analysis !== undefined)) {
-        return prev;
-      }
-      const patchLoopPayload = async () => {
-        const [configRes, metricsRes, analysisRes] = await Promise.all([
-          fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${idx}/config`),
-          fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${idx}/metrics`),
-          fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${idx}/analysis`),
-        ]);
-        const [configJson, metricsJson, analysisJson] = await Promise.all(
-          [configRes, metricsRes, analysisRes].map(async (res) => (res.ok ? res.json() : { data: {} }))
-        );
-        setLoops(current => current.map(loop => (
-          loop.loop_index === idx
-            ? {
-                ...loop,
-                config_json: configJson?.data?.config_json ?? loop.config_json,
-                metrics_json: metricsJson?.data?.metrics_json ?? loop.metrics_json,
-                agent_analysis: analysisJson?.data?.agent_analysis ?? loop.agent_analysis ?? null,
-              }
-            : loop
-        )));
-      };
-      patchLoopPayload().catch(e => console.error(`[QE] Loop payload error for Loop${idx}:`, e));
-      return prev;
-    });
-  }, [activeTaskId]);
+  const handleSelectLoop = useCallback((idx: number) => { setActiveLoopIndex(idx); setRightPanelView("loop"); }, []);
   const handleToggleLogs = useCallback(() => setLogsCollapsed(prev => !prev), []);
   const handleSetDetailTab = useCallback((tab: string) => setDetailTab(tab), []);
   const handleSetRightPanelView = useCallback((v: "loop" | "trajectory") => {
@@ -2481,8 +2458,8 @@ function SingleAlphaEvolutionDashboard() {
               新建任务
             </button>
             <button
-              onClick={() => { fetchTasks(); if (activeTaskId) fetchTaskDetail(activeTaskId); }}
-              title={hasRunningTask ? "自动刷新: 每10秒" : "自动刷新: 每60秒（无活跃任务）"}
+              onClick={() => { loopReads.current.clear(); setDetailRevision(value => value + 1); fetchTasks(); if (activeTaskId) fetchTaskDetail(activeTaskId); }}
+              title={hasRunningTask ? "仅运行任务每60秒更新，历史任务不自动刷新" : "无运行任务，仅手动刷新"}
               style={{
                 padding: "6px 14px",
                 backgroundColor: "#fff",
@@ -2499,11 +2476,11 @@ function SingleAlphaEvolutionDashboard() {
               <RefreshCw size={12} />
               刷新
               <span style={{ fontSize: "10px", color: "#94a3b8", fontWeight: 400 }}>
-                {hasRunningTask ? "运行中10s" : "手动"}
+                {hasRunningTask ? "运行中60s" : "手动"}
               </span>
             </button>
             <div style={{ display: "grid", gap: 4, padding: "8px 10px", borderRadius: 8, backgroundColor: "#fff", border: "1px solid #e2e8f0", fontSize: 11, color: "#475569", lineHeight: 1.35 }}>
-              <strong style={{ color: "#0f172a", fontSize: 12 }}>Full task view</strong>
+              <strong style={{ color: "#0f172a", fontSize: 12 }}>当前页任务</strong>
               <span>Tasks {tasks.length}</span>
               <span>Loop slots {taskVisibilitySummary.loopSlots}</span>
               <span>HMM {taskVisibilitySummary.hmmCount}</span>
@@ -2513,6 +2490,12 @@ function SingleAlphaEvolutionDashboard() {
 
           {/* 右侧: 任务列表表格 */}
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: 8, display: "flex", gap: 12, alignItems: "center" }}>
+              <button disabled={taskOffset === 0} onClick={() => { setActiveTaskId(null); setTaskOffset(offset => Math.max(0, offset - EVOLUTION_TASK_LIST_PAGE_SIZE)); }}>上一页</button>
+              <span>第 {Math.floor(taskOffset / EVOLUTION_TASK_LIST_PAGE_SIZE) + 1} 页，每页 {EVOLUTION_TASK_LIST_PAGE_SIZE} 条</span>
+              <button disabled={!hasMoreTasks} onClick={() => { setActiveTaskId(null); setTaskOffset(offset => offset + EVOLUTION_TASK_LIST_PAGE_SIZE); }}>下一页</button>
+              {readError && <span role="alert" style={{ color: "#b91c1c" }}>更新失败，保留上次结果：{readError}</span>}
+            </div>
             <div style={{ maxHeight: "660px", overflowY: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                 <thead>
@@ -2815,44 +2798,12 @@ function SingleAlphaEvolutionDashboard() {
 
       {/* ============ 实时日志 (任务列表下方, 可折叠) — React.memo 子组件 ============ */}
       <LogsPanel
-        logs={logs}
+        store={logStore}
         collapsed={logsCollapsed}
         onToggle={handleToggleLogs}
       />
 
-      {/* ============ 后端日志面板（折叠） ============ */}
-      <div style={{ marginBottom: "8px", border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" }}>
-        <div
-          onClick={() => setBackendLogsOpen(o => !o)}
-          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", backgroundColor: "#f8fafc", cursor: "pointer", userSelect: "none" }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: 600, color: "#475569" }}>
-            <span style={{ fontSize: "10px" }}>{backendLogsOpen ? "▼" : "▶"}</span>
-            后端日志（Windows AIstock）
-            <span style={{ fontSize: "11px", fontWeight: 400, color: "#94a3b8" }}>LLM分析 / API报错</span>
-          </div>
-          {backendLogsOpen && (
-            <div style={{ display: "flex", gap: "6px" }} onClick={e => e.stopPropagation()}>
-              {(["全部", "ERROR", "WARN", "INFO"] as const).map(lv => (
-                <button key={lv}
-                  onClick={() => setBackendLogLevel(lv === "全部" ? "" : lv)}
-                  style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", cursor: "pointer",
-                    backgroundColor: (lv === "全部" ? "" : lv) === backendLogLevel ? "#1e293b" : "#fff",
-                    color: (lv === "全部" ? "" : lv) === backendLogLevel ? "#fff" : "#475569",
-                  }}>{lv}</button>
-              ))}
-            </div>
-          )}
-        </div>
-        {backendLogsOpen && (
-          <LogTerminal
-            logs={backendLogs.length > 0 ? backendLogs : ["[System] 等待日志..."]}
-            logsEndRef={backendLogsEndRef}
-            maxHeight={280}
-            fontSize={11}
-          />
-        )}
-      </div>
+      <BackendLogPanel />
 
       {/* ============ 区域B: 拓扑 + Loop 详情 (中间横向并列, flex:1) ============ */}
       <div style={{ display: "flex", flex: 1, gap: "16px", minHeight: "1200px" }}>

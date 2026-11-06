@@ -1,4 +1,4 @@
-"""File-only contracts for extending a fixed HMM, never training a new model."""
+"""Explicit fixed-HMM file extension and DB subscription contracts; never fit."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend.services.hmm_data_source.daily_input import DailyInputError, snapshot_inference_origin
 from backend.services.quantevolver.qe_active_dataset_profile import (
     _require_plain_existing_chain,
     load_active_qe_profile,
@@ -22,7 +23,12 @@ POLICY_SCHEMA = "hmm_coefficient_extension_policy_v1"
 EXTENSION_MODE = "frozen_window_extension_v1"
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _PRESET = re.compile(r"[A-Za-z0-9_-]+\Z")
-_ASSET_FIELDS = {"coefficient_extension", "coefficient_windows", "qe_frozen_input_bundle"}
+_ASSET_FIELDS = {
+    "coefficient_extension",
+    "coefficient_windows",
+    "qe_frozen_input_bundle",
+    "daily_coefficient_subscription",
+}
 _FILE_COMPONENTS = {
     "sector_data_h5": "sector_data",
     "index_daily_h5": "index_daily",
@@ -63,6 +69,52 @@ def file_sha256(path: Path) -> str:
 
 def config_fingerprint(config: Mapping[str, Any]) -> str:
     return fingerprint({k: v for k, v in config.items() if k not in _ASSET_FIELDS})
+
+
+def make_daily_subscription(
+    *,
+    config: Mapping[str, Any],
+    snapshot_id: str,
+    model_sha256: str,
+    signal_presets: list[str],
+    enabled: bool,
+) -> dict[str, Any]:
+    if (
+        type(enabled) is not bool
+        or not isinstance(snapshot_id, str)
+        or not snapshot_id.strip()
+        or not isinstance(model_sha256, str)
+        or not _SHA.fullmatch(model_sha256)
+        or not isinstance(signal_presets, list)
+        or not signal_presets
+        or any(not isinstance(p, str) or not _PRESET.fullmatch(p) for p in signal_presets)
+        or len(set(signal_presets)) != len(signal_presets)
+        or config.get("strict_no_leakage") is not True
+    ):
+        _fail("explicit fixed-model daily subscription is required", "hmm_daily_subscription_identity_changed")
+    return {
+        "schema_version": "hmm_database_daily_subscription_v1",
+        "source_mode": "database_daily",
+        "enabled": enabled,
+        "snapshot_id": snapshot_id,
+        "model_sha256": model_sha256,
+        "config_sha256": config_fingerprint(config),
+        "signal_presets": sorted(signal_presets),
+    }
+
+
+def validate_daily_subscription(config: Mapping[str, Any], policy: Any, *, model_sha256: str) -> None:
+    if not isinstance(policy, dict):
+        _fail("daily subscription is missing", "hmm_daily_subscription_identity_changed")
+    expected = make_daily_subscription(
+        config=config,
+        snapshot_id=policy.get("snapshot_id"),
+        model_sha256=model_sha256,
+        signal_presets=policy.get("signal_presets"),
+        enabled=policy.get("enabled"),
+    )
+    if policy != expected or policy["enabled"] is not True:
+        _fail("daily subscription/model/config changed or disabled", "hmm_daily_subscription_identity_changed")
 
 
 def make_policy(
@@ -212,6 +264,16 @@ def resolve_active_input(profile: Any | None = None) -> dict[str, Any]:
     }
 
 
+def _model_inference_origin(metrics: Any, start: str) -> dict[str, str]:
+    try:
+        return snapshot_inference_origin(metrics, as_of=date.fromisoformat(start))
+    except (DailyInputError, TypeError, ValueError) as exc:
+        raise CoefficientExtensionError(
+            "hmm_coefficient_extension_model_asof_invalid",
+            "coefficient window must follow frozen snapshot training/semantic calibration",
+        ) from exc
+
+
 def build_plan(
     *,
     config_id: str,
@@ -238,6 +300,9 @@ def build_plan(
     if not model_path.is_file() or file_sha256(model_path) != policy["model_sha256"]:
         _fail("model bytes changed", "hmm_coefficient_extension_model_identity_mismatch")
     start = policy["coefficient_start"]
+    # Config dates are mutable and cannot establish when this model/semantic
+    # mapping became usable. Use the same frozen authority as database_daily.
+    origin = _model_inference_origin(snapshot.get("metrics_json"), start)
     dates = [d for d in inputs["calendar"] if d >= start]
     if not dates or dates[0] != start:
         _fail("coefficient_start must exist in the frozen calendar")
@@ -257,22 +322,27 @@ def build_plan(
             lo, hi = str(w.get("test_start") or ""), str(w.get("backtest_end") or "")
             if start <= lo <= hi <= end and lo in dates and hi in dates:
                 windows.add((lo, hi))
+    generator_sha = file_sha256(Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py")
+    reader_sha = file_sha256(Path(__file__))
     key = fingerprint(
         {
             "policy": policy,
             "preset": signal_preset,
             "preset_coeffs": preset_coeffs,
+            "model_inference_origin": origin,
             "input_identity": inputs["identity"],
             "start": start,
             "end": end,
-            "generator_sha256": file_sha256(
-                Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py"
-            ),
+            "generator_sha256": generator_sha,
+            # A reviewed reader fix gets a new admission identity; it must not
+            # silently retry or mutate a terminal job from the previous code.
+            "extension_reader_sha256": reader_sha,
         }
     )
     filename = f"coefficients_{signal_preset}_{start}_{end}__auto_{key[:24]}.json"
     return {
         "generation_mode": EXTENSION_MODE,
+        "source_mode": "qe_frozen_file",
         "extension_key": key,
         "policy": dict(policy),
         "snapshot_id": policy["snapshot_id"],
@@ -281,9 +351,9 @@ def build_plan(
         "preset_coeffs": dict(preset_coeffs),
         "model_path": str(model_path),
         "model_sha256": policy["model_sha256"],
-        "generator_sha256": file_sha256(
-            Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py"
-        ),
+        "model_inference_origin": origin,
+        "generator_sha256": generator_sha,
+        "extension_reader_sha256": reader_sha,
         "config_json": dict(config),
         "test_start": start,
         "backtest_end": end,
@@ -301,6 +371,18 @@ def build_plan(
 
 
 def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: str, end: str) -> dict[str, Any]:
+    origin = plan.get("model_inference_origin")
+    if not isinstance(origin, dict):
+        _fail("missing frozen snapshot boundaries", "hmm_coefficient_extension_model_asof_invalid")
+    checked_origin = _model_inference_origin(
+        {
+            "train_period": f"{origin.get('train_start')} ~ {origin.get('train_end')}",
+            "val_period": f"{origin.get('validation_start')} ~ {origin.get('validation_end')}",
+        },
+        start,
+    )
+    if checked_origin != origin:
+        _fail("frozen snapshot boundaries changed", "hmm_coefficient_extension_model_asof_invalid")
     expected_identity = plan["dataset_identity"]
     if payload.get("dataset_identity") != expected_identity or payload.get("model_sha256") != plan["model_sha256"]:
         _fail("generated artifact identity differs from the frozen plan")
@@ -323,14 +405,17 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         previous_end = ""
         for span in rows:
             if not isinstance(span, dict) or not all(
-                isinstance(span.get(k), str) for k in ("from", "to", "sector_code")
+                isinstance(span.get(k), str) for k in ("start_date", "end_date", "sector_code")
             ):
                 _fail("invalid PIT membership span")
-            date.fromisoformat(span["from"])
-            date.fromisoformat(span["to"])
-            if span["from"] > span["to"] or span["from"] <= previous_end:
+            try:
+                date.fromisoformat(span["start_date"])
+                date.fromisoformat(span["end_date"])
+            except ValueError:
+                _fail("invalid PIT membership span date")
+            if span["start_date"] > span["end_date"] or span["start_date"] <= previous_end:
                 _fail("overlapping or unordered PIT membership spans")
-            previous_end = span["to"]
+            previous_end = span["end_date"]
     unavailable = payload.get("quote_unavailable_sector_codes_by_date")
     asofs = payload.get("input_data_max_dates_by_date")
     if any(
@@ -346,7 +431,7 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
             symbol: span["sector_code"]
             for symbol, rows in spans.items()
             for span in rows
-            if span["from"] <= d <= span["to"]
+            if span["start_date"] <= d <= span["end_date"]
         }
         if maps is not None and maps[d] != day_map:
             _fail(f"PIT maps differ from membership spans on {d}")
@@ -375,12 +460,12 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         result["stock_sector_map_by_date"] = {d: result["stock_sector_map_by_date"][d] for d in dates}
     result["stock_sector_membership_spans"] = {
         symbol: [
-            dict(span, **{"from": max(span["from"], start), "to": min(span["to"], end)})
+            dict(span, start_date=max(span["start_date"], start), end_date=min(span["end_date"], end))
             for span in rows
-            if span["from"] <= end and span["to"] >= start
+            if span["start_date"] <= end and span["end_date"] >= start
         ]
         for symbol, rows in spans.items()
-        if any(span["from"] <= end and span["to"] >= start for span in rows)
+        if any(span["start_date"] <= end and span["end_date"] >= start for span in rows)
     }
     result.update(
         {
@@ -389,9 +474,11 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
             "coefficient_start": start,
             "coefficient_end": end,
             "strict_no_leakage": True,
+            "model_inference_origin": checked_origin,
             "snapshot_id": plan["snapshot_id"],
             "config_id": plan["config_id"],
             "extension_key": plan["extension_key"],
+            "extension_reader_sha256": plan["extension_reader_sha256"],
             "generation_mode": EXTENSION_MODE,
         }
     )
@@ -442,6 +529,7 @@ def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         "snapshot_id": plan["snapshot_id"],
         "config_id": plan["config_id"],
         "model_sha256": plan["model_sha256"],
+        "model_inference_origin": result["model_inference_origin"],
         "dataset_generation": identity["generation"],
         "release_id": identity["release_id"],
         "dataset_manifest_identity": identity["dataset_manifest_sha256"],
@@ -452,4 +540,5 @@ def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         "coefficient_bytes": byte_count,
         "extension_key": plan["extension_key"],
         "generator_sha256": plan["generator_sha256"],
+        "extension_reader_sha256": plan["extension_reader_sha256"],
     }

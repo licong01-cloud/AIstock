@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import posixpath
 import re
@@ -355,6 +356,9 @@ def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: st
     )
 
 
+_GENERAL_PTNN_RANKING_LOSSES = {"log_approx_ndcg_at_k", "ndcg_at_k_pairwise"}
+
+
 def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(params, dict):
         return False
@@ -362,7 +366,9 @@ def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
         return True
     raw_loss = params.get("loss")
-    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+    return raw_loss is not None and str(raw_loss).strip().lower() in {
+        "approx_ndcg_at_k", *_GENERAL_PTNN_RANKING_LOSSES,
+    }
 
 
 def _validate_positive_int_param(value: Any, *, name: str, reason_code: str) -> int:
@@ -382,7 +388,7 @@ def _validate_positive_float_param(value: Any, *, name: str) -> float:
         raise ValueError(
             f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}"
         ) from exc
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise ValueError(f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}")
     return parsed
 
@@ -395,20 +401,21 @@ def _finalize_general_ptnn_ltr_routing(
     model_dataset_cls: str,
     model_name: str,
 ) -> tuple[str, str, Dict[str, Any]]:
-    """Switch opt-in GeneralPTNN listwise requests to the AIstock LTR adapter."""
+    """Switch opt-in ranking requests; serialize the actual objective name."""
 
     if model_class not in _GENERAL_PTNN_MODEL_CLASSES:
         return model_class, model_module, model_kwargs
 
     updated_kwargs = dict(model_kwargs)
-    requested_mode = str(updated_kwargs.get("ltr_loss_mode") or updated_kwargs.get("loss") or "mse").strip()
-    if updated_kwargs.get("loss") == "approx_ndcg_at_k":
-        requested_mode = "approx_ndcg_at_k"
-    if requested_mode not in {"mse", "approx_ndcg_at_k"}:
+    modes = {str(updated_kwargs.get(key) or "mse").strip().lower() for key in ("loss", "ltr_loss_mode")}
+    modes = {"log_approx_ndcg_at_k" if value == "approx_ndcg_at_k" else value for value in modes}
+    modes.discard("mse")
+    if len(modes) > 1 or not modes.issubset(_GENERAL_PTNN_RANKING_LOSSES):
         raise ValueError(
             "reason_code=general_ptnn_ltr_invalid_loss_mode: "
-            f"model={model_name} requested unsupported ltr_loss_mode={requested_mode!r}"
+            f"model={model_name} requested unsupported or conflicting losses={sorted(modes)!r}"
         )
+    requested_mode = next(iter(modes), "mse")
 
     if requested_mode == "mse":
         updated_kwargs["loss"] = "mse"
@@ -422,8 +429,8 @@ def _finalize_general_ptnn_ltr_routing(
             f"model={model_name} requested ltr_loss_mode={requested_mode!r} with dataset={model_dataset_cls}"
         )
 
-    updated_kwargs["ltr_loss_mode"] = "approx_ndcg_at_k"
-    updated_kwargs["loss"] = "approx_ndcg_at_k"
+    updated_kwargs["ltr_loss_mode"] = requested_mode
+    updated_kwargs["loss"] = requested_mode
     updated_kwargs["topk_train_k"] = _validate_positive_int_param(
         updated_kwargs.get("topk_train_k", 25),
         name="topk_train_k",
@@ -467,8 +474,9 @@ def _finalize_general_ptnn_ltr_routing(
             "ltr_fail_on_degenerate_group=false is not supported for QE listwise LTR"
         )
     logger.info(
-        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR topk_train_k=%s relevance_bins=%s",
+        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR loss=%s topk_train_k=%s relevance_bins=%s",
         model_name,
+        requested_mode,
         updated_kwargs["topk_train_k"],
         updated_kwargs["ltr_relevance_bins"],
     )
@@ -2344,6 +2352,21 @@ class ConfigComposer:
         """
         import uuid as _uuid
 
+        from .l2_risk_consumer import apply_study, extract_study
+        from .l2_continuous_consumer import apply_continuous, extract_continuous
+        from .stock_probability_consumer import apply_stock_probability, extract_stock_probability
+        from .l2_relative_consumer import apply_relative, extract_relative
+        from .l2_natural_entry_consumer import apply_natural_entry, extract_natural_entry
+        from .terminal_replay_consumer import apply_terminal_replay, extract_terminal_replay
+        from .trend_entry_consumer import apply_trend_entry, extract_trend_entry
+
+        custom_params, trend_entry_study = extract_trend_entry(custom_params)
+        custom_params, natural_entry_study = extract_natural_entry(custom_params)
+        custom_params, terminal_replay = extract_terminal_replay(custom_params)
+        custom_params, relative_study = extract_relative(custom_params)
+        custom_params, stock_probability_study = extract_stock_probability(custom_params)
+        custom_params, continuous_study = extract_continuous(custom_params)
+        custom_params, l2_study = extract_study(custom_params)
         experiment_id = str(_uuid.uuid4())[:8]
         if not experiment_name:
             experiment_name = f"qe_exp_{experiment_id}"
@@ -2851,7 +2874,13 @@ class ConfigComposer:
             result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
         if direct_v2_dataset_binding is not None:
             result["direct_v2_dataset_binding"] = direct_v2_dataset_binding.as_dict()
-        return result
+        result = apply_study(result, l2_study, scripts_dir=scripts_dir)
+        result = apply_continuous(result, continuous_study, scripts_dir=scripts_dir)
+        result = apply_stock_probability(result, stock_probability_study, scripts_dir=scripts_dir)
+        result = apply_relative(result, relative_study, scripts_dir=scripts_dir)
+        result = apply_natural_entry(result, natural_entry_study, scripts_dir=scripts_dir)
+        result = apply_trend_entry(result, trend_entry_study, scripts_dir=scripts_dir)
+        return apply_terminal_replay(result, terminal_replay, scripts_dir=scripts_dir)
 
     # ── 内存生成辅助方法 ──
 
@@ -3698,6 +3727,11 @@ class ConfigComposer:
         结构与 RDAgent conf_baseline.yaml 完全一致，确保在 WSL 环境中
         使用相同的数据集、模型超参数、策略配置执行实验。
         """
+        feature_processing = self._normalize_feature_processing(
+            custom_params,
+            [f["factor_name"] for f in factors_info if f.get("code_text")],
+        )
+        clip_outlier_yaml = str(feature_processing.get("clip_outlier", True)).lower()
         # ── 模型配置 ──
         # 与 RDAgent model_runner.py 完全一致的模型选择逻辑：
         # - 有源代码的自定义模型 → GeneralPTNN + pt_model_uri: "model.model_cls"
@@ -3764,11 +3798,11 @@ class ConfigComposer:
                         # Preserve the request long enough for the authoritative
                         # local-WSL contract below to accept it or fail closed.
                         model_kwargs[loader_key] = thp[loader_key]
-                if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
+                if _requests_general_ptnn_ltr(thp):
                     model_kwargs.update(
                         {
-                            "ltr_loss_mode": thp.get("ltr_loss_mode", "approx_ndcg_at_k"),
-                            "loss": thp.get("loss", "approx_ndcg_at_k"),
+                            "ltr_loss_mode": thp.get("ltr_loss_mode", "mse"),
+                            "loss": thp.get("loss", "mse"),
                             "topk_train_k": thp.get("topk_train_k", 25),
                             "ltr_temperature": thp.get("ltr_temperature", 1.0),
                             "ltr_gate_temperature": thp.get("ltr_gate_temperature", 1.0),
@@ -4203,6 +4237,7 @@ class ConfigComposer:
             "archive_reason",
             "archive_allow_override",
             "observation_panel",     # Matched-factor data-loader contract, not a strategy kwarg
+            "feature_processing",    # Input projection / normalization, not model or strategy HP
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -4350,7 +4385,7 @@ class ConfigComposer:
         if _requests_general_ptnn_ltr(custom_params) and (
             model_class != "AIStockGeneralPTNNLTR"
             or model_module != "aistock_models.general_ptnn_ltr"
-            or model_kwargs.get("ltr_loss_mode") != "approx_ndcg_at_k"
+            or model_kwargs.get("ltr_loss_mode") not in _GENERAL_PTNN_RANKING_LOSSES
         ):
             raise ValueError(
                 "reason_code=ltr_loss_mode_injection_failed: "
@@ -4687,7 +4722,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append(f"              fit_start_time: {data_split['train_start']}")
             lines.append(f"              fit_end_time: {data_split['valid_end']}")
             lines.append("        - class: Fillna")
@@ -4715,7 +4750,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append(f"              fit_start_time: {data_split['train_start']}")
             lines.append(f"              fit_end_time: {data_split['valid_end']}")
             lines.append("        - class: Fillna")
@@ -4739,7 +4774,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append("        - class: Fillna")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
@@ -5064,6 +5099,72 @@ class ConfigComposer:
         }
 
     @staticmethod
+    def _normalize_feature_processing(
+        custom_params: Optional[Dict[str, Any]], factor_names: List[str],
+    ) -> Dict[str, Any]:
+        """Separate computed factors from model inputs without changing the panel."""
+        if custom_params is None or "feature_processing" not in custom_params:
+            return {}
+        raw = custom_params["feature_processing"]
+        prefix = "qe_feature_processing_invalid: "
+        if not isinstance(raw, dict) or set(raw) - {"exclude_from_model", "clip_outlier", "raw_state_controls"}:
+            raise ValueError(prefix + "expected exclude_from_model/clip_outlier/raw_state_controls object")
+        if custom_params.get("disable_alpha158") is not True or not factor_names:
+            raise ValueError(prefix + "requires custom factors and disable_alpha158=true")
+        excluded = raw.get("exclude_from_model", [])
+        clip = raw.get("clip_outlier", True)
+        if type(clip) is not bool:
+            raise ValueError(prefix + "clip_outlier must be boolean")
+        if (
+            not isinstance(excluded, list)
+            or any(not isinstance(name, str) or not name for name in excluded)
+            or len(set(excluded)) != len(excluded)
+            or set(excluded) - set(factor_names)
+        ):
+            raise ValueError(prefix + "exclude_from_model must name unique computed factors")
+        controls = None
+        if "raw_state_controls" in raw:
+            controls = raw["raw_state_controls"]
+            if (
+                not isinstance(controls, dict)
+                or set(controls) != {"schema_version", "source_factor", "valid_column", "zero_column"}
+                or controls.get("schema_version") != "qe_raw_state_controls_v1"
+            ):
+                raise ValueError(prefix + "expected complete qe_raw_state_controls_v1 declaration")
+            source = controls["source_factor"]
+            outputs = [controls["valid_column"], controls["zero_column"]]
+            if not isinstance(source, str) or source not in factor_names:
+                raise ValueError(prefix + "raw_state_controls source must be a computed factor")
+            if (
+                any(not isinstance(name, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None for name in outputs)
+                or len(set(outputs)) != 2
+                or set(outputs) & set(factor_names)
+                or len(set(factor_names)) != len(factor_names)
+            ):
+                raise ValueError(prefix + "raw_state_controls outputs must be distinct noncolliding identifiers")
+            controls = dict(controls)
+        selected = [name for name in factor_names if name not in excluded]
+        if controls is not None:
+            # Keep shared AF/Z columns in the same order in both arms; append F last.
+            source_selected = controls["source_factor"] in selected
+            selected = [name for name in selected if name != controls["source_factor"]]
+            selected.extend([controls["valid_column"], controls["zero_column"]])
+            if source_selected:
+                selected.append(controls["source_factor"])
+        if not selected:
+            raise ValueError(prefix + "cannot exclude all model features")
+        normalized = {
+            "computed_factor_names": list(factor_names),
+            "model_feature_names": selected,
+            "exclude_from_model": list(excluded),
+            "clip_outlier": clip,
+        }
+        if controls is not None:
+            normalized["raw_state_controls"] = controls
+            normalized["derived_control_names"] = [controls["valid_column"], controls["zero_column"]]
+        return normalized
+
+    @staticmethod
     def _normalize_observation_panel_contract(
         custom_params: Optional[Dict[str, Any]],
         factor_names: List[str],
@@ -5177,6 +5278,7 @@ class ConfigComposer:
             custom_params,
             factor_names,
         )
+        feature_processing = self._normalize_feature_processing(custom_params, factor_names)
         formal_dataset_binding = _formal_dataset_binding(custom_params)
         direct_v2_dataset_binding = _direct_v2_dataset_binding(custom_params)
         metadata_kwargs: Dict[str, Any] = {
@@ -5249,6 +5351,8 @@ class ConfigComposer:
         lines.append(
             "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
+        if feature_processing:
+            lines.append(f"QE_FEATURE_PROCESSING = {feature_processing!r}")
         lines.append("")
         lines.append("")
         lines.append("def _validate_factor_data_dataset_contract():")
@@ -5296,6 +5400,89 @@ class ConfigComposer:
         lines.append("    FACTOR_CACHE_META = ''")
         lines.append(f"TRAIN_START = '{train_start}'")
         lines.append(f"TEST_END = '{test_end}'")
+        cache_input_binding = None
+        if direct_v2_dataset_binding is not None:
+            cache_input_binding = {
+                "schema_version": "qe_direct_v2_factor_cache_inputs_v1",
+                "release_id": direct_v2_dataset_binding.release_id,
+                "cutoff": direct_v2_dataset_binding.cutoff.isoformat(),
+                "factor_meta_sha256": direct_v2_dataset_binding.factor_meta_sha256,
+            }
+        lines.append("QE_FACTOR_CACHE_INPUT_BINDING = " + repr(cache_input_binding))
+        lines.extend('''
+_QE_CACHE_INPUT_STATE = None
+
+def _cache_file_stat(path):
+    value = os.stat(path)
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+def _cache_file_sha256(path):
+    before = _cache_file_stat(path)
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    if _cache_file_stat(path) != before:
+        raise RuntimeError('qe_factor_cache_file_changed_during_read: ' + path)
+    return digest.hexdigest()
+
+def _cache_input_identity():
+    # Node paths are excluded; exact input bytes must agree.
+    global _QE_CACHE_INPUT_STATE
+    if QE_FACTOR_CACHE_INPUT_BINDING is None:
+        return None
+    if _QE_CACHE_INPUT_STATE is not None:
+        for path, expected in _QE_CACHE_INPUT_STATE['stats'].items():
+            if _cache_file_stat(path) != expected:
+                raise RuntimeError('qe_factor_cache_source_changed: ' + path)
+        return _QE_CACHE_INPUT_STATE['identity']
+    meta_path = os.path.join(FACTOR_DATA_DIR, 'meta.json')
+    if _cache_file_sha256(meta_path) != QE_FACTOR_CACHE_INPUT_BINDING['factor_meta_sha256']:
+        raise RuntimeError('qe_factor_cache_source_meta_mismatch')
+    with open(meta_path, 'r', encoding='utf-8') as stream:
+        meta = _json.load(stream)
+    declared = meta.get('files')
+    if (not isinstance(declared, list) or not declared
+            or not all(isinstance(name, str) for name in declared)
+            or len(set(declared)) != len(declared)):
+        raise RuntimeError('qe_factor_cache_source_files_invalid')
+    names = sorted(name for name in ALLOWED_DATA_FILES if os.path.isfile(os.path.join(FACTOR_DATA_DIR, name)))
+    if not names or set(names) != set(declared).intersection(ALLOWED_DATA_FILES):
+        raise RuntimeError('qe_factor_cache_source_files_invalid')
+    paths = [meta_path] + [os.path.join(FACTOR_DATA_DIR, name) for name in names]
+    stats = {path: _cache_file_stat(path) for path in paths}
+    files = {name: _cache_file_sha256(os.path.join(FACTOR_DATA_DIR, name)) for name in names}
+    if any(_cache_file_stat(path) != stat for path, stat in stats.items()):
+        raise RuntimeError('qe_factor_cache_source_changed')
+    identity = {**QE_FACTOR_CACHE_INPUT_BINDING, 'input_files_sha256': files}
+    _QE_CACHE_INPUT_STATE = {'identity': identity, 'stats': stats}
+    return identity
+
+def _verify_cache_input_provenance(entry, cache_path):
+    expected = _cache_input_identity()
+    if expected is None:
+        return None
+    if entry.get('qe_input_identity') != expected:
+        raise RuntimeError('qe_factor_cache_input_identity_unverified: rebuild or verify a versioned cache; do not relabel old values')
+    observed = _cache_file_sha256(cache_path)
+    if entry.get('cache_file_sha256') != observed:
+        raise RuntimeError('qe_factor_cache_value_hash_mismatch')
+    return observed
+
+def _factor_cache_paths(factor_name, factor_code):
+    identity = _cache_input_identity()
+    if identity is None:
+        return (os.path.join(FACTOR_CACHE_SINGLE_DIR, factor_name + '.parquet'), FACTOR_CACHE_META)
+    if not FACTOR_CACHE_SINGLE_DIR:
+        return ('', '')
+    # New input/code versions get new paths. Never copy or relabel a legacy cache.
+    payload = {'inputs': identity, 'universe': _expected_universe_meta(), 'factor_name': factor_name,
+               'requested_window': [TRAIN_START, TEST_END]}
+    key = hashlib.sha256(_json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    code_key = hashlib.sha256(factor_code.encode('utf-8')).hexdigest()
+    root = os.path.join(os.path.dirname(FACTOR_CACHE_META), 'qe_versions', key, code_key)
+    return (os.path.join(root, 'single', factor_name + '.parquet'), os.path.join(root, '_meta.json'))
+'''.splitlines())
         lines.append(
             "FACTOR_CACHE_EXPECTED_UNIVERSE_META = "
             + repr(
@@ -5456,7 +5643,7 @@ class ConfigComposer:
         lines.append('')
         lines.append('def _validate_official_cache_hit_contract(factor_name, factor_code):')
         lines.append("    cache_root = os.path.dirname(FACTOR_CACHE_SINGLE_DIR) if FACTOR_CACHE_SINGLE_DIR else ''")
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet') if FACTOR_CACHE_SINGLE_DIR else ''")
+        lines.append("    cache_path, cache_meta = _factor_cache_paths(factor_name, factor_code) if FACTOR_CACHE_SINGLE_DIR else ('', '')")
         lines.append('    miss_reasons = _official_cache_miss_reasons()')
         lines.append('    top_level_errors = []')
         lines.append('    contract = {')
@@ -5466,7 +5653,8 @@ class ConfigComposer:
         lines.append("        'factor_name': factor_name,")
         lines.append("        'cache_root': cache_root,")
         lines.append("        'single_dir': FACTOR_CACHE_SINGLE_DIR,")
-        lines.append("        'meta_path': FACTOR_CACHE_META,")
+        lines.append("        'meta_path': cache_meta,")
+        lines.append("        'cache_path': cache_path,")
         lines.append("        'start_date': TRAIN_START,")
         lines.append("        'end_date': TEST_END,")
         lines.append("        'expected_as_of_date': TEST_END,")
@@ -5485,15 +5673,17 @@ class ConfigComposer:
         lines.append('    if not _is_official_factor_cache_path_shape(FACTOR_CACHE_SINGLE_DIR):')
         lines.append("        top_level_errors.append('non_official_cache_root')")
         lines.append('        return contract')
+        lines.append("    if QE_FACTOR_CACHE_INPUT_BINDING is not None and os.path.exists(cache_path) != os.path.exists(cache_meta):")
+        lines.append("        raise RuntimeError('qe_factor_cache_version_partial_requires_reconciliation')")
         lines.append('    if not os.path.exists(cache_path):')
         lines.append("        miss_reasons['missing_from_cache'].append(factor_name)")
         lines.append('        return contract')
-        lines.append('    if not FACTOR_CACHE_META or not os.path.exists(FACTOR_CACHE_META):')
+        lines.append('    if not cache_meta or not os.path.exists(cache_meta):')
         lines.append("        miss_reasons['missing_meta'].append(factor_name)")
         lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
         lines.append('        return contract')
         lines.append('    try:')
-        lines.append("        with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("        with open(cache_meta, 'r', encoding='utf-8') as _meta_f:")
         lines.append('            meta = _json.load(_meta_f)')
         lines.append('    except Exception as e:')
         lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
@@ -5511,6 +5701,7 @@ class ConfigComposer:
         lines.append("        miss_reasons['missing_meta'].append(factor_name)")
         lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
         lines.append('        return contract')
+        lines.append("    contract['verified_cache_sha256'] = _verify_cache_input_provenance(entry, cache_path)")
         lines.append("    data_mode = entry.get('data_source_mode') or meta.get('data_source_mode') or meta.get('source_system')")
         lines.append("    allowed_modes = {'backtest_factor_data_dir', 'official_offline_backtest_factor_data'}")
         lines.append('    if data_mode and data_mode not in allowed_modes:')
@@ -5564,8 +5755,12 @@ class ConfigComposer:
         lines.append("            contract_payload = _json.dumps(contract, ensure_ascii=False, default=str)")
         lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + contract_payload)")
         lines.append('        return None')
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+        lines.append("    cache_path, _cache_meta = _factor_cache_paths(factor_name, factor_code)")
         lines.append('    df = pd.read_parquet(cache_path)')
+        lines.append("    if QE_FACTOR_CACHE_INPUT_BINDING is not None:")
+        lines.append("        _cache_input_identity()")
+        lines.append("        if _cache_file_sha256(cache_path) != contract['verified_cache_sha256']:")
+        lines.append("            raise RuntimeError('qe_factor_cache_value_changed_during_read')")
         lines.append('    dates = df.index.get_level_values(0)')
         lines.append('    df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]')
         lines.append("    if 'value' in df.columns:")
@@ -5577,8 +5772,11 @@ class ConfigComposer:
         lines.append("    \"\"\"Publish one factor and its metadata atomically while factor lock is held.\"\"\"")
         lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
         lines.append("        return")
-        lines.append("    os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)")
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+        lines.append("    input_identity = _cache_input_identity()")
+        lines.append("    cache_path, cache_meta = _factor_cache_paths(factor_name, factor_code)")
+        lines.append("    if input_identity is not None and (os.path.exists(cache_path) or os.path.exists(cache_meta)):")
+        lines.append("        raise RuntimeError('qe_factor_cache_immutable_version_exists')")
+        lines.append("    os.makedirs(os.path.dirname(cache_path), exist_ok=True)")
         lines.append("    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
         lines.append("    save_df = result_df.copy()")
         lines.append("    if len(save_df.columns) == 1:")
@@ -5592,8 +5790,8 @@ class ConfigComposer:
         lines.append("    d_max = str(dates.max().date())")
         lines.append("    with _exclusive_cache_lock('global_meta'):")
         lines.append("        meta = {}")
-        lines.append("        if os.path.exists(FACTOR_CACHE_META):")
-        lines.append("            with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("        if os.path.exists(cache_meta):")
+        lines.append("            with open(cache_meta, 'r', encoding='utf-8') as _meta_f:")
         lines.append("                meta = _json.load(_meta_f)")
         lines.append("        factors = dict(meta.get('factors', {}))")
         lines.append("        factors[factor_name] = {")
@@ -5607,13 +5805,17 @@ class ConfigComposer:
         lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
         lines.append("        factors[factor_name].update(universe_meta)")
+        lines.append("        if input_identity is not None:")
+        lines.append("            _cache_input_identity()")
+        lines.append("            factors[factor_name]['qe_input_identity'] = input_identity")
+        lines.append("            factors[factor_name]['cache_file_sha256'] = _cache_file_sha256(cache_path)")
         lines.append("        meta['factors'] = factors")
         lines.append(f"        meta['moneyflow_unit_contract_version'] = '{MONEYFLOW_UNIT_CONTRACT_VERSION}'")
         lines.append("        meta['data_source_mode'] = 'official_offline_backtest_factor_data'")
         lines.append("        for _k, _v in universe_meta.items():")
         lines.append("            if _v is not None:")
         lines.append("                meta[_k] = _v")
-        lines.append("        _publish_json_atomic(FACTOR_CACHE_META, meta)")
+        lines.append("        _publish_json_atomic(cache_meta, meta)")
         lines.append("    logger.info(f'  {factor_name}: cache WRITTEN ({len(result_df)} rows, {d_min}~{d_max}, window={TRAIN_START}~{TEST_END})')")
         lines.append("")
         lines.append("")
@@ -5660,6 +5862,7 @@ class ConfigComposer:
         lines.append('    3. 成功后回写缓存')
         lines.append('    """')
         lines.append("    # ── 缓存检查 ──")
+        lines.append("    _cache_input_identity()")
         lines.append("    cached = _try_cache_hit(factor_name, factor_code)")
         lines.append("    if cached is not None:")
         lines.append("        return cached")
@@ -5713,7 +5916,12 @@ class ConfigComposer:
         lines.append("        return None")
         lines.append("    # Official cache publication is part of the execution contract.  Do not")
         lines.append("    # downgrade a failed/partial cache write to a successful factor result.")
+        lines.append("    _cache_input_identity()")
         lines.append("    _write_cache(factor_name, factor_code, df)")
+        lines.append("    if QE_FACTOR_CACHE_INPUT_BINDING is not None:")
+        lines.append("        # Miss and hit expose the same window; full warmup remains in the version cache.")
+        lines.append("        dates = df.index.get_level_values(0)")
+        lines.append("        df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]")
         lines.append("    return df")
         lines.append("")
         lines.append("")
@@ -5745,8 +5953,13 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _select_factor_results(factor_names, factor_results):")
-        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT:")
+        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT" + (" or QE_FEATURE_PROCESSING:" if feature_processing else ":"))
         lines.append("        _require_factor_results(factor_names, factor_results)")
+        if feature_processing.get("raw_state_controls"):
+            lines.append("        for name in factor_names:")
+            lines.append("            frame = factor_results[name]")
+            lines.append("            if not frame.index.is_unique or list(frame.columns) != [name]:")
+            lines.append("                raise ValueError('qe_raw_state_controls_invalid: nonunique index or ambiguous factor columns: ' + name)")
         lines.append("        return [factor_results[name] for name in factor_names]")
         lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
         lines.append("    # omitted while the remaining successful factors still form the outer union.")
@@ -5791,6 +6004,33 @@ class ConfigComposer:
         lines.append("    return filtered")
         lines.append("")
         lines.append("")
+        if feature_processing.get("raw_state_controls"):
+            lines.extend('''def _derive_raw_state_controls(combined):
+    contract = QE_FEATURE_PROCESSING['raw_state_controls']
+    prefix = 'qe_raw_state_controls_invalid: '
+    if not combined.index.is_unique or not combined.columns.is_unique:
+        raise ValueError(prefix + 'expected unique index and columns')
+    source = contract['source_factor']
+    outputs = [contract['valid_column'], contract['zero_column']]
+    if source not in combined.columns or any(name in combined.columns for name in outputs):
+        raise ValueError(prefix + 'source missing or output collision')
+    raw = combined[source]
+    if (
+        not pd.api.types.is_numeric_dtype(raw.dtype)
+        or pd.api.types.is_bool_dtype(raw.dtype)
+        or pd.api.types.is_complex_dtype(raw.dtype)
+    ):
+        raise ValueError(prefix + 'source must be real numeric, nonpositive or NA')
+    values = raw.to_numpy(dtype=float, na_value=np.nan)
+    if np.isinf(values).any() or (values > 0).any():
+        raise ValueError(prefix + 'source must be nonpositive or NA; do not guess direction')
+    result = combined.copy()
+    result[outputs[0]] = np.isfinite(values).astype('int8')
+    result[outputs[1]] = (values == 0).astype('int8')
+    return result
+
+
+'''.splitlines())
         lines.append("def main():")
         lines.append("    script_dir = os.path.dirname(os.path.abspath(__file__))")
         lines.append("    os.chdir(script_dir)")
@@ -5853,13 +6093,26 @@ class ConfigComposer:
         lines.append("        combined = combined.sort_index()")
         lines.append("")
         lines.append("    combined = _apply_observation_panel(combined)")
+        if feature_processing.get("raw_state_controls"):
+            lines.append("    combined = _derive_raw_state_controls(combined)")
+        if feature_processing:
+            lines.append("    # Project only the run-local model input, after the unchanged reference mask.")
+            lines.append("    combined = combined.loc[:, QE_FEATURE_PROCESSING['model_feature_names']].copy()")
         lines.append("")
         lines.append("    # 添加 'feature' 多级列索引（与 RDAgent factor_runner.py 一致）")
         lines.append("    new_columns = pd.MultiIndex.from_product([['feature'], combined.columns])")
         lines.append("    combined.columns = new_columns")
         lines.append("")
         lines.append("    output_path = os.path.join(script_dir, 'combined_factors_df.parquet')")
-        lines.append("    combined.to_parquet(output_path, engine='pyarrow')")
+        if feature_processing:
+            lines.append("    import pyarrow as pa")
+            lines.append("    import pyarrow.parquet as pq")
+            lines.append("    table = pa.Table.from_pandas(combined)")
+            lines.append("    metadata = dict(table.schema.metadata or {})")
+            lines.append("    metadata[b'qe_feature_processing'] = _json.dumps(QE_FEATURE_PROCESSING, sort_keys=True).encode('utf-8')")
+            lines.append("    pq.write_table(table.replace_schema_metadata(metadata), output_path, compression='snappy')")
+        else:
+            lines.append("    combined.to_parquet(output_path, engine='pyarrow')")
         lines.append("    logger.info(f'Saved combined_factors_df.parquet: shape={combined.shape}')")
         lines.append("")
         lines.append("    # 计算 num_features：根据 conf.yaml 中的 data_loader 类型决定")

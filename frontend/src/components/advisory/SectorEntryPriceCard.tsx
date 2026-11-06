@@ -1,4 +1,5 @@
 "use client";
+import { QuoteCell } from "./LiveQuotes";
 
 import { useEffect, useState } from "react";
 import { advisoryApi, type AdvisorySectorEntryDaily, type AdvisorySectorPriceCandidate } from "@/lib/api/advisory";
@@ -94,6 +95,7 @@ export function SectorEntryPriceCard({ programId, targetTradeDate, listVersionId
             模型范围外/非买入候选 {result.unmodeled_items.length} 项，原动作保留。</p>
           {result.candidates.map((row) => <div className="mt-2 border-t pt-2" key={row.instrument}>
             <strong>{row.selection_effective_rank}. {row.instrument} · {labels[row.status]}</strong>
+            <div>当前最新价 <QuoteCell symbol={row.instrument} /></div>
             {row.intervals.map((band, index) => <p key={index}>{money(band.low_cny)}～{money(band.high_cny)} CNY；
               条件净价值 {money(band.expected_net_bps_min)}～{money(band.expected_net_bps_max)} bps；
               入场锚定路径损失 q90 ≤ {money(band.downside_q90_bps_max)} bps</p>)}

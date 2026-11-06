@@ -33,3 +33,8 @@ Use this as Claude Code's lightweight entry for broad or unclear AIstock work. T
 - Runtime BUGs use the lazy task-card contract; changed-file inference cannot be downgraded, unknown/conflict/multi-target fails closed, and frontend/client/database/backend activation states remain separate. Only restart-required or post-restart work is single-issue. Compatible records from one shared source PR use `close-sync-batch`; when the merge-aftercare owner already has at least two independently merged, non-runtime BUGs ready for metadata-only close-sync, use `close-sync-aggregate` with an explicit per-BUG `--source-pr` mapping. Never delay one ready BUG merely to wait for an aggregate.
 
 Report the selected lane, then continue when execution is requested.
+
+## 最小文档与自动交付
+
+- 按唯一规范 `DOC-MINIMUM-001`：默认零额外说明文件，复用已有任务/Issue/PR/回执；Context Pack Markdown 按需，必要设计和真实证据完整保留。
+- 按 `AUTO-REVIEW-DELIVERY-001`：当前 Agent 执行正确性与完整性审核、自动修复和最终版本复核；启用且有授权的源码交付连续执行，任务明确限制优先，不扩展到运行态、数据库、训练或删除。

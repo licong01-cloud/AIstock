@@ -1,21 +1,106 @@
 from __future__ import annotations
 
 import datetime as dt
+from contextlib import nullcontext
 from concurrent.futures import Future
 from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 import scripts.ingest_tushare_adj_factor as ingest_adj_factor
-
 from backend.ingestion.tdx_scheduler import TDXScheduler
+
+
+def test_known_history_conflict_cannot_be_reconciled_by_permissive_freshness(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduler_module
+    scheduler = object.__new__(TDXScheduler)
+    repository = Mock()
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repository)
+    scheduler._target_date_for_retry = lambda *args: dt.date(2026, 10, 27)
+    scheduler._job_update_outcome = lambda _job: {
+        "status": "failed", "history_reconciliation": {"failures": [
+            {"symbol": "920047.BJ", "retryable": False, "error": "source history conflict"}]}}
+    scheduler._check_dataset_recovered = Mock(return_value=SimpleNamespace(status="ok"))
+    scheduler._reconcile_recovered_target_state = Mock()
+    done = Future()
+    done.set_result(None)
+    scheduler._finalize_data_sync_target_retry(done, target_id="target", dataset="adj_factor",
+        mode="incremental", options={"job_id": "c197fd66-9de8-4e0c-a994-f774a42a89e7"})
+    repository.mark_final_blocked.assert_called_once()
+    scheduler._reconcile_recovered_target_state.assert_not_called()
+    scheduler._check_dataset_recovered.assert_not_called()
+
+
+@pytest.mark.parametrize("records", [[],
+    [{"ts_code": "300506.SZ", "trade_date": "20261026", "adj_factor": 1}],
+    [{"ts_code": "300506.SZ", "trade_date": "20261027", "adj_factor": float("nan")}],
+    [{"ts_code": "300506.SZ", "trade_date": "20261027", "adj_factor": 1}]*2,
+])
+def test_daily_provider_empty_wrong_date_invalid_or_duplicate_cannot_succeed(records):
+    import pandas as pd
+    class Provider:
+        def adj_factor(self, **_kwargs):
+            return pd.DataFrame(records)
+    with pytest.raises((RuntimeError, ValueError)):
+        ingest_adj_factor._fetch_adj_factor_for_date(Provider(), dt.date(2026, 10, 27))
+
 
 
 def _argument_value(args: list[str], name: str) -> str:
     return args[args.index(name) + 1]
+
+
+def test_exact_factor_repair_passes_each_symbol_not_a_stringified_list():
+    args = TDXScheduler._default_ingestion_args("adj_factor", "incremental", {
+        "history_reconcile_symbol": ["000001.SZ", "600000.SH"]})
+    assert [args[i + 1] for i, arg in enumerate(args) if arg == "--history-reconcile-symbol"] == [
+        "000001.SZ", "600000.SH"]
+
+
+def test_exact_factor_repair_cannot_fall_back_to_the_whole_market():
+    scheduler = object.__new__(TDXScheduler)
+    with pytest.raises(ValueError, match="symbol"):
+        scheduler._enqueue_target_retry(target={"dataset": "adj_factor", "data_source": "integrity_repair",
+            "target_id": "repair", "target_date": dt.date(2018, 8, 8)}, schedule={},
+            retry_mode="incremental", triggered_by="unit", attempt=1)
+
+
+def test_exact_factor_repair_uses_only_current_named_supported_gaps():
+    scheduler = object.__new__(TDXScheduler)
+    queries = []
+    def fetch(query, params):
+        queries.append((query, params))
+        return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
+                 "validation": {"gaps": [{"classification": "MISSING",
+                     "symbols": ["000001.SZ", "000001.SZ", "920001.BJ"]}]}}]
+    scheduler._fetchall = fetch
+    target = {"target_date": dt.date(2018, 8, 8)}
+    assert scheduler._scope_adj_factor_repair(target)
+    assert target["metadata"]["history_reconcile_symbols"] == ["000001.SZ"]
+    assert len(queries) == 1 and "FROM market.dataset_date_refresh_audit" in queries[0][0]
+
+
+@pytest.mark.parametrize("day,delay_hours", [(dt.date(2026, 5, 20), 24), (dt.date(2026, 11, 4), 6)])
+def test_exact_source_gap_backoff_keeps_recent_days_fast(monkeypatch, day, delay_hours):
+    import backend.ingestion.tdx_scheduler as scheduling
+    now = dt.datetime(2026, 11, 5, 8, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(scheduling, "_now", lambda: now)
+    repo = Mock()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    scheduler = object.__new__(TDXScheduler)
+    scheduler._target_date_for_retry = lambda *_: day
+    scheduler._final_deadline_for_target = lambda *_: now-dt.timedelta(days=1)
+    scheduler._check_dataset_recovered = lambda *_: SimpleNamespace(status="gap", failure_category="physical_gap")
+    done = Future()
+    done.set_result(None)
+    scheduler._finalize_data_sync_target_retry(done, target_id="dated", dataset="bak_basic",
+        mode="incremental", options={"integrity_repair": True})
+    assert repo.mark_retry.call_args.kwargs["retry_after"] == now+dt.timedelta(hours=delay_hours)
+    repo.mark_final_blocked.assert_not_called()
 
 
 def test_adj_factor_script_starts_by_absolute_path_outside_repository(tmp_path: Path) -> None:
@@ -139,17 +224,23 @@ def test_incremental_adj_factor_scheduler_passes_optional_history_controls() -> 
     assert "--history-reconcile-dry-run" in args
 
 
+@pytest.mark.parametrize("history_error", [False, True])
 def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write_path(
-    monkeypatch,
+    monkeypatch, history_error,
 ) -> None:
     class _Connection:
         autocommit = False
 
         def __enter__(self):
-            return self
+            pytest.fail("autocommit CLI must not enter a psycopg2 transaction context")
 
         def __exit__(self, exc_type, exc, traceback):
             return False
+
+        def close(self):
+            self.closed = True
+
+    connection = _Connection()
 
     calls: list[tuple[str, object]] = []
 
@@ -181,7 +272,7 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         bulk_session_tune=False,
     )
     monkeypatch.setattr(ingest_adj_factor, "parse_args", lambda: args)
-    monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: _Connection())
+    monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: connection)
     monkeypatch.setattr(ingest_adj_factor, "pro_api", lambda: object())
     monkeypatch.setattr(ingest_adj_factor, "_get_max_trade_date", lambda connection: dt.date(2026, 9, 13))
     monkeypatch.setattr(ingest_adj_factor, "_create_job", lambda *args: "job-id")
@@ -192,17 +283,31 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         "_finish_job",
         lambda connection, job_id, status, summary: calls.append(("finished", (status, summary))),
     )
-    monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository", lambda connection: object())
-    monkeypatch.setattr(ingest_adj_factor, "AdjFactorHistoryReconciler", _Reconciler)
+    def run_history(connection, arguments, job_id, end_date):
+        reconciler = _Reconciler(repository=object())
+        result = reconciler.reconcile(end_date=end_date)
+        if history_error:
+            raise RuntimeError("real history failure must remain failed")
+        return result
+    monkeypatch.setattr(ingest_adj_factor, "run_history_ingestion", run_history)
+    monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository",
+                        lambda _connection: SimpleNamespace(writer_lock=nullcontext))
     monkeypatch.setattr(
         ingest_adj_factor,
         "run_ingestion",
         lambda *args, **kwargs: pytest.fail("incremental mode must not use the date-only upsert path"),
     )
 
-    ingest_adj_factor.main()
+    if history_error:
+        with pytest.raises(SystemExit) as error:
+            ingest_adj_factor.main()
+        assert error.value.code == 1
+    else:
+        ingest_adj_factor.main()
 
     assert [name for name, _ in calls] == ["constructed", "reconciled", "finished"]
     status, summary = calls[-1][1]
-    assert status == "success"
-    assert summary["history_reconciliation"]["status"] == "unchanged"
+    assert connection.closed is True
+    assert status == ("failed" if history_error else "success")
+    if not history_error:
+        assert summary["history_reconciliation"]["status"] == "unchanged"

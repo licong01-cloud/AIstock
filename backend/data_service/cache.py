@@ -60,7 +60,7 @@ class SelectionDataCache:
         Args:
             max_entries: 最大缓存条目数，超过时删除最旧的条目
         """
-        self._cache: dict[tuple[date, int], CacheEntry] = {}
+        self._cache: dict[tuple[date, int, str | None], CacheEntry] = {}
         self._lock = threading.Lock()
         self._max_entries = max_entries
         self._total_hits = 0
@@ -74,6 +74,7 @@ class SelectionDataCache:
         self,
         trade_date: date,
         universe: list[str],
+        *, source_identity: str | None = None,
     ) -> Optional[tuple[pd.DataFrame, pd.DataFrame]]:
         """
         获取缓存数据
@@ -89,7 +90,7 @@ class SelectionDataCache:
             trade_date = trade_date.date()
 
         universe_hash = self._compute_universe_hash(universe)
-        cache_key = (trade_date, universe_hash)
+        cache_key = (trade_date, universe_hash, source_identity)
 
         with self._lock:
             entry = self._cache.get(cache_key)
@@ -122,6 +123,7 @@ class SelectionDataCache:
         universe: list[str],
         df_history: pd.DataFrame,
         df_fund_raw: pd.DataFrame,
+        *, source_identity: str | None = None,
     ) -> None:
         """
         存入缓存
@@ -136,7 +138,7 @@ class SelectionDataCache:
             trade_date = trade_date.date()
 
         universe_hash = self._compute_universe_hash(universe)
-        cache_key = (trade_date, universe_hash)
+        cache_key = (trade_date, universe_hash, source_identity)
 
         with self._lock:
             # 检查是否超过最大条目数

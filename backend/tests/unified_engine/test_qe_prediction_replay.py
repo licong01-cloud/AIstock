@@ -209,6 +209,16 @@ def test_executor_keeps_factor_preparation_for_full_train() -> None:
     assert "prepare_factors.py" in coordinator.payload.experiment_files
 
 
+def test_stock_probability_study_cannot_accidentally_fit_or_change_prediction() -> None:
+    config = _config()
+    config.model_params_base = {"qe_stock_probability_study": {"manifest": {"prediction_sha256": "wrong"}}}
+    for mode, error in [(BacktestMode.FULL_TRAIN, "REQUIRES_PREDICTION_REPLAY"),
+                        (BacktestMode.PREDICTION_REPLAY, "SOURCE_PREDICTION_MISMATCH")]:
+        executor, coordinator = _executor()
+        with pytest.raises(ValueError, match=error):
+            asyncio.run(executor.submit(config, _context(_source()), mode=mode))
+        executor.composer.compose_experiment_in_memory.assert_not_called()
+        assert coordinator.payload is None
 def test_executor_replay_rejects_orphan_factor_preparation_marker() -> None:
     executor, _ = _executor(
         "cd /workspace && python prepare_factors.py && "

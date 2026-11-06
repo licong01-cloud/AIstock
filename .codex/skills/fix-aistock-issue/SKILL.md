@@ -49,3 +49,8 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 4. Merge aftercare uses `merge-finalizer` or `aistock-merge-aftercare`.
 5. For a BUG with `backend_restart_required=true`, source PRs use `Refs`, the GitHub Issue remains open, and `finish-batch`/`close-sync-batch` are forbidden. Compatible non-restart BUGs from one shared source PR may use `close-sync-batch`; independently merged non-runtime BUGs may use `close-sync-aggregate` only when at least two are already ready, with one exact `--source-pr BUG-ID=PR-URL` mapping each, and must never wait merely to accumulate a batch. `restart-plan` only expands the existing repo runbook and catalog target. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>` and pass its complete digest-bound receipt to `close-sync --bug-id BUG-XXX --pr-url <source-pr> --validation-evidence "<command> -> passed" --post-restart-receipt <receipt> --create-registry-worktree --apply --create-pr`.
 6. Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans, runtime identity, post-restart gate and runtime/DB impact.
+
+## 最小文档与自动交付
+
+- 按唯一规范 `DOC-MINIMUM-001`：默认零额外说明文件，复用已有任务/Issue/PR/回执；Context Pack Markdown 按需，必要设计和真实证据完整保留。
+- 按 `AUTO-REVIEW-DELIVERY-001`：当前 Agent 执行正确性与完整性审核、自动修复和最终版本复核；启用且有授权的源码交付连续执行，任务明确限制优先，不扩展到运行态、数据库、训练或删除。

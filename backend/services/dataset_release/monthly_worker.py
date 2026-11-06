@@ -358,13 +358,29 @@ def _validate_semantics(
         ):
             raise MonthlyProducerError("source snapshot identity is incomplete")
         repair_evidence = require_json_list(scope.get("repair_overlap_check_refs"), field="repair_overlap_check_refs")
-        if len(repair_evidence) != 1 or repair_evidence[0] != {
+        legacy_overlap_evidence = {
             "schema_version": "aistock_monthly_repair_overlap_check_v1",
             "snapshot_group_id": scope["snapshot_group_id"],
             "initial_repair_watermark": snapshot_evidence[0]["repair_watermark"],
             "overlapping_repair_ids": [],
             "status": "PASS",
-        }:
+        }
+        asof_evidence = {
+            "schema_version": "aistock_monthly_source_asof_consistency_v1",
+            "snapshot_group_id": scope["snapshot_group_id"],
+            "source_as_of": scope["source_as_of"],
+            "isolation_level": "REPEATABLE READ READ ONLY",
+            "post_snapshot_writer_check_performed": False,
+            "status": "PASS",
+        }
+        # Keep the legacy ref slot/readback for existing frozen operations, but
+        # new captures explicitly attest as-of consistency, not absence of later
+        # jobs. Never label an unperformed global drift check as a passing one.
+        if len(repair_evidence) != 1 or not (
+            repair_evidence[0] == legacy_overlap_evidence
+            or (repair_evidence[0] == asof_evidence
+                and repair_evidence[0].get("post_snapshot_writer_check_performed") is False)
+        ):
             raise MonthlyProducerError("source repair overlap artifact differs")
         change_evidence = require_json_list(scope.get("change_scope_refs"), field="change_scope_refs")
         if len(change_evidence) != 1 or change_evidence[0] != {
@@ -880,23 +896,41 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
         return hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
 
     def checkpoint_is_valid(self, stage: str, receipt: Mapping[str, Any]) -> bool:
-        del stage
-        for group in ("input_refs", "output_refs"):
-            for ref in receipt.get(group, []):
+        # The operation store already verified the durable receipt's digest and
+        # request/plan/producer binding. Resume is not another whole-release
+        # content audit: LOCAL_VALIDATE and DEPLOY own that verification.
+        retained_stage = stage in {"BUILD", "DERIVE", "LOCAL_VALIDATE"}
+        if stage == "BUILD":
+            anchor = receipt.get("scope", {}).get("dataset_manifest_ref")
+            if not isinstance(anchor, Mapping) or anchor not in receipt.get("output_refs", []):
+                raise MonthlyProducerError("retained BUILD manifest anchor is missing")
+            groups = (receipt.get("input_refs", []), [anchor])
+        elif stage == "LOCAL_VALIDATE":
+            groups = (receipt.get("output_refs", []),)
+        else:
+            groups = (receipt.get("input_refs", []), receipt.get("output_refs", []))
+        for refs in groups:
+            for ref in refs:
                 relative = Path(str(ref["id"]))
                 matches = [(root, root / relative) for root in self.artifact_roots if (root / relative).is_file()]
                 if len(matches) != 1:
+                    if retained_stage:
+                        raise MonthlyProducerError("retained stage artifact is missing or ambiguous; exports preserved")
                     return False
                 root, path = matches[0]
                 try:
                     _require_plain_path_under(root, path, label="checkpoint")
                 except MonthlyProducerError:
+                    if retained_stage:
+                        raise MonthlyProducerError("retained stage artifact path differs; exports preserved") from None
                     return False
                 if (
                     _is_link_or_junction(path)
                     or path.stat().st_size != ref["size"]
                     or _file_sha256(path) != ref["sha256"]
                 ):
+                    if retained_stage:
+                        raise MonthlyProducerError("retained stage artifact bytes differ; exports preserved")
                     return False
         return True
 
@@ -1006,7 +1040,8 @@ class MonthlyReleaseWorker:
                 # state, consume its request or turn contention into an exit.
                 continue
             request = self.service.store.read_request(operation_id)
-            if state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready":
+            if (state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready"
+                    and self.service.store.read_plan(operation_id).get("monthly_ready_correction") is None):
                 if self.authorization_store is None or self.activation_verifier is None:
                     return self.service.store.update_state(
                         operation_id,
