@@ -99,6 +99,7 @@ SUPERSEDED_CLEANUP_MODES = (
     "canonical_bug_replacement",
     "owner_comment",
     "patch_equivalent",
+    "reviewed_disposal",
 )
 CLEANUP_BATCH_TARGET_KEYS = {
     "branch",
@@ -16190,6 +16191,7 @@ def _persist_superseded_cleanup_receipt(
         "authority_ref": verification.get("authority_ref"),
         "reason": verification.get("reason"),
         "authority_digest": verification.get("authority_digest"),
+        "authority": verification.get("authority"),
         "recorded_at": _utc_now(),
     }
     if cleanup_verification is not None:
@@ -16325,6 +16327,129 @@ def _owner_supersession_comment_profile(
     }
 
 
+def _disposal_bound_file(reference: dict[str, Any], *, root: Path, worktree: Path) -> Path:
+    """Read only exact, external, digest-bound evidence; never follow reparse ancestors."""
+    path = Path(str(reference.get("path") or ""))
+    digest = str(reference.get("sha256") or "")
+    if not path.is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("disposal evidence requires an absolute path and SHA256")
+    if any(_is_reparse_or_symlink(part) for part in (path, *path.parents)):
+        raise ValueError("disposal evidence has a reparse/symlink ancestor")
+    path = path.resolve()
+    if any(path == parent.resolve() or parent.resolve() in path.parents for parent in (root, worktree)):
+        raise ValueError("disposal evidence must survive outside source and canonical roots")
+    observed = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            observed.update(chunk)
+    if observed.hexdigest() != digest:
+        raise ValueError("disposal evidence missing or SHA256 mismatch")
+    return path
+
+
+def _reviewed_disposal_profile(
+    *, branch: str, expected_head: str, worktree: str | None, authority_ref: str,
+    manifest_path: str | None, manifest_sha256: str | None, root: Path,
+) -> dict[str, Any]:
+    """A user-reviewed abandonment is distinct from source merge or patch equivalence."""
+    try:
+        if not worktree or not Path(worktree).is_absolute():
+            raise ValueError("reviewed disposal requires an explicit absolute worktree")
+        target_root = Path(worktree)
+        if any(_is_reparse_or_symlink(part) for part in (target_root, *target_root.parents)):
+            raise ValueError("disposal target has a reparse/symlink ancestor")
+        target = {"branch": branch, "head": expected_head, "worktree": str(target_root.resolve())}
+        registered = _registered_worktree_for_branch(branch, cwd=root)
+        if (registered is None or registered.resolve() != target_root.resolve()
+                or _git(["rev-parse", "HEAD"], cwd=target_root, check=False).strip() != expected_head
+                or _git(["branch", "--show-current"], cwd=target_root, check=False).strip() != branch):
+            raise ValueError("disposal worktree is not registered at the exact branch HEAD")
+        bound: list[tuple[dict[str, Any], Path]] = []
+
+        def read_bound(ref: dict[str, Any]) -> dict[str, Any]:
+            path = _disposal_bound_file(ref, root=root, worktree=target_root)
+            if path.stat().st_size > 1024 * 1024:
+                raise ValueError("disposal JSON exceeds bounded evidence size")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("disposal evidence must be a JSON object")
+            bound.append((ref, path))
+            return value
+
+        manifest = read_bound({"path": manifest_path, "sha256": manifest_sha256})
+        if (manifest.get("schema_version") != "aistock_reviewed_disposal_v1"
+                or manifest.get("repository") != GITHUB_REPO or manifest.get("target") != target):
+            raise ValueError("disposal manifest repository/target identity mismatch")
+        authorization = read_bound(manifest["authorization"])
+        if (str(manifest["authorization"]["path"]) != authority_ref
+                or authorization.get("schema_version") != "aistock_cleanup_authorization_v1"
+                or not str(authorization.get("user_instruction") or "").strip()
+                or "discard_reviewed_unmerged_branch" not in authorization.get("actions", [])
+                or target not in authorization.get("targets", [])):
+            raise ValueError("explicit user disposal authorization does not cover this target")
+        review = manifest["review"]
+        if (review.get("decision") != "DISCARD_AFTER_ARCHIVE"
+                or len(str(review.get("reason") or "").strip()) < 12):
+            raise ValueError("disposal requires a completed value review")
+        successors = review.get("successor_commits")
+        if not isinstance(successors, list) or not successors or any(
+            not isinstance(commit, str) or not _FULL_GIT_COMMIT_RE.fullmatch(commit)
+            or not _git_commit_is_ancestor(commit, "origin/main", root=root) for commit in successors
+        ):
+            raise ValueError("reviewed successors are not contained in origin/main")
+        references = read_bound(review["reference_evidence"])
+        if (references.get("schema_version") != "aistock_disposal_reference_review_v1"
+                or references.get("target") != target
+                or references.get("remaining_dependencies") != []
+                or not references.get("reviewed_roots")
+                or references.get("status") != "NO_REMAINING_DEPENDENCIES"):
+            raise ValueError("frozen/current/unknown references still block disposal")
+        for ref in references.get("protected_files", []):
+            _disposal_bound_file(ref, root=root, worktree=target_root)
+            bound.append((ref, Path(ref["path"])))
+        bundle_ref = manifest["recovery_bundle"]
+        bundle = _disposal_bound_file(bundle_ref, root=root, worktree=target_root)
+        bound.append((bundle_ref, bundle))
+        # Self-contained v2 bundles can be recovered even after all source refs disappear.
+        with bundle.open("rb") as stream:
+            if stream.readline(64) != b"# v2 git bundle\n":
+                raise ValueError("recovery bundle must use the self-contained v2 format")
+            header_size = 0
+            while True:
+                line = stream.readline(4096)
+                header_size += len(line)
+                if not line or header_size > 1024 * 1024 or len(line) == 4096:
+                    raise ValueError("invalid recovery bundle header")
+                if line == b"\n":
+                    break
+                if line.startswith(b"-"):
+                    raise ValueError("recovery bundle must not require external prerequisites")
+        heads = _run_command(["git", "bundle", "list-heads", str(bundle)], cwd=root, timeout=60)
+        verify = _run_command(["git", "bundle", "verify", str(bundle)], cwd=root, timeout=60)
+        expected_ref = f"{expected_head} refs/heads/{branch}"
+        if (not heads.get("ok") or expected_ref not in str(heads.get("stdout") or "").splitlines()
+                or not verify.get("ok")):
+            raise ValueError("recovery bundle does not verify the exact branch HEAD")
+        recovered = read_bound(manifest["recovery_receipt"])
+        tree = _git(["rev-parse", f"{expected_head}^{{tree}}"], cwd=root, check=False).strip()
+        if (recovered.get("schema_version") != "aistock_bundle_restore_receipt_v1"
+                or recovered.get("bundle_sha256") != bundle_ref["sha256"]
+                or recovered.get("independent_object_store") is not True
+                or recovered.get("fsck_passed") is not True
+                or {"branch": branch, "head": expected_head, "tree": tree}
+                not in recovered.get("restored_targets", [])):
+            raise ValueError("independent bundle restore receipt does not bind the exact source tree")
+        for ref, _path in bound:
+            _disposal_bound_file(ref, root=root, worktree=target_root)
+        return {"verified": True, "reason": "user_reviewed_disposal_with_verified_recovery",
+                "manifest_path": str(manifest_path), "manifest_sha256": manifest_sha256,
+                "target": target, "authorization": manifest["authorization"],
+                "recovery_bundle": bundle_ref, "recovery_receipt": manifest["recovery_receipt"],
+                "review": review, "source_merged": False}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {"verified": False, "reason": "reviewed_disposal_evidence_invalid", "error": str(exc)}
+
+
 def _cleanup_supersession_verification(
     *,
     branch: str,
@@ -16337,6 +16462,9 @@ def _cleanup_supersession_verification(
     supersession_comment_url: str | None,
     remote_ref: str,
     root: Path,
+    worktree: str | None = None,
+    disposal_manifest: str | None = None,
+    disposal_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     normalized_head = expected_head.strip().lower()
     blocking: list[str] = []
@@ -16364,6 +16492,10 @@ def _cleanup_supersession_verification(
         blocking.append("owner comment mode does not accept --replacement-pr-url")
     elif mode == "patch_equivalent" and (replacement_pr_url or supersession_comment_url):
         blocking.append("patch-equivalent mode does not accept PR or comment authority arguments")
+    elif mode == "reviewed_disposal" and (replacement_pr_url or supersession_comment_url):
+        blocking.append("reviewed disposal does not accept PR or comment authority arguments")
+    if mode != "reviewed_disposal" and (disposal_manifest or disposal_manifest_sha256):
+        blocking.append("disposal evidence requires reviewed_disposal mode")
     if len(reason.strip()) < 12:
         blocking.append("superseded cleanup reason must contain at least 12 characters")
     if not authority_ref.strip():
@@ -16414,6 +16546,12 @@ def _cleanup_supersession_verification(
             )
     elif not blocking and mode == "patch_equivalent":
         authority = _git_patch_equivalence_profile(branch, root=root)
+    elif not blocking and mode == "reviewed_disposal":
+        authority = _reviewed_disposal_profile(
+            branch=branch, expected_head=normalized_head, worktree=worktree,
+            authority_ref=authority_ref, manifest_path=disposal_manifest,
+            manifest_sha256=disposal_manifest_sha256, root=root,
+        )
     if not authority.get("verified"):
         blocking.append(f"supersession authority is not verified: {authority.get('reason') or 'unknown'}")
     authority_digest = hashlib.sha256(
@@ -20825,6 +20963,9 @@ def build_cleanup_after_merge_plan(
             ),
             remote_ref=remote_ref,
             root=root,
+            worktree=worktree,
+            disposal_manifest=supersession.get("disposal_manifest"),
+            disposal_manifest_sha256=supersession.get("disposal_manifest_sha256"),
         )
         if supersession_verification.get("verified"):
             merge_verification = {
@@ -21261,6 +21402,14 @@ def build_cleanup_after_merge_plan(
             if payload["git_object_mirror"].get("warning"):
                 payload.setdefault("warnings", []).append(payload["git_object_mirror"]["warning"])
         if supersession_verification:
+            if supersession_verification.get("mode") == "reviewed_disposal":
+                refreshed = _cleanup_supersession_verification(
+                    branch=branch, bug_id=evidence_bug_id, worktree=worktree,
+                    remote_ref=remote_ref, root=root, **supersession,
+                )
+                if (not refreshed.get("verified")
+                        or refreshed.get("authority_digest") != supersession_verification.get("authority_digest")):
+                    raise WorkflowError("reviewed disposal identity/evidence changed before deletion")
             payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
                 supersession_verification,
                 status="authorized_pre_cleanup",
@@ -21298,6 +21447,9 @@ def build_cleanup_after_merge_plan(
                 }
             )
         if worktree_path and worktree_path.exists() and worktree_registered:
+            if supersession_verification and supersession_verification.get("mode") == "reviewed_disposal":
+                if _git(["rev-parse", "HEAD"], cwd=worktree_path, check=False).strip() != supersession_verification["expected_head"]:
+                    raise WorkflowError("reviewed disposal worktree HEAD changed before removal")
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _remove_worktree_with_reparse_fallback(root=root, worktree_path=worktree_path)})
         elif worktree_path and worktree_path.exists() and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
             removed = _remove_reparse_or_empty_tree(worktree_path)
@@ -21319,8 +21471,13 @@ def build_cleanup_after_merge_plan(
                     "profile": removed.get("profile"),
                 }
         if branch in local_branches:
-            delete_flag = "-d" if merged else "-D"
-            applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
+            if supersession_verification and supersession_verification.get("mode") == "reviewed_disposal":
+                expected = supersession_verification["expected_head"]
+                command = ["git", "update-ref", "-d", f"refs/heads/{branch}", expected]
+                applied.append({"command": " ".join(command), "result": _execute_checked(command, cwd=root, timeout=120)})
+            else:
+                delete_flag = "-d" if merged else "-D"
+                applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
         if remote_ref:
             applied.append(
                 {
@@ -22194,6 +22351,8 @@ def cmd_cleanup_superseded(args: argparse.Namespace) -> int:
             "reason": args.reason,
             "replacement_pr_url": args.replacement_pr_url,
             "supersession_comment_url": args.supersession_comment_url,
+            "disposal_manifest": getattr(args, "disposal_manifest", None),
+            "disposal_manifest_sha256": getattr(args, "disposal_manifest_sha256", None),
         },
     )
     _emit_args(payload, args)
@@ -22712,6 +22871,8 @@ def build_parser() -> argparse.ArgumentParser:
     superseded_cleanup.add_argument("--reason", required=True)
     superseded_cleanup.add_argument("--replacement-pr-url")
     superseded_cleanup.add_argument("--supersession-comment-url")
+    superseded_cleanup.add_argument("--disposal-manifest")
+    superseded_cleanup.add_argument("--disposal-manifest-sha256")
     superseded_cleanup.add_argument("--sync-root", action="store_true")
     superseded_cleanup.add_argument("--canonical-root")
     superseded_cleanup.add_argument("--apply", action="store_true")
