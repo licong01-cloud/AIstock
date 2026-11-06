@@ -28,14 +28,22 @@
   "evidence_uris": [],
   "expected": "A single invocation creates three distinct service tabs before slow activation or inventory; each service runs independently.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md",
+      "scripts/start_ai_stock.py",
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/bugs/20261022_BUG-2058-all-service-startup-still-shares-one-console-instead-of-three-service-ta.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "start_all_ai_stock.bat",
-      "scripts/start_ai_stock.py",
       "backend/tests/platform_api/test_windows_launcher.py",
-      "docs/operations/windows_runtime_startup.md"
+      "docs/operations/windows_runtime_startup.md",
+      "scripts/start_ai_stock.py",
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/bugs/20261022_BUG-2058-all-service-startup-still-shares-one-console-instead-of-three-service-ta.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "start_all_ai_stock.bat",
@@ -110,8 +118,8 @@
   },
   "first_seen_at": "2026-10-22T03:56:09.317605Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "79df6a9a4a5cc7bebf8f18729a34bf67f64fa3fc",
+  "fixed_at": "2026-10-22T04:03:45Z",
   "github_issue_number": 6567,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6567",
   "last_seen_at": "2026-10-22T03:56:09.317605Z",
@@ -119,6 +127,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6568",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -142,7 +151,9 @@
     "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -152,7 +163,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2058",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b5da61e4fd3eb12a",
+    "recorded_at": "2026-10-22T04:04:22.046336Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9fd5b5318d48ddfd0b021508d6a63d9b80a05e3b",
+    "source_merge_commit": "79df6a9a4a5cc7bebf8f18729a34bf67f64fa3fc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6568",
+    "validation_evidence": [
+      "python -m pytest backend/tests/platform_api/test_windows_launcher.py -q --no-cov -> 29 passed",
+      "python -m nox -s l0 guardrail_changed_files -> passed; 5/5 files mapped; blocking=0"
+    ],
+    "validation_evidence_digest": "8c55a47bc8f6124ef3c143b07b3fff910f8389ef1fbf729327ae96c30e5d668f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api"
   ],
@@ -161,6 +194,10 @@
     "fingerprint": "c01285f7db5c104d69c14726",
     "source_event_id": "FE-20261022-c01285f7db5c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/platform_api/test_windows_launcher.py -q --no-cov -> 29 passed",
+    "python -m nox -s l0 guardrail_changed_files -> passed; 5/5 files mapped; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
