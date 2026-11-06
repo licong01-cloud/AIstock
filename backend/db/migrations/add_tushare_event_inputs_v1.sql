@@ -70,9 +70,12 @@ SELECT data_kind,table_name,extra_info FROM market.data_stats_config
 WHERE data_kind IN ('stk_shock','stk_high_shock','stk_alert','idx_anns','stk_seasoned')
 ON CONFLICT(data_kind) DO NOTHING;
 
--- Only add missing defaults. Preserve existing operator customizations.
+-- Stage new defaults disabled until the restarted backend advertises the new
+-- DatasetSpec catalogue. Enable these exact rows through the existing local
+-- management API after source readback; never expose unknown names to an old
+-- running integrity catalogue. Preserve existing operator customizations.
 INSERT INTO market.ingestion_schedules(schedule_id,dataset,mode,frequency,enabled,options,created_at,updated_at)
-SELECT id::uuid,name,'incremental',frequency,TRUE,options::jsonb,NOW(),NOW()
+SELECT id::uuid,name,'incremental',frequency,FALSE,options::jsonb,NOW(),NOW()
 FROM (VALUES
  ('5d77f7a5-bbe6-4ec6-a151-cafc4e078e01','stk_shock','daily','{"at":"21:10","skip_auto_range":true}'),
  ('5d77f7a5-bbe6-4ec6-a151-cafc4e078e02','stk_high_shock','daily','{"at":"21:15","skip_auto_range":true}'),

@@ -189,6 +189,7 @@ def test_event_jobs_do_not_add_daily_obligations_and_all_schedules_are_registere
     assert page.count('EVENT_INPUT_DATASETS') >= 8
     sql = (root/'backend/db/migrations/add_tushare_event_inputs_v1.sql').read_text(encoding='utf-8')
     assert all(name in sql for name in EVENTS)
+    assert "frequency,FALSE,options::jsonb" in sql  # old runtime never executes an unknown new name
 
 
 def test_generic_sync_and_scheduler_project_review_option_is_explicit():
