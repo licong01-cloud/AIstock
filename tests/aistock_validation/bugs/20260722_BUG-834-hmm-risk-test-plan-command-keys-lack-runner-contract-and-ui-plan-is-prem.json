@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-834",
-  "closed_at": null,
+  "closed_at": "2026-11-06T18:41:35Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,11 +33,19 @@
   "expected": "The implemented HMM Risk backend plan has an exact runner allowlist mapping, no unimplemented UI plan/session is registered, and validation catalog integrity passes.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json"
+      "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+      "tests/aistock_validation/bugs/20260622_BUG-469-remove-retired-research-assistant-frontend-routes.json",
+      "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json",
+      "tests/aistock_validation/bugs/20260722_BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-every-validation-state.json",
+      "tests/aistock_validation/bugs/20260731_BUG-939-bug-939-p1-ma-e01-sector-risk-rebalance-hooks-are-never-invoked.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json"
+      "tests/aistock_validation/bugs/20260617_BUG-403-ra-reply-synthesis-replace-all-hardcoded-per-domain-answer-templates-wit.json",
+      "tests/aistock_validation/bugs/20260622_BUG-469-remove-retired-research-assistant-frontend-routes.json",
+      "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json",
+      "tests/aistock_validation/bugs/20260722_BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-every-validation-state.json",
+      "tests/aistock_validation/bugs/20260731_BUG-939-bug-939-p1-ma-e01-sector-risk-rebalance-hooks-are-never-invoked.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -84,8 +92,8 @@
   },
   "first_seen_at": "2026-07-22T20:15:58.313694Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a571884414ab74eb3bcf3e8ec1f3c2a99abc59b0",
+  "fixed_at": "2026-11-06T18:41:35Z",
   "github_issue_number": 2644,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2644",
   "last_seen_at": "2026-07-22T20:15:58.313694Z",
@@ -93,6 +101,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7118",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -120,6 +129,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -129,7 +139,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -157,6 +167,11 @@
     "ui_routes": [],
     "visual_acceptance_required": false
   },
+  "validation_evidence": [
+    "validation-receipt: id=6ea7959fd9411001 commit=8cd365a9576b53ad92cfaf72afb4dfcf82d98692 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed`",
+    "validation-receipt: id=6ea7959fd9411002 commit=8cd365a9576b53ad92cfaf72afb4dfcf82d98692 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=6ea7959fd9411003 commit=8cd365a9576b53ad92cfaf72afb4dfcf82d98692 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`8 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
