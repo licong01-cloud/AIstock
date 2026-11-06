@@ -1,7 +1,7 @@
 # 盘中择时：同等待预算对照 F1 设计
 
-日期：2026-11-06。Owner：position_timing。状态：TIMING_SOFTWARE_VERIFIED（源码交付证据见PR）。
-已实现择时侧研究接口与三户统计；不表示LocalSIM接入或新账户实验已完成。
+日期：2026-11-07。Owner：position_timing。状态：OCTOBER_DIAGNOSED_HISTORY_BLOCKED_SOURCE_FILES。
+10月三户51账户日已由LocalSIM完成并由择时消费；1—9月扩展研究的接口、来源与账户执行分别验收。
 
 ## Background
 
@@ -35,6 +35,7 @@ ready至派单为墙钟差，可含操作员排队、闭市等影响；它不是
 允许写入：`intraday/wait_control.py`、`intraday/wait_control_results.py`、`intraday/continuous_results.py`，对应`backend/tests/position_timing/test_intraday_wait_control.py`及`test_isolation.py`的公开SDK消费边界，本设计及上位蓝图进度段。三个实现文件前缀均为`backend/services/position_timing/`；冻结研究产物仅写本窗口X盘根目录。
 实施仅限研究侧纯机会判断、直接测试和自身文档；LocalSIM账户接入由其owner单独完成。
 复用现有CandidateReader、共享价格计划、core.evaluate、trading_minutes、FileRef、freeze和LocalSIM账本/撮合，不建第二套Reader或账户引擎。
+2026-11-07扩展允许新增`intraday/wait_control_history.py`、`intraday/wait_control_diagnostics.py`及直接测试`test_intraday_wait_history.py`；更新`test_isolation.py`的精确只读公共接缝。本轮不改原plan绑定的12份实现文件，旧10月身份继续可核验。
 
 ## Non-goals
 
@@ -136,11 +137,14 @@ CLI：`python -m backend.services.position_timing.intraday.wait_control_results 
 | F-406 | 研究专用W15真实纯接口、共享安全检查、状态恢复和机会身份隔离 |
 | F-407 | 真实冻结plan、共同经济初态与完整三户来源在收益前核验 |
 | F-408 | 复用NAV统计，三项比较/完整分母/可选统计缺失显式；原13户不退化 |
+| F-409 | 10月完整人口归因、提前机会与失效原因留证，缺失生命周期标UNKNOWN |
+| F-410 | 独立历史plan绑定181日9050目标、修正版candidate及共同现金起点；旧实现不变 |
+| F-411 | 历史三户全来源先于收益，月季分钟MDD与配对区块区间；消费边界明确 |
 
 ## Implementation Plan
 
 设计交付#7091已合入。本次完成研究专用W15、三户来源/统计合同和直接测试；旧13户归约入口不放宽。WSL旧13户实际统计等价核验不重跑账户、不覆盖旧报告。
-后续由LocalSIM owner按Contracts-4/6完成最小研究接入，先短窗口联调，再WSL执行51账户日、inspect和不可变结果重试；择时消费其正式输出。普通回放不自动整批经济重算。
+原Contracts-4/6接入已由LocalSIM PR #7109完成，51账户日与不可变产物重试已通过；择时统计已完成。下一步按文末Contracts-7/8实施1—9月扩展。普通回放不自动整批经济重算。
 不拆更多阶段，不等待在线重启或未来行情。账户接口未接入时交回准确需求，不在择时侧临时模拟收益。
 
 ## Verification Plan
@@ -152,12 +156,12 @@ CLI：`python -m backend.services.position_timing.intraday.wait_control_results 
 ## Risks
 
 同最大预算不等于同实际等待；单操作员排队可主导总延迟；C1费用降低可能混入少交易和低暴露。
-10月不是未见样本；分钟成交为代理，不证明真实盘口成交。择时侧合同已实现，但LocalSIM新三户接入和真实新实验尚未执行，不能称经济验证已完成。
+10月不是未见样本；分钟成交为代理，不证明真实盘口成交。10月三户研究已完成，但仅为事后机制诊断，不能称样本外经济确认；1—9月新三户尚未回放。
 
 ## Production Gates
 
 本次database/network/runtime/process/training/account_replay=false；无部署、重启、DDL/DML或生产激活。
-DESIGN_VERIFIED仅表示设计闭合；择时软件验证、LocalSIM接入和新51账户日经济结果分别报告，不以fixture或prepare成功声称经济有效。
+DESIGN_VERIFIED仅表示设计闭合；择时软件验证、LocalSIM接入和新543账户日经济结果分别报告，不以fixture或prepare成功声称经济有效。
 
 ## Design Acceptance Matrix
 
@@ -171,8 +175,11 @@ DESIGN_VERIFIED仅表示设计闭合；择时软件验证、LocalSIM接入和新
 | F-406 | intraday/wait_control.py::evaluate_wait_control | backend/tests/position_timing/test_intraday_wait_control.py；backend/tests/position_timing/test_isolation.py | VERIFIED | none |
 | F-407 | intraday/wait_control_results.py::prepare/source_preflight | backend/tests/position_timing/test_intraday_wait_control.py | VERIFIED | none |
 | F-408 | intraday/continuous_results.py::period_account_rows；intraday/wait_control_results.py::analyze | backend/tests/position_timing/test_intraday_wait_control.py；backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
+| F-409 | 本文Contracts-7；intraday/wait_control_diagnostics.py | backend/tests/position_timing/test_intraday_wait_history.py；本文2026-11-07真实归因证据 | VERIFIED | none |
+| F-410 | 本文Contracts-8；intraday/wait_control_history.py | backend/tests/position_timing/test_intraday_wait_history.py；artifact:X:/AIstock_temp/position-timing-wait-history-20261107/source_blocker.json | BLOCKED | 原价格来源617份固定路径文件缺失，真实prepare未通过 |
+| F-411 | 本文Contracts-8；intraday/wait_control_history.py | backend/tests/position_timing/test_intraday_wait_history.py；backend/tests/position_timing/test_isolation.py | BLOCKED | 定向功能测试通过，真实历史plan及LocalSIM三户未接入；不得标完整交付 |
 
-## 当前离线软件交付证据
+## 2026-11-06离线软件交付证据（历史记录）
 
 择时业务实现与plan来源commit：`78eb97333bcab3f0d93ed5c7255749463e497f74`。后续文档、SDK消费边界测试及主线同步不改变plan绑定的12份共享实现LF哈希；完整源码/测试交付以PR最终HEAD和CI为准。
 本轮唯一交付research_plan为
@@ -187,4 +194,54 @@ WSL路径将`X:/`替换为`/mnt/x/`。共同经济opening摘要为`1cc6971f68655
 功能夹具证据：42项相关小矩阵通过；最终新接口17项通过，包括拒绝恢复状态中混入B0预算前可见时间，只读inspect/依赖指纹的受影响路径定向复核通过。夹具不证明真实新三户收益。
 变更范围L0/ruff、F1 8项/F2 12项通过；classifier为targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。补齐公开SDK消费边界后，测试债务生产48,549/测试12,692有效行，26.14%，没有调整归属或分类。
 既有隔离测试债务BUG-2193已由独立源码PR #7099和close-sync #7100完成；原main复现失败，修复后四项隔离合同通过，只补精确只读接缝，不修改其他模块。新研究SDK仅开放公开符号，写入/发布函数及其他业务消费者继续被拒绝。
-CI、源码合入和本窗口状态以本次PR为准；LocalSIM接入、51日经济结果与线上激活仍分开报告，无需等待后端重启交付这些离线接口。
+上述为软件交付当时状态；后续51账户日和分析已完成，见下节。线上激活仍独立报告。
+
+## Contracts-7：10月结果、归因边界与本轮研究顺序
+
+LocalSIM交付`X:/AIstock_temp/localsim-w15-wait-budget-20261106/delivery.json`，完整SHA为`5bb1e318c46a99e95d9a561d54d3ded704051ec84ad0263e28b93af2c090ef15`；source PR #7109已合入。正式三户分析位于`X:/AIstock_temp/position-timing-w15-account-analysis-20261107/intraday_v1/wait_budget_analyses/d98f6febe9044184629426e8c61cbafd308aa1205baa0f164a15ef7a6ae0afb8.json`，完整SHA为`69f024ad315fcf3849e0c9730f833771e597fab4f533896a4c2ac76df6869e56`。
+
+| 比较 | 成本后增量（元） | 共同期初收益差（bps） | 正向MDD降低（百分点） | 费用差（元） |
+|---|---:|---:|---:|---:|
+| C2−W15（主比较） | 1,047.78 | 1.0758 | 0.0251 | -3,515.11 |
+| W15−B0 | 51,954.46 | 53.3447 | 0.4203 | -898.07 |
+| C2−B0 | 53,002.24 | 54.4205 | 0.4454 | -4,413.18 |
+
+共同opening为9,739,392.18元；三户期间收益分别为-7.4617%/-6.9282%/-6.9175%。C2−W15费用加回差额为-2,467.33元，净优势不足以证明更好的成交价格。固定等待值得扩展检验，C2反转条件的附加价值尚未证实，不据此调参。
+三户生成父计划589/582/587，未派单13/22/82；动作失效原因均为OPPORTUNITY_WAIT，而非明确的TTL超时。C2首次外层机会早于15分钟的修订为69/587；首次机会不等于实际派单或成交。现有signal_revisions只保存首次机会和最后状态，不能从最终reason集合恢复转WAIT当刻的细分原因与完整生命周期。无该证据时记录UNKNOWN，不推断成价格反转或现金不足。
+
+P0只读消费完整51账户日，逐BUY/SELL报告提前机会的派单/成交/失效去向、原始动作原因、数量与费用；同日同股同向同目标数量的价格比较仅是条件化子集，保留配对覆盖与双方未成交人口，不宣称纯执行alpha。所有收益读取前完成来源检查。
+P1固定B0/W15/C2做1—9月历史稳健性检验。P2保留一个“价格朝本次交易不利方向持续移动时提前执行”的候选，当前不实现、不训练、不扫描参数。模型仅在需要预测等待相对立即执行的成本差时另立单一假设；未见数据不作为本轮开跑前提。
+本轮producer exact retry为EXACT_ARTIFACT_RETRY_VERIFIED，账户重算0、新提交0；producer_economic_retry=NOT_SUPPLIED合法。时间加权暴露0/17日覆盖，保持UNAVAILABLE，日终现金均值不替代。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false。
+
+## Contracts-8：1—9月独立历史研究合同
+
+### 8.1 固定人口、来源与期初
+
+仅复用原生目标清单2026-01-05～09-30的181日/9,050目标，三臂共543账户日；主反应延迟60秒、W15预算15交易分钟、原C2及B0、安全/队列/费用/14:57截止合同不变。连续现金账户、共同期初1000万元及空持仓，与父研究`initial_cash_cny`一致；这是新研究的显式起点，不充值既有账户，不按月重置，不从9月末倒推1月账户。
+权威父请求为`X:/AIstock_temp/localsim-post-renewal-study-20261029/full/studies/54e1a6a55b13fa8916cf1084b9a8ad4398755fc9ea5028e09c51d608775cc25d/request.json`，完整SHA `4c60878d91a4c7a90fdd3f73baf48422556241d7866d0a34b82816fb4d72d8ee`；其effective candidate SHA `321a966c55822db5777dda4ef0091422e8a1877b7bcb6c27ffb763e9a2441c73`。价格模板保留原生价格来源candidate `f5af5cc0506e502300ef225805b51aaeb7ea1b1bc352fdc81f363f4933f5f8ed`及显式input_candidate后继链，不混用10月candidate `2242c4…`，不读取active/profile。
+来源完整检查复用continuous_results.source_preflight及price_plan_campaign原生projection/completion/PIT检查，验证181份原生projection/completion、价集来源和所有引用SHA；行情批次完整验证仍由LocalSIM在新收益前完成。本窗口不重新推理或补数据。源价格计划中的UNKNOWN/NONE按原政策保留。
+历史price manifest固定完整SHA为`4781d4fa7c27dd7f7c632090c32e87fb17a7d74dba225f607bcd638ddd2323bd`。当前price构造器指纹与当时不同，因此不得以当前build重建替换旧模板，也不伪称通过其重建式inspect。新入口只作冻结历史产物内容、其policy/source audit、所有source/day FileRef及原生PIT投影的完整闭合检查，保留旧producer commit/implementation；不是新价格计划生产。任一旧来源缺失仍失败，不因effective candidate存在就跳过旧来源。
+
+### 8.2 择时公共入口与LocalSIM最小接入
+
+新增`wait_control_history.HistorySourceSpec`冻结父request/source_inspection/result_receipt及price_manifest四个FileRef；`prepare(spec, source_commit, timing_root)`生成`position_timing_wait_budget_history_plan_v1`和声明性common_opening文件，绑定source_spec、实现closure、全部日期、人口/包/candidate/价格/费用/执行/operation身份。它不创建账户，不是LocalSIM执行请求。
+公开`inspect_history_plan(FileRef)`只读核验plan和全部来源并返回plan，不读新三户NAV；LocalSIM可显式import该函数与`HistoryAnalysisSpec`，写入函数不得跨模块消费。旧wait_control_results/旧plan和旧51账户日不修改。
+LocalSIM需要一个独立history request（`localsim_wait_budget_history_request_v1`）：按此plan从共同现金起点初始化三户，复用既有三户执行器、账户引擎和按日提交；不得调用旧10月parent_account_receipt续接路径。返回既有WaitBudgetFacts三户模型，research_plan指向新plan；producer_request额外绑定history_scope=`JAN_SEP_2026_INDEPENDENT_CASH_ORIGIN_181D_9050_TARGETS`。opening采用`position_timing_wait_budget_history_opening_v1`，完整保留common_opening字段和值，仅schema_version替换，并增加account_id/arm_id/rule/delay_seconds/operation/common_opening；本轮初始持仓为空，不接收账户引擎的额外状态字段。source_inspection采用原三户投影字段并绑定全543账户日，每个day的study_identity必须等于producer_request身份；旧17日语义不放宽。LocalSIM owner修改自己的代码，本窗口不代写适配器。
+
+### 8.3 完整性、统计与结论
+
+`HistoryAnalysisSpec`包含research_plan、facts和可选producer_economic_retry；新`analyze`先核验全部来源、三个opening及543个day SHA，再调用既有period_account_rows和三户诊断。source检查完成前不读取新研究NAV；少日/重复日/未知账户/资金漂移/非有限或未来NAV失败显式。分析产物不可变，exact retry只复用产物，不触发账户重算。
+全期间三项比较保持C2−W15主比较；月度和季度以各账户上一期间末NAV作为区间期初，MDD从该期初及区间全部分钟NAV重算，不能取每日MDD最大值。月/季报告不代表重置账户，不把月收益直接相加，不与独立10月共同opening研究拼接累计收益。
+不确定性只对全期间每日配对净PnL差/共同初始资本做5交易日循环区块bootstrap（2000次、seed=20261107）；报告均值bps/日的95%区间及三比较Bonferroni区间，不冒称实际累计收益或MDD的区间。月/季及BUY/SELL、波动/方向情形仅诊断，不回选规格；当前先输出月/季，行情分层须有明确前缀字段来源，缺少时UNAVAILABLE，不追加模型或数据依赖。不设置MDE或盈利准入。
+生产入口只有REAL_HISTORY；测试夹具仅为定向测试证据。WSL账户内逐日顺序、账户间有界并行由LocalSIM控制。当前真实543账户日状态为NOT_RUN_SOURCE_BLOCKED，来源修复后仍需OWNER_INTEGRATION，不将本地分析函数通过说成账户已回放。
+
+## 2026-11-07真实归因与研发阻断证据
+
+P0完整51账户日只读分析报告：`X:/AIstock_temp/position-timing-wait-history-20261107/artifacts/intraday_v1/wait_budget_detailed_diagnostics/c494b597de6a5412b4821c1931819d2e1138202223cd25155063508e0ad3aa66.json`，完整SHA `d6bde9206f080ce82fa310e54fe292f2480f8bdbcbe3266ec0b2a57a66ba517e`。
+69个C2提前机会对应69父计划，其中BUY全成4/未成31、SELL全成3/未成31。7个成交父计划的首次实际派单均不早于15交易分钟（6个15分钟、1个27分钟）；这批数据不能证明提前信号被提前执行。其余62个没有派单；失效细因继续UNKNOWN，不能从first/last审计推断。
+C2−W15同日同股同向同目标数量子集：BUY配对163（两侧全部父计划300/295），双方全成143，条件成交价改善合计-8,382.97元；SELL配对165（全部287/287），双方全成140，条件改善-4,105.49元。两项只对双方全成的条件化子集计算、不含费用，不外推全部账户收益或纯择时alpha。完整报告同时保留NO_FILL交叉分母。P2不因这组事后结果直接投产。
+
+P1真实来源检查失败于原价格来源candidate：`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260930-qe_hmm_full_v2-direct-monthly-v2-unified-candidate-correction-4ab0b48642c3-margin1-minute1/`。父preflight与价格source audit合并后617份FileRef在固定路径不存在，包含manifest和日线参考价组件；修正版321a…candidate存在，但不是这些缺失文件的同一身份。
+不可变阻断回执：`X:/AIstock_temp/position-timing-wait-history-20261107/source_blocker.json`，完整SHA `f084b76462b919291297f13c50bb906157d9559d0cff5b03f985014e921ed437`。未修改数据、未尝试在线补数、未读取新研究NAV、未生成真实history plan或启动543账户日。数据owner需恢复准确固定源字节，或返回正式不可变迁移合同供另行设计消费；不能静默指向321a…、忽略源SHA或重建旧价格模板。
+新增12项定向测试通过，最终相关小矩阵33项通过（含原17项W15与4项隔离）；两轮代码审核修正了跨修订父计划重复计数及新研究day身份绑定。ruff、L0和diff-check通过；classifier覆盖全部6个变更文件，targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。P0同输入exact retry为ALREADY_MATERIALIZED，报告FileRef相同；旧plan绑定12份实现没有改动。
+F2蓝图验证12项通过；F1明确保留F-410/411未完成，验证FAIL，不把缺口改标VERIFIED来通过检查。尚未提交PR/运行远端CI，不满足完整合入条件；功能夹具不解除真实来源阻断，不合入或宣称P1已交付。工作稿与代码保存在独立任务分支，main没有本轮更新。

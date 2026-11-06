@@ -1,8 +1,8 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.3；更新日期：2026-10-24；Feature tier：F2。
-> 状态：`TIMING_RUNTIME_VERIFIED_RESEARCH_IMPLEMENTED_CONSUMERS_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户已完成后端重启，加载身份/API核验通过；多日历史研究与比较能力见[研究详细设计](position_timing_intraday_research_f2_detailed_design_20261023.md)。LocalSIM/Advisory消费接入和账户经济评价仍未完成。
-> 源码核查基线：`029e8e4a8a9b18446edca7f439bf333152a5565b`（本任务独立工作树起点）。
+> 版本：v1.4；更新日期：2026-11-07；Feature tier：F2。
+> 状态：`LOCALSIM_OFFLINE_OCTOBER_DIAGNOSED_HISTORY_SOURCE_BLOCKED`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、1—10月原13户分析及10月W15三户比较已完成；这不等于荐股嵌入、线上策略替换或经济确认。最新研究边界见§7.2。
+> 本次源码核查基线：`d7c8f07f670372686c4c661130aa1e86ca8dc334`（2026-11-07独立工作树起点；下文历史验收保持其原证据身份）。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
 > 范围：独立分钟择时核心、LocalSIM 分钟模拟执行适配、荐股可嵌入提醒；不接实盘，不适配 MiniQMT。
 
@@ -215,7 +215,7 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 
 回滚：停止新计划引用新策略，保留旧研究和提醒记录；在途模拟计划由LocalSIM owner按既有生命周期处理，不把清理文件当取消订单。提醒故障只使本组件UNAVAILABLE，不影响原荐股页面。
 
-当前 `code_change=true; real_history_decision_replay=true; account_economic_experiment_started=false; database_read=false; database_write=false; dataset_mutation=false`。阶段一用户重启后的加载身份/API核验已通过；本次只新增离线研究文件，不改API/核心/线上默认值，`backend_restart_required=false; runtime_action=false`。无行情采样、模型训练、生产迁移或用户服务进程操作。
+阶段一历史记录为`code_change=true; real_history_decision_replay=true`，当时尚未启动账户实验。此后LocalSIM离线账户研究已完成，见§7；本窗口当前继续只写择时所属研究代码及文档，`database_read=false; database_write=false; dataset_mutation=false; backend_restart_required=false; runtime_action=false`。无新行情采样、模型训练、生产迁移或用户服务进程操作。
 
 ### 6.2 风险与处置
 
@@ -281,4 +281,14 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 
 择时跨月价集/分析能力#7054、LocalSIM输入#7048及期间runner#7072均已合入。10月13户×17日实际回放、inspect及producer经济exact retry已交付；择时已完成294项来源预检、221账户日/52,598条NAV的期间与累计分析及报告exact retry。证据唯一入口为`X:/AIstock_temp/position-timing-october-account-analysis-20261106/verification-receipt.json`。离线功能、账户可重复性和经济确认仍分开，经济结果保持描述性，不能把旧报告缺省NOT_SUPPLIED解释为producer未执行。
 
-下一项研究是[同等待预算对照F1设计](position_timing_wait_budget_control_f1_20261106.md)：B0、固定15交易分钟W15、原C2从同一份B0-60秒9月末opening起跑，固定60秒主反应延迟和原作业合同，先做51账户日机制诊断，不扫描阈值。择时侧研究专用W15封装、真实plan冻结和独立三户统计合同已实现，原13户分析与线上三规则不变；LocalSIM三户接入与新51账户日实验尚未完成，最小需求和精确消费合同见该设计Contracts-4/6，由其owner执行。现有同延迟比较包含排队/暴露与父期持仓差异，不能宣称纯执行alpha；本轮不增加线上规则、模型或跨模块融合。
+当时下一项为[同等待预算对照F1设计](position_timing_wait_budget_control_f1_20261106.md)：B0、固定15交易分钟W15、原C2从同一份B0-60秒9月末opening起跑，固定60秒主反应延迟和原作业合同。该51账户日研究现已完成，最新结论见§7.2；原13户和线上三规则不变。
+
+### 7.2 2026-11-07：简单等待优先，反转条件附加价值未证实
+
+LocalSIM #7109已完成三户17日/850目标/51账户日；择时354项来源检查先于收益，完整分钟NAV统计及分析产物exact retry通过。权威报告路径与完整SHA见同等待预算F1 Contracts-7。
+共同期初9,739,392.18元，B0/W15/C2期间收益为-7.4617%/-6.9282%/-6.9175%，正向MDD为8.4998%/8.0795%/8.0544%。主比较C2−W15仅+1,047.78元（1.08bps），费用少3,515.11元；W15−B0为+51,954.46元（53.34bps）。因此固定等待值得扩展验证，但本期不能证明反转条件改善了成交价格。
+三户未派单13/22/82，均记录OPPORTUNITY_WAIT，不直接解释为TTL超时。C2有69/587个修订在15分钟预算前产生首次机会，不等于提前成交。完整BUY/SELL人口、资金反馈、机会生命周期与排队共同影响账户结果，quantity_matched=false、pure_timing_attribution=false。盘中时间加权暴露未发布，保持UNAVAILABLE；producer_economic_retry=NOT_SUPPLIED符合本轮产物重试合同，不能自动重算账户。
+
+当前工作只分两块：P0消费现有事实，解释提前机会/失效/费用/条件配对覆盖并同步设计；P1复用2026-01-05～09-30的181日/9,050原生目标，以同一1000万元空仓起点连续比较三户543账户日。规格、初态和统计见F1 Contracts-8；旧研究实现/产物不覆盖，不拼接不同opening路径的累计收益。新历史研究的LocalSIM适配由其owner完成，不能把择时合同交付当作账户实验已完成。
+P0已完成：69个提前机会只有7父计划全成，且实际派单均不早于15交易分钟；62个未派单。同目标数量且双方全成的BUY/SELL子集，C2相对W15条件成交价改善均为负，但存在条件化选择偏差，不能冒充全账户因果结论。P1代码定向验证通过，真实来源检查发现旧价格来源f5af…candidate下617个固定引用文件缺失，已fail closed，尚无真实history plan或543账户日。准确来源/阻断回执及SHA见F1文末；需数据owner恢复准确字节或提供显式迁移合同，不默换candidate，不以fixture通过合入完整研究交付。
+后续只保留一个P2候选：已完成分钟线显示价格持续朝本次交易不利方向移动时提前给机会，否则沿用固定等待。当前不实现P2、不扫描窗口、不引入训练；只有明确需要预测“立即与等待的成本差”时再研究轻量模型。已有历史区间均按探索性稳健性检验报告，不伪装未见样本，也不等待未来自然日作为研发门禁。
