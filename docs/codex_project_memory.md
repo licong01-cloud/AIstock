@@ -68,6 +68,8 @@ Load it once for AIstock architecture, backend, frontend, data pipeline, trading
 - Temporary exchange notes use ignored `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/` paths.
 - Keep secrets out of reports, memory, logs, receipts, and handoffs; record only non-secret credential locations.
 
+- Follow `DOC-MINIMUM-001` and `AUTO-REVIEW-DELIVERY-001` from the sole standard: no extra narrative files by default; active-agent review/repair precedes authorized automatic source delivery, with task restrictions taking precedence.
+
 ## Completion report
 
 Report worktree/branch, commit and PR when available, exact changed files, direct tests, BUG/Issue state, delegated/nightly coverage, production gates, merge/close-sync/root-sync/cleanup separately, runtime/client activation, DB/runtime impact, and remaining blockers.

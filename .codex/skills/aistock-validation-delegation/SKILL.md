@@ -16,13 +16,13 @@ Use this skill when local Codex validation would become broad, repetitive, or lo
 - Codex keeps the minimal pre-merge gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
 - Deep validation runs in Validation Center, GitHub CI, or Nightly; Codex does not manually run broad module matrices, UI journeys, or cross-module business-flow suites for every BUG.
 - When a local test fails, Codex should rerun only the failed nodeid or `pytest --lf` before escalating to a broader suite.
-- When local validation/exploration exceeds about 30 minutes or the task-card command budget, Codex should stop adding local suites and create a compact validation handoff.
+- When local validation/exploration exceeds about 30 minutes or the task-card command budget, Codex should stop adding local suites and reuse existing task state/PR for a compact validation handoff.
 - DeepSeek may choose test plans and diagnose failures, but deterministic allowlisted runners execute commands.
 - DeepSeek/API failure is a loud `planner_status=failed`; do not silently downgrade to deterministic success.
 
 ## Request Shape
 
-Create or request a compact validation handoff with:
+Reuse existing task state/PR for the following handoff fields; create one short handoff file only when necessary:
 
 - `issue_or_feature_id`
 - `commit_sha`
@@ -53,3 +53,8 @@ Read full artifacts only when the compact receipt is failing or insufficient for
 ## Nightly Policy
 
 Report deferred modules/scenarios in the PR/final response so nightly can deduplicate all merged daily BUG/PR changes into one deep run. Use immediate deep validation only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
+
+## 最小文档与自动交付
+
+- 按唯一规范 `DOC-MINIMUM-001`：默认零额外说明文件，复用已有任务/Issue/PR/回执；Context Pack Markdown 按需，必要设计和真实证据完整保留。
+- 按 `AUTO-REVIEW-DELIVERY-001`：当前 Agent 执行正确性与完整性审核、自动修复和最终版本复核；启用且有授权的源码交付连续执行，任务明确限制优先，不扩展到运行态、数据库、训练或删除。

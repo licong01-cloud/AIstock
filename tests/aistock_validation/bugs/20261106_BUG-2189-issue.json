@@ -1,0 +1,607 @@
+{
+  "actual": "默认生成多份 Markdown/JSON 镜像，缺少统一最小文档和自动审核交付策略。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20261106_BUG-2189-issue.json",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".claude/commands/aistock-feature-workflow.md",
+    ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-readonly-triage.md",
+    ".claude/commands/aistock-task-router.md",
+    ".claude/commands/aistock-validation-delegation.md",
+    ".claude/commands/fix-aistock-issue.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-readonly-triage/SKILL.md",
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/SKILL.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "docs/codex_project_memory.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "noxfile.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_issue_flow.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2189",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "code_review": {
+    "digest_normalization": "utf8_lf",
+    "executor": "active_agent",
+    "independent_review": false,
+    "reviewed_content_sha256": "5b00538cc8f4fbaed3af3e1dd367a9b672d0f6246aee0c63aa06d2ea843b29de",
+    "rounds": [
+      {
+        "findings_resolved": [
+          "UTF-8 text integrity",
+          "task restrictions override source flags",
+          "optional context refs never point to stale copies"
+        ],
+        "perspective": "correctness"
+      },
+      {
+        "findings_resolved": [
+          "batch explicit artifact consumer",
+          "synthetic batch receipt plan coverage",
+          "Windows external skill validator encoding"
+        ],
+        "perspective": "completeness_and_regression"
+      },
+      {
+        "perspective": "final_budget_and_acceptance",
+        "findings_resolved": [
+          "shared existing PR-evidence fixtures and invocation; all scenario assertions retained",
+          "removed new assertions that only repeated fixed policy fields",
+          "existing 0.30 module test budget passed without changing threshold"
+        ]
+      }
+    ],
+    "unresolved_blockers": [],
+    "verification_refs": [
+      "773 related regressions passed",
+      "16 minimal delivery cases passed",
+      "workflow-smoke passed",
+      "batch-workflow-smoke passed",
+      "explicit 21-file L0 passed",
+      "31 focused PR/minimal-delivery cases passed",
+      "production denominator test passed after fixture reuse",
+      "explicit 22-file L0 passed"
+    ]
+  },
+  "created_at": "2026-11-06T07:08:24.830347Z",
+  "description": "按用户批准的统一计划落实最小文档默认、按需上下文和PR产物、自动多轮审核修复及授权源码交付；保留真实证据、恢复兼容和运行态边界。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261106-b97aabae4943",
+      "timestamp": "2026-11-06T07:08:24.830330Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "普通任务不新增额外说明文件；当前 Agent 完成多轮审核修复后，在用户授权及当前 HEAD 必需检查通过时自动交付源码；保留设计、验证和运行态合同。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".claude/commands/aistock-docs-handoff.md",
+      ".claude/commands/aistock-feature-workflow.md",
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-readonly-triage.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/aistock-validation-delegation.md",
+      ".claude/commands/fix-aistock-issue.md",
+      ".codex/skills/aistock-docs-handoff/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-readonly-triage/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/aistock-validation-delegation/SKILL.md",
+      ".codex/skills/fix-aistock-issue/SKILL.md",
+      ".codex/skills/verify-aistock-feature/SKILL.md",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/codex_project_memory.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2189-issue.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".claude/commands/aistock-docs-handoff.md",
+      ".claude/commands/aistock-feature-workflow.md",
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-readonly-triage.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/aistock-validation-delegation.md",
+      ".claude/commands/fix-aistock-issue.md",
+      ".codex/skills/aistock-docs-handoff/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-readonly-triage/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/aistock-validation-delegation/SKILL.md",
+      ".codex/skills/fix-aistock-issue/SKILL.md",
+      ".codex/skills/verify-aistock-feature/SKILL.md",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/codex_project_memory.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2189-issue.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".claude/commands/aistock-docs-handoff.md",
+        ".claude/commands/aistock-feature-workflow.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+        ".claude/commands/aistock-readonly-triage.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/aistock-validation-delegation.md",
+        ".claude/commands/fix-aistock-issue.md",
+        ".codex/skills/aistock-docs-handoff/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".codex/skills/aistock-readonly-triage/SKILL.md",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/aistock-validation-delegation/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".codex/skills/verify-aistock-feature/SKILL.md",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "docs/codex_project_memory.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        "noxfile.py",
+        "scripts/aistock_issue_workflow.py"
+      ],
+      "impacted_modules": [
+        "docs.standards",
+        "validation.guardrails",
+        "validation.module_quality",
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.center",
+        "tests.backend",
+        "tests.frontend"
+      ],
+      "matched_rules": [
+        {
+          "file": ".claude/commands/aistock-docs-handoff.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-feature-workflow.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-merge-aftercare.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-readonly-triage.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-task-router.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-validation-delegation.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/fix-aistock-issue.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-docs-handoff/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-merge-aftercare/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-readonly-triage/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-task-router/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-validation-delegation/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/fix-aistock-issue/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/verify-aistock-feature/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        },
+        {
+          "file": "docs/codex_project_memory.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        }
+      ],
+      "risk_levels": [
+        "medium",
+        "high"
+      ],
+      "suggested_scope": [
+        ".claude/commands/aistock-docs-handoff.md",
+        ".claude/commands/aistock-feature-workflow.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+        ".claude/commands/aistock-readonly-triage.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/aistock-validation-delegation.md",
+        ".claude/commands/fix-aistock-issue.md",
+        ".codex/skills/aistock-docs-handoff/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".codex/skills/aistock-readonly-triage/SKILL.md",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/aistock-validation-delegation/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".codex/skills/verify-aistock-feature/SKILL.md",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "docs/codex_project_memory.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        "noxfile.py",
+        "scripts/aistock_issue_workflow.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".claude/commands/aistock-docs-handoff.md",
+      ".claude/commands/aistock-feature-workflow.md",
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-readonly-triage.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/aistock-validation-delegation.md",
+      ".claude/commands/fix-aistock-issue.md",
+      ".codex/skills/aistock-docs-handoff/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-readonly-triage/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/aistock-validation-delegation/SKILL.md",
+      ".codex/skills/fix-aistock-issue/SKILL.md",
+      ".codex/skills/verify-aistock-feature/SKILL.md",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/codex_project_memory.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".claude/commands/aistock-docs-handoff.md",
+      ".claude/commands/aistock-feature-workflow.md",
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-readonly-triage.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/aistock-validation-delegation.md",
+      ".claude/commands/fix-aistock-issue.md",
+      ".codex/skills/aistock-docs-handoff/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-readonly-triage/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/aistock-validation-delegation/SKILL.md",
+      ".codex/skills/fix-aistock-issue/SKILL.md",
+      ".codex/skills/verify-aistock-feature/SKILL.md",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/codex_project_memory.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py"
+    ]
+  },
+  "first_seen_at": "2026-11-06T07:08:24.830347Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7079,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7079",
+  "last_seen_at": "2026-11-06T07:08:24.830347Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_workflow_automation",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "client",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "流水线默认重复生成文档且缺少统一自动审核交付策略",
+  "trigger_condition": {
+    "fingerprint": "b97aabae494338f39bb339af",
+    "source_event_id": "FE-20261106-b97aabae4943"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
