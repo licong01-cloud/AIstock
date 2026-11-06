@@ -464,9 +464,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "File-only audit uses the unchanged QE provider on synthetic dated sample indices: 20 passed; no DB/network/frozen release writes, model construction, training or service actions."
+    ],
     "inference_basis": "actual_changed_files",
-    "persistence_basis": "not_required",
+    "persistence_basis": "git_tracked_source",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
     "provisional": false,
@@ -584,5 +586,69 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "validation_receipts": [
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "02ebf33297a81038",
+      "reuse_key": "02ebf33297a81038690346b64a353a2284d3bfa6a11a651b4f0f491f0c4dcbe1",
+      "commit": "3459fb19ee214dad212e26a3a872223d0538f99c",
+      "changed_files_digest": "9409f5870a38c31c2546d62a97e74c211c31b7743651e14d3ffa415fb2ec3a71",
+      "environment_identity": {
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.12.12",
+        "executable": "python.exe"
+      },
+      "command": "python -m pytest backend/tests/dataset_release/test_dataset_release_industry_audit.py -q",
+      "result": "20 passed",
+      "status": "passed",
+      "evidence_kind": "pytest",
+      "plan": null,
+      "recorded_at": "2026-11-06T04:32:49.118817Z"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "92c3cb02ffa6f505",
+      "reuse_key": "92c3cb02ffa6f505e0c7bf8d073b1209041ea118230d79f28793d2ab0d9feb23",
+      "commit": "3459fb19ee214dad212e26a3a872223d0538f99c",
+      "changed_files_digest": "9409f5870a38c31c2546d62a97e74c211c31b7743651e14d3ffa415fb2ec3a71",
+      "environment_identity": {
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.12.12",
+        "executable": "python.exe"
+      },
+      "command": "python -m nox -s l0",
+      "result": "passed",
+      "status": "passed",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "recorded_at": "2026-11-06T04:32:49.118817Z"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "d34e044a09b33634",
+      "reuse_key": "d34e044a09b336341ef70a6eeb440d5b69b7a68c439a35ccb53ef14d0ad59f3a",
+      "commit": "3459fb19ee214dad212e26a3a872223d0538f99c",
+      "changed_files_digest": "9409f5870a38c31c2546d62a97e74c211c31b7743651e14d3ffa415fb2ec3a71",
+      "environment_identity": {
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.12.12",
+        "executable": "python.exe"
+      },
+      "command": "python -m nox -s validation_catalog_integrity",
+      "result": "8 passed; integrity state passed",
+      "status": "passed",
+      "evidence_kind": "nox",
+      "plan": "validation_catalog_integrity",
+      "recorded_at": "2026-11-06T04:32:49.118817Z"
+    }
+  ],
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_dataset_release_industry_audit.py -q -> 20 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> 8 passed; integrity state passed"
+  ]
 }
