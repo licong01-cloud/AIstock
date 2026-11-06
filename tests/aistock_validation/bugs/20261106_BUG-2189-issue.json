@@ -26,7 +26,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2189",
-  "closed_at": null,
+  "closed_at": "2026-11-06T07:38:03Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -55,12 +55,12 @@
         "perspective": "completeness_and_regression"
       },
       {
-        "perspective": "final_budget_and_acceptance",
         "findings_resolved": [
           "shared existing PR-evidence fixtures and invocation; all scenario assertions retained",
           "removed new assertions that only repeated fixed policy fields",
           "existing 0.30 module test budget passed without changing threshold"
-        ]
+        ],
+        "perspective": "final_budget_and_acceptance"
       }
     ],
     "unresolved_blockers": [],
@@ -104,6 +104,7 @@
       ".codex/skills/fix-aistock-issue/SKILL.md",
       ".codex/skills/verify-aistock-feature/SKILL.md",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_issue_flow.py",
       "docs/codex_project_memory.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
@@ -128,6 +129,7 @@
       ".codex/skills/fix-aistock-issue/SKILL.md",
       ".codex/skills/verify-aistock-feature/SKILL.md",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_issue_flow.py",
       "docs/codex_project_memory.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
@@ -448,8 +450,8 @@
   },
   "first_seen_at": "2026-11-06T07:08:24.830347Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1dda62b2a2d311972e28cf2c49bb75d4307b2636",
+  "fixed_at": "2026-11-06T07:38:03Z",
   "github_issue_number": 7079,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7079",
   "last_seen_at": "2026-11-06T07:08:24.830347Z",
@@ -457,6 +459,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7080",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -475,6 +478,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "client",
@@ -484,7 +488,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2189",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b510204f5ef157ea",
+    "recorded_at": "2026-11-06T07:39:54.634555Z",
+    "runtime_contract_digest": "35343b440d535d28f7adbce288e2e1d37ea1e1f424e81752b78268fe3eac22d5",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e49dcdedb2076ead42cd7e1dd9d8259cea17b9da",
+    "source_merge_commit": "1dda62b2a2d311972e28cf2c49bb75d4307b2636",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7080",
+    "validation_evidence": [
+      "validation-receipt: id=da7621d7023e117b commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=4a97eb9344bc0ffb commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=b72b10efbd49052d commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_issue_flow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -k \"minimal or pr_check\" --no-cov --tb=short` result=`31 passed`",
+      "validation-receipt: id=4946ce5566a9498c commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator --no-cov --tb=short` result=`passed`"
+    ],
+    "validation_evidence_digest": "35ad0e4fcad401ef4057d0886fa7b88f82c05c13e0d7491fb66ad2319f6e3d79"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -493,6 +521,12 @@
     "fingerprint": "b97aabae494338f39bb339af",
     "source_event_id": "FE-20261106-b97aabae4943"
   },
+  "validation_evidence": [
+    "validation-receipt: id=da7621d7023e117b commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=4a97eb9344bc0ffb commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=b72b10efbd49052d commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_issue_flow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -k \"minimal or pr_check\" --no-cov --tb=short` result=`31 passed`",
+    "validation-receipt: id=4946ce5566a9498c commit=e49dcdedb2076ead42cd7e1dd9d8259cea17b9da kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator --no-cov --tb=short` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
