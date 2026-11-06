@@ -290,3 +290,273 @@ def test_cli_unsafe_output_fails_before_any_database_access(tmp_path, monkeypatc
     )
     with pytest.raises(ValueError):
         runpy.run_path(str(script))["main"]()
+
+
+def test_refresh_reuses_bytes_and_first_observation_but_records_new_check(tmp_path, monkeypatch):
+    from scripts.hmm_risk import observed_industry_source as source
+
+    raw = _official_workbook_bytes()
+    now = [datetime(2026, 11, 5, 9, tzinfo=timezone.utc)]
+    monkeypatch.setattr(source, "_download", lambda: raw)
+    monkeypatch.setattr(source, "_now", lambda: now[0])
+    first = source.refresh(tmp_path / "sources")
+    now[0] = datetime(2026, 11, 6, 9, tzinfo=timezone.utc)
+    second = source.refresh(tmp_path / "sources")
+    a, b = (source.load_capture(Path(p["path"]), p["sha256"])[0] for p in (first, second))
+    assert a["first_observed_at"] == b["first_observed_at"] == "2026-11-05T09:00:00+00:00"
+    assert b["captured_at"] == "2026-11-06T09:00:00+00:00"
+    assert a["path"] == b["path"]
+    assert len(list((tmp_path / "sources" / "workbooks").iterdir())) == 1
+    assert source.read_current(tmp_path / "sources") == second
+
+
+def test_failed_refresh_keeps_last_observation_without_claiming_success(tmp_path, monkeypatch):
+    from scripts.hmm_risk import observed_industry_source as source
+
+    monkeypatch.setattr(source, "_download", _official_workbook_bytes)
+    previous = source.refresh(tmp_path / "sources")
+    monkeypatch.setattr(source, "_download", lambda: b"<html>blocked</html>")
+    with pytest.raises(ValueError):
+        source.refresh(tmp_path / "sources")
+    assert source.read_current(tmp_path / "sources") == previous
+
+
+def _official_workbook_bytes(code="480301", included="2021-07-30"):
+    import io
+
+    output = io.BytesIO()
+    pd.DataFrame(
+        [["000001", pd.Timestamp(included), code, pd.NaT]], columns=["股票代码", "计入日期", "行业代码", "更新日期"]
+    ).to_excel(output, index=False)
+    return output.getvalue()
+
+
+def test_returning_old_content_is_a_new_observation_segment(tmp_path, monkeypatch):
+    from scripts.hmm_risk import observed_industry_source as source
+
+    a, b = _official_workbook_bytes(), _official_workbook_bytes(code="370102")
+    current = [a, datetime(2026, 11, 3, 9, tzinfo=timezone.utc)]
+    monkeypatch.setattr(source, "_download", lambda: current[0])
+    monkeypatch.setattr(source, "_now", lambda: current[1])
+    source.refresh(tmp_path / "sources")
+    current[:] = [b, datetime(2026, 11, 4, 9, tzinfo=timezone.utc)]
+    source.refresh(tmp_path / "sources")
+    current[:] = [a, datetime(2026, 11, 5, 9, tzinfo=timezone.utc)]
+    pin = source.refresh(tmp_path / "sources")
+    capture, _ = source.load_capture(Path(pin["path"]), pin["sha256"])
+    assert capture["first_observed_at"] == "2026-11-05T09:00:00+00:00"
+    assert capture["first_observation"] is None
+    assert len(list((tmp_path / "sources" / "workbooks").iterdir())) == 2
+
+
+@pytest.mark.parametrize("fault", ["network", "hash_drift", "clock_rollback", "locked"])
+def test_refresh_errors_do_not_advance_observation_pointer(tmp_path, monkeypatch, fault):
+    from scripts.hmm_risk import observed_industry_source as source
+
+    now = datetime(2026, 11, 5, 9, tzinfo=timezone.utc)
+    monkeypatch.setattr(source, "_now", lambda: now)
+    monkeypatch.setattr(source, "_download", _official_workbook_bytes)
+    root = tmp_path / "sources"
+    pin = source.refresh(root)
+    pointer = (root / "current.json").read_bytes()
+    if fault == "network":
+
+        def fail():
+            raise OSError("injected network failure")
+
+        monkeypatch.setattr(source, "_download", fail)
+    elif fault == "hash_drift":
+        capture = json.loads(Path(pin["path"]).read_text())
+        Path(capture["path"]).write_bytes(b"changed")
+    elif fault == "clock_rollback":
+        monkeypatch.setattr(source, "_now", lambda: datetime(2026, 11, 4, tzinfo=timezone.utc))
+    if fault == "locked":
+        with source._locked(root), pytest.raises(ValueError, match="in progress"):
+            source.refresh(root)
+    else:
+        with pytest.raises((ValueError, OSError)):
+            source.refresh(root)
+    assert (root / "current.json").read_bytes() == pointer
+
+
+@pytest.mark.parametrize("fault", [None, "missing_symbol", "projection_hash", "unknown_l2", "ambiguous"])
+def test_direct_source_mapping_preserves_official_text_identity_and_time(tmp_path, monkeypatch, fault):
+    import io
+    from scripts.hmm_risk import observed_industry_source as source
+    from backend.services.dataset_release.canonical import digest_named_fields
+
+    monkeypatch.setattr(source, "_now", lambda: datetime(2026, 11, 5, 9, tzinfo=timezone.utc))
+    raw = _official_workbook_bytes()
+    if fault == "ambiguous":
+        frame = pd.read_excel(io.BytesIO(raw), dtype=object)
+        frame.loc[1] = ["000001", pd.Timestamp("2021-07-30"), "370102", pd.NaT]
+        stream = io.BytesIO()
+        frame.to_excel(stream, index=False)
+        raw = stream.getvalue()
+    monkeypatch.setattr(source, "_download", lambda: raw)
+    pin = source.refresh(tmp_path / "sources")
+    projection = {"rows": [{"taxonomy_l2_code": "480300", "canonical_l2_code": "801783.SI"}]}
+    if fault == "unknown_l2":
+        projection["rows"][0]["taxonomy_l2_code"] = "370100"
+    projection["canonical_hash"] = digest_named_fields(source.HMM_L2_CODE_PROJECTION_SCHEMA, projection)
+    if fault == "projection_hash":
+        projection["canonical_hash"] = "0" * 64
+    symbols = {"000001.SZ", "000002.SZ"} if fault == "missing_symbol" else {"000001.SZ"}
+    args = (Path(pin["path"]), pin["sha256"], {"l2_projection": projection})
+    if fault:
+        with pytest.raises(ValueError):
+            source.observation_from_capture(*args, data_date=date(2026, 11, 6), symbols=symbols)
+    else:
+        observed = source.observation_from_capture(*args, data_date=date(2026, 11, 6), symbols=symbols)
+        row = observed.rows["000001.SZ"]
+        assert row["canonical_l2_code"] == "801783.SI"
+        assert row["publication_at"] is None
+        assert row["publication_time_quality"] == "FIRST_PUBLICATION_UNVERIFIED"
+        assert subject.known_day(observed.captured_at, (date(2026, 11, 5), date(2026, 11, 6))) == date(2026, 11, 6)
+        with pytest.raises(ValueError, match="no next session"):
+            subject.known_day(observed.captured_at, (date(2026, 10, 29),))
+
+
+def test_copied_earlier_timestamp_without_source_evidence_is_rejected(tmp_path, monkeypatch):
+    from scripts.hmm_risk import observed_industry_source as source
+
+    monkeypatch.setattr(source, "_download", _official_workbook_bytes)
+    pin = source.refresh(tmp_path / "sources")
+    body = json.loads(Path(pin["path"]).read_bytes())
+    body["first_observed_at"] = "2021-01-01T00:00:00+00:00"
+    forged = tmp_path / "forged.json"
+    forged.write_text(json.dumps(body))
+    with pytest.raises(ValueError, match="no evidence"):
+        source.load_capture(forged, hashlib.sha256(forged.read_bytes()).hexdigest())
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("schema_version", "unknown"),
+        ("tls_verification_disabled", True),
+        ("final_url", "http://invalid.example/file.xls"),
+        ("bytes", 1),
+        ("row_count", 999),
+        ("first_publication_verified", True),
+        ("business_preflight_passed", True),
+    ],
+)
+def test_capture_metadata_drift_is_not_accepted(tmp_path, monkeypatch, field, value):
+    from scripts.hmm_risk import observed_industry_source as source
+
+    monkeypatch.setattr(source, "_download", _official_workbook_bytes)
+    pin = source.refresh(tmp_path / "sources")
+    body = json.loads(Path(pin["path"]).read_bytes())
+    body[field] = value
+    changed = tmp_path / "changed.json"
+    changed.write_text(json.dumps(body))
+    with pytest.raises(ValueError):
+        source.load_capture(changed, hashlib.sha256(changed.read_bytes()).hexdigest())
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_cli_refresh_uses_formal_readonly_denominator_and_never_builds_future_authority(
+    inputs, tmp_path, monkeypatch, capsys, pending
+):
+    from contextlib import contextmanager
+    import runpy
+    import sys
+    from types import SimpleNamespace
+    from scripts.hmm_risk import observed_industry_source as source
+    from backend.services.hmm_risk import risk_l2_database_inference as database
+    from backend.services.hmm_risk import rotation_l1_input_bundle as rotation
+    from backend.services.hmm_risk import stock_fact_repository as facts
+
+    _, denominator, observation, _ = inputs
+    if pending:
+        observation = replace(observation, captured_at=datetime(2026, 10, 23, tzinfo=timezone.utc))
+    observation = replace(observation, checked_at=observation.captured_at)
+    output, store = tmp_path / "authority", tmp_path / "sources"
+    request = {
+        "source": {
+            "knowledge_mode": "forward_current_read_snapshot",
+            "industry_authority": {"artifact_root": str(tmp_path / "baseline")},
+            "universe_key": "pit",
+            "universe_rule_version": "v2",
+            "security_identity_manifest": str(tmp_path / "security"),
+            "security_identity_sha256": "a" * 64,
+            "provider_absence_manifest": str(tmp_path / "provider"),
+            "provider_absence_sha256": "b" * 64,
+        }
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request))
+    monkeypatch.setattr(database, "validate_request", lambda _: None)
+    monkeypatch.setattr(rotation, "_industry_adapter", lambda *_a, **_k: None)
+    monkeypatch.setattr(database, "load_security_source_identity_manifest", lambda *_a, **_k: None)
+    monkeypatch.setattr(database, "load_provider_absence_manifest", lambda *_a, **_k: None)
+    connection_token = object()
+
+    @contextmanager
+    def connect(_):
+        yield connection_token
+
+    monkeypatch.setattr(database, "connect", connect)
+    monkeypatch.setattr(
+        database,
+        "_read_plan",
+        lambda req, conn: {"start": denominator.window_start.isoformat(), "end": denominator.window_end.isoformat()},
+    )
+
+    class Reader:
+        def __init__(self, connection, *_args, **_kwargs):
+            assert connection is connection_token
+
+        def validate_source(self):
+            pass
+
+        def load_industry_pit_denominator(self, **kwargs):
+            assert kwargs == {"window_start": denominator.window_start, "window_end": denominator.window_end}
+            return denominator
+
+    monkeypatch.setattr(facts, "PostgresStockFactReader", Reader)
+    pin = {"path": str(store / "capture.json"), "sha256": "c" * 64}
+    monkeypatch.setattr(source, "refresh", lambda root: pin if root == store else pytest.fail("wrong store"))
+    monkeypatch.setattr(source, "observation_from_capture", lambda *_a, **_k: observation)
+
+    def build(**kwargs):
+        assert not pending
+        assert kwargs["denominator"] is denominator and kwargs["observation"] is observation
+        output.mkdir()
+        (output / "authority.json").write_text("{}")
+        return dict.fromkeys(
+            (
+                "schema_version",
+                "authority_path",
+                "identity",
+                "data_date",
+                "target_symbols",
+                "resolved_symbols",
+                "target_unavailable",
+                "causal_daily_from",
+                "database_write",
+                "dataset_write",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(subject, "build_authority", build)
+    root = Path(__file__).resolve().parents[3]
+    script = root / "scripts/hmm_risk/build_observed_industry_authority.py"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(script), "--request", str(request_path), "--source-store", str(store), "--output-root", str(output)],
+    )
+    module = runpy.run_path(str(script))
+    monkeypatch.setattr(
+        module["subprocess"], "run", lambda args, **_: SimpleNamespace(stdout="" if args[1] == "status" else "a" * 40)
+    )
+    assert module["main"]() == (2 if pending else 0)
+    result = json.loads(capsys.readouterr().out)
+    if pending:
+        assert result["status"] == "PENDING_OBSERVATION_NOT_YET_CAUSAL"
+        assert result["full_hmm_preflight_passed"] is False and not output.exists()
+    else:
+        assert (output / "database_forward_request.json").is_file()

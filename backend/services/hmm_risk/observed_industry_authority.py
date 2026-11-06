@@ -71,6 +71,7 @@ class Observation:
     rows: Mapping[str, Mapping[str, Any]]
     source_hashes: tuple[str, ...]
     conflicts: tuple[Mapping[str, Any], ...]
+    checked_at: datetime | None = None
 
 
 def _object(data: bytes) -> dict[str, Any]:
@@ -84,6 +85,46 @@ def _timestamp(value: Any) -> datetime:
     result = datetime.fromisoformat(value.replace("Z", "+00:00"))
     require(result.tzinfo is not None and result.utcoffset() is not None, "capture timezone required")
     return result
+
+
+def read_workbook(raw: bytes) -> pd.DataFrame:
+    """One parser for pinned legacy handoffs and directly captured official XLS."""
+    try:
+        frame = pd.read_excel(io.BytesIO(raw), dtype=object)
+    except (ValueError, ImportError, OSError) as exc:
+        raise ValueError("official workbook cannot be parsed") from exc
+    require(
+        len(frame) > 0 and list(frame.columns) == ["股票代码", "计入日期", "行业代码", "更新日期"],
+        "captured workbook schema differs",
+    )
+    return frame
+
+
+def latest_assignments(frame: pd.DataFrame, data_date: date) -> dict[str, tuple[pd.Timestamp, set[str], int]]:
+    latest: dict[str, tuple[pd.Timestamp, set[str], int]] = {}
+    for position, (stock, included, code, _) in enumerate(frame.itertuples(index=False, name=None)):
+        numeric, text_code = str(stock).strip().zfill(6), str(code).strip().zfill(6)
+        stamp = pd.Timestamp(included)
+        require(len(numeric) == 6 and numeric.isdigit() and not pd.isna(stamp), "invalid workbook identity/date")
+        require(len(text_code) == 6 and text_code.isdigit(), "invalid official taxonomy code")
+        require(stamp.tzinfo is None, "source-reported timestamp timezone unexpectedly changed")
+        if stamp.date() > data_date:
+            continue
+        previous = latest.get(numeric)
+        if previous is None or stamp > previous[0]:
+            latest[numeric] = (stamp, {text_code}, position)
+        elif stamp == previous[0]:
+            previous[1].add(text_code)
+    return latest
+
+
+def target_symbols(denominator: FrozenDenominator) -> set[str]:
+    return {
+        span.canonical_symbol
+        for span in denominator.universe_spans
+        if span.eligible_start <= denominator.window_end
+        and (span.eligible_end is None or span.eligible_end >= denominator.window_end)
+    }
 
 
 def load_observation(
@@ -135,7 +176,7 @@ def load_observation(
     raw = pinned_bytes(workbook_path, source["sha256"])
     require(len(raw) == capture.get("bytes"), "captured workbook byte count differs")
     captured_at = _timestamp(capture["captured_at"])
-    frame = pd.read_excel(io.BytesIO(raw), dtype=object)
+    frame = read_workbook(raw)
     require(
         frame.shape == (capture["row_count"], 4)
         and list(frame.columns) == ["股票代码", "计入日期", "行业代码", "更新日期"],
@@ -143,20 +184,7 @@ def load_observation(
     )
     # Source fields remain source-reported (timezone unknown). Only the proven
     # capture timestamp establishes a timezone-aware knowledge lower bound.
-    latest: dict[str, tuple[pd.Timestamp, set[str]]] = {}
-    for stock, included, code, _ in frame.itertuples(index=False, name=None):
-        numeric = str(stock).strip().zfill(6)
-        stamp = pd.Timestamp(included)
-        require(len(numeric) == 6 and numeric.isdigit() and not pd.isna(stamp), "invalid workbook identity/date")
-        require(stamp.tzinfo is None, "source-reported timestamp timezone unexpectedly changed")
-        if stamp.date() > date.fromisoformat(mapping["data_date"]):
-            continue
-        previous = latest.get(numeric)
-        text_code = str(code).strip().zfill(6)
-        if previous is None or stamp > previous[0]:
-            latest[numeric] = (stamp, {text_code})
-        elif stamp == previous[0]:
-            previous[1].add(text_code)
+    latest = latest_assignments(frame, date.fromisoformat(mapping["data_date"]))
     projection = {row["canonical_l2_code"]: row["taxonomy_l2_code"] for row in authority["l2_projection"]["rows"]}
     rows: dict[str, Mapping[str, Any]] = {}
     for row in mapping["rows"]:
@@ -174,7 +202,7 @@ def load_observation(
             "source update differs",
         )
         require(
-            latest.get(symbol[:6]) == (pd.Timestamp(included), {row["taxonomy_l3_code"]}),
+            latest.get(symbol[:6], ())[:2] == (pd.Timestamp(included), {row["taxonomy_l3_code"]}),
             "observed row is not the unique latest official assignment",
         )
         require(
@@ -254,12 +282,7 @@ def build_intervals(
         "invalid observation source hash",
     )
     known = known_day(observation.captured_at, denominator.trading_dates)
-    targets = {
-        span.canonical_symbol
-        for span in denominator.universe_spans
-        if span.eligible_start <= denominator.window_end
-        and (span.eligible_end is None or span.eligible_end >= denominator.window_end)
-    }
+    targets = target_symbols(denominator)
     require(set(observation.rows) == targets, "observed mapping does not close the target PIT population")
     receipt = replace(
         base.classification_receipt,
@@ -414,6 +437,7 @@ def build_authority(
         "source_commit": source_commit,
         "source_tree": source_tree,
         "source_observed_at": observation.captured_at.isoformat(),
+        "source_checked_at": (observation.checked_at or observation.captured_at).isoformat(),
         "first_publication_verified": False,
         "causal_daily_from": known_day(observation.captured_at, denominator.trading_dates).isoformat(),
         "data_date": target.isoformat(),
