@@ -333,6 +333,11 @@ class TimingExecution:
             order, engine_state, fills, events, capital = self.backend._fit_buy_fills_to_available_cash(
                 order_before=self.order, engine_state=engine_state, final_order=order, fills=fills, events=events,
             )
+            if getattr(self.backend, "_historical_execution_events", False):
+                # General OMS audit time is wall time. In a frozen replay the
+                # existing confirmed fill owns the historical event clock.
+                events = [event.model_copy(update={"event_time": event.fill.trade_time})
+                          if event.fill is not None else event for event in events]
             for fill in fills:
                 self.backend._ledger.apply_fill(fill)
             available_at = max(bar.end, bar.received_at, bar.source_available_at or bar.end)
@@ -370,18 +375,33 @@ class TimingExecution:
         self.backend._sync_timing_execution(self, fills)
         return fills
 
-    def cancel(self, reason: str = "PLAN_EXPIRED") -> None:
+    def cancel(self, reason: str = "PLAN_EXPIRED", *, confirmed_at: datetime | None = None) -> None:
         if self.order.status == OrderStatus.CANCELLED:
             return  # The confirmed cancellation is already the durable outcome.
+        clock = utc(confirmed_at) if confirmed_at is not None else None
+        if clock is not None and (
+                clock.astimezone(CHINA).date() != self.facade.plan.target_trade_date
+                or clock < utc(self.order.created_at)
+                or self.execution_state.causality_cursor is not None
+                and clock < utc(self.execution_state.causality_cursor)):
+            raise ValueError("LOCALSIM_HISTORICAL_CANCEL_CLOCK_INVALID")
         self.facade.invalidate(reason)
         if self.order.status not in (OrderStatus.CANCELLED, OrderStatus.FILLED, OrderStatus.REJECTED):
             self.order, event = self.backend._oms.cancel_order(self.order, reason)
+            if clock is not None:
+                self.order = self.order.model_copy(update={"updated_at": clock})
+                event = event.model_copy(update={
+                    "event_id": "lste_cancel_" + digest([self.run_id, self.order.order_id, reason, clock]),
+                    "event_time": clock,
+                })
             self.events.append(event)
         if self.order.status == OrderStatus.CANCELLED:
             state = self.execution_state.model_dump(mode="python")
             state.update(order_status="CANCELLED", runtime_status=LocalSimExecutionRuntimeStatus.CANCELLED,
                          terminal_reason=reason, sequence=self.execution_state.sequence + 1,
                          idempotency_key=digest([self.run_id, "cancel", reason]), state_hash="")
+            if clock is not None:
+                state["updated_at"] = clock
             self.execution_state = LocalSimExecutionStateV1.model_validate(state)
         self.reasons.append(reason)
         self.backend._sync_timing_execution(self, [])
