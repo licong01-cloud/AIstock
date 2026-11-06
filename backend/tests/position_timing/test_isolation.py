@@ -8,6 +8,12 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
     if not path.is_relative_to(Path("backend/services/simulation_execution/localsim")):
         return False
     sdk = "backend.services.position_timing.intraday"
+    research_symbols = {
+        sdk + ".wait_control": {"CONTROL_ID", "WaitControlSpec", "WaitControlState", "WaitControlDecision", "evaluate_wait_control"},
+        sdk + ".wait_control_results": {"inspect_plan", "economic_opening", "WaitBudgetAnalysisSpec", "WaitBudgetFacts", "WaitBudgetAccount"},
+    }
+    if module in research_symbols:
+        return bool(names) and set(names) <= research_symbols[module]
     # Approved period continuation seams are file-and-symbol specific. In
     # particular, permitting the typed error does not expose IntradayStore.
     period_seams = {
@@ -94,6 +100,11 @@ def test_sdk_consumer_exception_does_not_open_other_consumers_or_internal_module
     assert not _approved_localsim_sdk_import(consumer, "backend.services.position_timing.service", ["Service"])
     assert not _approved_localsim_sdk_import(consumer, sdk + ".store", ["IntradayStore"])
     assert not _approved_localsim_sdk_import(consumer, sdk, ["store"])
+    assert _approved_localsim_sdk_import(consumer, sdk + ".wait_control", ["evaluate_wait_control", "WaitControlState"])
+    assert _approved_localsim_sdk_import(consumer, sdk + ".wait_control_results", ["inspect_plan", "WaitBudgetFacts"])
+    for denied in ("prepare", "analyze", "source_preflight", "*"):
+        assert not _approved_localsim_sdk_import(consumer, sdk + ".wait_control_results", [denied])
+    assert not _approved_localsim_sdk_import(Path("backend/services/advisory/service.py"), sdk + ".wait_control", ["evaluate_wait_control"])
     period = consumer.with_name("period_research.py")
     assert _approved_localsim_sdk_import(period, sdk + ".continuous_results", ["period_source_preflight"])
     assert not _approved_localsim_sdk_import(period, sdk + ".continuous_results", ["analyze_period"])

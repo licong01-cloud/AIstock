@@ -32,7 +32,7 @@ ready至派单为墙钟差，可含操作员排队、闭市等影响；它不是
 
 ## Scope
 
-允许写入：`intraday/wait_control.py`、`intraday/wait_control_results.py`、`intraday/continuous_results.py`，对应`backend/tests/position_timing/test_intraday_wait_control.py`，本设计及上位蓝图进度段。三个实现文件前缀均为`backend/services/position_timing/`；冻结研究产物仅写本窗口X盘根目录。
+允许写入：`intraday/wait_control.py`、`intraday/wait_control_results.py`、`intraday/continuous_results.py`，对应`backend/tests/position_timing/test_intraday_wait_control.py`及`test_isolation.py`的公开SDK消费边界，本设计及上位蓝图进度段。三个实现文件前缀均为`backend/services/position_timing/`；冻结研究产物仅写本窗口X盘根目录。
 实施仅限研究侧纯机会判断、直接测试和自身文档；LocalSIM账户接入由其owner单独完成。
 复用现有CandidateReader、共享价格计划、core.evaluate、trading_minutes、FileRef、freeze和LocalSIM账本/撮合，不建第二套Reader或账户引擎。
 
@@ -107,6 +107,7 @@ W15无价格预测、无订单/数量分配、无额外调度器；接口只供�
 ### 6. 可消费的软件合同
 
 `wait_control.evaluate_wait_control`返回`(WaitControlDecision, WaitControlState)`；底层计划/Policy均须为未分批B0。外层返回完整underlying_decision供审计，但消费者只能按外层status/ID/advice_available_at派单。外层state可JSON往返恢复；换计划revision须显式使用新state。控制spec绑定base_policy.source_commit及15分钟固定值。
+LocalSIM使用显式from-import消费上述公开决策/状态/spec/CONTROL_ID，以及wait_control_results中的inspect_plan、economic_opening和三个WaitBudget模型；隔离测试只允许这些公开符号，不开放prepare/analyze/source_preflight等发布或内部入口，也不允许其他业务模块反向导入。
 
 `wait_control_results.prepare(parent_period_spec, source_commit, timing_root, input_kind="REAL_HISTORY")`冻结`position_timing_wait_budget_research_plan_v1`，不是LocalSIM可执行请求。真实研究精确绑定本文parent/common opening/candidate SHA与17日850目标，公开函数仅为测试另接受显式FUNCTIONAL_FIXTURE；CLI不开放fixture参数。plan绑定共享实现LF哈希、三profile、费用/执行/operation及共同经济初态摘要。克隆仅允许变更portfolio_id，不忽略股份、成本、可卖量、parent_state、现金或锚点。
 
