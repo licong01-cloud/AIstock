@@ -1,4 +1,13 @@
 {
+  "acceptance_scope_review": {
+    "historical_failures_preserved": true,
+    "note": "将验收对象绑定原生 SUMMARY 操作 ahrop_ede34d946b8873c24638cdf909be8c3f，与既存原生源验证回执一致。整页历史操作的两个时间顺序冲突另行保留，不修改、不容差放宽，也不冒称所有历史操作已恢复。",
+    "previous_probe": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_0e93d579a57c0d4393e711f350b87b1f/operations?limit=50",
+    "receipt": "X:/AIstock_temp/ADVISORY/historical-cleanup-20261106-v2/BUG-1969-native-terminal-readback.json",
+    "receipt_sha256": "fb5944382359ca94a141319fd065f9b1b31253da65e4ce902ab759ecc193cf98",
+    "review_bug": "BUG-2195",
+    "source_fix_unchanged": true
+  },
   "actual": "原生父收尾及大产物LRU淘汰重复全量canonicalize；真实30MB产物重复4次约41秒，结束状态发布耗时数分钟。",
   "allowed_write_scope": [
     "backend/services/advisory_historical_range/outcome_file_inputs.py",
@@ -9,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1969",
-  "closed_at": null,
+  "closed_at": "2026-11-06T16:39:35.204116Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -162,10 +171,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/ADVISORY/historical-cleanup-20261106-v2/BUG-1969-mainline-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1969",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_success",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "bfc29a542eb79f251f5115a06c07b8f2d11602e0853514c337b5b801f98f6711",
+      "expected_identity": "0c8f804aeb92ae4b075d244ccf1b8538f7ef5116",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T16:33:06.615243Z",
+      "mode": "read_only",
+      "observed_identity": "094c541a4b6210e539ed98e257378bb5ee2131cd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4cddd18f478e8d7d167c8df24c4124e5ba790d3d23cfd8b8d0723b03f15b76e9",
+      "receipt_sha256": "575b846d321f642a8a49ca2c8238069cc3c9bb46271e56e74ce311088c0bf4ce",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7c007f6cc99de5c68468772c9203be6ca2f611783daedda0f4801b2f39d20c01",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -196,7 +227,7 @@
     ],
     "validation_evidence_digest": "2a74b51c9006f6b2d0d194ef58f0000390bdf5e6a2d3d2c0d736b7e77262e569"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory.historical_range"
   ],
@@ -315,14 +346,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "acceptance_scope_review": {
-    "review_bug": "BUG-2195",
-    "previous_probe": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_0e93d579a57c0d4393e711f350b87b1f/operations?limit=50",
-    "note": "将验收对象绑定原生 SUMMARY 操作 ahrop_ede34d946b8873c24638cdf909be8c3f，与既存原生源验证回执一致。整页历史操作的两个时间顺序冲突另行保留，不修改、不容差放宽，也不冒称所有历史操作已恢复。",
-    "source_fix_unchanged": true,
-    "historical_failures_preserved": true,
-    "receipt": "X:/AIstock_temp/ADVISORY/historical-cleanup-20261106-v2/BUG-1969-native-terminal-readback.json",
-    "receipt_sha256": "fb5944382359ca94a141319fd065f9b1b31253da65e4ce902ab759ecc193cf98"
   }
 }
