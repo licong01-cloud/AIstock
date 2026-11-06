@@ -282,5 +282,12 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "25-35%"
     }
+  },
+  "implementation_review": {
+    "correctness": "PASS",
+    "completeness_and_regression": "PASS",
+    "reviewer": "active_agent",
+    "independent_review": false,
+    "note": "复核完成：保持默认成功验收；显式 PARTIAL 绑定原 run、batch、回执语义哈希及计数/时钟，公开探针仅证明回执引用，产物内容另由原生读回校验且固定 SHA256。BUG-1969 只验收原 SUMMARY，旧时间冲突保留。源修复、运行验收、经济效果分别记录；不新增训练、恢复执行、数据库操作或审批。"
   }
 }

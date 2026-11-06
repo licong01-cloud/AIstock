@@ -219,6 +219,69 @@ def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[
     return "passed", None, {"statuses": normalized}
 
 
+def _validate_advisory_run_terminal(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """显式绑定的 PARTIAL 只证明失败已终结；默认仍要求执行成功。"""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    fields = ("expected_terminal_status", "expected_batch_id", "expected_receipt_sha256")
+    if not any(name in query for name in fields):
+        return _validate_run_terminal_success(payload)
+    facts: dict[str, Any] = {"execution_completed": False, "economic_evaluated": False,
+        "artifact_content_verified": False, "verification_scope": "pinned_partial_terminal_receipt_reference"}
+    def failed(reason):
+        return "failed", reason, facts
+    if any(len(query.get(name, [])) != 1 or not query[name][0].strip() for name in fields):
+        return failed("partial closure requires one exact status, batch and receipt declaration")
+    status, batch_id, digest = (query[name][0] for name in fields)
+    if status != "PARTIAL" or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        return failed("partial closure declaration has invalid status or receipt hash")
+    match = re.fullmatch(r"/api/v1/advisory/historical-range-runs/([^/]+)", urllib.parse.urlsplit(url).path)
+    if not match or not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return failed("partial closure requires an exact run path and ok=true")
+    data = payload.get("data")
+    run = data.get("run") if isinstance(data, dict) else None
+    if not isinstance(run, dict) or run.get("range_run_id") != urllib.parse.unquote(match[1]) or run.get("batch_id") != batch_id:
+        return failed("partial closure run or batch identity differs")
+    if run.get("status") != status or run.get("error_json") is not None or "error_json" not in run:
+        return failed("partial closure status or error evidence contradicts its declaration")
+    statuses = _collect_status_fields(payload)
+    if any(value.upper() not in _RUN_STATUS_SUCCESS | {"PARTIAL"} for value in statuses.values()):
+        return failed("partial closure envelope carries contradictory status")
+    ref = run.get("final_receipt_ref")
+    if (not isinstance(ref, dict) or run.get("final_receipt_hash") != digest
+            or ref.get("semantic_content_hash") != digest
+            or ref.get("schema_version") != "advisory_historical_range_artifact_ref_v1"
+            or ref.get("artifact_kind") != "RANGE_RECEIPT"
+            or ref.get("payload_schema_version") != "advisory_historical_range_run_execution_receipt_v1"
+            or not isinstance(ref.get("producer_contract_version"), str) or not ref["producer_contract_version"].strip()):
+        return failed("partial closure final receipt identity or schema differs")
+    if any(not isinstance(ref.get(name), str) or re.fullmatch(r"[0-9a-f]{64}", ref[name]) is None
+           for name in ("payload_sha256", "file_sha256")):
+        return failed("partial closure receipt lacks content hashes")
+    path = ref.get("relative_path")
+    if (not isinstance(path, str) or not path.startswith("range-receipts/") or ":" in path
+            or "\\" in path or any(part in ("", ".", "..") for part in path.split("/"))):
+        return failed("partial closure receipt path is not contained")
+    counts = ("completed_day_count", "failed_day_count", "waiting_day_count", "retryable_day_count",
+              "materialized_day_count", "total_day_count")
+    if any(type(run.get(name)) is not int or run[name] < 0 for name in counts):
+        return failed("partial closure counts are missing or invalid")
+    success, failure, waiting, retryable, materialized, total = (run[name] for name in counts)
+    if (success < 1 or failure != 1 or waiting != 0 or retryable != 0
+            or materialized != total or success + failure > total or type(run.get("row_version")) is not int
+            or run["row_version"] < 1 or run.get("resume_trade_date") is not None):
+        return failed("partial closure counts or progress contradict a failed terminal prefix")
+    try:
+        stamps = [datetime.fromisoformat(run[name]) for name in ("created_at", "started_at", "finished_at", "updated_at")]
+        if any(stamp.utcoffset() is None for stamp in stamps) or stamps != sorted(stamps):
+            return failed("partial closure lifecycle timestamps contradict")
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return failed("partial closure requires complete aware lifecycle timestamps")
+    facts.update(range_run_id=run["range_run_id"], batch_id=batch_id, terminal_status=status,
+        final_receipt_hash=digest, successful_day_count=success, failed_day_count=failure,
+        unexecuted_day_count=total-success-failure, failure_preserved=True)
+    return "passed", None, facts
+
+
 def _validate_run_terminal_evidence(
     payload: Any,
     *,

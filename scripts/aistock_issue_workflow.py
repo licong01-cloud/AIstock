@@ -3518,6 +3518,7 @@ _collect_status_fields = _runtime_semantics._collect_status_fields
 _normalize_expected_terminal_outcome = _runtime_semantics._normalize_expected_terminal_outcome
 _expectation_outcome_digest = _runtime_semantics._expectation_outcome_digest
 _validate_run_terminal_success = _runtime_semantics._validate_run_terminal_success
+_validate_advisory_run_terminal = _runtime_semantics._validate_advisory_run_terminal
 _validate_run_terminal_evidence = _runtime_semantics._validate_run_terminal_evidence
 _structured_current_trade_date_blockers_are_clear = _runtime_semantics._structured_current_trade_date_blockers_are_clear
 _scheduler_failure_markers = _runtime_semantics._scheduler_failure_markers
@@ -3623,7 +3624,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-operations/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
-    (re.compile(r"^/api/v1/advisory/historical-range-runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-runs/[^/]+$"), "advisory_run_terminal_readback", _validate_advisory_run_terminal),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs$"), "collection", _validate_collection_payload),
@@ -3756,6 +3757,7 @@ def _evaluate_business_smoke_semantics(
         "advisory_returns_metrics_v2",
         "advisory_calendar_defaults_only",
         "advisory_historical_operation_status_readback",
+        "advisory_run_terminal_readback",
         "local_data_freshness",
         "monthly_release_ready",
     }:

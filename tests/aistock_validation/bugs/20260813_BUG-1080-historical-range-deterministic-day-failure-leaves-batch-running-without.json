@@ -76,7 +76,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_1aa96934a7e3d0afd1c81a5202b6af47",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-runs/ahrr_48d091fc400606b68d772bb6b994fe36?expected_terminal_status=PARTIAL&expected_batch_id=ahrb_1aa96934a7e3d0afd1c81a5202b6af47&expected_receipt_sha256=b8d3c79e75294c760be5ade000bcd6e025055b8894d51359336d74bde044e24a",
     "fresh_process_evidence": [
       "Fresh Python process passed 14 repository tests including typed failed-attempt predecessor recursion; rollback-only DEV replay reconciled ahrr_48d091fc400606b68d772bb6b994fe36 to PARTIAL with a final receipt",
       "fresh Python process loaded patched repository; rollback-only DEV replay reached PARTIAL with final receipt",
@@ -202,5 +202,14 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "implementation_allowed"
+  "workflow_gate": "implementation_allowed",
+  "acceptance_scope_review": {
+    "review_bug": "BUG-2195",
+    "previous_probe": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_1aa96934a7e3d0afd1c81a5202b6af47",
+    "note": "验收目标为原始确定性失败链的终结与原生 RANGE_RECEIPT 完整性，不要求历史选股执行全部成功。原 run 保持 PARTIAL：2 成功、1 失败、42 未执行。独立原生读取校验了最终回执、两个成功日和阻断失败日，共 4 份产物；未训练、重跑、写库或评价收益。",
+    "source_fix_unchanged": true,
+    "historical_failures_preserved": true,
+    "receipt": "X:/AIstock_temp/ADVISORY/historical-cleanup-20261106-v2/BUG-1080-native-terminal-readback.json",
+    "receipt_sha256": "974ac7c6a00a57e637e5a37be4a2ff7486c4a343899cd0b27e1bb1bcb02c9435"
+  }
 }
