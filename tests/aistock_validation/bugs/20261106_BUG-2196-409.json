@@ -1,5 +1,13 @@
 {
   "actual": "2026-11-07默认目标日2026-11-09，全部5个启用任务摘要至列表409 SNAPSHOT_CHANGED；同参数往返200。",
+  "agent_review": {
+    "ci_repair": "首次CI为767通过/1失败，失败项为工作流测试比例30.043%超限。删除新增测试按场景名重复分发的分支，直接使用数据表；内联仅调用一次的entry-price测试构造，保留全部22+10项断言。生产分母和30%门槛不变，32项及预算失败nodeid重验通过。最终修订仅测试构造及BUG证据，业务源码和新进程证据SHA不变。",
+    "completeness_regression": "已覆盖交易日、周六、周日、长假和两类真实数据变更；默认/显式目标日真实五任务新进程读回通过。浏览器显式日期可读，默认入口的实际生效仍待用户重启。",
+    "correctness": "已核对摘要和分页共用_context，解析默认目标日后统一日历上界；保留完整日历hash及真实更新拒绝，不修改目标日、名单、排名、价格或收益。",
+    "deferred_scope": "advisory_workbench_backend全矩阵由当前PR CI承担；共享bak_basic告警遮挡移交数据管理/全局告警owner。",
+    "design_compliance": "普通BUG最小修复；原快照/分页设计逐项对应，未简化一致性门禁，未新增业务入口。运行与经济验收分态，0训练/写库/服务控制。",
+    "reviewer": "当前执行Agent自审，不冒充独立第三方审核"
+  },
   "allowed_write_scope": [
     "backend/services/advisory_workbench/service.py",
     "backend/tests/advisory_workbench/test_service.py",
@@ -8,10 +16,9 @@
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20261106_BUG-2196-409.json"
   ],
-  "scope_expansion_reason": "finish实际拒绝未注册的workbench daily业务smoke；仅补该精确GET响应的纯语义合同、分发登记及定向回归，不恢复流水线或修改现有验收门槛。",
   "assigned_agent": null,
   "bug_id": "BUG-2196",
-  "closed_at": null,
+  "closed_at": "2026-11-06T18:53:57.670192Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,16 +41,30 @@
     "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh-source-readback.json",
     "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fix-matrix.xml",
     "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/semantic-tests.xml",
-    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/workflow-smoke.json"
+    "X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/workflow-smoke.json",
+    "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-roundtrip.json",
+    "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-ui.json"
   ],
   "expected": "相同业务目标日及未变化的数据应共享快照；默认摘要传给显式目标日分页应成功，真实日历或watermark变化仍返回409。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_workbench/service.py",
+      "backend/tests/advisory_workbench/test_service.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2196-409.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_workbench/service.py",
-      "backend/tests/advisory_workbench/test_service.py"
+      "backend/tests/advisory_workbench/test_service.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2196-409.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_workbench/service.py",
@@ -89,8 +110,8 @@
   },
   "first_seen_at": "2026-11-06T17:39:08.566932Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d7c8f07f670372686c4c661130aa1e86ca8dc334",
+  "fixed_at": "2026-11-06T18:24:33Z",
   "github_issue_number": 7111,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7111",
   "last_seen_at": "2026-11-06T17:39:08.566932Z",
@@ -98,6 +119,31 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "post_restart_additional_acceptance": {
+    "V2_economic_files_read": 0,
+    "browser_default_entry": "passed",
+    "database_writes": 0,
+    "default_explicit_roundtrip": "passed",
+    "evidence": [
+      {
+        "path": "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-roundtrip.json",
+        "sha256": "91119687388b27feb14463c606043a80d3e1ebeeb74fe1fef93d289d8a290b41"
+      },
+      {
+        "path": "X:\\AIstock_temp\\ADVISORY\\live-integrity-20261107-v1\\post-restart-ui.json",
+        "sha256": "2b6c3bb5166d8e9df9700292a4a3c9eda4b4fa0be563c981ee0bfef9d2a26ec8"
+      }
+    ],
+    "mouse_pagination": "passed",
+    "observed_identity": "0344c1f9b371398465ef59f364106e361654871a",
+    "pagination_duplicates": 0,
+    "program_count": 5,
+    "published_program_count": 4,
+    "real_asset_blocked_program_count": 1,
+    "schema_version": "advisory_runtime_roundtrip_summary_v1",
+    "status": "passed"
+  },
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7115",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -114,11 +160,35 @@
       "新进程加载本工作树持久源码，对五个真实启用任务核对默认/显式目标日快照一致，四个PUBLISHED及一个真实NO_CURRENT_LIST通过；仅READ ONLY事务，0写库/训练/V2经济读取。回执X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh-source-readback.json绑定源码SHA256。"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-2196-close-sync-20261106/tmp/issue_workflow/BUG-2196/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2196",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_workbench_daily_snapshot",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "0e9f80a10f26b67ea23467e8b757b5e5a55706fe9f8d0d5417f5fa0b758ddf1e",
+      "expected_identity": "d7c8f07f670372686c4c661130aa1e86ca8dc334",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T18:48:59.461992Z",
+      "mode": "read_only",
+      "observed_identity": "0344c1f9b371398465ef59f364106e361654871a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c162686f96c87e2e50462435e1132f84a6b4c473780100ba1d266321db50dc45",
+      "receipt_sha256": "d2c4be0bac70ed8ba5108b521b9a6b25199fce9a65e67a88f09acc33caeade36",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "577ec70295ad64a66d23872bfa6de00b172ab581c7dc087283829295a76d37d8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -127,25 +197,33 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "finish实际拒绝未注册的workbench daily业务smoke；仅补该精确GET响应的纯语义合同、分发登记及定向回归，不恢复流水线或修改现有验收门槛。",
   "severity": "P1",
-  "status": "open",
-  "validation_evidence": [
-    "rtk pytest -q backend/tests/advisory_workbench/test_service.py backend/tests/advisory_workbench/test_api.py -> 29 passed",
-    "rtk pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'advisory_workbench_daily_semantic_contract or entry_price_status_semantic_contract' -> 32 passed",
-    "rtk pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> 1 passed; production_sloc=48105, test_sloc=14430, ratio below 30 percent",
-    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2196 --module validation -> passed",
-    "python -m nox -s l0 -- six exact changed files -> passed, zero blocking",
-    "rtk ruff check five changed Python files; git diff --check -> passed",
-    "python -B X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh_source_readback.py -> passed for five enabled programs; runtime restart still pending"
-  ],
-  "agent_review": {
-    "correctness": "已核对摘要和分页共用_context，解析默认目标日后统一日历上界；保留完整日历hash及真实更新拒绝，不修改目标日、名单、排名、价格或收益。",
-    "completeness_regression": "已覆盖交易日、周六、周日、长假和两类真实数据变更；默认/显式目标日真实五任务新进程读回通过。浏览器显式日期可读，默认入口的实际生效仍待用户重启。",
-    "design_compliance": "普通BUG最小修复；原快照/分页设计逐项对应，未简化一致性门禁，未新增业务入口。运行与经济验收分态，0训练/写库/服务控制。",
-    "reviewer": "当前执行Agent自审，不冒充独立第三方审核",
-    "ci_repair": "首次CI为767通过/1失败，失败项为工作流测试比例30.043%超限。删除新增测试按场景名重复分发的分支，直接使用数据表；内联仅调用一次的entry-price测试构造，保留全部22+10项断言。生产分母和30%门槛不变，32项及预算失败nodeid重验通过。最终修订仅测试构造及BUG证据，业务源码和新进程证据SHA不变。",
-    "deferred_scope": "advisory_workbench_backend全矩阵由当前PR CI承担；共享bak_basic告警遮挡移交数据管理/全局告警owner。"
+  "source_merge_receipt": {
+    "bug_id": "BUG-2196",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5c04d07fb4e96e46",
+    "recorded_at": "2026-11-06T18:25:14.078614Z",
+    "runtime_contract_digest": "0e9f80a10f26b67ea23467e8b757b5e5a55706fe9f8d0d5417f5fa0b758ddf1e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3c0b1f5fdee8374d57cb9ab13a597a894f3ba485",
+    "source_merge_commit": "d7c8f07f670372686c4c661130aa1e86ca8dc334",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7115",
+    "validation_evidence": [
+      "validation-receipt: id=71f6fe3979a67465 commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/advisory_workbench/test_service.py backend/tests/advisory_workbench/test_api.py` result=`29 passed`",
+      "validation-receipt: id=1182ac753801eb7c commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'advisory_workbench_daily_semantic_contract or entry_price_status_semantic_contract'` result=`32 passed`",
+      "validation-receipt: id=e98eaeb2064a5301 commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator` result=`1 passed`",
+      "validation-receipt: id=d772ff259820a0f5 commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261106_BUG-2196-409.json` result=`passed`"
+    ],
+    "validation_evidence_digest": "6c62c85a27402a918efa44b582966ba109999c6c80bd30ac296187e1b0c737e7"
   },
+  "status": "verified",
   "suspected_modules": [
     "advisory.ui"
   ],
@@ -154,6 +232,20 @@
     "fingerprint": "6b75419b59f677aef796d454",
     "source_event_id": "FE-20261106-6b75419b59f6"
   },
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/advisory_workbench/test_service.py backend/tests/advisory_workbench/test_api.py -> 29 passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'advisory_workbench_daily_semantic_contract or entry_price_status_semantic_contract' -> 32 passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -> 1 passed; production_sloc=48105, test_sloc=14430, ratio below 30 percent",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2196 --module validation -> passed",
+    "python -m nox -s l0 -- six exact changed files -> passed, zero blocking",
+    "rtk ruff check five changed Python files; git diff --check -> passed",
+    "python -B X:/AIstock_temp/ADVISORY/live-integrity-20261107-v1/fresh_source_readback.py -> passed for five enabled programs; runtime restart still pending",
+    "validation-receipt: id=71f6fe3979a67465 commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/advisory_workbench/test_service.py backend/tests/advisory_workbench/test_api.py` result=`29 passed`",
+    "validation-receipt: id=1182ac753801eb7c commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'advisory_workbench_daily_semantic_contract or entry_price_status_semantic_contract'` result=`32 passed`",
+    "validation-receipt: id=e98eaeb2064a5301 commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator` result=`1 passed`",
+    "validation-receipt: id=d772ff259820a0f5 commit=3c0b1f5fdee8374d57cb9ab13a597a894f3ba485 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261106_BUG-2196-409.json` result=`passed`",
+    "rtk git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
