@@ -989,6 +989,7 @@ def qlib_data_backend(session: nox.Session) -> None:
     """Run Qlib exporter and PIT-universe regressions only."""
 
     full_targets = [
+        "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
         "backend/tests/qlib_exporter",
         "backend/tests/test_qlib_export_stock_universe_filters.py",
         "backend/tests/core_index_membership",

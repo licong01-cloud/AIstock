@@ -1,0 +1,588 @@
+{
+  "actual": "Train industry coverage below unchanged 0.90; no early frozen L2 values.",
+  "allowed_write_scope": [
+    "scripts/dataset_release_industry_audit.py",
+    "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
+    "tests/aistock_validation/bugs/20261011_BUG-1843-frozen-sw-l2-history-does-not-cover-efficientgats-approved-2018-training.json",
+    "noxfile.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1843",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-11T16:15:31.974526Z",
+  "data_diagnosis": {
+    "active_generation": "20260928-v15-unified-moneyflow1",
+    "active_profile_file_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
+    "active_profile_write": false,
+    "actual_consumer_segment_audit": {
+      "both_valid_h5_parquet_conflicting_ids": 0,
+      "configured_windows_changed": false,
+      "graph_input_ready": false,
+      "sample_processing_note": "The original 40-trading-day label maturity processor is unchanged: actual learned train samples end 2022-11-03, valid samples end 2024-04-26; configured windows remain unchanged.",
+      "sector_data_h5": {
+        "test": {
+          "coverage": 0.6087168902968592,
+          "covered_rows": 1571399,
+          "missing_rows": 1010095,
+          "missing_symbol_count": 2045,
+          "rows": 2581494
+        },
+        "train": {
+          "coverage": 0.22534427819903474,
+          "covered_rows": 804153,
+          "missing_rows": 2764400,
+          "missing_symbol_count": 3951,
+          "rows": 3568553
+        },
+        "valid": {
+          "coverage": 0.619724585608792,
+          "covered_rows": 895696,
+          "missing_rows": 549617,
+          "missing_symbol_count": 1948,
+          "rows": 1445313
+        }
+      },
+      "static_factors_parquet": {
+        "test": {
+          "coverage": 0.5339702513350796,
+          "covered_rows": 1378441,
+          "missing_rows": 1203053,
+          "missing_symbol_count": 2430,
+          "rows": 2581494
+        },
+        "train": {
+          "coverage": 0.22184313922197596,
+          "covered_rows": 791659,
+          "missing_rows": 2776894,
+          "missing_symbol_count": 3962,
+          "rows": 3568553
+        },
+        "valid": {
+          "coverage": 0.5836133764796968,
+          "covered_rows": 843504,
+          "missing_rows": 601809,
+          "missing_symbol_count": 2115,
+          "rows": 1445313
+        }
+      },
+      "threshold": 0.9
+    },
+    "c013_classification_candidate_counts": {
+      "catalog_identity_invalid": 5371,
+      "classification_knowledge_time_unverified": 4059,
+      "resolved": 3791
+    },
+    "candidate_write": false,
+    "consumer_sample_indices_sha256": "ff0810050e20d3fa408d3a7a7a673238820f6e4ae497124090fcb086e12e665d",
+    "current_member_table_is_new_values": [
+      "Y"
+    ],
+    "current_member_table_rows": 5914,
+    "data_successor_built": false,
+    "database_read": true,
+    "database_write": false,
+    "dataset_manifest_sha256": "2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc",
+    "earlier_historical_fact_availability": "Historical rows exist, but the current approved authority does not close the old taxonomy and causal identity; this is not proof that every upstream source lacks history.",
+    "experiment_started": false,
+    "first_frozen_sector_date": "2021-07-30",
+    "forbidden_fallback": "SW2021 stable-taxonomy backcast cannot replace the user-required historical PIT basis.",
+    "fresh_process_readback": {
+      "all_missing_symbol_bounds_equal": true,
+      "all_segment_and_annual_counts_equal": true,
+      "node1_receipt": "X:/AIstock_dataset_candidates/data_repair_receipts/BUG-1843/node1-v15-batched.json",
+      "node1_receipt_sha256": "cb2208faf2f276e9b4f0846c44e9b3a7d8edd4bb81a424cdee617d8c8d1e3553",
+      "node_identity_and_component_hashes_equal": true,
+      "original_vs_partitioned_lookup_equivalent": true,
+      "wsl_partitioned_receipt": "X:/AIstock_dataset_candidates/data_repair_receipts/BUG-1843/wsl-v15-batched/industry_history_audit.json",
+      "wsl_partitioned_receipt_sha256": "452b15b39b8b20352f34cd1c497713900f6830b49cd3aa20fd44f69735b5acab",
+      "wsl_receipt": "X:/AIstock_dataset_candidates/data_repair_receipts/BUG-1843/wsl-v15/industry_history_audit.json",
+      "wsl_receipt_sha256": "663ecab2338f3fe3bac17b5616e4ed41084a2775778c892aa255927d8ecb328a"
+    },
+    "local_catalog_versions": [
+      "SW2021"
+    ],
+    "manifest_file_sha256": "940e56941ee84d9caf05622ce94d0ad18ef5d2ae9c2dcbe30f7f1eb35d1cba92",
+    "official_history_file": "F:/Dev/AIstock_validation_clean/BUG1590_sw_history_source_20260920/StockClassifyUse_stock.xls",
+    "official_history_pre_boundary_symbols": 4600,
+    "official_history_rows_before_sw2021_boundary": 7914,
+    "official_history_sha256": "1a181c4a7aa1db22ea3c52233221d9d70b731ed6cb0fd7c9bbc80f6b0c066742",
+    "pre_boundary_rows_not_in_current_catalog": 5080,
+    "required_next_step": "Bind authentic SW2014 and SW2021 historical authority and cross-version shared identities, then materialize the same dated industry IDs into both frozen consumer files; keep windows, model, pools and 0.90 threshold unchanged.",
+    "resolution_state": "BLOCKED_PENDING_VERSIONED_HISTORICAL_AUTHORITY",
+    "runtime_action": false,
+    "sector_data_sha256": "575ad57d52567857a028ff71809ea776894dce3f00421182ecf9ebdb4e3402f3",
+    "source_authority_ready": false,
+    "source_bug_fixed": false,
+    "static_factors_sha256": "0231ee5589757d76a3ff9b6ce3e3826c10f4b22a29da35aff9a0d3f56d662bbd",
+    "test_exact_valid_ids_differing_from_membership": 0,
+    "test_h5_exact_missing_with_membership_present": 1095876,
+    "test_membership_missing_count": 0,
+    "test_parquet_exact_missing_with_membership_present": 1204834,
+    "test_sample_count": 2581494,
+    "unmapped_existing_l2_id_count": 0
+  },
+  "description": "Train industry coverage below unchanged 0.90; no early frozen L2 values.",
+  "dev_historical_reconstruction": {
+    "active_dataset_written": false,
+    "active_profile_written": false,
+    "actual_QE_sample_effective_coverage": {
+      "test": {
+        "expected_rows": 2581494,
+        "resolved_rows": 2581494
+      },
+      "train": {
+        "expected_rows": 3568553,
+        "resolved_rows": 3568553
+      },
+      "valid": {
+        "expected_rows": 1445313,
+        "resolved_rows": 1445313
+      }
+    },
+    "artifact_root": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-dev-repair-20261012-v2",
+    "as_known_verified": false,
+    "database": "aistock_dev",
+    "dev_business_tables_written": false,
+    "dev_staging_written": true,
+    "duplicate_or_overlap_count": 0,
+    "experiment_or_training": false,
+    "full_validation_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-dev-repair-20261012-v2/final_dev_validation.json",
+    "full_validation_receipt_sha256": "09d296bf32437236ad3789142cac4c492b403cd3996c9fe7400fe75aa4cdc1dc",
+    "graph_input_ready": false,
+    "isolated_schema": "repair_sw_pit_bug1843_20261012_v1",
+    "july_baseline_exact_readback": true,
+    "july_baseline_member_rows": 6967,
+    "known_from_fabricated": false,
+    "official_source_revision_difference": {
+      "active_dataset_written": false,
+      "changed_interval_count": 1,
+      "current_provider_file_sha256": "6b2dfdbc50a0d11c42f07f0dc400b18e305bafeb87b609cfe7f8f6df9ed204b2",
+      "dev_business_tables_written": false,
+      "dev_migration_sha256": "d6f91fc8afa71edafa724430b58f300503271f572613f771b2a7273cb8237437",
+      "dev_selected_projection_table": "repair_sw_pit_bug1843_20261012_v1.effective_intervals_resolved_v2",
+      "dev_staging_written": true,
+      "dev_typed_resolution_table": "repair_sw_pit_bug1843_20261012_v1.historical_resolution_600114_v1",
+      "evidence_root": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-600114-official-revision-20261012-v1",
+      "full_as_known_pit_proof": false,
+      "historical_provider_file_sha256": "e0ae4e24159eb5b2abca8aeb6d1ab67293070f29de787c5973f56c6868320367",
+      "known_from_inferred": false,
+      "newer_source_l2_identity": "SW2014:640100",
+      "older_source_l2_identity": "SW2014:240200",
+      "production_written": false,
+      "provider_current_published_l2_code": "801072.SI",
+      "provider_current_start_date": "2021-07-30",
+      "provider_endpoint": "index_member_all",
+      "provider_historical_end_date": "2021-07-29",
+      "range": "2018-08-01..2021-07-29",
+      "raw_versions_overwritten": false,
+      "readback_receipt_sha256": "b7d02e21215760a111777d7e0a2e18a0db97078747a2694821f134f167acc328",
+      "resolution": "DEV_HISTORICAL_SOURCE_SELECTION_VERIFIED_RAW_VERSIONS_RETAINED",
+      "selected_historical_l2_identity": "SW2014:240200",
+      "selected_published_l2_code": "801051.SI",
+      "symbol": "600114.SH",
+      "targeted_tests_passed": 8,
+      "trading_days": 728,
+      "unchanged_selected_interval_count": 10541
+    },
+    "outcomes_read": false,
+    "production_database_written": false,
+    "python_and_independent_dev_sql_counts_equal": true,
+    "raw_taxonomy_unresolved_intervals_preserved": 26,
+    "readback_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-dev-repair-20261012-v2/dev_apply_readback.json",
+    "readback_receipt_sha256": "8e0214aca2765ede51f51af1743ec451e52cc3d6b851f52fc866f39a12492466",
+    "required_next_step": "600114 historical source selection is DEV-verified, with raw conflicting revisions retained; approve knowledge/effective-time semantics without inferred publication timestamps, fix current-only ingestion and version-qualified taxonomy storage, then materialize shared successor files and validate the real QE provider.",
+    "runtime_action": false,
+    "selected_source_intervals": 10542,
+    "selected_source_required_unresolved_stock_days": 0,
+    "selected_source_symbol_count": 5275,
+    "selected_source_unresolved_intervals": 8,
+    "status": "DEV_EFFECTIVE_HISTORY_VALIDATED_NOT_PRODUCTION_PIT_READY",
+    "sw2021_backcast_count": 0,
+    "targeted_tests_passed": 19,
+    "versioned_effective_intervals": 20326,
+    "versioned_raw_source_rows": 24723
+  },
+  "draft_salvage_20261106": {
+    "business_issue_closed": false,
+    "ci_registration": "Only register the new direct test file in the existing qlib_data_backend full target list; no workflow, runner, policy or execution logic change.",
+    "code_reviews": [
+      "Remove hardcoded experiment windows, Qlib/handler construction and fixed component revision paths; accept only an explicitly saved consumer sample index.",
+      "Keep the actual provider and unchanged coverage threshold; reject H5/Parquet ID conflicts even when both individual coverage ratios pass.",
+      "Reject path escape, linked paths, ambiguous inventory, normalized duplicate samples and inputs changing during readback. ID coverage never claims feature completeness."
+    ],
+    "current_frozen_data_acceptance": "NOT_EVALUATED_THIS_MAINTENANCE_TASK",
+    "data_or_database_write": false,
+    "historical_diagnosis_snapshots_preserved": true,
+    "historical_snapshot_status_is_not_current_active_status": true,
+    "monthly_default_gate_added": false,
+    "next_step": "Use existing successor consumer receipts or request this on-demand audit against the exact saved QE samples before independently closing the original data coverage Issue; no experiment is started by this PR.",
+    "runtime_action": false,
+    "scope": "Persist the reviewed manual, read-only consumer-sample industry-ID diagnostic; retire the old unsubmitted implementation without changing data or model contracts.",
+    "training_or_experiment_started": false
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261011-35ccaa3f8a42",
+      "timestamp": "2026-10-11T16:15:31.974526Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20261011_134748_fbb8"
+  ],
+  "expected": "Traceable versioned historical L2 facts aligned to unchanged QE samples; exact coverage by year/segment, unknown fail closed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "noxfile.py",
+      "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
+      "scripts/dataset_release_industry_audit.py",
+      "tests/aistock_validation/bugs/20261011_BUG-1843-frozen-sw-l2-history-does-not-cover-efficientgats-approved-2018-training.json"
+    ],
+    "added_files": [
+      "scripts/dataset_release_industry_audit.py",
+      "backend/tests/dataset_release/test_dataset_release_industry_audit.py"
+    ],
+    "changed_files": [
+      "noxfile.py",
+      "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
+      "scripts/dataset_release_industry_audit.py",
+      "tests/aistock_validation/bugs/20261011_BUG-1843-frozen-sw-l2-history-does-not-cover-efficientgats-approved-2018-training.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/dataset_release_industry_audit.py",
+        "backend/tests/dataset_release/test_dataset_release_industry_audit.py"
+      ],
+      "impacted_modules": [
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/dataset_release_industry_audit.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/dataset_release_industry_audit.py",
+        "backend/tests/dataset_release/test_dataset_release_industry_audit.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/dataset_release_industry_audit.py",
+      "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
+      "noxfile.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/dataset_release_industry_audit.py",
+      "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
+      "noxfile.py"
+    ]
+  },
+  "first_seen_at": "2026-10-11T16:15:31.974526Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "full_market_database_validation": {
+    "active_profile_written": false,
+    "added_dated_fact_intervals": 4,
+    "added_dated_stock_days": 7,
+    "added_symbols": [
+      "001211.SZ",
+      "601868.SH",
+      "605589.SH",
+      "688322.SH"
+    ],
+    "all_six_pool_required_effective_gaps": 0,
+    "artifact_root": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-full-db-validation-20261012-v1",
+    "cleanup_logic_modified": false,
+    "current_and_historical_provider_member_rows": 7920,
+    "database": "aistock_dev",
+    "dataset_export_performed": false,
+    "dev_business_written": false,
+    "dev_migration_sha256": "11aa9d826efcd1ad9e0945f78d10aed9499fd8c2e04f0857693d4e0ad2e0663a",
+    "dev_staging_written": true,
+    "duplicate_or_overlap_count": 0,
+    "experiment_or_training": false,
+    "final_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-full-db-validation-20261012-v1/full_database_final_validation.json",
+    "final_receipt_sha256": "f066a23647354d4a63d3886e7a1f2918d0dc7ced8600de4f0be332793d3ab5ae",
+    "graph_input_ready": false,
+    "isolated_schema": "repair_sw_pit_bug1843_20261012_v1",
+    "knowledge_time_proven": false,
+    "known_from_inferred": false,
+    "outcomes_read": false,
+    "population": "ALL_SHSZ_A_LISTED_LIFECYCLE_INCLUDING_ST_AND_DELISTED_NOT_STRATEGY_POOL",
+    "production_written": false,
+    "python_and_independent_sql_counts_equal": true,
+    "raw_legacy_index_membership_reinterpreted_as_classification": false,
+    "raw_provider_capture_count": 116,
+    "real_QE_sample_effective_gaps": 0,
+    "remaining_missing_stock_days": 421,
+    "remaining_missing_symbol_count": 12,
+    "required_next_step": "Resolve the 12 explicit source-evidence gaps without current-industry backcasts; validate versioned production storage and obtain exact-target DDL/DML authorization before production apply; only then consider shared frozen-file export and separate current-only destructive ingestion repair.",
+    "required_stock_days": 8947671,
+    "required_symbol_count": 5448,
+    "resolved_stock_days": 8947250,
+    "runtime_action": false,
+    "selected_effective_intervals": 11023,
+    "selected_projection_table": "repair_sw_pit_bug1843_20261012_v1.full_effective_intervals_v3",
+    "selected_symbol_count": 5553,
+    "source_revision_conflicts_reviewed": 3,
+    "source_revision_dispositions": {
+      "000693.SZ": "SELECT_SW2014_RARE_METALS_OLDER_OFFICIAL_FACT_CONFIRMED_BY_PROVIDER",
+      "301071.SZ": "KEEP_NEWER_DATED_GENERAL_EQUIPMENT_TO_NONMETAL_MATERIALS_TRANSITION_CONFIRMED_BY_PROVIDER",
+      "600114.SH": "INHERIT_EXISTING_DEV_APPROVED_HISTORICAL_SELECTION"
+    },
+    "source_rows_preserved": 24723,
+    "status": "DEV_RECONSTRUCTION_VERIFIED_WITH_EXPLICIT_SOURCE_GAPS_NOT_PRODUCTION_READY",
+    "sw2021_backcast_count": 0,
+    "targeted_offline_tests_passed": 12,
+    "unknown_taxonomy_required_stock_days": 0,
+    "unresolved_source_revision_conflicts": 0,
+    "validation_window": "2018-08-01..2026-08-31",
+    "version_qualified_catalog_rows": 870
+  },
+  "github_issue_number": 5895,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5895",
+  "last_seen_at": "2026-10-11T16:15:31.974526Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "public_history_dev_supplement_20261013": {
+    "active_profile_unchanged": true,
+    "artifact_root": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-public-history-dev-20261013-v1",
+    "boundary_tests_passed": 12,
+    "candidate_write": false,
+    "capture_time_backfilled_as_available_at": false,
+    "consumer_effective_history_groups_verified": 20,
+    "current_classification_backcast": false,
+    "dataset_export_performed": false,
+    "dated_public_membership_sources_found": 11,
+    "dev_business_tables_unchanged": true,
+    "dev_business_write": false,
+    "dev_database": "aistock_dev",
+    "dev_effective_history_candidate_covered_stock_days": 8947628,
+    "dev_facts_row_count": 11027,
+    "dev_facts_rowset_sha256": "bffd300b82a749b8874a55573977c69dc48122d8ea3dcd56e4671bdeda61cfeb",
+    "dev_facts_table": "full_effective_intervals_v4",
+    "dev_schema": "repair_sw_pit_bug1843_20261012_v1",
+    "dev_staging_write": true,
+    "duplicate_overlap_conflict_count": 0,
+    "expected_stock_days": 8947671,
+    "final_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-public-history-dev-20261013-v1/public_history_final_validation.json",
+    "final_receipt_sha256": "da3f42487bde35eea0fb8227ed091917ef65afcf35ebf8e864608bf89c6d0c12",
+    "graph_input_ready": false,
+    "historical_first_publication_verified": false,
+    "index_entry_used_as_first_classification_date": false,
+    "legal_na_waiver_added": false,
+    "new_dev_support_interval_count": 4,
+    "new_dev_supported_stock_days": 378,
+    "outcomes_read": false,
+    "previous_v3_tables_unchanged": true,
+    "production_database_write": false,
+    "production_source_tables_unchanged": true,
+    "profile_write": false,
+    "public_page_without_dated_sw_record": [
+      "689009.SH"
+    ],
+    "remaining_missing_stock_days": 43,
+    "remaining_missing_symbol_count": 12,
+    "required_next_step": "Resolve or precisely characterize the remaining twelve early-life ranges (43 stock-days), retaining public-index-support and first-publication semantics separately. Production storage/apply and frozen H5/Parquet export are not yet authorized or performed. Keep BUG OPEN.",
+    "required_symbols": 5448,
+    "runtime_action": false,
+    "source_and_catalog_identity_verified": true,
+    "source_role": "Historical industry-index membership, intersected with its documented span and the official taxonomy era; not first classification/publication dates.",
+    "sources_checked": 12,
+    "status": "DEV_PUBLIC_EFFECTIVE_HISTORY_SUPPORT_VALIDATED_NOT_PRODUCTION_READY",
+    "supported_days_by_symbol": {
+      "001289.SZ": 7,
+      "601399.SH": 186,
+      "603324.SH": 70,
+      "605055.SH": 115
+    }
+  },
+  "remaining_gap_investigation": {
+    "all_existing_v3_dev_table_rowsets_unchanged": true,
+    "artifact_root": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-gap-closure-20261012-v1",
+    "candidate_write": false,
+    "consumer_effective_coverage_segments_verified": 20,
+    "covered_stock_days": 8947250,
+    "database_write": false,
+    "dataset_export_performed": false,
+    "direct_scoped_provider_requests": 26,
+    "expected_stock_days": 8947671,
+    "final_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-gap-closure-20261012-v1/gap_investigation_final_readback.json",
+    "final_receipt_sha256": "55c21034963076d9a159a709a4f130c671717686588cb47655ac04975fe76714",
+    "fresh_official_history_rows": 12925,
+    "fresh_official_history_sha256": "5ff1c10b9968fdb3dbba73d83e68fcf17d2b112f903276694b464dae9a7fc017",
+    "graph_input_ready": false,
+    "historical_available_at_fabricated": false,
+    "index_entry_dates_reinterpreted_as_classification_dates": false,
+    "issuer_relisting_projected_as_industry_continuity": false,
+    "new_classification_facts_written": 0,
+    "new_resolved_stock_days": 0,
+    "production_database_write": false,
+    "profile_write": false,
+    "remaining_missing_stock_days": 421,
+    "remaining_missing_symbol_count": 12,
+    "required_next_step": "Obtain date- and taxonomy-qualified historical classification facts for the exact twelve ranges; current classification, IPO/relisting business descriptions and industry index inclusion dates are not substitutes. Keep BUG open and existing facts immutable; production apply and frozen-file export remain separate authorized steps.",
+    "required_symbols": 5448,
+    "runtime_action": false,
+    "status": "BLOCKED_MISSING_VERSIONED_HISTORICAL_CLASSIFICATION_EVIDENCE"
+  },
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Frozen SW L2 history does not cover EfficientGATs approved 2018 training window",
+  "trigger_condition": {
+    "fingerprint": "35ccaa3f8a42c18df0468da5",
+    "source_event_id": "FE-20261011-35ccaa3f8a42"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
