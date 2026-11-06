@@ -290,3 +290,110 @@ def test_cli_unsafe_output_fails_before_any_database_access(tmp_path, monkeypatc
     )
     with pytest.raises(ValueError):
         runpy.run_path(str(script))["main"]()
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_cli_refresh_uses_formal_readonly_denominator_and_never_builds_future_authority(
+    inputs, tmp_path, monkeypatch, capsys, pending
+):
+    from contextlib import contextmanager
+    import runpy
+    import sys
+    from types import SimpleNamespace
+    from scripts.hmm_risk import observed_industry_source as source
+    from backend.services.hmm_risk import risk_l2_database_inference as database
+    from backend.services.hmm_risk import rotation_l1_input_bundle as rotation
+    from backend.services.hmm_risk import stock_fact_repository as facts
+
+    _, denominator, observation, _ = inputs
+    if pending:
+        observation = replace(observation, captured_at=datetime(2026, 10, 23, tzinfo=timezone.utc))
+    observation = replace(observation, checked_at=observation.captured_at)
+    output, store = tmp_path / "authority", tmp_path / "sources"
+    request = {
+        "source": {
+            "knowledge_mode": "forward_current_read_snapshot",
+            "industry_authority": {"artifact_root": str(tmp_path / "baseline")},
+            "universe_key": "pit",
+            "universe_rule_version": "v2",
+            "security_identity_manifest": str(tmp_path / "security"),
+            "security_identity_sha256": "a" * 64,
+            "provider_absence_manifest": str(tmp_path / "provider"),
+            "provider_absence_sha256": "b" * 64,
+        }
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request))
+    monkeypatch.setattr(database, "validate_request", lambda _: None)
+    monkeypatch.setattr(rotation, "_industry_adapter", lambda *_a, **_k: None)
+    monkeypatch.setattr(database, "load_security_source_identity_manifest", lambda *_a, **_k: None)
+    monkeypatch.setattr(database, "load_provider_absence_manifest", lambda *_a, **_k: None)
+    connection_token = object()
+
+    @contextmanager
+    def connect(_):
+        yield connection_token
+
+    monkeypatch.setattr(database, "connect", connect)
+    monkeypatch.setattr(
+        database,
+        "_read_plan",
+        lambda req, conn: {"start": denominator.window_start.isoformat(), "end": denominator.window_end.isoformat()},
+    )
+
+    class Reader:
+        def __init__(self, connection, *_args, **_kwargs):
+            assert connection is connection_token
+
+        def validate_source(self):
+            pass
+
+        def load_industry_pit_denominator(self, **kwargs):
+            assert kwargs == {"window_start": denominator.window_start, "window_end": denominator.window_end}
+            return denominator
+
+    monkeypatch.setattr(facts, "PostgresStockFactReader", Reader)
+    pin = {"path": str(store / "capture.json"), "sha256": "c" * 64}
+    monkeypatch.setattr(source, "refresh", lambda root: pin if root == store else pytest.fail("wrong store"))
+    monkeypatch.setattr(source, "observation_from_capture", lambda *_a, **_k: observation)
+
+    def build(**kwargs):
+        assert not pending
+        assert kwargs["denominator"] is denominator and kwargs["observation"] is observation
+        output.mkdir()
+        (output / "authority.json").write_text("{}")
+        return dict.fromkeys(
+            (
+                "schema_version",
+                "authority_path",
+                "identity",
+                "data_date",
+                "target_symbols",
+                "resolved_symbols",
+                "target_unavailable",
+                "causal_daily_from",
+                "database_write",
+                "dataset_write",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(subject, "build_authority", build)
+    root = Path(__file__).resolve().parents[3]
+    script = root / "scripts/hmm_risk/build_observed_industry_authority.py"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(script), "--request", str(request_path), "--source-store", str(store), "--output-root", str(output)],
+    )
+    module = runpy.run_path(str(script))
+    monkeypatch.setattr(
+        module["subprocess"], "run", lambda args, **_: SimpleNamespace(stdout="" if args[1] == "status" else "a" * 40)
+    )
+    assert module["main"]() == (2 if pending else 0)
+    result = json.loads(capsys.readouterr().out)
+    if pending:
+        assert result["status"] == "PENDING_OBSERVATION_NOT_YET_CAUSAL"
+        assert result["full_hmm_preflight_passed"] is False and not output.exists()
+    else:
+        assert (output / "database_forward_request.json").is_file()
