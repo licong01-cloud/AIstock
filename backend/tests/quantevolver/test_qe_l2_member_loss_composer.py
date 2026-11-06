@@ -195,16 +195,26 @@ def test_saved_af_rejects_disguised_unknown_and_drift(formal, fault, reason):
     evidence = saved_af_fixture(formal)
     review = evidence["bridge_review"]
     row = review["fresh_readback"]["rows"][0]
-    if fault == "runtime": evidence["original_runtime_integrity"] = "VERIFIED"
-    elif fault == "reference": evidence["legacy_reference_equivalent"] = True
-    elif fault == "fabricated_fingerprint": review["original_runtime_fingerprints"]["processor_before"] = "3" * 64
-    elif fault == "missing_cause": review["data_owner_confirmation"]["EPS"]["historical_initial_missing_cause"] = "LEGAL_NA"
-    elif fault == "source_seed": row["seed"] = 2024
-    elif fault == "source_model": evidence["source"]["model_sha256"] = "4" * 64
-    elif fault == "prediction_pin": evidence["saved_prediction"]["sha256"] = "5" * 64
-    elif fault == "panel": evidence["saved_prediction"]["panel_sha256"] = "6" * 64
-    elif fault == "index": evidence["saved_prediction"]["index_sha256"] = row["prediction_index_sha256"] = "7" * 64
-    elif fault == "forged_review": review["formal_admission"] = "ADMITTED"
+    if fault == "runtime":
+        evidence["original_runtime_integrity"] = "VERIFIED"
+    elif fault == "reference":
+        evidence["legacy_reference_equivalent"] = True
+    elif fault == "fabricated_fingerprint":
+        review["original_runtime_fingerprints"]["processor_before"] = "3" * 64
+    elif fault == "missing_cause":
+        review["data_owner_confirmation"]["EPS"]["historical_initial_missing_cause"] = "LEGAL_NA"
+    elif fault == "source_seed":
+        row["seed"] = 2024
+    elif fault == "source_model":
+        evidence["source"]["model_sha256"] = "4" * 64
+    elif fault == "prediction_pin":
+        evidence["saved_prediction"]["sha256"] = "5" * 64
+    elif fault == "panel":
+        evidence["saved_prediction"]["panel_sha256"] = "6" * 64
+    elif fault == "index":
+        evidence["saved_prediction"]["index_sha256"] = row["prediction_index_sha256"] = "7" * 64
+    elif fault == "forged_review":
+        review["formal_admission"] = "ADMITTED"
     evidence["bridge_review_canonical_sha256"] = consumer.canonical_sha(review)
     formal.manifest["assets"]["AF_receipt"] = write(formal.root, "saved_AF_evidence.json", evidence)
     readmit_fixture(formal)
@@ -255,7 +265,8 @@ def test_release_authority_extension_keeps_baseline_and_october_distinct(formal,
                  "release_binding": {"manifest_sha256": admission.TARGET_MANIFEST, "release_id": consumer.RELEASE},
                  "extension_start": "2026-10-01", "extension_end": "2026-10-30",
                  "membership_sha256": "1" * 64, "code_map_sha256": "2" * 64, "component_receipt_sha256": "3" * 64}
-    if fault == "release": authority["release_binding"]["manifest_sha256"] = "4" * 64
+    if fault == "release":
+        authority["release_binding"]["manifest_sha256"] = "4" * 64
     authority["receipt_sha256"] = consumer.canonical_sha(authority)
     m["assets"]["authority"] = write(formal.root, "release_authority.json", authority)
     m["authority_canonical_sha256"] = consumer.canonical_sha(authority)
@@ -265,11 +276,13 @@ def test_release_authority_extension_keeps_baseline_and_october_distinct(formal,
           "binding_sha256": authority["receipt_sha256"], "release_binding": authority["release_binding"],
           "membership_sha256": authority["membership_sha256"], "code_map_sha256": authority["code_map_sha256"],
           "historical_as_known": False, "l3_identity_inferred": False, "canonical_l2_count": 131}
-    if fault == "membership": mm["membership_sha256"] = "5" * 64
+    if fault == "membership":
+        mm["membership_sha256"] = "5" * 64
     frame = pd.read_parquet(m["assets"]["mapping"]["path"])
     extension = frame.as_of_date.ge("2026-10-01")
     assert extension.any() and (~extension).any()
-    if fault != "october_receipt": frame.loc[extension, "classification_receipt_hash"] = authority["receipt_sha256"]
+    if fault != "october_receipt":
+        frame.loc[extension, "classification_receipt_hash"] = authority["receipt_sha256"]
     if fault == "reason":
         frame.loc[extension, "mapping_status"] = "unavailable"
         frame.loc[extension, "l2_code"] = None
