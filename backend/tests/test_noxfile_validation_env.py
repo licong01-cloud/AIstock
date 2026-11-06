@@ -39,6 +39,36 @@ def test_offline_shards_cover_all_files_once_keep_fixtures_and_are_stable(tmp_pa
         noxfile._pytest_file_shards(("missing",))
 
 
+@pytest.mark.parametrize("workers", [1, 2, 6])
+def test_measured_long_tail_cost_balances_without_losing_files_or_module_fixtures(tmp_path, monkeypatch, workers):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    long_tail = "tests/test_long_tail.py"
+    paths = [long_tail, *[f"tests/test_fast_{i}.py" for i in range(9)]]
+    for index, relative in enumerate(paths):
+        path = tmp_path / relative
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# fixture\n", encoding="utf-8")
+    costs = {long_tail: 12}
+    groups = noxfile._pytest_file_shards(("tests", "tests"), workers=workers, cost_multipliers=costs)
+    assert sorted(path for group in groups for path in group) == sorted(paths)
+    assert len(groups) == workers
+    assert groups == noxfile._pytest_file_shards(("tests",), workers=workers, cost_multipliers=costs)
+    if workers > 1:
+        assert [long_tail] in groups
+    with pytest.raises(RuntimeError, match="absent"):
+        noxfile._pytest_file_shards(("tests",), cost_multipliers={"tests/test_missing.py": 12})
+    with pytest.raises(ValueError, match="worker"):
+        noxfile._pytest_file_shards(("tests",), workers=0)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, float("nan"), 1.5])
+def test_invalid_shard_cost_is_rejected(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    (tmp_path / "test_cost.py").touch()
+    with pytest.raises(ValueError, match="positive integer"):
+        noxfile._pytest_file_shards((".",), cost_multipliers={"test_cost.py": value})
+
+
 @pytest.mark.parametrize("fault", [None, "failed", "empty", "coverage_missing"])
 def test_offline_shards_isolate_receipts_preserve_failures_and_enforce_union_coverage(tmp_path, monkeypatch, fault):
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
@@ -109,6 +139,32 @@ def test_advisory_full_shards_keep_roots_workers_numeric_limits_and_X_output_con
     assert noxfile._offline_fixture_parent("hmm_risk_backend") == noxfile.ROOT.parent
 
 
+def test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regression(monkeypatch):
+    monkeypatch.setattr(noxfile, "_env", lambda env: env)
+    shards, direct = [], []
+    monkeypatch.setattr(noxfile, "_run_nightly_pytest_shards", lambda *args, **kwargs: shards.append((args, kwargs)) or True)
+    class Session:
+        name = "simulation_core_l2"
+        def run(self, *args, **kwargs):
+            direct.append((args, kwargs))
+    noxfile.simulation_core_l2(Session())
+    assert len(shards) == 1
+    args, options = shards[0]
+    assert args[1] == (
+        "backend/tests/simulation_runtime", "backend/tests/simulation_architecture",
+        "backend/tests/simulation_data", "backend/tests/simulation_signal",
+        "backend/tests/simulation_execution",
+    )
+    assert args[2] == ("-q", "-p", "no:cacheprovider") and options == {"workers": 4}
+    assert args[3] == {"AISTOCK_TEST_PLAN": "simulation_core_l2"}
+    assert direct[0][0][:3] == ("python", "-m", "compileall")
+    tail = direct[1][0]
+    assert tail[:3] == ("python", "-m", "pytest")
+    assert "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py" in tail
+    assert "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py" in tail
+    assert len(direct) == 2
+
+
 def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeypatch):
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
     monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
@@ -122,7 +178,7 @@ def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeyp
         def run(self, *args, **kwargs):
             subprocess.run(args, cwd=tmp_path, env=kwargs["env"], check=True, capture_output=True, text=True, timeout=60)
     env = {**os.environ, "AISTOCK_TEST_PLAN": "hmm_risk_backend", "PYTHONPATH": str(tmp_path)}
-    assert noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch", "-q"), env,
+    assert noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch", "-q", "-p", "no:cacheprovider"), env,
                                               coverage_file=tmp_path / ".coverage")
     assert (tmp_path / "coverage.xml").is_file() and (tmp_path / "junit.xml").is_file()
 

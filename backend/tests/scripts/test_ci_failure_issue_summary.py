@@ -13,6 +13,12 @@ def _github_json(payload):
     return {"ok": True, "stdout": json.dumps(payload), "stderr": ""}
 
 
+def _cli_options(**options):
+    return [part for name, value in options.items() if value is not False
+            for part in (["--" + name.replace("_", "-")]
+                         + ([] if value is True else [str(value)]))]
+
+
 def _actions_run_response(**overrides):
     return _github_json({
         "databaseId": 300, "workflowName": "AIstock CI", "displayTitle": "CI",
@@ -413,17 +419,9 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
     context_markdown_path = tmp_path / "context-pack.md"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main([
-        *_log_cli_args(log_path),
-        "--output",
-        str(output_path),
-        "--markdown-output",
-        str(markdown_path),
-        "--context-output",
-        str(context_path),
-        "--context-markdown-output",
-        str(context_markdown_path),
-    ]) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        output=output_path, markdown_output=markdown_path,
+        context_output=context_path, context_markdown_output=context_markdown_path)]) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     file_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -464,13 +462,8 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     issue_payload_path = tmp_path / "issue-payload.json"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main([
-        *_log_cli_args(log_path),
-        "--run-id",
-        "26378872481",
-        "--github-issue-payload-output",
-        str(issue_payload_path),
-    ]) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        run_id="26378872481", github_issue_payload_output=issue_payload_path)]) == 0
 
     capsys.readouterr()
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -486,20 +479,9 @@ def test_cli_llm_rollout_preserves_deterministic_issue_payload(
     issue_payload_path = tmp_path / "issue-payload.json"
     log_path.write_text(CI_LOG, encoding="utf-8")
 
-    assert summary.main(
-        [
-            *_log_cli_args(log_path),
-            "--run-id",
-            "26378872481",
-            "--llm-triage-mode",
-            mode,
-            *(["--llm-auto-file-opt-in"] if mode == "opt_in_auto_file" else []),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main([*_log_cli_args(log_path), *_cli_options(
+        run_id="26378872481", llm_triage_mode=mode, llm_auto_file_opt_in=mode == "opt_in_auto_file",
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")]) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -596,6 +578,64 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
         "workflow_gate": "not_required",
         "reason": "same_run_github_actions_read_prohibited",
     }
+
+
+def _completed_nightly_receipts():
+    return {
+        "statuses": {"nightlyL3": "failure"}, "run_id": "9001", "commit": "a" * 40,
+        "nightly_session_results": [
+            {"session": "advisory_modeling_backend", "result": "failure", "failure_kind": "timeout",
+             "duration_seconds": 182.0, "timeout_seconds": 180, "return_code": None},
+            {"session": "simulation_core_l2", "result": "failure", "failure_kind": "nonzero_exit",
+             "duration_seconds": 44.0, "timeout_seconds": 300, "return_code": 1},
+        ],
+    }
+
+
+def test_completed_nightly_receipts_round_trip_into_each_issue_without_foreign_diagnostics():
+    combined = summary.summarize_nightly_status(_completed_nightly_receipts())
+    issues = summary.build_github_issue_payloads(combined)
+    assert len(issues) == 2
+    for issue in issues:
+        group = summary.nightly_issue_group(issue["body"])
+        scoped = summary.bind_nightly_issue_group(combined, group)
+        assert len(scoped["failed_jobs"]) == 1
+        job = scoped["failed_jobs"][0]
+        assert job["nightly_diagnostic_session"] == group["sessions"][0]
+        foreign = ({"advisory_modeling_backend", "simulation_core_l2"} - set(group["sessions"])).pop()
+        assert foreign not in issue["body"]
+        assert foreign not in json.dumps(summary.build_context_pack(scoped))
+        assert job["nightly_diagnostic_source"]["commit"] == "a" * 40
+
+
+@pytest.mark.parametrize("changes", [
+    {"duration_seconds": 1}, {"return_code": 0}, {"timeout_seconds": 0},
+    {"duration_seconds": float("nan")}, {"duration_seconds": True},
+])
+def test_completed_nightly_receipt_rejects_contradictory_timeout(changes):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][0].update(changes)
+    with pytest.raises(ValueError):
+        summary.summarize_nightly_status(payload)
+
+
+@pytest.mark.parametrize("field,value", [("return_code", 0), ("return_code", True), ("session", "unregistered_session")])
+def test_completed_nightly_receipt_rejects_invalid_failure_identity(field, value):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][1][field] = value
+    with pytest.raises(ValueError):
+        summary.summarize_nightly_status(payload)
+
+
+@pytest.mark.parametrize("field", ["run_id", "commit", "session"])
+def test_nightly_receipt_binding_rejects_foreign_provenance(field):
+    payload = summary.summarize_nightly_status(_completed_nightly_receipts())
+    issue = summary.build_github_issue_payloads(payload)[0]
+    group = summary.nightly_issue_group(issue["body"])
+    row = next(j for j in payload["failed_jobs"] if j.get("nox_session") in group["sessions"])
+    row["nightly_diagnostic_source"][field] = "foreign"
+    with pytest.raises(ValueError, match="provenance"):
+        summary.bind_nightly_issue_group(payload, group)
 
 
 def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads() -> None:
@@ -1018,38 +1058,14 @@ def test_cli_deferred_summary_skips_github_issue_payload(
     issue_payload_path = tmp_path / "github-issue-payload.json"
 
     def fake_summary(**_: object) -> dict[str, object]:
-        return summary.finalize_summary(
-            {
-                "schema_version": "aistock_ci_failure_summary_v1",
-                "generated_at": "2026-06-02T00:00:00Z",
-                "severity": "P1",
-                "workflow": "AIstock CI",
-                "run_id": "300",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/300",
-                "branch": "bug/example",
-                "commit": "abcdef1234567890",
-                "failed_jobs": [],
-                "extraction_errors": [
-                    "run 300 is still in progress after 1 check(s); logs will be available when it is complete"
-                ],
-                "defer_issue_creation": True,
-            }
-        )
+        return _ci_summary([], run_id="300", branch="bug/example", commit="abcdef1234567890",
+            generated_at="2026-06-02T00:00:00Z", defer_issue_creation=True,
+            extraction_errors=["run 300 is still in progress after 1 check(s); logs will be available when it is complete"])
 
     monkeypatch.setattr(summary, "summarize_actions_run", fake_summary)
 
-    assert summary.main(
-        [
-            "--run-id",
-            "300",
-            "--output",
-            str(output_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(run_id="300", output=output_path,
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -1096,24 +1112,10 @@ def test_partial_unactionable_summary_blocks_payload_and_bug_promotion() -> None
 def test_manual_summary_issue_is_triage_only_not_bug_promotion(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue_payload_path = tmp_path / "github-issue-payload.json"
 
-    assert summary.main(
-        [
-            "--run-id",
-            "302",
-            "--run-url",
-            "https://github.com/licong01-cloud/AIstock/actions/runs/302",
-            "--manual-summary",
-            "manual P1 failure report needs triage",
-            "--branch",
-            "main",
-            "--commit",
-            "abcdef1234567890",
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(
+        run_id="302", run_url="https://github.com/licong01-cloud/AIstock/actions/runs/302",
+        manual_summary="manual P1 failure report needs triage", branch="main", commit="abcdef1234567890",
+        github_issue_payload_output=issue_payload_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
@@ -1378,20 +1380,8 @@ def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
 
     monkeypatch.setattr(llm_provider_adapter, "build_test_plan_advice", fake_test_plan_advice)
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--code-intelligence-json",
-            str(code_refs_path),
-            "--llm-triage-mode",
-            "warning_only",
-            "--output",
-            str(summary_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert summary.main(_cli_options(nightly_status_json=status_path, code_intelligence_json=code_refs_path,
+        llm_triage_mode="warning_only", output=summary_path, stdout_format="compact")) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     payload = json.loads(summary_path.read_text(encoding="utf-8"))

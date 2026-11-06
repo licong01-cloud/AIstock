@@ -16,6 +16,49 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+def test_runner_only_janitor_skips_business_nightly_before_reading_actions(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    fingerprint = hashlib.sha256(b"module=advisory.modeling|group_kind=module").hexdigest()[:16]
+    body = (f"<!-- aistock-nightly-failure:nightly-group-{fingerprint} -->\n"
+            "<!-- aistock-issue-on-test-fail:9001 -->\n"
+            f"- Commit: `{'a' * 40}`\n"
+            "- module=`advisory.modeling`; sessions=`advisory_modeling_backend`\n")
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda _: {"number": 6984, "body": body})
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: pytest.fail("business Actions diagnostics fetched"))
+    result = workflow.build_ci_issue_janitor_plan(issue_numbers=[6984], runner_recovered_only=True, apply=True)
+    assert result["workflow_gate"] == "no_actionable_ci_issues"
+    assert result["failed_count"] == result["closed_count"] == 0
+
+
+def test_runner_only_janitor_does_not_close_superseded_business_ci(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda _: {"body": "ordinary CI issue"})
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: {
+        "classification_recommendation": next(iter(workflow.SUPERSEDED_CI_CLASSIFICATIONS)),
+        "linked_bug": None, "superseded_action": {"superseding_run": {"run_id": "9002"}},
+        "summary": {"workflow": "CI", "failed_jobs": []},
+    })
+    monkeypatch.setattr(workflow, "_close_superseded_ci_issue", lambda *_: pytest.fail("business CI closed"))
+    result = workflow.build_ci_issue_janitor_plan(issue_numbers=[1], runner_recovered_only=True, apply=True)
+    assert result["closed_count"] == result["failed_count"] == 0
+
+
+def test_runner_only_janitor_still_closes_proven_runner_recovery(monkeypatch, tmp_path):
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda _: {"body": "runner outage"})
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: {
+        "classification_recommendation": "infra_blocker", "linked_bug": None, "needs_bug_json": False,
+        "infra_action": {"workflow_gate": "infra_recovered"},
+        "summary": {"workflow": "AIstock Nightly L3 + DR", "failed_jobs": [
+            {"error_signature": "self-hosted Windows runner unavailable"}]},
+    })
+    closed = []
+    monkeypatch.setattr(workflow, "_close_infra_ci_issue", lambda *args: closed.append(args[0]) or {"ok": True, "returncode": 0})
+    result = workflow.build_ci_issue_janitor_plan(issue_numbers=[1], runner_recovered_only=True, apply=True)
+    assert result["workflow_gate"] == "closed"
+    assert closed == [1]
+
+
 @pytest.mark.parametrize("path", ["schedules", "targets", "not-registered"])
 @pytest.mark.parametrize("payload,expected", [
     ({"data": {"items": []}}, "passed"),
