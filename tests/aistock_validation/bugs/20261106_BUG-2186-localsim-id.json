@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2186",
-  "closed_at": null,
+  "closed_at": "2026-11-06T13:06:31.238109Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-11-06T03:50:44.523600Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "112c682a8935f9d4fd41dfa68bfd33e209e13f1a",
+  "fixed_at": "2026-11-06T04:27:44Z",
   "github_issue_number": 7065,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7065",
   "last_seen_at": "2026-11-06T03:50:44.523600Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7068",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -168,9 +169,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2186/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2186",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "112c682a8935f9d4fd41dfa68bfd33e209e13f1a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T13:04:42.050406Z",
+      "mode": "read_only",
+      "observed_identity": "200dc5d5f98dc553ecae3c24f74ad74210845b20",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7d3d8e10968b05af804d09e62045fc88931ee22b50ab2087f8d72a29b5f9ae82",
+      "receipt_sha256": "e0af0afe1d08b47424362ead257f19bdb153c0d47f1d9b23ec38d798226f5173",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "79318efe8b829276b358fae0f378202ca797ade430d46920305f638d18e2e3e9",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -180,7 +204,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2186",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "87d9b81ac5463dc6",
+    "recorded_at": "2026-11-06T04:28:25.304599Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3efbc6bb91aa15c45f53b86edfd0833d5978d81a",
+    "source_merge_commit": "112c682a8935f9d4fd41dfa68bfd33e209e13f1a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7068",
+    "validation_evidence": [
+      "validation-receipt: id=67137c3a0a87df4f commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_execution/localsim/timing.py backend/services/simulation_execution/localsim/human_portfolio.py backend/services/simulation_execution/localsim/native_research.py backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py tests/aistock_validation/bugs/20261106_BUG-2186-localsim-id.json` result=`passed (0 blocking)`",
+      "validation-receipt: id=15c371395e3b3fa5 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py` result=`passed (4 tests; fresh process; X:/AIstock_temp/localsim-october-account-replay-20261106/bug2186-targeted.xml)`",
+      "validation-receipt: id=8d8ff498bec6c3e2 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "9e45adf4f1cb92e472891fe4eaeafbfebc6011c6a7bf90e36cd9e576fcf6bf44"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -189,6 +236,11 @@
     "fingerprint": "019d2ab59b076e22e515ee78",
     "source_event_id": "FE-20261106-019d2ab59b07"
   },
+  "validation_evidence": [
+    "validation-receipt: id=67137c3a0a87df4f commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_execution/localsim/timing.py backend/services/simulation_execution/localsim/human_portfolio.py backend/services/simulation_execution/localsim/native_research.py backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py tests/aistock_validation/bugs/20261106_BUG-2186-localsim-id.json` result=`passed (0 blocking)`",
+    "validation-receipt: id=15c371395e3b3fa5 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/simulation_execution/test_localsim_historical_cancel_clock.py` result=`passed (4 tests; fresh process; X:/AIstock_temp/localsim-october-account-replay-20261106/bug2186-targeted.xml)`",
+    "validation-receipt: id=8d8ff498bec6c3e2 commit=3efbc6bb91aa15c45f53b86edfd0833d5978d81a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

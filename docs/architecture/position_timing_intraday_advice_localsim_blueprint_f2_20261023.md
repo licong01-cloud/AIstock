@@ -275,4 +275,10 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 
 后续研究能力已增加：显式candidate/计划/费用绑定、逐消费文件SHA核验、多日三规则×四延迟决策回放、全计划消费包，以及LocalSIM结果导入/匹配比较。详细证据与真实数据研究身份见[研究实施记录](../analysis/position_timing_intraday_research_implementation_20261023.md)。预声明的3股×4日×买卖两侧24计划属于工程机制人口，不是全市场alpha研究；不训练模型、不调参、不声称已获得超额收益。只产生机会与后续执行槽，不能当成成交。
 
-下一步可将更新的[LocalSIM接入包](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)转交模拟盘窗口，消费真实研究包并返回全计划账户结果，再由择时比较器分析成本后改善、完成率、延迟与MDD。纯SDK和离线研究无需后端重启。荐股挂载/真实来源resolver亦由对应窗口接入，本窗口没有跨模块修改，也不解除TWAP-only。以上接入与经济验证完成前，不宣称完整阶段或双消费产品交付；研究本身不等待未来自然日。
+当时的下一步为将更新的[LocalSIM接入包](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)转交模拟盘窗口。该历史接入安排的最新进展见§7.1，不再将“等待账户结果”作为当前阻断。纯SDK和离线研究无需后端重启；荐股挂载/真实来源resolver仍由对应窗口接入，本窗口没有跨模块修改，也不解除TWAP-only。不宣称完整阶段或双消费产品交付；研究本身不等待未来自然日。
+
+### 7.1 2026-11-06：期间分析已完成，转向等待预算机制研究
+
+择时跨月价集/分析能力#7054、LocalSIM输入#7048及期间runner#7072均已合入。10月13户×17日实际回放、inspect及producer经济exact retry已交付；择时已完成294项来源预检、221账户日/52,598条NAV的期间与累计分析及报告exact retry。证据唯一入口为`X:/AIstock_temp/position-timing-october-account-analysis-20261106/verification-receipt.json`。离线功能、账户可重复性和经济确认仍分开，经济结果保持描述性，不能把旧报告缺省NOT_SUPPLIED解释为producer未执行。
+
+下一项研究是[同等待预算对照F1设计](position_timing_wait_budget_control_f1_20261106.md)：B0、固定15交易分钟W15、原C2从同一份B0-60秒9月末opening起跑，固定60秒主反应延迟和原作业合同，先做51账户日机制诊断，不扫描阈值。择时侧研究专用W15封装、真实plan冻结和独立三户统计合同已实现，原13户分析与线上三规则不变；LocalSIM三户接入与新51账户日实验尚未完成，最小需求和精确消费合同见该设计Contracts-4/6，由其owner执行。现有同延迟比较包含排队/暴露与父期持仓差异，不能宣称纯执行alpha；本轮不增加线上规则、模型或跨模块融合。

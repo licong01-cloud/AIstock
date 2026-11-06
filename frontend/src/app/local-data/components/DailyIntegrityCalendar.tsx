@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import styles from "./dailyIntegrity.module.css";
+import { datasetName } from "../datasetLabels";
 
 type State = "NOT_TRADING" | "UNVERIFIED" | "IN_PROGRESS" | "PARTIAL" | "ERROR" | "COMPLETE";
 type Count = { unit: string; expected: number | null; valid: number | null; legal_na: number | null;
@@ -14,7 +15,8 @@ type Day = { fact_date: string; state: State; completion_kind: string | null; as
   revision: number | null; all_sync_complete: boolean; release_contains_revision: boolean | null;
   release_coverage_state: string; release_read_error?: string; partitions?: Partition[] };
 type Partition = { dataset: string; state: string; data_revision?: number; validated_revision?: number;
-  due_at: string | null; next_retry_at?: string | null; metadata?: { validation?: { counts?: Count[]; reason?: string } } };
+  due_at: string | null; next_retry_at?: string | null; metadata?: { validation?: {
+    counts?: Count[]; reason?: string; gaps?: { classification?: string }[] } } };
 type Calendar = { month: string; as_of: string; days: Day[]; counts: Record<State, number>;
   trading_day_count?: number; recovered_day_count?: number };
 type GapPage = { dataset: string; groups: Record<string, unknown>[]; next_cursor: string | null; group_count: number };
@@ -22,7 +24,37 @@ type GapPage = { dataset: string; groups: Record<string, unknown>[]; next_cursor
 const labels: Record<State, string> = { NOT_TRADING: "休市", UNVERIFIED: "待核验", IN_PROGRESS: "同步或等待",
   PARTIAL: "部分完成", ERROR: "检查异常", COMPLETE: "完整" };
 const kinds: Record<string, string> = { RECOVERED: "补齐", HISTORICAL_VERIFIED: "历史补验", SOURCE_REVISED: "已修订" };
+const partitionLabels: Record<string, string> = { VALID: "完整", INCOMPLETE: "未完整", ERROR: "检查异常",
+  UNVERIFIED: "待核验", IN_PROGRESS: "同步或等待", NOT_DUE: "未到期" };
 const todayCN = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(new Date());
+
+function currentValidation(partition: Partition) {
+  return partition.data_revision != null && partition.validated_revision != null
+    && partition.data_revision === partition.validated_revision
+    && ["VALID", "INCOMPLETE", "ERROR"].includes(partition.state);
+}
+
+function knownGap(partition: Partition) {
+  if (!currentValidation(partition)) return false;
+  const validation = partition.metadata?.validation;
+  // LEGAL_NA and unknown counts are not missing facts. Old revision results
+  // must not turn into current red rows or trigger a stale gap request.
+  return Boolean(validation?.counts?.some(count => [count.missing, count.invalid].some(
+    value => typeof value === "number" && Number.isFinite(value) && value > 0))
+    || validation?.gaps?.some(group => ["MISSING", "INVALID", "HISTORY_CONFLICT"].includes(group.classification || "")));
+}
+
+function partitionStatus(partition: Partition) {
+  if (["VALID", "INCOMPLETE", "ERROR"].includes(partition.state) && !currentValidation(partition)) return "待重新核验";
+  return partitionLabels[partition.state] || "待确认";
+}
+
+function noGapAction(partition: Partition) {
+  if (partition.state === "NOT_DUE") return "未到期";
+  if (!currentValidation(partition)) return partitionStatus(partition);
+  if (partition.state === "VALID") return "无缺口";
+  return partition.state === "ERROR" ? "检查异常" : "缺口详情待确认";
+}
 
 async function read<T>(base: string, path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${base.replace(/\/$/, "")}/api/v1/local-data/${path}`, { signal, cache: "no-store" });
@@ -107,6 +139,11 @@ export function DailyIntegrityCalendar({ backendBase }: { backendBase: string })
     }
   }
   const offset = (new Date(`${month}-01T00:00:00Z`).getUTCDay() + 6) % 7;
+  const partitions = detail?.partitions || [];
+  const gapPartitions = partitions.filter(knownGap);
+  const pendingCount = partitions.filter(partition => partition.state !== "NOT_DUE" && !knownGap(partition)
+    && (partition.state !== "VALID" || !currentValidation(partition))).length;
+  const notDueCount = partitions.filter(partition => partition.state === "NOT_DUE").length;
   return <Card className={styles.root} data-testid="daily-integrity-calendar">
     <CardHeader><CardTitle>交易日数据完整性</CardTitle></CardHeader>
     <CardContent>
@@ -140,17 +177,23 @@ export function DailyIntegrityCalendar({ backendBase }: { backendBase: string })
         {!detail && !detailError && <p role="status">正在读取…</p>}
         {detail && <>
           <p>源完整：{detail.all_sync_complete ? "是" : "否"} · 已包含于活动发布：{detail.release_coverage_state === "OUTSIDE_CUTOFF" ? "未覆盖" : detail.release_contains_revision === null ? "未建立对应关系" : detail.release_contains_revision ? "是" : "否"}</p>
+          <p className={styles.note} data-testid="partition-summary">已确认缺口：{gapPartitions.length ? gapPartitions.map(partition => datasetName(partition.dataset)).join("、") : "暂无"}
+            {`；尚待验收或检查异常：${pendingCount}项；未到期：${notDueCount}项。合法NA及未到期不算缺失，待核验不代表完整。`}</p>
           {detail.release_read_error && <p role="alert">活动发布身份暂不可读，不能确认是否包含本次源修订；源完整性结论不因此改变。</p>}
           <div className={styles.tableScroll}><table><thead><tr><th>数据集/状态</th><th>应到时间</th><th>已验/当前修订</th><th>检查计数（未知不填0）</th><th>缺口</th></tr></thead>
-            <tbody>{detail.partitions?.map(partition => <tr key={partition.dataset}>
-              <td>{partition.dataset}<br />{partition.state}<br />{partition.metadata?.validation?.reason || ""}
+            <tbody>{partitions.map(partition => <tr key={partition.dataset} data-dataset={partition.dataset}
+              data-gap-status={knownGap(partition) ? "known-gap" : "none-confirmed"}
+              className={knownGap(partition) ? styles.gapRow : undefined}>
+              <td><span>{datasetName(partition.dataset)}</span><br />{partitionStatus(partition)}<br />{partition.metadata?.validation?.reason || ""}
+                {knownGap(partition) && <strong className={styles.gapLabel}>存在缺失或无效数据</strong>}
                 {partition.next_retry_at && <small>下次重试：{partition.next_retry_at}</small>}</td><td>{partition.due_at || "待确认日历"}</td>
               <td>{partition.validated_revision ?? "未知"} / {partition.data_revision ?? "未知"}</td>
-              <td>{partition.metadata?.validation?.counts?.map((count, index) => <div key={index}>{count.unit}：应有 {count.expected ?? "未知"}，有效 {count.valid ?? "未知"}，合法NA {count.legal_na ?? "未知"}，缺失 {count.missing ?? "未知"}，无效 {count.invalid ?? "未知"}，未验 {count.unverified ?? "未知"}</div>) || "尚未验收"}</td>
-              <td><Button variant="outline" size="sm" onClick={() => void loadGaps(partition.dataset)}>查看缺口</Button></td>
+              <td>{!currentValidation(partition) && partition.metadata?.validation?.counts?.length ? <small>下列计数尚非当前有效验收结论，待核验。</small> : null}
+                {partition.metadata?.validation?.counts?.length ? partition.metadata.validation.counts.map((count, index) => <div key={index}>{count.unit}：应有 {count.expected ?? "未知"}，有效 {count.valid ?? "未知"}，合法NA {count.legal_na ?? "未知"}，缺失 {count.missing ?? "未知"}，无效 {count.invalid ?? "未知"}，未验 {count.unverified ?? "未知"}</div>) : "尚未提供检查计数"}</td>
+              <td>{knownGap(partition) ? <Button variant="outline" size="sm" onClick={() => void loadGaps(partition.dataset)}>查看缺口</Button> : noGapAction(partition)}</td>
             </tr>)}</tbody></table></div>
           {gapError && <p role="alert">{gapError}</p>}
-          {gaps && <section aria-label="分页缺口"><h4>{gaps.dataset}：共 {gaps.group_count} 个缺口组</h4>
+          {gaps && <section aria-label="分页缺口"><h4>{datasetName(gaps.dataset)}：共 {gaps.group_count} 个缺口组</h4>
             <pre className={styles.gaps}>{JSON.stringify(gaps.groups, null, 2)}</pre>
             {gaps.next_cursor && <Button variant="outline" onClick={() => void loadGaps(gaps.dataset, gaps.next_cursor || undefined)}>下一页缺口</Button>}
           </section>}

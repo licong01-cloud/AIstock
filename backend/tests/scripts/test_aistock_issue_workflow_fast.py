@@ -16,6 +16,190 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.fixture
+def disposal_repository(cli_task_worktree, tmp_path, monkeypatch):
+    """Reuse the real unmerged Git worktree; archive and cold-restore its unique source."""
+    root, task, invoke = cli_task_worktree
+    monkeypatch.chdir(root)
+    def git(*args, cwd=root):
+        return invoke(cwd, *args)
+    branch = git("branch", "--show-current", cwd=task)
+    head, base = git("rev-parse", branch), git("rev-parse", "origin/main")
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    target = {"branch": branch, "head": head, "worktree": str(task.resolve())}
+
+    def write(name, value):
+        path = evidence / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    authorization = write("authorization.json", {"schema_version": "aistock_cleanup_authorization_v1",
+        "user_instruction": "Archive and remove these reviewed obsolete branches.",
+        "actions": ["discard_reviewed_unmerged_branch"], "targets": [target]})
+    reference = write("reference-review.json", {"schema_version": "aistock_disposal_reference_review_v1",
+        "target": target, "remaining_dependencies": [], "reviewed_roots": [str(tmp_path)],
+        "status": "NO_REMAINING_DEPENDENCIES", "protected_files": []})
+    bundle = evidence / "source.bundle"
+    git("bundle", "create", "--version=2", str(bundle), f"refs/heads/{branch}")
+    bundle_ref = {"path": str(bundle), "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+    restored = evidence / "restore.git"
+    git("clone", "--bare", str(bundle), str(restored))
+    git("fsck", "--full", cwd=restored)
+    assert git("show", f"{head}:task.txt", cwd=restored) == "task"
+    recovery = write("recovery.json", {"schema_version": "aistock_bundle_restore_receipt_v1",
+        "bundle_sha256": bundle_ref["sha256"], "independent_object_store": True, "fsck_passed": True,
+        "restored_targets": [{"branch": branch, "head": head, "tree": git("rev-parse", f"{head}^{{tree}}", cwd=restored)}]})
+    manifest = {"schema_version": "aistock_reviewed_disposal_v1", "repository": workflow.GITHUB_REPO,
+        "target": target, "authorization": authorization, "recovery_bundle": bundle_ref,
+        "recovery_receipt": recovery, "review": {"decision": "DISCARD_AFTER_ARCHIVE",
+        "reason": "Replaced implementation; retain historical source in verified recovery.",
+        "successor_commits": [base], "reference_evidence": reference}}
+    manifest_ref = write("manifest.json", manifest)
+    monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *a, **kw: None)
+    return SimpleNamespace(root=root, task=task, evidence=evidence, git=git, write=write, target=target,
+        manifest=manifest, manifest_ref=manifest_ref, branch=branch, head=head, base=base)
+
+
+def _disposal_arguments(case):
+    return {"branch": case.branch, "bug_id": None, "expected_head": case.head,
+        "worktree": str(case.task), "mode": "reviewed_disposal",
+        "authority_ref": case.manifest["authorization"]["path"], "reason": "Reviewed obsolete source after recovery.",
+        "replacement_pr_url": None, "supersession_comment_url": None, "remote_ref": "", "root": case.root,
+        "disposal_manifest": case.manifest_ref["path"], "disposal_manifest_sha256": case.manifest_ref["sha256"]}
+
+
+def _disposal_verification(case, **overrides):
+    return workflow._cleanup_supersession_verification(**(_disposal_arguments(case) | overrides))
+
+
+def test_reviewed_disposal_accepts_cold_recoverable_unique_source(disposal_repository):
+    case = disposal_repository
+    assert case.git("cherry", "origin/main", case.branch).startswith("+")
+    result = _disposal_verification(case)
+    assert result["verified"], result
+    assert result["authority"]["source_merged"] is False
+    assert case.task.exists()  # Verification itself never deletes.
+
+
+@pytest.mark.parametrize("section,key,value", [
+    (None, "sha256", "0" * 64), ("authorization", "actions", ["merge_source"]),
+    ("manifest", "recovery_bundle.sha256", "0" * 64), ("recovery_receipt", "restored_targets.0.head", "base"),
+    ("review.reference_evidence", "remaining_dependencies", ["frozen consumer"]),
+    ("manifest", "review.successor_commits", "unmerged"), ("manifest", "target.worktree", "wrong-worktree"),
+    ("manifest", "authorization.path", "/missing-disposal-evidence.json"),
+])
+def test_reviewed_disposal_rejects_incomplete_or_mismatched_evidence(disposal_repository, section, key, value):
+    case = disposal_repository
+    reference = case.manifest_ref
+    if section not in (None, "manifest"):
+        reference = case.manifest
+        for part in section.split("."):
+            reference = reference[part]
+    payload = case.manifest if section == "manifest" else json.loads(Path(reference["path"]).read_text())
+    cursor = reference if section is None else payload
+    parts = key.split(".")
+    for part in parts[:-1]:
+        cursor = cursor[int(part) if isinstance(cursor, list) else part]
+    cursor[parts[-1]] = case.base if value == "base" else [case.head] if value == "unmerged" else value
+    if section not in (None, "manifest"):
+        reference.update(case.write(Path(reference["path"]).name, payload))
+    if section is not None:
+        case.manifest_ref = case.write("manifest.json", case.manifest)
+    assert not _disposal_verification(case)["verified"]
+    assert case.task.exists() and case.git("rev-parse", case.branch) == case.head
+
+
+@pytest.mark.parametrize("reparse", [False, True])
+def test_reviewed_disposal_rejects_external_prerequisites_and_reparse(disposal_repository, monkeypatch, reparse):
+    case = disposal_repository
+    if reparse:
+        original = workflow._is_reparse_or_symlink
+        monkeypatch.setattr(workflow, "_is_reparse_or_symlink", lambda p: p == case.evidence or original(p))
+    else:
+        bundle = case.evidence / "partial.bundle"
+        case.git("bundle", "create", "--version=2", str(bundle), case.branch, f"^{case.base}")
+        case.manifest["recovery_bundle"] = {"path": str(bundle), "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+        case.manifest_ref = case.write("manifest.json", case.manifest)
+    assert not _disposal_verification(case)["verified"] and case.task.exists()
+
+
+@pytest.mark.parametrize("fault", ["open_pr", "local_head", "remote_head", "wrong_registered_worktree", "mode"])
+def test_reviewed_disposal_keeps_existing_identity_and_authority_guards(disposal_repository, monkeypatch, fault):
+    case = disposal_repository
+    overrides = {"local_head": {"expected_head": case.base},
+        "remote_head": {"remote_ref": f"{case.base}\trefs/heads/{case.branch}"},
+        "wrong_registered_worktree": {"worktree": str(case.root)}, "mode": {"mode": "patch_equivalent"}}.get(fault, {})
+    if fault == "open_pr":
+        monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *a, **kw: {"url": "https://example/pr/1"})
+    assert not _disposal_verification(case, **overrides)["verified"]
+    assert case.task.exists()
+
+
+@pytest.mark.parametrize("fault", ["none", "evidence_drift", "active", "dirty", "unknown", "late_head_drift"])
+def test_reviewed_disposal_canonical_apply_and_predelete_recheck(disposal_repository, monkeypatch, fault):
+    case = disposal_repository
+    monkeypatch.setattr(workflow, "REPO_ROOT", case.root)
+    monkeypatch.setenv("AISTOCK_CLEANUP_RECEIPT_ROOT", str(case.evidence / "receipts"))
+    monkeypatch.setattr(workflow, "_run_read_command_with_retry", lambda *a, **kw: _result())
+    monkeypatch.setattr(workflow, "_worktree_active_process_profile", lambda *a: {
+        "scan_status": "complete", "reference_count": int(fault == "active"), "references": []})
+    if fault == "dirty":
+        (case.task / "unique.py").write_text("uncommitted work\n", encoding="utf-8")
+    if fault == "unknown":
+        monkeypatch.setattr(workflow, "_worktree_ignored_artifact_profile", lambda *a, **kw: {
+            "scan_status": "complete", "unknown_count": 1, "protected_count": 0,
+            "unknown_samples": ["unknown-model.bin"], "transient_count": 0})
+    if fault == "evidence_drift":
+        original = workflow._git_snapshot
+
+        def change_after_preflight(root):
+            Path(case.manifest_ref["path"]).write_text("{}", encoding="utf-8")
+            return original(root)
+
+        monkeypatch.setattr(workflow, "_git_snapshot", change_after_preflight)
+    if fault == "late_head_drift":
+        remove = workflow._remove_worktree_with_reparse_fallback
+
+        def advance_before_remove(**kwargs):
+            (case.task / "unique.py").write_text("new_unarchived_work = 11\n", encoding="utf-8")
+            case.git("add", "unique.py", cwd=case.task)
+            case.git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-m", "concurrent source change", cwd=case.task)
+            return remove(**kwargs)
+
+        monkeypatch.setattr(workflow, "_remove_worktree_with_reparse_fallback", advance_before_remove)
+    supersession = _disposal_arguments(case)
+    for key in ("branch", "bug_id", "worktree", "remote_ref", "root"):
+        supersession.pop(key)
+
+    def apply():
+        return workflow.build_cleanup_after_merge_plan(branch=case.branch, worktree=str(case.task),
+            canonical_root=str(case.root), apply=True, supersession=supersession,
+            preflight_fetch={"status": "fetched", "result": {"ok": True}})
+
+    if fault == "evidence_drift":
+        with pytest.raises(workflow.WorkflowError, match="changed before deletion"):
+            apply()
+        assert case.task.exists() and case.git("rev-parse", case.branch) == case.head
+    elif fault == "late_head_drift":
+        with pytest.raises(workflow.WorkflowError):
+            apply()
+        assert case.git("show", f"{case.branch}:unique.py") == "new_unarchived_work = 11"
+    elif fault in {"active", "dirty", "unknown"}:
+        message = {"active": "active processes", "dirty": "worktree is dirty", "unknown": "unknown ignored artifacts"}[fault]
+        with pytest.raises(workflow.CleanupBlockedError, match=message):
+            apply()
+        assert case.task.exists() and case.git("rev-parse", case.branch) == case.head
+    else:
+        result = apply()
+        assert result["workflow_gate"] == "cleanup_done", result.get("blocking")
+        assert result["cleanup_verification"]["all_clear"]
+        assert not case.task.exists()
+        assert Path(case.manifest["recovery_bundle"]["path"]).is_file()
+        durable = json.loads(Path(result["superseded_cleanup_receipt"]["path"]).read_text())
+        assert durable["authority"]["recovery_bundle"] == case.manifest["recovery_bundle"]
+
+
 @pytest.mark.parametrize("restriction,expected", [
     (None, {"commit", "push", "create_or_update_pr", "merge_source", "metadata_sync", "root_sync"}),
     ("no_merge", {"commit", "push", "create_or_update_pr", "metadata_sync", "root_sync"}),
@@ -855,9 +1039,45 @@ def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
 
 
 def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, Any]:
-    return workflow._evaluate_business_smoke_semantics(
-        url, json.dumps(payload), response_sha256=response_hash,
-    )[1]
+    return workflow._evaluate_business_smoke_semantics(url, json.dumps(payload), response_sha256=response_hash)[1]
+
+
+@pytest.mark.parametrize("area,key,value,passed", [
+    (None, None, None, True), ("query", "expected_terminal_status", "COMPLETED", False),
+    ("query", "expected_receipt_sha256", "b" * 64, False), ("query", "expected_batch_id", "other", False),
+    ("query", "expected_terminal_status", ["PARTIAL", "PARTIAL"], False),
+    ("query", "expected_receipt_sha256", "", False), ("run", "range_run_id", "other", False),
+    ("run", "status", "RUNNING", False), ("run", "status", "COMPLETED", False),
+    ("run", "final_receipt_ref", None, False), ("ref", "file_sha256", "missing", False),
+    ("ref", "relative_path", "range-receipts/../escape", False), ("ref", "artifact_kind", "DAY_RECEIPT", False),
+    ("run", "failed_day_count", 0, False), ("run", "completed_day_count", True, False),
+    ("run", "total_day_count", 2, False), ("run", "retryable_day_count", 1, False),
+    ("run", "finished_at", None, False), ("run", "finished_at", "2020-01-01T00:00:00+00:00", False),
+    ("run", "error_json", {"reason": "unexpected"}, False), ("payload", "ok", False, False),
+    ("payload", "status", "FAILED", False), ("default", "status", "PARTIAL", False),
+    ("default", "status", "COMPLETED", True)])
+def test_advisory_partial_terminal_requires_explicit_original_receipt(area, key, value, passed):
+    ref = dict(schema_version="advisory_historical_range_artifact_ref_v1", artifact_kind="RANGE_RECEIPT",
+        payload_schema_version="advisory_historical_range_run_execution_receipt_v1", producer_contract_version="v1",
+        relative_path="range-receipts/a.json", semantic_content_hash="a" * 64, payload_sha256="c" * 64, file_sha256="d" * 64)
+    run = dict(range_run_id="ahrr_test", batch_id="ahrb_test", status="PARTIAL", final_receipt_ref=ref,
+        final_receipt_hash="a" * 64, completed_day_count=2, failed_day_count=1, waiting_day_count=0,
+        retryable_day_count=0, materialized_day_count=45, total_day_count=45, row_version=7,
+        resume_trade_date=None, error_json=None, **dict.fromkeys(
+            ("created_at", "started_at", "finished_at", "updated_at"), "2026-08-14T00:00:00+00:00"))
+    payload, query = {"ok": True, "data": {"run": run}}, dict(expected_terminal_status="PARTIAL",
+        expected_batch_id="ahrb_test", expected_receipt_sha256="a" * 64)
+    if area == "default":
+        query, run[key] = {}, value
+    elif area:
+        {"run": run, "ref": ref, "query": query, "payload": payload}[area][key] = value
+    semantic = _business_semantic("http://localhost/api/v1/advisory/historical-range-runs/ahrr_test?"
+        + urllib.parse.urlencode(query, doseq=True), payload, "e" * 64)
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed and area != "default":
+        assert semantic["facts"]["unexecuted_day_count"] == 42
+        assert semantic["facts"]["failure_preserved"] and not semantic["facts"]["execution_completed"]
+        assert not semantic["facts"]["artifact_content_verified"]
 
 
 @pytest.mark.parametrize("state,patch,area,field,value,passed", [
@@ -1225,16 +1445,32 @@ def test_advisory_lstm_shadow_capture_semantic_contract(case):
     assert semantic["verdict"] == ("passed" if case in {"valid", "old_failure"} else "failed")
 
 
-def _entry_price_payload(configured=False):
-    return {
-        "ok": True,
-        "schema_version": "advisory_entry_price_status_v1",
-        "configured": configured,
-        "program_id": "advp_test",
-        "status": "QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
-        "database_written": False,
-        **({"binding_activated": False} if configured else {}),
-    }
+@pytest.mark.parametrize("patch,row,query,passed", [
+    ({}, {}, "", True), ({}, {}, "target_date=2026-11-09&snapshot_id=" + "a" * 64, True),
+    ({"status": "NO_CURRENT_LIST", "list_version_id": None, "summary": None, "items": [], "total_count": 0}, {}, "", True),
+    *[({key: value}, {}, "", False) for key, value in {"program_id": "other", "target_date": "2026-11-9",
+        "snapshot_id": "missing", "binding_version_id": None, "limit": True, "total_count": 3,
+        "schema_version": "wrong", "status": "FAILED"}.items()],
+    ({"status": "NO_CURRENT_LIST"}, {}, "", False), (None, {}, "", False),
+    *[({}, {key: "other"}, "", False) for key in ("program_id", "list_version_id", "binding_version_id", "symbol")],
+    ({}, {"symbol": "000002.SZ"}, "", False),
+    *[({}, {}, query, False) for query in ("target_date=2026-11-10", "snapshot_id=" + "b" * 64,
+        "offset=20", "target_date=2026-11-09&target_date=2026-11-09")]])
+def test_advisory_workbench_daily_semantic_contract(patch, row, query, passed):
+    payload = {"schema_version": "advisory_workbench_v1", "program_id": "advp_test",
+        "target_date": "2026-11-09", "snapshot_id": "a" * 64, "status": "PUBLISHED",
+        "list_version_id": "list-test", "binding_version_id": "binding-test", "summary": {},
+        "limit": 20, "offset": 0, "total_count": 2}
+    identity = {key: payload[key] for key in ("program_id", "list_version_id", "binding_version_id")}
+    payload["items"] = [dict(identity, symbol=symbol) for symbol in ("000001.SZ", "000002.SZ")]
+    payload["items"][0].update(row)
+    payload = dict(payload, **patch) if patch is not None else None
+    semantic = _business_semantic("http://localhost/api/v1/advisory/workbench/programs/advp_test/daily?" + query, payload, "e" * 64)
+    assert semantic["contract_id"] == "advisory_workbench_daily_snapshot"
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed:
+        assert semantic["facts"]["economic_acceptance"] == "not_evaluated"
+        assert semantic["facts"]["default_explicit_roundtrip"] == "requires_separate_readback"
 
 
 @pytest.mark.parametrize("configured,override,reason", [
@@ -1250,8 +1486,9 @@ def _entry_price_payload(configured=False):
 ])
 def test_entry_price_status_semantic_contract(configured, override, reason):
     """Shared setup retains both positive and every original negative oracle."""
-    payload = _entry_price_payload(configured)
-    payload.update(override)
+    payload = dict(ok=True, schema_version="advisory_entry_price_status_v1", configured=configured,
+        program_id="advp_test", status="QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
+        database_written=False, **({"binding_activated": False} if configured else {})) | override
     semantic = _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/entry-price/status", payload, "e" * 64)
     assert semantic["contract_id"] == "advisory_entry_price_status"
     assert semantic["verdict"] == ("passed" if reason is None else "failed")
@@ -2058,33 +2295,16 @@ def test_workflow_smoke_does_not_call_full_doctor(tmp_path: Path, monkeypatch: p
 
 def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: dict[str, Any] = {}
-    monkeypatch.setattr(
-        workflow,
-        "build_close_sync_plan",
-        lambda **kwargs: {"bug_id": "BUG-199", "workflow_gate": "fixed_source_pending_user_restart"},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_maybe_commit_and_pr_close_sync",
-        lambda **kwargs: pytest.fail("intermediate close-sync PR created"),
-    )
-    monkeypatch.setattr(workflow, "_production_gates_payload", lambda args=None: {})
-    monkeypatch.setattr(workflow, "_emit_args", lambda payload, args: emitted.update(payload))
-    args = argparse.Namespace(
-        bug_id="BUG-199",
-        issue_json=None,
-        pr_url="https://github.example/pull/199",
-        apply=True,
-        allow_missing_linkage=False,
-        validation_evidence=["pytest -> passed"],
-        merge_commit="a" * 40,
-        skip_github_check=False,
-        create_registry_worktree=True,
-        allow_current_worktree=False,
-        post_restart_receipt=None,
-        create_pr=True,
-    )
-
+    for name, value in {
+        "build_close_sync_plan": lambda **kwargs: {"bug_id": "BUG-199", "workflow_gate": "fixed_source_pending_user_restart"},
+        "_maybe_commit_and_pr_close_sync": lambda **kwargs: pytest.fail("intermediate close-sync PR created"),
+        "_production_gates_payload": lambda args=None: {}, "_emit_args": lambda payload, args: emitted.update(payload),
+    }.items():
+        monkeypatch.setattr(workflow, name, value)
+    args = argparse.Namespace(bug_id="BUG-199", issue_json=None, pr_url="https://github.example/pull/199",
+        apply=True, allow_missing_linkage=False, validation_evidence=["pytest -> passed"], merge_commit="a" * 40,
+        skip_github_check=False, create_registry_worktree=True, allow_current_worktree=False,
+        post_restart_receipt=None, create_pr=True)
     assert workflow.cmd_close_sync(args) == 0
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
@@ -2204,51 +2424,28 @@ def test_backend_lifespan_logs_are_transient_only_for_exact_bounded_format(tmp_p
     assert reject_reason == "backend_lifespan_log_inventory_mismatch"
 
 
-def test_cleanup_discovers_registered_worktree_when_argument_is_omitted(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    branch = "bug/BUG-199-workflow"
-    task_worktree = tmp_path / "task-worktree"
+def test_cleanup_discovers_registered_worktree_when_argument_is_omitted(tmp_path, monkeypatch):
+    branch, task_worktree = "bug/BUG-199-workflow", tmp_path / "task-worktree"
     task_worktree.mkdir()
-
-    def fake_git(args: list[str], **kwargs: Any) -> str:
-        if args[:2] == ["branch", "--show-current"]:
-            return "main"
-        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
-        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
-            return branch
-        return ""
-
-    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
-        if args[:2] == ["git", "status"]:
-            return _result()
-        if args[:2] == ["git", "ls-files"]:
-            return _result(stdout="")
-        if args[:3] == ["git", "ls-remote", "--heads"]:
-            return _result(stdout="")
-        raise AssertionError(args)
-
-    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
-    monkeypatch.setattr(workflow, "_registered_worktree_for_branch", lambda value, cwd=None: task_worktree)
-    monkeypatch.setattr(workflow, "_git", fake_git)
-    monkeypatch.setattr(workflow, "_run_command", fake_run)
-    monkeypatch.setattr(workflow, "_path_is_registered_worktree", lambda path, cwd=None: True)
-    monkeypatch.setattr(workflow, "_git_snapshot", lambda root: {"branch": "main", "dirty": False})
-    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
-    monkeypatch.setattr(workflow, "_cleanup_protected_receipt_paths", lambda bug_id: set())
-    monkeypatch.setattr(
-        workflow,
-        "_cleanup_evidence_finalization",
-        lambda bug_id: {"durable_receipt_present": True, "status": "finalized_structured_receipt"},
-    )
-
+    git_results = {("branch", "--show-current"): "main",
+        ("for-each-ref", "--format=%(refname:short)", "refs/heads"): branch,
+        ("branch", "--format=%(refname:short)", "--merged", "origin/main"): branch}
+    def fake_run(args, **kwargs):
+        assert args[:2] in (["git", "status"], ["git", "ls-files"], ["git", "ls-remote"]), args
+        return _result()
+    for name, value in {
+        "_canonical_root": lambda: tmp_path,
+        "_registered_worktree_for_branch": lambda value, cwd=None: task_worktree,
+        "_git": lambda args, **kw: git_results.get(tuple(args), ""), "_run_command": fake_run,
+        "_path_is_registered_worktree": lambda path, cwd=None: True,
+        "_git_snapshot": lambda root: {"branch": "main", "dirty": False},
+        "_dirty_files": lambda root: [], "_cleanup_protected_receipt_paths": lambda bug_id: set(),
+        "_cleanup_evidence_finalization": lambda bug_id: {"durable_receipt_present": True, "status": "finalized_structured_receipt"},
+    }.items():
+        monkeypatch.setattr(workflow, name, value)
     payload = workflow.build_cleanup_after_merge_plan(branch=branch, apply=False)
-
     assert payload["workflow_gate"] == "ready_for_cleanup"
-    assert payload["worktree"] == str(task_worktree)
-    assert payload["worktree_registered"] is True
+    assert payload["worktree"] == str(task_worktree) and payload["worktree_registered"] is True
 
 
 @pytest.mark.parametrize("cache_matches", [True, False])
@@ -2257,16 +2454,8 @@ def test_cleanup_merged_pr_cache_is_reused_only_for_exact_identity(tmp_path, mon
     pr_url = "https://github.example/pull/199"
     head = "a" * 40
     merge_commit = "b" * 40
-    verified = {
-        "checked": True,
-        "merged": True,
-        "pr": {
-            "url": pr_url,
-            "headRefName": branch,
-            "headRefOid": head,
-            "mergeCommit": {"oid": merge_commit},
-        },
-    }
+    verified = {"checked": True, "merged": True, "pr": {"url": pr_url,
+        "headRefName": branch, "headRefOid": head, "mergeCommit": {"oid": merge_commit}}}
     readbacks = []
     def readback(value):
         assert cache_matches is False, "cached PR check was reread"
@@ -2274,107 +2463,52 @@ def test_cleanup_merged_pr_cache_is_reused_only_for_exact_identity(tmp_path, mon
         readbacks.append(value)
         return verified
     monkeypatch.setattr(workflow, "_verify_pr_merged", readback)
-    monkeypatch.setattr(
-        workflow,
-        "_git_commit_is_ancestor",
-        lambda ancestor, descendant, root: ancestor == head and descendant == merge_commit,
-    )
-
-    result = workflow._cleanup_merge_verification(
-        branch,
-        pr_url,
-        False,
-        cwd=tmp_path,
-        verified_pr_check=verified if cache_matches else {
-            "checked": True, "merged": True,
-            "pr": {
-                "url": "https://github.example/pull/200", "headRefName": "bug/BUG-200-other",
-                "headRefOid": "c" * 40, "mergeCommit": {"oid": "d" * 40},
-            },
-        },
-    )
-
+    monkeypatch.setattr(workflow, "_git_commit_is_ancestor",
+        lambda ancestor, descendant, root: ancestor == head and descendant == merge_commit)
+    cached = verified if cache_matches else {**verified, "pr": {**verified["pr"], "headRefName": "bug/other"}}
+    result = workflow._cleanup_merge_verification(branch, pr_url, False, cwd=tmp_path, verified_pr_check=cached)
     assert result["verified"] is True
     assert result["method"] == "merged_pr_head_is_ancestor_of_merge_commit"
     assert result["tree_equivalence_ref"] == head
     assert len(readbacks) == (0 if cache_matches else 1)
 
 
-def test_cleanup_preflight_reuses_successful_same_finalizer_fetch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_cleanup_preflight_reuses_successful_same_finalizer_fetch(tmp_path, monkeypatch):
     cached = {"status": "fetched", "command": "git fetch origin --prune", "result": _result()}
-    monkeypatch.setattr(
-        workflow,
-        "_cleanup_preflight_fetch_origin",
-        lambda root, apply: pytest.fail("successful cached fetch was repeated"),
-    )
-
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin",
+        lambda root, apply: pytest.fail("successful cached fetch was repeated"))
     result = workflow._cleanup_preflight_fetch_for_plan(tmp_path, apply=True, cached=cached)
-
-    assert result["status"] == "fetched"
-    assert result["reused"] is True
+    assert result["status"] == "fetched" and result["reused"] is True
 
 
 @pytest.mark.parametrize("stale", [False, True])
-def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    stale: bool,
-) -> None:
-    events: list[str] = []
-    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        workflow,
-        "_cleanup_preflight_fetch_origin",
-        lambda root, apply: {"status": "fetched", "result": _result()},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_git_snapshot",
-        lambda root: {"branch": "main", "dirty": False, "head": "same" if stale else "old", "origin_main": "same" if stale else "new"},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_run_command",
-        lambda args, **kwargs: events.append(
-            "root_sync" if args[:2] == ["git", "merge"] else "merge_containment"
-        )
-        or _result(),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_merge_commit_changed_files",
-        lambda merge_commit, root: {
-            "ok": True,
-            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"] if stale else [
-                ".codex/skills/aistock-merge-aftercare/SKILL.md", ".claude/commands/aistock-task-router.md",
-                "docs/standards/README.md"],
-        },
-    )
-
-    def fake_install(*, apply: bool, selected_lane: str, **kwargs: Any) -> dict[str, Any]:
-        events.append(f"install:{selected_lane}")
-        return {"workflow_gate": "installed", "blocking": []}
-
-    monkeypatch.setattr(workflow, "build_client_install_plan", fake_install)
-    monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
-    monkeypatch.setattr(workflow, "_client_manifest", lambda: {
+def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(tmp_path, monkeypatch, stale):
+    events = []
+    changed = [".codex/skills/aistock-merge-aftercare/SKILL.md"]
+    if not stale:
+        changed += [".claude/commands/aistock-task-router.md", "docs/standards/README.md"]
+    manifest = {
         "codex_entries": {"merge_aftercare": {"status": "current"}, "validation_delegation": {"status": "stale"}},
         "claude_entries": {"validation_delegation": {"status": "stale_global"}, "readonly_triage": {"status": "missing_global"}},
-    } if stale else {})
-    monkeypatch.setattr(
-        workflow,
-        "_client_lane_verification",
-        lambda manifest, selected_lane, verify_codex, verify_claude: {"ready": True, "blocking": []},
-    )
-
-    result = workflow._publish_changed_clients_after_merge(
-        merge_commit="c" * 40,
-        sync_root=True,
-        apply=True,
-    )
+    } if stale else {}
+    def fake_install(*, apply, selected_lane, **kwargs):
+        events.append(f"install:{selected_lane}")
+        return {"workflow_gate": "installed", "blocking": []}
+    for name, value in {
+        "_canonical_root": lambda: tmp_path,
+        "_cleanup_preflight_fetch_origin": lambda root, apply: {"status": "fetched", "result": _result()},
+        "_git_snapshot": lambda root: {"branch": "main", "dirty": False,
+            "head": "same" if stale else "old", "origin_main": "same" if stale else "new"},
+        "_run_command": lambda args, **kwargs: events.append(
+            "root_sync" if args[:2] == ["git", "merge"] else "merge_containment") or _result(),
+        "_merge_commit_changed_files": lambda merge_commit, root: {"ok": True, "files": changed},
+        "build_client_install_plan": fake_install,
+        "_ClientInstallLock": lambda: workflow.contextlib.nullcontext(),
+        "_client_manifest": lambda: manifest,
+        "_client_lane_verification": lambda *args, **kwargs: {"ready": True, "blocking": []},
+    }.items():
+        monkeypatch.setattr(workflow, name, value)
+    result = workflow._publish_changed_clients_after_merge(merge_commit="c" * 40, sync_root=True, apply=True)
 
     assert result["workflow_gate"] == "installed_and_verified"
     if stale:
@@ -2541,33 +2675,18 @@ def test_finalizer_records_state_and_postmortem_outside_deleted_source(tmp_path:
     assert states[-1]["root"] == canonical and result["postmortem"]["worktree"] == str(canonical)
 
 
-def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        workflow,
-        "_publish_changed_clients_after_merge",
-        lambda **kwargs: {"workflow_gate": "blocked", "blocking": ["client publish failed"]},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "build_close_sync_plan",
-        lambda **kwargs: pytest.fail("close-sync started before client publish"),
-    )
-
+def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(monkeypatch):
+    for name, value in {
+        "_publish_changed_clients_after_merge": lambda **kwargs: {
+            "workflow_gate": "blocked", "blocking": ["client publish failed"]},
+        "build_close_sync_plan": lambda **kwargs: pytest.fail("close-sync started before client publish"),
+    }.items():
+        monkeypatch.setattr(workflow, name, value)
     payload = workflow.build_merge_finalizer_plan(
-        bug_id="BUG-199",
-        source_pr_url="https://github.example/pull/199",
-        source_branch=None,
-        source_worktree=None,
-        validation_evidence=["pytest -> passed"],
-        sync_root=True,
-        apply=True,
-        source_pr_check={
-            "checked": True,
-            "merged": True,
-            "pr": {"mergeCommit": {"oid": "d" * 40}},
-        },
+        bug_id="BUG-199", source_pr_url="https://github.example/pull/199",
+        source_branch=None, source_worktree=None, validation_evidence=["pytest -> passed"],
+        sync_root=True, apply=True,
+        source_pr_check={"checked": True, "merged": True, "pr": {"mergeCommit": {"oid": "d" * 40}}},
     )
 
     assert payload["workflow_gate"] == "blocked"

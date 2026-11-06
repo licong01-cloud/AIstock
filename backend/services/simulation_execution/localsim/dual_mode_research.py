@@ -452,14 +452,26 @@ def _compute_account_day(job: dict) -> dict:
             initial_marks=prices, run_id=job["run_id"], source_commit=job["producer_commit"], optimized=job["optimized"])
     else:
         source = job["source"]
+        control = job.get("research_control")
+        if control is not None:
+            from .wait_budget_execution import CONTROL_ID
+            if control != CONTROL_ID or initial["rule"] != CONTROL_ID:
+                raise ValueError("LOCALSIM_WAIT_CONTROL_PROFILE_CONFLICT")
         events, unavailable = build_timing_plan_events(intents=native.order_intents,
-            series=source["series"], rule=initial["rule"], source_commit=job["producer_commit"],
+            series=source["series"], rule="FIRST_OBSERVABLE_V1" if control else initial["rule"],
+            source_commit=job.get("timing_source_commit", job["producer_commit"]),
             day=day, quantity_source=identity, unknown_references=source["unknown_references"])
         result = run_human_portfolio_day(backend=backend, markets=markets, events=events,
             initial_marks=prices, policy=HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]),
-            run_id=job["run_id"], optimized=job["optimized"])
+            run_id=job["run_id"], optimized=job["optimized"],
+            research_control=control, research_audit=job.get("research_audit", False))
     attach_native_quantity_evidence(result, targets=targets, native=native,
         projection_ref=job["projection_ref"], price_policy_sha256=job["price_policy_sha256"], unavailable=unavailable)
+    if job.get("research_audit"):
+        result["account"]["timing_observations"] = [
+            {"plan_id": p["plan_id"], "first_dispatch_at": p.get("research_timing", {}).get("first_dispatch_at"),
+             "first_fill_at": p.get("research_timing", {}).get("first_fill_at")}
+            for p in result["account"]["parents"]]
     result["account"].update(operation=initial["operation"], rule=initial["rule"], delay_seconds=initial["delay_seconds"])
     commit = prepare_portfolio_commit(result=result, run_id=job["run_id"], input_identity=identity, day_index=0)
     return {"account": result["account"], "commit_request": commit}
@@ -523,10 +535,13 @@ def _verify_recomputed_account_day(result: dict, record: dict) -> None:
 def execute_account_days(*, request: dict, inspected: dict, initials: list[dict], manifest,
                          cost, candidate, root: Path, pool: ResearchAccountPool, metrics: dict,
                          performance: ResearchPerformanceOptions, stop_after_account_days: int | None = None,
-                         verify_recompute: bool = False, day_schema: str | None = None) -> dict:
+                         verify_recompute: bool = False, day_schema: str | None = None,
+                         research_controls: dict | None = None, research_audit: bool = False) -> dict:
     """One account-day orchestrator; callers must first inspect complete sources."""
     completed = root / "results.json"
     histories = {i["account_id"]: [] for i in initials}
+    if research_controls is not None and not set(research_controls).issubset(histories):
+        raise ValueError("LOCALSIM_WAIT_CONTROL_ACCOUNT_SCOPE_CONFLICT")
     references = {i["account_id"]: [] for i in initials}
     computed, recomputed = 0, 0
     prepared_projections = {}
@@ -571,6 +586,8 @@ def execute_account_days(*, request: dict, inspected: dict, initials: list[dict]
                          "projection_ref": projection_ref.model_dump(), "source": source, "cost": cost,
                          "manifest": manifest, "manifest_sha256": request["manifest_sha256"],
                          "producer_commit": request["producer_source_commit"], "day": day,
+                         "timing_source_commit": request.get("timing_source_commit", request["producer_source_commit"]),
+                         "research_control": (research_controls or {}).get(account_id), "research_audit": research_audit,
                          "identity": identity, "run_id": run_id, "optimized": performance.optimized,
                          "price_policy_sha256": inspected["templates"].policy_document.sha256})
         computations = pool.prepare(jobs)

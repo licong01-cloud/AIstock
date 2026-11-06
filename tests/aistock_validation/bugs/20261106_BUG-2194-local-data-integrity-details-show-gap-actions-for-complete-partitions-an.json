@@ -1,0 +1,342 @@
+{
+  "actual": "交易日完整性详情对所有分区无条件显示查看缺口且缺失行无突出标识；名称仍附技术编号，不符合仅中文名称要求。只修前端展示：按当前revision的missing/invalid计数或明确缺口组显示按钮和缺失行颜色，合法NA、未到期、待验和过期验收不得误作缺口或完整；显示部分完成的具体分区摘要。不修改后端判定或数据。",
+  "allowed_write_scope": [
+    "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+    "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+    "frontend/src/app/local-data/datasetLabels.ts",
+    "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+    "tests/aistock_validation/bugs/20261106_BUG-2194-local-data-integrity-details-show-gap-actions-for-complete-partitions-an.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2194",
+  "closed_at": "2026-11-06T15:16:52Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-06T14:59:14.708920Z",
+  "description": "交易日完整性详情对所有分区无条件显示查看缺口且缺失行无突出标识；名称仍附技术编号，不符合仅中文名称要求。只修前端展示：按当前revision的missing/invalid计数或明确缺口组显示按钮和缺失行颜色，合法NA、未到期、待验和过期验收不得误作缺口或完整；显示部分完成的具体分区摘要。不修改后端判定或数据。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261106-97657a1d8ad2",
+      "timestamp": "2026-11-06T14:59:14.708920Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "详情仅显示中文数据集名称；无已确认缺口无查看缺口按钮；确认缺口行使用明显不同颜色及文字；未知/过期验收保留待核验，摘要解释部分完成。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2194-local-data-integrity-details-show-gap-actions-for-complete-partitions-an.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2194-local-data-integrity-details-show-gap-actions-for-complete-partitions-an.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+        "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+        "frontend/src/app/local-data/datasetLabels.ts",
+        "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/src/app/local-data/datasetLabels.ts",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+        "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+        "frontend/src/app/local-data/datasetLabels.ts",
+        "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+    ]
+  },
+  "first_seen_at": "2026-11-06T14:59:14.708920Z",
+  "fix_branch": null,
+  "fix_commit": "9e061a275295bb7af4d16039e2114020678aa03d",
+  "fixed_at": "2026-11-06T15:16:52Z",
+  "github_issue_number": 7101,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7101",
+  "last_seen_at": "2026-11-06T14:59:14.708920Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7102",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "review_results": {
+    "completeness_and_regression": "PASS：仅中文名称、缺失行颜色加文字、部分完成摘要、分页原始dataset参数和后补齐消除按钮均有回归；两项RED（名称缺失、8个无差别按钮）后GREEN。候选实际React组件在Chromium验证8类分区及分页，未启动应用或修改生产数据。",
+    "correctness": "PASS：只修前端，不修改后台完整性判定。当前revision匹配且正式验证为VALID/INCOMPLETE/ERROR时，明确missing/invalid计数或MISSING/INVALID/HISTORY_CONFLICT组才提供缺口按钮和颜色；LEGAL_NA、未知、未到期及过期验收不冒充缺失/完整。",
+    "design_compliance_001": [
+      "禁止简化交付：中文名称、条件按钮、颜色、部分完成原因摘要均实现，保持未知和合法NA的独立语义。",
+      "禁止静默错误：空计数仍为未知，不将待核验和检查异常标为无缺口；旧revision结果不误标当前缺失。",
+      "禁止改变业务逻辑：后台状态、股票范围、PIT、来源数据、发布/profile、API dataset键均不改。",
+      "禁止私增门禁审批：没有新请求、扫描、服务、依赖或人工步骤，仅复用现有L0/CI和定向UI回归。"
+    ]
+  },
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "frontend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2194",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0f4fb5a775c95eac",
+    "recorded_at": "2026-11-06T15:17:56.771124Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2c9393216e78a65da6af9bfe4f16d85dd004a004",
+    "source_merge_commit": "9e061a275295bb7af4d16039e2114020678aa03d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7102",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Local data integrity details show gap actions for complete partitions and do not distinguish missing rows",
+  "trigger_condition": {
+    "fingerprint": "97657a1d8ad2e899665ecbd7",
+    "source_event_id": "FE-20261106-97657a1d8ad2"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:local_data",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/local-data",
+    "ui_routes": [
+      "/local-data"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light_ui",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-40%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light_ui",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-40%"
+    }
+  }
+}

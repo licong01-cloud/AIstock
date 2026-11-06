@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 def main() -> int:
     from backend.services.hmm_risk import observed_industry_authority as observed
+    from scripts.hmm_risk import observed_industry_source as official
     from backend.services.hmm_risk import risk_l2_database_inference as database
     from backend.services.hmm_risk import risk_l2_date_inference as core
     from backend.services.hmm_risk.formal_state_executor import read_json, validate_output_location, write_once
@@ -22,10 +23,14 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
-    parser.add_argument("--mapping", type=Path, required=True)
-    parser.add_argument("--mapping-sha256", required=True)
-    parser.add_argument("--readback", type=Path, required=True)
-    parser.add_argument("--readback-sha256", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--mapping", type=Path, help="Existing pinned mapping/readback mode (unchanged)")
+    mode.add_argument("--source-store", type=Path, help="Refresh official HTTPS source in an external HMM store")
+    mode.add_argument("--capture-receipt", type=Path, help="Use an explicitly pinned official capture, without HTTP")
+    parser.add_argument("--mapping-sha256")
+    parser.add_argument("--readback", type=Path)
+    parser.add_argument("--readback-sha256")
+    parser.add_argument("--capture-sha256")
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args()
     # All output and source validation precedes a database connection. Do not
@@ -41,15 +46,31 @@ def main() -> int:
     authority = request["source"]["industry_authority"]
     validate_output_location(output, dataset_root=Path(authority["artifact_root"]))
     _industry_adapter(authority, forbidden_roots=(ROOT,))
-    observation = observed.load_observation(
-        args.mapping, args.mapping_sha256, args.readback, args.readback_sha256, authority
+    mapping_args = (args.mapping_sha256, args.readback, args.readback_sha256)
+    observed.require(all(mapping_args) if args.mapping else not any(mapping_args), "mapping/readback arguments differ")
+    observed.require(bool(args.capture_receipt) == bool(args.capture_sha256), "capture receipt/hash must be paired")
+    observation = (
+        observed.load_observation(args.mapping, args.mapping_sha256, args.readback, args.readback_sha256, authority)
+        if args.mapping
+        else None
     )
+    capture = None
+    if args.capture_receipt:
+        official.load_capture(args.capture_receipt, args.capture_sha256)
+        capture = {"path": str(args.capture_receipt), "sha256": args.capture_sha256}
 
     def git(*args):
         return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
 
     observed.require(not git("status", "--porcelain"), "formal authority build requires a clean committed source")
     commit, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+    if args.source_store:
+        store = validate_output_location(args.source_store, dataset_root=Path(authority["artifact_root"]))
+        observed.require(
+            not (output.is_relative_to(store) or store.is_relative_to(output)),
+            "source store and authority output must not overlap",
+        )
+        capture = official.refresh(store)
     with database.connect(request) as connection:
         plan = database._read_plan(request, connection)
         source = request["source"]
@@ -73,11 +94,43 @@ def main() -> int:
         denominator = reader.load_industry_pit_denominator(
             window_start=core._day(plan["start"]), window_end=core._day(plan["end"])
         )
+    if capture:
+        observation = official.observation_from_capture(
+            Path(capture["path"]),
+            capture["sha256"],
+            authority,
+            data_date=denominator.window_end,
+            symbols=observed.target_symbols(denominator),
+        )
     observed.require(
         (commit, tree) == (git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}"))
         and not git("status", "--porcelain"),
         "source changed during authority build",
     )
+    if capture and not any(
+        day > observation.captured_at.astimezone(observed.SHANGHAI).date() for day in denominator.trading_dates
+    ):
+        # The source can be valid while its first causal source day is still in
+        # the future. Never extend dates, write an authority, or mark readiness.
+        print(
+            json.dumps(
+                {
+                    "status": "PENDING_OBSERVATION_NOT_YET_CAUSAL",
+                    "capture": capture,
+                    "source_observed_at": observation.captured_at.isoformat(),
+                    "source_checked_at": observation.checked_at.isoformat(),
+                    "target_as_of_date": denominator.window_end.isoformat(),
+                    "target_symbols": len(observation.rows),
+                    "database_write": False,
+                    "dataset_write": False,
+                    "full_hmm_preflight_passed": False,
+                    "runtime_activation": False,
+                    "fits": 0,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
     result = observed.build_authority(
         base_authority=authority,
         observation=observation,

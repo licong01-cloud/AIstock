@@ -369,15 +369,15 @@ def period_source_preflight(spec: PeriodAnalysisSpec):
     return p, preparation, openings, facts, refs
 
 
-def summarize_period(preflight, openings, facts):
-    """Statistical NAV reduction only; no fills, fees, marks or shares simulated."""
+def period_account_rows(trade_dates, openings, facts):
+    """Shared statistical reduction; callers enforce their own sealed population."""
     from .period_context import read
 
-    days = _dates(preflight["trade_dates"])
+    days = _dates(trade_dates)
     initial = {a["account_id"]: a for a in openings}
-    require(len(facts["accounts"]) == len(initial) == 13 and
+    require(len(facts["accounts"]) == len(openings) == len(initial) and
             {a["account_id"] for a in facts["accounts"]} == set(initial), "PERIOD_ACCOUNT_POPULATION")
-    rows, keyed = [], {}
+    rows = []
     for account in facts["accounts"]:
         opening = initial[account["account_id"]]
         start = number(opening["opening_nav_cny"], minimum=0)
@@ -417,7 +417,14 @@ def summarize_period(preflight, openings, facts):
                       cumulative_fees_cny=number(anchor["prior_cumulative_fees_cny"], minimum=0)+fees,
                       nav_high_water_cny=cumulative_high, daily_nav=daily, day_refs_sha256=digest(account["days"]))
         rows.append(result)
-        keyed[(result["rule"], result["delay_seconds"])] = result
+    return rows
+
+
+def summarize_period(preflight, openings, facts):
+    """The original FULL_13 contract remains strict; no padded research arms."""
+    require(len(facts["accounts"]) == len(openings) == 13, "PERIOD_ACCOUNT_POPULATION")
+    rows = period_account_rows(preflight["trade_dates"], openings, facts)
+    keyed = {(r["rule"], r["delay_seconds"]): r for r in rows}
     require(set(keyed) == {("LOCALSIM_NATIVE_TWAP", None)} | {(r, d) for r in ARMS for d in DELAYS}, "PERIOD_PROFILES")
     comparisons = []
     for a in rows:

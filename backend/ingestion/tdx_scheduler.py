@@ -1324,14 +1324,33 @@ class TDXScheduler:
         except Exception:
             _logger.exception("recovered schedule projection failed; retaining current schedule states")
         candidates = self._fetchall(
-            """SELECT DISTINCT ON (dataset, target_date)
-                      target_id, dataset, target_date, metadata, data_source, target_status,
-                      attempt_count, last_error_message AS failure_category
-                 FROM market.data_sync_targets
-                WHERE target_status = 'final_blocked'
-                  AND data_source IN ('readiness_gate','tushare','integrity_repair')
+            """WITH candidates AS (SELECT DISTINCT ON (t.dataset, target_date)
+                      target_id, t.dataset, target_date, t.metadata, t.data_source, target_status,
+                      attempt_count, last_error_message AS failure_category,
+                      COALESCE(p.validation_status IN ('VALID','NOT_APPLICABLE')
+                          AND p.data_revision=p.validated_revision,FALSE) AS recovered_priority,
+                      EXISTS (SELECT 1 FROM market.data_alerts e WHERE e.dataset=t.dataset
+                          AND NOT e.acknowledged AND e.alert_type='retry_exhausted'
+                          AND e.details->>'target_id'=t.target_id) AS alarm_priority
+                 FROM market.data_sync_targets AS t
+                 LEFT JOIN market.dataset_date_refresh_audit p
+                   ON p.dataset=CASE t.dataset WHEN 'stock_moneyflow_ts' THEN 'moneyflow_ts'
+                       WHEN 'sw_sector' THEN 'sw_daily' ELSE t.dataset END
+                  AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                WHERE (target_status = 'final_blocked'
+                    OR (target_status = 'reconciled' AND EXISTS (
+                        SELECT 1 FROM market.data_alerts AS a
+                        WHERE a.dataset=t.dataset AND NOT a.acknowledged
+                          AND a.alert_type IN ('retry_exhausted','retry_pending')
+                          AND a.details->>'target_id'=t.target_id)))
+                  AND t.data_source IN ('readiness_gate','tushare','integrity_repair')
                   AND target_date IS NOT NULL
-                ORDER BY dataset, target_date DESC, updated_at DESC
+                ORDER BY t.dataset, target_date DESC, t.updated_at DESC)
+                SELECT * FROM candidates
+                ORDER BY recovered_priority DESC,alarm_priority DESC,
+                         ROW_NUMBER() OVER (PARTITION BY dataset ORDER BY recovered_priority DESC,
+                             alarm_priority DESC,target_date DESC),
+                         target_date DESC,dataset
                 LIMIT 100"""
         )
         reconciled: List[str] = []
@@ -1631,7 +1650,7 @@ class TDXScheduler:
     def _scope_adj_factor_repair(self, target: Dict[str, Any]) -> bool:
         """A dated gap repair must not launch the scheduled whole-market audit.
 
-        Reuse the current exact partition verdict (one indexed ledger lookup),
+        Reuse the current exact partition verdict and indexed named-code lookups,
         then run the existing safe history reconciler only for its named gaps.
         Unproven/obsolete verdicts go back to validation, never to a full scan.
         """
@@ -1648,7 +1667,26 @@ class TDXScheduler:
         if (row.get("validation_status") == "INCOMPLETE"
                 and row.get("data_revision") == row.get("validated_revision") and symbols
                 and all(gap.get("classification") in {"MISSING", "INVALID"} for gap in gaps)):
-            target["metadata"] = {**(target.get("metadata") or {}), "history_reconcile_symbols": symbols}
+            # Match the existing reconciler's input contract before spawning
+            # it. Some long-delisted securities have no local price or factor
+            # history at all. Repeated subprocesses cannot repair that absence.
+            observed = self._fetchall("""SELECT code AS ts_code FROM unnest(%s::character(9)[]) AS code
+                WHERE EXISTS (SELECT 1 FROM market.adj_factor f
+                    WHERE f.ts_code=code::text AND f.trade_date<=%s)
+                   OR EXISTS (SELECT 1 FROM market.kline_daily_raw p
+                    WHERE p.ts_code=code AND p.trade_date<=%s
+                      AND (p.volume_hand>0 OR p.amount_li>0))""", (symbols, day, day))
+            available = {str(item["ts_code"]).strip() for item in observed}
+            missing = sorted(set(symbols)-available)
+            symbols = sorted(set(symbols) & available)
+            if not symbols:
+                DataSyncTargetRepository().mark_retry(str(target["target_id"]),
+                    retry_after=_now() + dt.timedelta(days=1),
+                    reason="factor_repair_local_history_unavailable",
+                    context={"source_gap_preserved": True, "missing_symbols": missing})
+                return False
+            target["metadata"] = {**(target.get("metadata") or {}),
+                "history_reconcile_symbols": symbols, "history_unavailable_symbols": missing}
             return True
         from ..services.data_integrity.repository import enqueue_validation
         with get_conn(autocommit=False, manage_transaction=True) as conn:
@@ -2127,6 +2165,14 @@ class TDXScheduler:
     ) -> None:
         if dataset == "_vix_index_midday":
             dataset = "vix_index"  # same job/overlap owner; only the schedule clock differs
+        event_aliases = {'_stk_shock_morning': 'stk_shock', '_stk_high_shock_morning': 'stk_high_shock',
+                         '_stk_alert_morning': 'stk_alert', '_idx_anns_morning': 'idx_anns',
+                         '_stk_seasoned_morning': 'stk_seasoned', '_stk_seasoned_project_review': 'stk_seasoned'}
+        if dataset in event_aliases:
+            options = dict(options)
+            if dataset == '_stk_seasoned_project_review':
+                options['review_open_projects'] = True
+            dataset = event_aliases[dataset]
         if (dataset or "").strip().lower() == "_weekend_compensation" and not self._weekend_compensation_due():
             if schedule_id:
                 self._update_ingestion_schedule(
@@ -2850,7 +2896,7 @@ class TDXScheduler:
         for target in targets:
             status = str(target.get("target_status") or target.get("status") or "").lower()
             failure_category = str(target.get("failure_category") or "retry_exhausted")
-            if status != "final_blocked" and failure_category not in {"db_unavailable", "provider_contract_error"}:
+            if status not in {"final_blocked", "reconciled"} and failure_category not in {"db_unavailable", "provider_contract_error"}:
                 continue
             dataset = str(target.get("dataset") or "?")
             target_date = target.get("target_date")
@@ -2882,6 +2928,8 @@ class TDXScheduler:
                         context={"canonical_validation_id": partition["validation_id"]})
                     continue
                 recovery_ids = context.get("recovery_target_ids") or []
+            if status == "reconciled":
+                continue  # success of a fetch target alone is not a validated partition
             alerts.append(
                 classify_retry_alert(dataset, "exhausted", original_status=failure_category,
                                      attempt_count=target.get("attempt_count"))
@@ -3965,7 +4013,8 @@ class TDXScheduler:
                     summary_patch = json.dumps(
                         {"inserted_rows": rows, "dataset": "sector_data", "mode": mode,
                          "source_revision_dates": repaired_dates, "source_revision_errors": revision_errors,
-                         "deferred_revision_count": deferred_revisions},
+                         "deferred_revision_count": deferred_revisions,
+                         "error": error_msg, "delay_reason": None},
                         ensure_ascii=False, default=str,
                     )
                     self._execute(
@@ -5255,6 +5304,7 @@ class TDXScheduler:
                 spec=spec, mode=mode,
                 start_date=start_date, end_date=end_date,
                 job_id=job_id,
+                **({'review_open_projects': True} if options.get('review_open_projects') else {}),
             )
             status = "success" if result.ok else "failed"
             if not result.ok:

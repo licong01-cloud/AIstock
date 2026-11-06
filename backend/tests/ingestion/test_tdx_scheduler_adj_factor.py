@@ -74,6 +74,8 @@ def test_exact_factor_repair_uses_only_current_named_supported_gaps():
     queries = []
     def fetch(query, params):
         queries.append((query, params))
+        if "unnest" in query:
+            return [{"ts_code": "000001.SZ"}]
         return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
                  "validation": {"gaps": [{"classification": "MISSING",
                      "symbols": ["000001.SZ", "000001.SZ", "920001.BJ"]}]}}]
@@ -81,7 +83,34 @@ def test_exact_factor_repair_uses_only_current_named_supported_gaps():
     target = {"target_date": dt.date(2018, 8, 8)}
     assert scheduler._scope_adj_factor_repair(target)
     assert target["metadata"]["history_reconcile_symbols"] == ["000001.SZ"]
-    assert len(queries) == 1 and "FROM market.dataset_date_refresh_audit" in queries[0][0]
+    assert len(queries) == 2 and "FROM market.dataset_date_refresh_audit" in queries[0][0]
+    assert "character(9)[]" in queries[1][0] and "EXISTS" in queries[1][0]
+
+
+def test_factor_gap_without_local_history_is_deferred_without_launching_a_failing_job(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduling
+    scheduler = object.__new__(TDXScheduler)
+    repo = Mock()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    day = dt.date(2010, 1, 4)
+    now = dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(scheduling, "_now", lambda: now)
+    verdict = {"data_revision": 1, "validated_revision": 1, "validation_status": "INCOMPLETE",
+               "validation": {"gaps": [{"classification": "MISSING", "symbols": ["000787.SZ"]}]}}
+    scheduler._fetchall = lambda query, params: [verdict] if "refresh_audit" in query else []
+    target = {"target_id": "old-gap", "target_date": day}
+    assert scheduler._scope_adj_factor_repair(target) is False
+    repo.mark_retry.assert_called_once()
+    assert repo.mark_retry.call_args.kwargs["retry_after"] == now + dt.timedelta(days=1)
+    assert repo.mark_retry.call_args.kwargs["context"]["missing_symbols"] == ["000787.SZ"]
+
+
+def test_existing_factor_job_preserves_scheduler_target_identity():
+    queries = []
+    cursor = SimpleNamespace(execute=lambda sql, params: queries.append((sql, params)))
+    conn = SimpleNamespace(cursor=lambda: nullcontext(cursor))
+    ingest_adj_factor._start_existing_job(conn, "job", {"dataset": "adj_factor"})
+    assert "COALESCE(summary" in queries[0][0] and "||" in queries[0][0]
 
 
 @pytest.mark.parametrize("day,delay_hours", [(dt.date(2026, 5, 20), 24), (dt.date(2026, 11, 4), 6)])

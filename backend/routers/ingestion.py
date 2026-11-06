@@ -18,6 +18,7 @@ from ..db.init_tushare_schedules import get_default_schedule_catalog
 from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
+from ..services.tushare_event_inputs import EVENT_DATASETS
 from ..services.trading_calendar_status import TradingCalendarStatusService
 from ..services.trading_core.errors import DataUnavailableError
 
@@ -621,6 +622,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "daily_basic",
         "vix_index",
         "stock_daily_afterhours",
+        *EVENT_DATASETS,
         "stk_limit",
         "suspend_d",
         "margin_detail",
@@ -1605,6 +1607,7 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
 _DAILY_PRESETS = [
     ("vix_index", "incremental"),
     ("stock_daily_afterhours", "incremental"),
+    *((name, "incremental") for name in sorted(EVENT_DATASETS)),
     ("kline_daily_raw", "incremental"),
     ("kline_minute_raw", "incremental"),
     ("daily_basic", "incremental"),
@@ -1932,7 +1935,7 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="bak_basic init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="bak_basic init requires end_date")
-    elif dataset in {"daily_basic", "vix_index", "stock_daily_afterhours"}:
+    elif dataset in {"daily_basic", "vix_index", "stock_daily_afterhours", *EVENT_DATASETS}:
         # init: 需要 start_date/end_date；incremental: start_date 可选
         if mode == "init" and not options.get("start_date"):
             raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
@@ -2566,6 +2569,30 @@ def get_data_gaps(
                 "missing_days": None, "missing_ranges": [], "total_trading_days": None,
                 "session_date_timezone": "America/New_York",
                 "reason": "formal_US_session_calendar_not_registered"}
+    if data_kind in EVENT_DATASETS:
+        if bool(start_date) != bool(end_date):
+            raise HTTPException(status_code=400, detail='start_date and end_date must both be provided')
+        try:
+            end = dt.date.fromisoformat(end_date) if end_date else dt.date.today()
+            start = dt.date.fromisoformat(start_date) if start_date else end-dt.timedelta(days=6)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail='invalid event query dates') from exc
+        if end < start:
+            raise HTTPException(status_code=400, detail='event query dates are inverted')
+        queries = _fetchall("SELECT trade_date,status,metadata FROM market.dataset_date_refresh_audit "
+            "WHERE dataset=%s AND data_source='tushare' AND trade_date BETWEEN %s AND %s",
+            (data_kind, start, end))
+        complete = {row['trade_date'] for row in queries if row['status'] == 'success'
+                    and _json_load(row['metadata']).get('event_scan', {}).get('complete') is True
+                    and not _json_load(row['metadata']).get('event_scan', {}).get('parameters', {}).get('ts_code')}
+        missing = [str(start+dt.timedelta(days=n)) for n in range((end-start).days+1)
+                   if start+dt.timedelta(days=n) not in complete]
+        return {'data_kind': data_kind, 'date_sequence': 'calendar',
+                'coverage_basis': 'completed_provider_queries_not_daily_event_count',
+                'status': 'QUERY_COVERED' if not missing else 'QUERY_INCOMPLETE',
+                'start_date': str(start), 'end_date': str(end), 'unqueried_dates': missing,
+                'covered_query_days': len(complete), 'expected_calendar_dates': (end-start).days+1,
+                'missing_event_count': None, 'historical_PIT': False}
     # 缓存有效期 1 小时，过期后重新计算
     _CACHE_TTL_SECONDS = 3600
     if not refresh and not start_date and not end_date:

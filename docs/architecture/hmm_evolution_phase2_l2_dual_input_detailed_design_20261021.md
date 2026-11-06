@@ -4,6 +4,7 @@
 > 用户授权：完成 HMM 自身数据集/数据库双入口；QE、荐股、模拟盘及共享选股信号的源码由对应业务窗口修改。
 > 父蓝图：hmm_evolution_and_risk_management_system_design_20260716.md §1.0、§2.6、§4.6。
 > 直接基线：hmm_evolution_phase2_l2_risk_date_inference_detailed_design_20261018.md。
+> 2026-11-06追加批准：持续在线更新官方分类；按目标请求驱动，保留真实观测知识时间，先验证、不激活生产。§4.2为本次源侧扩展，原模型及历史交付不变。
 
 ## 1. Background / 目标
 
@@ -20,6 +21,7 @@
 - scripts/hmm_risk/run_risk_l2_date_inference.py：在原薄 CLI 增加显式 source-mode；文件默认行为不变，数据库只在 parent 读取一次。
 - backend/tests/hmm_risk/test_risk_l2_date_inference.py、test_risk_l2_database_inference.py：直接回归与反例。
 - 本设计及父蓝图必要当前状态。
+- 2026-11-06源侧扩展：backend/services/hmm_risk/observed_industry_authority.py；scripts/hmm_risk/observed_industry_source.py、build_observed_industry_authority.py；backend/tests/hmm_risk/test_observed_industry_authority.py、test_observed_industry_source.py。联网及文件缓存仅在离线工具层，不由后端请求处理线程导入；两个测试文件按既有直接邻居命名映射覆盖service/CLI和来源工具，不修改nox或test plan。
 
 不改 QE、Selection、Advisory、Paper、调度器、数据生产、旧系数 producer、CI、nox、test plan、规范或候选数据。测试复用现有 fixture/内核，不复制业务实现。无需新增表、通知平台、依赖或过程环境变量。
 
@@ -56,6 +58,22 @@ knowledge_mode 显式二选一：
 
 CLI 要求干净已提交源码，读取完整所需上下文的 PIT/日历，复用共享构建器生成新分类/成员 receipt、分母闭合 preflight 与标准 bundle，再用正式 HMM adapter 读回，输出独立 authority 和重新计算 receipt 的请求。接着运行原数据库业务 prepare 预检，区分当前目标身份修复与历史上下文/20D可用性；前者通过不推导后者通过。模型、scaler、20D、训练窗口、seed、阈值、131 目录及消费者公式均不变。无训练、推断发布、数据库写入、服务控制或生产绑定激活。
 
+### 4.2 请求驱动的持续官方观察（2026-11-06批准）
+
+本节替代§4.1中“未批准持续自动更新”的后续限制，不改写该次历史验收。只扩展HMM输入来源，不自动晋升成员损失C或把其损失幅度改作概率。原文件QE入口、旧preset_A、训练预算和已交付B/C资产均不变。
+
+既有构建CLI增加互斥的`--source-store <绝对外部目录>`（一次官方HTTPS刷新）和`--capture-receipt <path> --capture-sha256 <sha>`（精确复用已认证来源，无HTTP）。原`--mapping/--mapping-sha256/--readback/--readback-sha256`仍兼容。调用方按目标request执行，不新增调度器、通知平台、按分钟轮询、月度人工源码迁移或环境变量状态；prepare/infer内不联网。生产调用、运行激活和其他业务接线不在本包。
+
+source-store只保存按SHA去重的官方工作簿、不可变观察回执和原子current观察指针。固定HTTPS官方URL、默认TLS证书校验、有限传输超时及大小约束；拒绝错误状态、来源跳转、异常schema、间接路径或哈希漂移。它不是dataset candidate，也不是业务完成水位；单owner文件锁保护并发。获取/解析/校验失败不推进指针、不返回旧来源冒充刷新成功，下一次显式请求可重试。
+
+同一连续内容版本保持首次实际观察时间，只更新再次核验时间；相同字节不重复保存。A→B→A属于新的观察段，即使复用A的字节，也不得沿用最初A的知识时间。更早的观察必须有固定SHA的原始抓取证据；来源“计入/更新日期”不是发布时间。新来源先与当次只读PIT股票集合、既有131个申万文本L2投影及完整taxonomy核对；不新增行业编号，不查数据库成员表填补，不依赖其他窗口手工制作HMM映射文件。
+
+知识边界仍是`known_from=next_open(Shanghai(first_observed_at).date())`。分类按原source/as_of日期解析，decision仍为下一交易日；不为了当日可用额外移动该边界。没有落入请求source窗口的合法known_from时，CLI返回`PENDING_OBSERVATION_NOT_YET_CAUSAL`、真实来源pin和目标日期，不写authority、不标记业务完成。今天的新观察不得回填10月29日。历史未知区间保持typed NA；不凭最新股票集合相同延长旧资格，不自动延长index membership。
+
+当合法目标日及其数据完成状态具备时，正式构建、标准adapter读回、完整264日数据库prepare与冻结模型双fresh-process零fit验证连续执行。只读事务、131完整输出及所有availability/reason保留；预检通过不要求每个行业均available，不把合法停牌/空成员升级为全局失败。若尚无合法目标日或存在具体输入阻断，源码可独立交付，真实业务状态明确pending，不无限等待QE或日历。
+
+2026-11-06正式clean-source读回（源码27628f74d16f5f29a9e4f5c3d455de1b06bc1531）：官方来源实际首次观察为11月6日19:08（上海），12,933行，目标PIT 4,919只股票全部唯一解析；capture文件SHA为1c401740c86ed47b501e70597cc9d945167f8fa4d0dcc94ff66fb4025c53503a，保存在外部HMM source-store。目标as-of 11月5日早于新来源知识边界，正式CLI返回PENDING_OBSERVATION_NOT_YET_CAUSAL，未生成authority或执行推断。只读canonical日历确认后续开放日为11月9日、11月10日：本观察最早可用于11月9日source/as-of、11月10日decision，届时仍须完整预检。11月5日六项依赖的完成审计全部成功，只证明该日完成记录，不代替264日业务输入验证。database_live_ready=false；无新数据补录请求、写库、激活或fit。
+
 ## 5. D3：Implementation Plan / 共用特征与自然不可用
 
 数据库股票行与文件股票行进入同一 _collect_domains 和 build_c010_feature_domain_panel，再用同一特征载体构造与原参数推断函数。复用文件 reader 的 C-013 authority 区间索引，按真实变更边界缓存身份并恢复每条事实的实际日期，不复制分类实现或按股票日重复认证。全部 131 行始终保留。单成分、正常停牌、空成员、正式来源不可用沿原有 typed NA；不补 neutral/1.0，不新设最小股票数或每行业全成功门。
@@ -86,7 +104,7 @@ HMM 交接入口为同一 CLI 的 --source-mode frozen_file（默认）或 datab
 
 完成源码与直接验证，报告实际数据库就绪状态；有缺口保留 pending，不宣称实时双入口完成。用户已于2026-10-21追加授权本任务提交、PR及满足门禁后的合入和后续步骤；该授权不推导生产 DDL/DML、runtime activation、其他模块接线或服务控制，后端重启仍由用户操作。
 
-Rollout 为 HMM 可选 service/CLI；回退为不调用新 database source-mode，旧 file/preset_A 行为完全保留。新 backend 文件按实际 runtime contract 分类，fresh import 不等于后端已加载。当前只读元数据确认全局 PIT ready/clean 至 2026-10-20；kline_daily_raw 最新成功完成记录仅至 2026-10-15，不能宣称 10-20 forward 数据齐备。
+Rollout 为 HMM 可选 service/CLI；回退为不调用新 database source-mode，旧 file/preset_A 行为完全保留。新 backend 文件按实际 runtime contract 分类，fresh import 不等于后端已加载。2026-10-21历史读回的全局 PIT ready/clean 至 2026-10-20、kline_daily_raw 完成记录至 2026-10-15，仅保留当时结论；当前源侧扩展与实际pending以§4.2为准。
 
 ### Production Gates / 生产门禁
 
@@ -99,6 +117,7 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 | F-011 | §3/§5；risk_l2_date_inference.py；risk_l2_database_inference.py | backend/tests/hmm_risk/test_risk_l2_database_inference.py：相同20D/冻结参数预测一致、完整目录及合法NA；最终文件+DB相关矩阵61 passed | PASS_SOURCE_CONTRACT | - |
 | F-012 | §4/§7；risk_l2_database_inference.py；run_risk_l2_date_inference.py | backend/tests/hmm_risk/test_risk_l2_database_inference.py：readonly/PIT/完成水位/来源前收盘价/两child隔离；fresh-process import PASS；真实有界读回见§11 | PASS_SOURCE_CONTRACT | - |
 | F-013 | §6/§8；父蓝图§1.21 | backend/tests/hmm_risk/test_risk_l2_database_inference.py::test_cli_database_dispatch_preserves_file_default_and_children_cannot_read_db；§6完整service/CLI交接及§11真实pending边界 | PASS_HMM_HANDOFF_CONTRACT | - |
+| HMM-OBSERVE-D1-D6 | §4.2；scripts/hmm_risk/observed_industry_source.py；observed_industry_authority.py；build_observed_industry_authority.py | backend/tests/hmm_risk/test_observed_industry_authority.py、test_observed_industry_source.py合计39项；去重/知识时间/变更回归/失败不推进/并发/明确投影/旧入口；§4.2的因果pending不是源码缺项 | PASS_SOURCE_CONTRACT | - |
 
 以上仅为本包HMM源码/交接合同验收，不是父蓝图全部F-011/F-012/F-013、生产运行或外部业务验收。未提交源下的受控读回不冒充 clean committed CLI 正式acceptance；正式CLI仍要求最终已提交源码及干净工作树。
 
@@ -113,6 +132,10 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 源码第一轮作者审修：修正路径link校验调用，移除可复用service内全局动作mock；C-013投影后按日canonical排序；沿用区间索引并验证跨变更日身份及真实日期，保留未知/重复/日历缺口失败。55项原文件+数据库相关矩阵通过；新增区间回归通过。未声称独立外部审核。
 
 源码第二轮作者审修：补齐provider pre_close与除权口径对齐、PIT预热NA不造值、缺失/重复/非有限反例；补冻结参数parent读回，防止两child共同错误；7项最终修复点通过，最终同一相关矩阵61 passed。Ruff/format/py_compile、scope/ownership、registry 8 passed、L0 blocking=0及fresh import通过；两份设计F2 PASS。受控真实读回与运行态分开；没有改变模型、20D定义、训练窗口、seed或阈值。
+
+2026-11-06持续观察扩展两轮作者审修（非外部独立审核）：第一轮补A→B→A重新计知识时间、来源失败/时钟回退不推进指针、原始观察证据链校验；第二轮核对正式CLI的新旧模式、未来观察pending不写authority、离线工具层与后台推断隔离。定向文件39 passed；工具归属调整后重验受影响22项通过，fresh import、Ruff/compile、6文件ownership（无未知/歧义）、L0（blocking=0）及两份F2通过。真实HTTPS读取12,933行、1,166,848字节、SHA 677943bdbc022c31a4959bf5ef23f91bd802ecccec9d33f9ed4d629df6f2dd1b，与10月12日来源不同；这只证明当次可获取和schema可读，不冒充标准authority、完整输入或模型采用。正式capture/build回执在外部HMM运行目录保存，不通过修改环境变量记录状态。
+
+首次PR CI在执行测试前正确阻断：新增source工具缺少同名直接邻居测试文件。已将原文件中20项source测试原样移至test_observed_industry_source.py，保留authority/CLI的19项，断言与覆盖未删减；生产实现、nox、test plan均未改变。最终交付须以新HEAD正式CI为准，初始CI失败不能作为通过证据。
 
 ## 11. 实际读回、输入差异与剩余边界
 

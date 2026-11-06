@@ -57,6 +57,58 @@ def result():
     return ValidationResult(PartitionState.VALID, (CheckCounts("row", 1, 1, 0, 0, 0, 0),), {"source": "DEV fixture"})
 
 
+def test_contract_upgrade_wakeup_native_dev_preserves_facts_failures_and_active_leases(db):
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from psycopg2.extras import Json
+    from contextlib import contextmanager
+    _dataset, repo = db
+    day = date(2026, 10, 30)
+    cases = ["known_a", "known_b", "unsupported", "incomplete", "valid", "other_reason", "leased", "changed", "future"]
+    lease_marker = uuid4().hex
+    supported = [code for code in cases if code != "unsupported"]
+    with repo.transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute('CREATE TEMP TABLE wake_targets (LIKE market.data_sync_targets INCLUDING DEFAULTS) ON COMMIT DROP')
+            cur.execute('CREATE TEMP TABLE wake_partitions (LIKE market.dataset_date_refresh_audit INCLUDING DEFAULTS) ON COMMIT DROP')
+            for code in cases:
+                target_day = date(2099, 1, 1) if code == "future" else day
+                state = {"incomplete":"INCOMPLETE", "valid":"VALID"}.get(code, "UNVERIFIED")
+                reason = "different_failure" if code == "other_reason" else "non_daily_dataset_contract"
+                metadata = {"desired_revision": 1}
+                if code == "leased":
+                    metadata.update(lease_token=lease_marker, lease_until="2099-01-01T00:00:00Z")
+                cur.execute("""INSERT INTO wake_partitions(dataset,trade_date,data_source,status,validation_status,
+                    data_revision,metadata) VALUES (%s,%s,'canonical_db','failed',%s,%s,%s)""",
+                    (code,target_day,state,2 if code == "changed" else 1,Json({"validation":{"reason":reason}})))
+                cur.execute("""INSERT INTO wake_targets(target_id,dataset,data_source,target_date,target_scope,
+                    target_key_sha256,target_status,next_retry_at,metadata) VALUES (%s,%s,'canonical_db',%s,
+                    '{"operation":"VALIDATE_ONLY"}',%s,'retry',clock_timestamp()+interval '12 hours',%s)""",
+                    (code,code,target_day,code,Json(metadata)))
+        class Wrapped:
+            @contextmanager
+            def cursor(self, **kwargs):
+                with conn.cursor(**kwargs) as cur:
+                    original = cur.execute
+                    class Cursor:
+                        def execute(self, query, params):
+                            return original(query.replace('market.data_sync_targets','pg_temp.wake_targets')
+                                .replace('market.dataset_date_refresh_audit','pg_temp.wake_partitions'),params)
+                        def fetchall(self):
+                            return cur.fetchall()
+                    yield Cursor()
+        # Native SQL, same bounded helper as the worker, no market fact writes.
+        observed = DailyIntegrityWorker._wake_supported_contracts(Wrapped(), supported, today=date(2026, 11, 6), limit=1)
+        assert [r['dataset'] for r in observed] == ['known_a']
+        observed = DailyIntegrityWorker._wake_supported_contracts(Wrapped(), supported, today=date(2026, 11, 6), limit=10)
+        assert [r['dataset'] for r in observed] == ['known_b']
+        assert DailyIntegrityWorker._wake_supported_contracts(Wrapped(), supported, today=date(2026, 11, 6), limit=10) == []
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM wake_partitions WHERE validation_status='UNVERIFIED'")
+            assert cur.fetchone()[0] == 7  # wakeup NEVER changes the published verdict
+            cur.execute("SELECT metadata->>'lease_token',target_status FROM wake_targets WHERE dataset='leased'")
+            assert cur.fetchone() == (lease_marker,'retry')
+
+
 def test_legacy_zero_stk_limit_count_is_revalidated_once_without_fact_revision(db):
     from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
     from backend.services.data_integrity.repository import enqueue_validation
