@@ -60,9 +60,12 @@ class WaitBudgetAnalysisSpec(Contract):
 
 
 def implementation_identity():
-    return {n: hashlib.sha256((Path(__file__).parent / n).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
-            for n in ("wait_control.py", "wait_control_results.py", "continuous_results.py", "period_context.py",
-                      "contracts.py", "core.py", "research.py", "research_inputs.py")}
+    root = Path(__file__).parent
+    files = [root / n for n in ("wait_control.py", "wait_control_results.py", "continuous_results.py", "period_context.py",
+             "contracts.py", "core.py", "research.py", "research_inputs.py", "inputs.py", "replay.py", "store.py")]
+    files.append(root.parent / "artifact_store.py")
+    return {p.relative_to(root.parent).as_posix(): hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+            for p in files}
 
 
 def economic_opening(opening):
