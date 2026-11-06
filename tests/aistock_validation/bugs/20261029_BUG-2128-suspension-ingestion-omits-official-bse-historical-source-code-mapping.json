@@ -153,6 +153,7 @@
   "severity": "P1",
   "status": "wontfix",
   "validation_evidence": [
+    "validation-receipt: id=615bb828b60aa209 commit=82456698eef44ee8aca728151802a07601e6b579 kind=pytest plan=direct status=passed command=`pytest backend/tests/test_daily_data_integrity.py::test_raw_financial_scans_share_supported_stock_scope_without_rewriting_legacy_hash -q -p no:cacheprovider` result=`3 passed`",
     "2026-11-06: pytest backend/tests/test_daily_data_integrity.py::test_raw_financial_scans_share_supported_stock_scope_without_rewriting_legacy_hash -q -p no:cacheprovider -> 3 passed；当前沪深范围排除北交所，未写库或操作服务。",
     "2026-11-06: git diff --check passed；仅关闭BUG元数据，不宣称原BSE专用runtime合同通过，已合入历史源码继续保留。"
   ],
