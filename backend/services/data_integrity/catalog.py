@@ -50,9 +50,10 @@ class Obligation:
 
 def optional_input_contract(dataset: str) -> Obligation | None:
     """Validate a requested optional partition without adding a global obligation."""
-    if dataset not in {"vix_index", "stock_daily_afterhours"}:
+    from ..tushare_event_inputs import EVENT_DATASETS
+    if dataset not in {"vix_index", "stock_daily_afterhours", *EVENT_DATASETS}:
         return None
-    return Obligation(dataset, "event" if dataset == "vix_index" else "daily_series", "23:59")
+    return Obligation(dataset, "daily_series" if dataset == "stock_daily_afterhours" else "event", "23:59")
 
 
 def obligations(extra_schedules: Iterable[Mapping[str, Any]] = (),

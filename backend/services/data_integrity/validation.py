@@ -205,6 +205,9 @@ class PhysicalValidator:
 
     def validate(self, conn, obligation: Obligation, day: date, revision: int) -> ValidationResult:
         dataset = obligation.dataset
+        from ..tushare_event_inputs import EVENT_DATASETS, validate_partition
+        if dataset in EVENT_DATASETS:
+            return validate_partition(conn, DATASET_REGISTRY[dataset], day, revision)
         if dataset in {"kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts", "cyq_perf", "bak_basic"}:
             from .catalog import SCOPE_VERSION, RULE_VERSION
             dependency = rows(conn, """SELECT * FROM market.dataset_date_refresh_audit

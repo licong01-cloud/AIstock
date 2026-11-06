@@ -340,7 +340,8 @@ class DataRefreshAuditRepository:
         query_only = (dataset == "vix_index" and row_count == 0)
         if data_source != "canonical_db" and not query_only and schema_installed(conn):
             completed = (status == "success" and quality_status in {"ok", "empty_valid"}
-                         and bool(metadata.get("provider_scan"))
+                         and (bool(metadata.get("provider_scan"))
+                              or metadata.get('event_scan', {}).get('complete') is True)
                          and (dataset != "index_daily" or metadata.get("provider_query_scope_complete") is True))
             # A new complete scan can repair missing query provenance without
             # changing a single fact. Wake that revision, not an old retry timer.

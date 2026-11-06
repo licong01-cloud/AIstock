@@ -33,6 +33,7 @@ from .data_sync_targets import (
     publication_target_date,
 )
 from .tushare_rate_limiter import get_limiter
+from .tushare_event_inputs import EVENT_DATASETS
 from .tushare_dataset_specs import (
     DAILY_BASIC, DatasetSpec, QueryMode, complete_stk_limit_daily_references, stk_limit_prices_valid,
 )
@@ -49,6 +50,7 @@ ZERO_ROW_VALID_DATASETS = {
     "stock_st",
     "stock_st_events",
     *FINANCIAL_EVENT_RAW_DATASETS,
+    *EVENT_DATASETS,
 }
 DENSE_STOCK_PANELS = frozenset({"bak_basic", "cyq_perf"})
 NULL_PRESERVING_DATASETS = frozenset(LATE_PUBLICATION_TAIL_DAYS) | DENSE_STOCK_PANELS
@@ -987,6 +989,13 @@ class TushareSyncEngine:
 
     def _get_incremental_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
         """Return the safe incremental cursor without treating missing audit as cold start."""
+        if spec.name in EVENT_DATASETS:
+            # Raw risk events share a table. Never seed API A from API B.
+            with conn.cursor() as cur:
+                cur.execute("SELECT max(trade_date) FROM market.dataset_date_refresh_audit "
+                            "WHERE dataset=%s AND data_source='tushare' AND status='success' "
+                            "AND metadata#>>'{event_scan,complete}'='true'", (spec.name,))
+                return cur.fetchone()[0]
         if spec.incremental_cursor_from_audit:
             cursor = self._get_safe_audit_cursor(conn, spec)
             if cursor is not None:
@@ -1254,6 +1263,9 @@ class TushareSyncEngine:
         end_date: dt.date,
     ) -> tuple[dt.date, Dict[str, Any]]:
         """Resolve incremental start from safe audit cursor plus physical seeding."""
+        if spec.name in EVENT_DATASETS:
+            from .tushare_event_inputs import incremental_start
+            return incremental_start(self, conn, spec, end_date)
         metadata: Dict[str, Any] = {}
         cursor = self._get_incremental_cursor(conn, spec)
         if cursor is not None:
@@ -1547,6 +1559,9 @@ class TushareSyncEngine:
         start_date: dt.date, end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
+        if spec.name in EVENT_DATASETS:
+            from .tushare_event_inputs import sync_events
+            return sync_events(self, conn, spec, start_date, end_date, job_id)
         if spec.name == "vix_index":
             return self._sync_vix_range(conn, spec, start_date, end_date, job_id)
         if spec.name == "stock_daily_afterhours":
@@ -2078,6 +2093,7 @@ class TushareSyncEngine:
         start_date: Optional[dt.date] = None,
         end_date: Optional[dt.date] = None,
         job_id: Optional[uuid.UUID] = None,
+        review_open_projects: bool = False,
     ) -> SyncResult:
         """Run a full sync for *spec*.
 
@@ -2088,6 +2104,8 @@ class TushareSyncEngine:
         job_id : attach to an existing ingestion_jobs row (API-created)
         """
         today = dt.date.today()
+        if review_open_projects and spec.name != 'stk_seasoned':
+            raise ValueError('project review is only defined for stk_seasoned')
         self._late_recheck_dates.pop(spec.name, None)
         if end_date is None:
             end_date = today
@@ -2110,7 +2128,9 @@ class TushareSyncEngine:
         try:
             with get_conn() as conn:
                 self._ensure_target_table_exists(conn, spec)
-                if mode == "incremental" and start_date is None:
+                if review_open_projects:
+                    start_date = end_date  # separate bounded scope review, no history-range cursor
+                elif mode == "incremental" and start_date is None:
                     start_date, cursor_metadata = self._resolve_incremental_start_date(conn, spec, end_date)
 
                 if start_date is not None and start_date > end_date:
@@ -2159,7 +2179,11 @@ class TushareSyncEngine:
 
         # Phase 2: 按模式执行同步（BY_CODE 使用分批连接）
         try:
-            if spec.query_mode == QueryMode.SINGLE_CALL:
+            if review_open_projects:
+                from .tushare_event_inputs import review_seasoned_projects
+                with get_conn() as conn:
+                    result = review_seasoned_projects(self, conn, spec, end_date, job_id)
+            elif spec.query_mode == QueryMode.SINGLE_CALL:
                 with get_conn() as conn:
                     result = self._sync_single_call(conn, spec, job_id)
             elif spec.query_mode == QueryMode.BY_CODE:
