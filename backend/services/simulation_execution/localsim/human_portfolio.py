@@ -25,6 +25,7 @@ class _Proposal:
     facade: TimingFacade
     executions: list = field(default_factory=list)
     reasons: set[str] = field(default_factory=set)
+    signal_audits: dict = field(default_factory=dict)
 
     @property
     def active(self):
@@ -36,7 +37,8 @@ class _Proposal:
 
 
 def run_human_portfolio_day(*, backend, markets, events, initial_marks,
-                            policy: HumanOperationPolicy, run_id: str, optimized: bool = False) -> dict:
+                            policy: HumanOperationPolicy, run_id: str, optimized: bool = False,
+                            research_control: str | None = None, research_audit: bool = False) -> dict:
     """A single account, one operator, native feedback, and an atomic day result.
 
     Full bars are only supplied to native post-interval matching. Core evaluate
@@ -44,6 +46,12 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
     """
     if not markets:
         raise ValueError("LOCALSIM_HUMAN_MARKETS_REQUIRED")
+    def new_facade(plan):
+        if research_control is None:
+            return TimingFacade(plan, 0, mode=CLOSED_LOOP_MODE)
+        # The new SDK is loaded only by explicitly opted-in offline research.
+        from .wait_budget_execution import research_facade
+        return research_facade(plan, research_control)
     day = next(iter(markets.values())).trade_date
     start, terminal = (utc(datetime.combine(day, clock, CHINA)) for clock in (time(9, 30), time(14, 57)))
     _validate_markets(markets, day, start)
@@ -119,6 +127,19 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
             # must fail the day, never become an apparently successful study.
             raise ValueError("LOCALSIM_HUMAN_CORE_UNAVAILABLE:" + ",".join(decision.reason_codes))
         proposal.reasons.update(decision.reason_codes)
+        if research_audit:
+            audit = proposal.signal_audits.setdefault(plan.revision, {
+                "revision": plan.revision, "batch_started_at": None, "first_outer_opportunity_at": None,
+            })
+            state = proposal.facade.core_state
+            if state is not None and state.batch_started_at is not None:
+                audit["batch_started_at"] = state.batch_started_at
+            if decision.status == "OPPORTUNITY" and audit["first_outer_opportunity_at"] is None:
+                audit["first_outer_opportunity_at"] = decision.advice_available_at
+            audit.update(last_status=decision.status, last_reasons=decision.reason_codes)
+            if research_control is not None:
+                audit.update(control_state=proposal.facade.control_state,
+                             control_decision=proposal.facade.control_decision)
         return decision
 
     def add_cancel(proposal, clock, reason):
@@ -148,7 +169,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
             if plan.plan_id not in proposals:
                 if plan.revision != 1 or plan.lifecycle != "ACTIVE" or event.available_at > plan.valid_from:
                     raise ValueError("LOCALSIM_HUMAN_INITIAL_PLAN_INVALID")
-                proposals[plan.plan_id] = _Proposal(plan, TimingFacade(plan, 0, mode=CLOSED_LOOP_MODE))
+                proposals[plan.plan_id] = _Proposal(plan, new_facade(plan))
             else:
                 proposal = proposals[plan.plan_id]
                 old = proposal.plan
@@ -156,7 +177,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                     raise ValueError("LOCALSIM_HUMAN_PLAN_REVISION_CONFLICT")
                 queue.invalidate_plan(plan.plan_id, reason="PLAN_REVISED")
                 add_cancel(proposal, clock, "PLAN_REVISED")
-                proposal.plan, proposal.facade = plan, TimingFacade(plan, 0, mode=CLOSED_LOOP_MODE)
+                proposal.plan, proposal.facade = plan, new_facade(plan)
         for proposal in proposals.values():
             plan, execution = proposal.plan, proposal.active
             if clock >= plan.valid_until or plan.lifecycle != "ACTIVE":
@@ -178,7 +199,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                 if proposal.facade.plan.target_quantity != remaining:
                     replacement = plan.model_copy(update={"target_quantity": remaining,
                                                           "quantity_source_ref": digest([plan.quantity_source_ref, proposal.filled_quantity])})
-                    proposal.facade = TimingFacade(replacement, 0, mode=CLOSED_LOOP_MODE)
+                    proposal.facade = new_facade(replacement)
             decision = evaluate_proposal(proposal, clock)
             if decision.status != "OPPORTUNITY":
                 queue.invalidate_plan(plan.plan_id, revision=plan.revision, reason="OPPORTUNITY_" + decision.status)
@@ -283,6 +304,13 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                         "weighted_wait_seconds": str(sum(q * wait for e in proposal.executions for q, wait in e.waits)),
                         "human_actions": [a.model_dump(mode="json") for a in actions],
                         "sessions": [e.snapshot(include_account=False) for e in proposal.executions]})
+        if research_audit:
+            dispatches = [a.dispatch_at for a in actions if a.kind == "SUBMIT" and a.dispatch_at is not None]
+            parents[-1]["research_timing"] = payload({
+                "signal_revisions": [proposal.signal_audits[r] for r in sorted(proposal.signal_audits)],
+                "first_dispatch_at": min(dispatches) if dispatches else None,
+                "first_fill_at": min(f.trade_time for f in fills) if fills else None,
+            })
     account = result["account"]
     account.update(parents=payload(parents), operation=operation_snapshot(policy),
                    human_operation_state=queue.snapshot(),

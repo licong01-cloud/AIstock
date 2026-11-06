@@ -86,11 +86,13 @@ class TimingFacade(BaseExecutionAlgo):
         if self.last_feedback_at is not None and utc(as_of) < self.last_feedback_at:
             raise ValueError("LOCALSIM_TIMING_EVALUATION_PRECEDES_CONFIRMED_ACCOUNT_CLOCK")
         prefix = visible_prefix(market, as_of)
-        decision, self.core_state = evaluate(
-            self.plan, prefix, execution, self.plan.policy, self.core_state, as_of,
-        )
+        decision, self.core_state = self._evaluate_signal(prefix, execution, as_of)
         self.observe(decision)
         return decision
+
+    def _evaluate_signal(self, prefix: MarketView, execution: ExecutionView, as_of: datetime):
+        """Research adapters may replace the signal, never the native fill path."""
+        return evaluate(self.plan, prefix, execution, self.plan.policy, self.core_state, as_of)
 
     def observe(self, decision: Decision) -> None:
         if (decision.plan_id, decision.revision, decision.policy_sha256) != (
