@@ -695,6 +695,21 @@ def monthly_price_encoding(tmp_path: Path):
     qlib = root / 'components/daily_bin_candidate'
     days = (subject.SOURCE_START, subject.SOURCE_END, date(2026, 9, 30))
     pins, rows = {}, []
+    seed = tmp_path / 'seed'
+    seed_meta = seed / 'components/daily_bin_candidate/meta_export.json'
+    seed_meta.parent.mkdir(parents=True)
+    seed_meta.write_text(json.dumps({'export_mode': 'authoritative_aistock_dump_bin'}), encoding='utf-8')
+    seed_calendar = seed_meta.parent / 'calendars/day.txt'
+    seed_calendar.parent.mkdir()
+    seed_calendar.write_text('\n'.join(d.isoformat() for d in days[:2]) + '\n', encoding='utf-8')
+    seed_body = dict(schema_version='qe_dataset_manifest_v1', components={
+        'meta': dict(path='components/daily_bin_candidate/meta_export.json',
+                     sha256=subject._sha256_file(seed_meta), size=seed_meta.stat().st_size),
+        'calendar': dict(path='components/daily_bin_candidate/calendars/day.txt',
+                         sha256=subject._sha256_file(seed_calendar), size=seed_calendar.stat().st_size)})
+    seed_sha = canonical_sha256(seed_body)
+    (seed / 'qe_dataset_manifest.json').write_text(
+        json.dumps({**seed_body, 'dataset_manifest_sha256': seed_sha}), encoding='utf-8')
 
     def pin(path):
         relative = path.relative_to(root).as_posix()
@@ -715,12 +730,13 @@ def monthly_price_encoding(tmp_path: Path):
         if field in ('open', 'high', 'low', 'close', 'factor'):
             rows.append(dict(instrument='000001.sz', feature=field, start_index=0, end_index=2,
                              written_value_count=1, prefix_scale=.9784479330245184,
-                             predecessor_manifest_sha256='a' * 64,
+                             predecessor_manifest_sha256=seed_sha,
                              target_sha256=subject._sha256_file(path), target_size=path.stat().st_size))
     receipt = dict(schema_version='aistock_monthly_native_qlib_materialization_v1', status='PASS',
-                   predecessor_manifest_sha256='a' * 64,
+                   predecessor_manifest_sha256=seed_sha,
                    native_writer=dict(schema_version='aistock_qlib_bounded_update_receipt_v1',
-                                      frequency='day', predecessor_manifest_sha256='a' * 64,
+                                      frequency='day', predecessor_manifest_sha256=seed_sha,
+                                      baseline_root=str(seed / 'components/daily_bin_candidate'),
                                       calendar_sha256=subject._sha256_file(calendar),
                                       qfq_basis_changed_instrument_count=1,
                                       calendar_prefix_count=2, feature_receipts=rows))
@@ -794,6 +810,181 @@ def test_qlib_monthly_encoding_rejects_unpinned_receipt_and_changed_bin(monthly_
     binary.write_bytes(binary.read_bytes() + b'\x00' * 4)
     with pytest.raises(subject.RotationL1InputBundleError, match='pinned file differs'):
         encoding.scale('000001.SZ', days[0])
+
+
+def _encoding_successor(monthly_price_encoding, *, scale=1.0):
+    """A real additional cast with a pinned predecessor, not duplicated history."""
+    old_qlib, old_days, _, _ = monthly_price_encoding
+    old_root = old_qlib.parent.parent
+    old_manifest = json.loads((old_root / 'qe_dataset_manifest.json').read_text(encoding='utf-8'))
+    root = old_root.parent / 'successor'
+    qlib = root / 'components/daily_bin_candidate'
+    days = (*old_days, date(2026, 10, 30))
+    pins, rows = {}, []
+
+    def pin(path):
+        relative = path.relative_to(root).as_posix()
+        pins[relative] = dict(path=relative, size=path.stat().st_size, sha256=subject._sha256_file(path))
+
+    calendar = qlib / 'calendars/day.txt'
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text('\n'.join(d.isoformat() for d in days) + '\n', encoding='utf-8')
+    pin(calendar)
+    for field in ('open', 'high', 'low', 'close', 'factor'):
+        path = qlib / 'features/000001.sz' / f'{field}.day.bin'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = np.fromfile(old_qlib / 'features/000001.sz' / path.name, dtype='<f4')
+        values = (old[1:].astype(np.float64) * scale).astype('<f4')
+        np.concatenate((old[:1], values, values[-1:])).astype('<f4').tofile(path)
+        pin(path)
+        rows.append(dict(instrument='000001.sz', feature=field, start_index=0, end_index=3,
+                         written_value_count=1, prefix_scale=scale,
+                         predecessor_manifest_sha256=old_manifest['dataset_manifest_sha256'],
+                         target_sha256=subject._sha256_file(path), target_size=path.stat().st_size))
+    receipt = dict(schema_version='aistock_monthly_native_qlib_materialization_v1', status='PASS',
+                   predecessor_manifest_sha256=old_manifest['dataset_manifest_sha256'],
+                   native_writer=dict(schema_version='aistock_qlib_bounded_update_receipt_v1',
+                                      frequency='day', baseline_root=str(old_root / 'daily_bin/qlib'),
+                                      predecessor_manifest_sha256=old_manifest['dataset_manifest_sha256'],
+                                      calendar_prefix_count=3, calendar_sha256=subject._sha256_file(calendar),
+                                      qfq_basis_changed_instrument_count=int(scale != 1), feature_receipts=rows))
+    materialization = root / 'daily_bin/materialization_receipt.json'
+    materialization.parent.mkdir()
+
+    def seal():
+        materialization.write_text(json.dumps(receipt), encoding='utf-8')
+        pin(materialization)
+        for relative in tuple(pins):
+            pin(root / relative)
+        body = dict(schema_version='qe_dataset_manifest_v1', components=pins)
+        (root / 'qe_dataset_manifest.json').write_text(
+            json.dumps({**body, 'dataset_manifest_sha256': canonical_sha256(body)}), encoding='utf-8')
+
+    (root / 'release_closure_receipt.json').write_text('{}', encoding='utf-8')
+    seal()
+    return qlib, days, receipt, seal
+
+
+@pytest.mark.parametrize('scale', [1.0, 1.123456789])
+def test_qlib_monthly_encoding_preserves_ancestor_casts_and_append_boundaries(monthly_price_encoding, scale):
+    qlib, days, _, _ = _encoding_successor(monthly_price_encoding, scale=scale)
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        row[field] = (np.fromfile(qlib / 'features/000001.sz' / f'{field}.day.bin', dtype='<f4')[1]
+                      if field in ('open', 'high', 'low', 'close', 'factor') else
+                      0 if field in ('limit_up', 'limit_down') else 11.48)
+    assert subject._raw_qlib_values(row, prefix_scale=encoding.scale('000001.SZ', days[0]))['close'] == 11.48
+    assert encoding.scale('000001.SZ', days[-1]) == 1
+    assert encoding.scale('000001.SZ', days[-2]) == scale
+    encoding.unchanged()
+
+
+@pytest.mark.parametrize('mutation', ['identity', 'missing', 'locator', 'seed', 'unknown_schema', 'calendar'])
+def test_qlib_monthly_encoding_requires_authenticated_ancestry(monthly_price_encoding, mutation):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    old_root = monthly_price_encoding[0].parent.parent
+    if mutation == 'identity':
+        receipt['predecessor_manifest_sha256'] = 'f' * 64
+        receipt['native_writer']['predecessor_manifest_sha256'] = 'f' * 64
+        for row in receipt['native_writer']['feature_receipts']:
+            row['predecessor_manifest_sha256'] = 'f' * 64
+    elif mutation == 'missing':
+        (old_root / 'qe_dataset_manifest.json').unlink()
+    elif mutation == 'locator':
+        receipt['native_writer']['baseline_root'] = '../release'
+    elif mutation == 'unknown_schema':
+        receipt['native_writer']['schema_version'] = 'future'
+    elif mutation == 'calendar':
+        receipt['native_writer']['calendar_prefix_count'] = 2
+    else:
+        (old_root.parent / 'seed/components/daily_bin_candidate/meta_export.json').write_text('{}', encoding='utf-8')
+    seal()
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._QlibPriceEncoding(qlib, days)
+
+
+def test_qlib_encoding_ancestor_metadata_never_reads_old_price_bins(monthly_price_encoding, monkeypatch):
+    qlib, days, _, _ = _encoding_successor(monthly_price_encoding)
+    old_qlib = monthly_price_encoding[0]
+    old_sha = subject._sha256_file
+
+    def forbid_old_prices(path):
+        assert not (Path(path).is_relative_to(old_qlib / 'features')), 'old price fallback'
+        return old_sha(path)
+
+    monkeypatch.setattr(subject, '_sha256_file', forbid_old_prices)
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    assert encoding.scale('000001.SZ', days[0]) == .9784479330245184
+    encoding.unchanged()
+    seed_meta = old_qlib.parent.parent.parent / 'seed/components/daily_bin_candidate/meta_export.json'
+    seed_meta.write_text('{}', encoding='utf-8')
+    with pytest.raises(subject.RotationL1InputBundleError, match='changed during readback'):
+        encoding.unchanged()
+
+
+def test_qlib_encoding_unbound_prefix_is_not_silently_single_cast(monthly_price_encoding):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    for row in receipt['native_writer']['feature_receipts']:
+        row['predecessor_manifest_sha256'] = None
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    with pytest.raises(subject.RotationL1InputBundleError, match='no encoding identity'):
+        encoding.scale('000001.SZ', days[0])
+    assert encoding.scale('000001.SZ', days[-1]) == 1
+
+
+def test_qlib_encoding_new_instrument_has_no_inherited_cast(monthly_price_encoding):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    # IPO only in the appended window: no old encoding, nonzero Bin start.
+    for row in receipt['native_writer']['feature_receipts']:
+        row.update(start_index=3, written_value_count=1, predecessor_manifest_sha256=None, target_size=8)
+        path = qlib / 'features/000001.sz' / f'{row["feature"]}.day.bin'
+        value = np.fromfile(path, dtype='<f4')[-1]
+        np.asarray([3, value], dtype='<f4').tofile(path)
+        row['target_sha256'] = subject._sha256_file(path)
+    # No cast will consume these fields, but reseal the actual current files.
+    seal()
+    assert subject._QlibPriceEncoding(qlib, days).scale('000001.SZ', days[-1]) == 1
+
+
+def test_qlib_encoding_amended_identity_target_cannot_use_ancestor_cast(monthly_price_encoding):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    receipt['native_writer']['feature_receipts'][0]['target_sha256'] = 'a' * 64
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    with pytest.raises(subject.RotationL1InputBundleError, match='target was amended'):
+        encoding.scale('000001.SZ', days[0])
+
+
+@pytest.mark.parametrize('unchanged', [True, False])
+def test_qlib_encoding_no_append_instrument_inherits_only_identical_files(monthly_price_encoding, unchanged):
+    qlib, days, receipt, seal = _encoding_successor(monthly_price_encoding)
+    receipt['native_writer']['feature_receipts'].clear()
+    if unchanged:
+        for field in ('open', 'high', 'low', 'close', 'factor'):
+            relative = f'features/000001.sz/{field}.day.bin'
+            (qlib / relative).write_bytes((monthly_price_encoding[0] / relative).read_bytes())
+    seal()
+    encoding = subject._QlibPriceEncoding(qlib, days)
+    if unchanged:
+        assert encoding.scale('000001.SZ', days[0]) == .9784479330245184
+    else:
+        with pytest.raises(subject.RotationL1InputBundleError, match='unrecorded target change'):
+            encoding.scale('000001.SZ', days[0])
+
+
+def test_qlib_encoding_real_000001_august_high_and_multiple_cast_population():
+    # Exact October bytes: high 12.75 after an inherited September rebase.
+    assert subject._raw_rebased_qlib_price(10.22513484954834, .801971435546875,
+                                          .9784479330245184) == 12.75
+    rng = np.random.default_rng(2179)
+    for li, factor in zip(rng.integers(1, 300000, 40), rng.uniform(.1, 1, 40)):
+        p, f = np.float32(int(li) / 1000 * factor), np.float32(factor)
+        scales = (.9784479330245184, 1.123456789)
+        for scale in scales:
+            p, f = np.float32(float(p) * scale), np.float32(float(f) * scale)
+        assert subject._raw_rebased_qlib_price(float(p), float(f), tuple(reversed(scales))) == int(li) / 1000
 
 
 @pytest.mark.parametrize('value', [0.0, -1.0, np.inf, np.nan])
