@@ -738,6 +738,13 @@ class TushareSyncEngine:
             from .sw_industry_history_store import store_member_refresh
 
             return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        if spec.name in {"vix_index", "stock_daily_afterhours"}:
+            from .tushare_supplemental_inputs import store_observations
+            return store_observations(conn, spec, rows,
+                                      lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        if spec.name == "daily_basic":
+            from .tushare_supplemental_inputs import normalize_rows
+            rows = normalize_rows(spec, rows)
         return self._upsert_plain_batch(conn, spec, rows)
 
     def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, fill_only_reference=False) -> int:
@@ -1026,7 +1033,8 @@ class TushareSyncEngine:
             return None
 
         max_success = max(success_dates)
-        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        can_infer_gaps = (spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+                          and spec.name != "vix_index")
         if not can_infer_gaps:
             return max_success
 
@@ -1171,7 +1179,8 @@ class TushareSyncEngine:
         present_dates = sorted(row_counts)
         min_date = present_dates[0]
         max_date = present_dates[-1]
-        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        can_infer_gaps = (spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+                          and spec.name != "vix_index")
         target_dates = self._date_sequence_for_by_date(conn, spec, min_date, max_date) if can_infer_gaps else present_dates
         if not target_dates:
             target_dates = present_dates
@@ -1478,11 +1487,70 @@ class TushareSyncEngine:
         return {**observation, "attempted_keys": min(len(pending), DENSE_PANEL_REPAIR_BATCH),
                 "source_empty_symbols": empty, "provider_absence_established": False}, written
 
+    def _sync_vix_range(self, conn, spec, start_date, end_date, job_id):
+        """Query US-date facts in bounded windows, without inventing a US calendar."""
+        from .tushare_supplemental_inputs import normalize_rows, request_windows
+        from .data_integrity.provider import provider_scan
+        windows = list(request_windows(start_date, end_date))
+        windows += [(day, day) for day in self._late_recheck_dates.get(spec.name, [])
+                    if not start_date <= day <= end_date]
+        result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id, total_batches=len(windows))
+        for start, end in windows:
+            params = {"start_date": start.strftime("%Y%m%d"), "end_date": end.strftime("%Y%m%d")}
+            try:
+                rows = self._fetch_from_tushare(spec, params)
+                normalize_rows(spec, rows)
+                by_date = {}
+                for row in rows:
+                    day = _parse_ymd(row['trade_date'])
+                    if not start <= day <= end or day in by_date:
+                        raise ValueError('vix_index: duplicate or out-of-window US date')
+                    by_date[day] = row
+                for day in _date_range(start, end):
+                    facts = [by_date[day]] if day in by_date else []
+                    target = self._upsert_sync_target(spec, day, metadata={"request": params})
+                    written = self._upsert_batch(conn, spec, facts)
+                    self._refresh_audit.record_success(
+                        dataset=spec.name, trade_date=day, row_count=len(facts), written_rows=written,
+                        job_id=str(job_id), data_source="tushare", conn=conn,
+                        quality_status="ok" if facts else "unknown",
+                        metadata={"tushare_api": spec.tushare_api, "mode": "by_date_range",
+                                  "provider_query_complete": True, "request": params,
+                                  "session_date_timezone": "America/New_York",
+                                  "session_calendar_completeness": "NOT_EVALUATED",
+                                  "empty_date_meaning": "UNKNOWN_NOT_PROVEN_HOLIDAY" if not facts else None,
+                                  "publication_time_quality": "UNKNOWN", "vintage_quality": "NON_VINTAGE",
+                                  "provider_scan": provider_scan(spec, facts, parameters=params)})
+                    result.inserted_rows += written
+                    self._record_sync_attempt(target, "reconciled", job_id=job_id,
+                        rows_written=written, rows_observed=len(facts),
+                        context={"provider_query_complete": True, "session_calendar_completeness": "NOT_EVALUATED"})
+                result.success_batches += 1  # completed provider query, not proven session-calendar completeness
+            except Exception as exc:
+                result.failed_batches += 1
+                result.error = '; '.join(filter(None, (result.error, str(exc))))[:4000]
+                for day in _date_range(start, end):
+                    target = self._upsert_sync_target(spec, day, metadata={"request": params})
+                    self._refresh_audit.record_failure(
+                        dataset=spec.name, trade_date=day, error_message=str(exc), job_id=str(job_id),
+                        data_source="tushare", conn=conn, quality_status="error",
+                        failure_category="provider_or_persistence_error", metadata={"request": params})
+                    self._record_sync_attempt(target, "retry", job_id=job_id, error_message=str(exc),
+                                              rows_written=0, rows_observed=0)
+            self._update_progress(conn, job_id, result)
+            if spec.batch_sleep:
+                time.sleep(spec.batch_sleep)
+        return result
+
     def _sync_by_date(
         self, conn, spec: DatasetSpec,
         start_date: dt.date, end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
+        if spec.name == "vix_index":
+            return self._sync_vix_range(conn, spec, start_date, end_date, job_id)
+        if spec.name == "stock_daily_afterhours":
+            start_date = max(start_date, _parse_ymd(spec.initial_start_date))
         days = self._iter_sync_dates(conn, spec, start_date, end_date)
         days = sorted(set(days).union(self._late_recheck_dates.get(spec.name, [])))
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
@@ -1541,6 +1609,14 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                if spec.name == "stock_daily_afterhours":
+                    audit_metadata["source_contract"] = {
+                        "volume_unit": "hand_100_shares", "amount_unit": "thousand_CNY",
+                        "source_floor": "2026-07-06", "publication_time_quality": "UNKNOWN",
+                        "vintage_quality": "NON_VINTAGE", "optional_for_daily_complete": True,
+                        "null_field_count": sum(row.get(field) is None for row in rows
+                                                for field in ("ah_vol", "ah_amount")),
+                    }
                 from .data_integrity.provider import provider_scan
                 audit_metadata["provider_scan"] = provider_scan(spec, rows, parameters={spec.date_param_name: ymd})
                 if dense_panel is not None:
@@ -2015,6 +2091,9 @@ class TushareSyncEngine:
         self._late_recheck_dates.pop(spec.name, None)
         if end_date is None:
             end_date = today
+            if spec.name == "vix_index":
+                from .tushare_supplemental_inputs import latest_vix_query_date
+                end_date = latest_vix_query_date()
             if spec.name in PUBLICATION_LAG_DAYS:
                 calendar = TradingCalendarStatusService()
                 latest = calendar.latest_trading_day_on_or_before(today)

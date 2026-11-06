@@ -2049,7 +2049,11 @@ class TDXScheduler:
                 current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None
 
         if use_calendar_dates:
-            latest_date: Optional[dt.date] = dt.date.today()
+            if dataset == "vix_index":
+                from backend.services.tushare_supplemental_inputs import latest_vix_query_date
+                latest_date = latest_vix_query_date()
+            else:
+                latest_date: Optional[dt.date] = dt.date.today()
         else:
             latest_date = (self._latest_trading_day() if dataset in PUBLICATION_LAG_DAYS
                            else self._latest_completed_trading_day())
@@ -2121,6 +2125,8 @@ class TDXScheduler:
     def _scheduled_ingestion_run(
         self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any], frequency: str = ""
     ) -> None:
+        if dataset == "_vix_index_midday":
+            dataset = "vix_index"  # same job/overlap owner; only the schedule clock differs
         if (dataset or "").strip().lower() == "_weekend_compensation" and not self._weekend_compensation_due():
             if schedule_id:
                 self._update_ingestion_schedule(

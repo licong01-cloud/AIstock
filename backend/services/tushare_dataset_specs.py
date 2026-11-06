@@ -141,6 +141,7 @@ class DatasetSpec:
     # retry-target -> 23:00 auto-retry chain re-fetches the day via upsert.
     # None (default) keeps the historical behavior (any non-empty day is "ok").
     min_expected_rows: Optional[int] = None
+    required_for_daily_complete: bool = True  # optional research feeds never block A-share readiness
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +173,30 @@ DAILY_BASIC = DatasetSpec(
         "free_share": "numeric",
         "total_mv": "numeric",
         "circ_mv": "numeric",
+        "limit_status": "smallint",
     },
     batch_sleep=0.12,
     rate_per_minute=500,
     trading_day_only=True,
+)
+
+VIX_INDEX = DatasetSpec(
+    name="vix_index", tushare_api="vix_index", target_table="market.vix_index",
+    primary_keys=["trade_date"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "close": "numeric", "pct_change": "numeric"},
+    row_limit=300, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", incremental_cursor_from_audit=True,
+    required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
+)
+
+STOCK_DAILY_AFTERHOURS = DatasetSpec(
+    name="stock_daily_afterhours", tushare_api="daily", target_table="market.stock_daily_afterhours",
+    primary_keys=["trade_date", "ts_code"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "ts_code": "text", "ah_vol": "numeric", "ah_amount": "numeric"},
+    row_limit=6000, rate_per_minute=500, batch_sleep=0.12, trading_day_only=True,
+    initial_start_date="2026-07-06", required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
 )
 
 ADJ_FACTOR = DatasetSpec(
@@ -704,6 +725,8 @@ SW_DAILY = DatasetSpec(
 DATASET_REGISTRY: Dict[str, DatasetSpec] = {
     s.name: s
     for s in [
+        VIX_INDEX,
+        STOCK_DAILY_AFTERHOURS,
         DAILY_BASIC,
         ADJ_FACTOR,
         INDEX_DAILY,
