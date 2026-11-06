@@ -27,6 +27,7 @@ def test_historical_cancel_events_are_exact_reproducible_and_retry_is_noop():
 
 def test_partial_fill_cancellation_preserves_native_cash_fee_and_quantity():
     backend, session = execution()
+    backend._historical_execution_events = True
     now = at("09:31:10")
     session.facade.evaluate(session.market, session.feedback(now), now)
     session.step(session.market.bars[2].model_copy(update={"volume_shares": Decimal(300)}))
@@ -36,6 +37,8 @@ def test_partial_fill_cancellation_preserves_native_cash_fee_and_quantity():
     assert session.state.executed_quantity == 300 and len(backend._ledger.fills) == 1
     assert session.events[-1].event_time == at("09:33:10")
     assert backend._ledger.positions[session.order.symbol].available_quantity == 0
+    filled = [e for e in session.events if e.fill is not None]
+    assert filled and all(e.event_time == e.fill.trade_time == at("09:32:00") for e in filled)
 
 
 def test_invalid_historical_cancel_clock_fails_before_mutation():
