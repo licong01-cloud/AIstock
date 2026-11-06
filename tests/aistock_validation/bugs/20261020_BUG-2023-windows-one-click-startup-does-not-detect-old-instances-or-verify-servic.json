@@ -176,8 +176,8 @@
   },
   "first_seen_at": "2026-10-20T08:13:20.262212Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4120a58e6885960f724b9d70056837e2586c96be",
+  "fixed_at": "2026-10-20T08:31:49Z",
   "github_issue_number": 6457,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6457",
   "implementation_review": {
@@ -197,6 +197,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6461",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -226,6 +227,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -237,7 +239,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2023",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6e16d8347405b7d8",
+    "recorded_at": "2026-10-20T08:32:35.102488Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "63a1f052d9de79be075b6ab6edb0a600e9c2f104",
+    "source_merge_commit": "4120a58e6885960f724b9d70056837e2586c96be",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6461",
+    "validation_evidence": [
+      "validation-receipt: id=22f67c35f8b8e582 commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/platform_api/test_windows_launcher.py backend/tests/test_aistock_guardrail_scan.py -q --no-cov` result=`69 passed; UTF-8 and ownership follow-up nodes passed`",
+      "validation-receipt: id=888874993413fea4 commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
+      "validation-receipt: id=c591f93d3896c4fe commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; 8/8 mapped`",
+      "validation-receipt: id=352071481b8e4a7b commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`"
+    ],
+    "validation_evidence_digest": "28d582f5b7d9d96f8e035313c8e7637323c98ec6d0b3ba488f191cd976508b2d"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.config"
   ],
@@ -246,6 +272,12 @@
     "fingerprint": "03b255810e21279eb91aa93c",
     "source_event_id": "FE-20261020-03b255810e21"
   },
+  "validation_evidence": [
+    "validation-receipt: id=22f67c35f8b8e582 commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/platform_api/test_windows_launcher.py backend/tests/test_aistock_guardrail_scan.py -q --no-cov` result=`69 passed; UTF-8 and ownership follow-up nodes passed`",
+    "validation-receipt: id=888874993413fea4 commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
+    "validation-receipt: id=c591f93d3896c4fe commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; 8/8 mapped`",
+    "validation-receipt: id=352071481b8e4a7b commit=63a1f052d9de79be075b6ab6edb0a600e9c2f104 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
