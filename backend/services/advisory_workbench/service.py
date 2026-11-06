@@ -36,9 +36,15 @@ class WorkbenchService:
         versions = repo.versions(program_id)
         bindings = repo.bindings(program_id)
         start = min([v["trade_date"] for v in versions] + [now.date() - timedelta(days=30)])
-        calendar = repo.calendar(start, max(now.date(), date.fromisoformat(target) if target else now.date()))
+        calendar_end = max(now.date(), date.fromisoformat(target) if target else now.date())
+        calendar = repo.calendar(start, calendar_end)
         default = calendar_context(calendar, now.astimezone(CN).date())
         target = target or default
+        # Default and explicit requests for the same target must hash the same
+        # calendar range, including the repository's future-day lookahead.
+        resolved_end = max(now.date(), date.fromisoformat(target))
+        if resolved_end != calendar_end:
+            calendar = repo.calendar(start, resolved_end)
         selected = next((v for v in versions if str(v["trade_date"]) == target and v["version_status"] == "PUBLISHED"), None)
         published = [v for v in versions if v["version_status"] == "PUBLISHED"]
         active = next((b for b in bindings if b["activation_status"] == "ACTIVE"), None)

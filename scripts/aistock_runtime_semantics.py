@@ -1060,6 +1060,62 @@ def _validate_advisory_trading_day_defaults(payload: Any, *, url: str) -> tuple[
                              "next_trading_day": next_value, "trading_day_count": len(days)}
 
 
+def _validate_advisory_workbench_daily(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Validate a saved-list page; source identity and the two-request smoke remain separate."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        match = re.fullmatch(r"/api/v1/advisory/workbench/programs/([^/]+)/daily", parsed.path)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "advisory_workbench_v1":
+            raise ValueError("daily page schema is missing")
+        if not match or payload.get("program_id") != match[1]:
+            raise ValueError("daily page program differs")
+        target = payload.get("target_date")
+        if not isinstance(target, str) or datetime.strptime(target, "%Y-%m-%d").date().isoformat() != target:
+            raise ValueError("daily page target date is invalid")
+        snapshot = payload.get("snapshot_id")
+        if not isinstance(snapshot, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot):
+            raise ValueError("daily page snapshot is missing")
+        for name, actual in (("target_date", target), ("snapshot_id", snapshot)):
+            if name in query and query[name] != [actual]:
+                raise ValueError(f"daily page {name} differs from request")
+        limit, offset, total = (payload.get(k) for k in ("limit", "offset", "total_count"))
+        if any(type(v) is not int for v in (limit, offset, total)) or limit not in {20, 50, 100} or offset < 0 or total < 0:
+            raise ValueError("daily page bounds are invalid")
+        for name, actual, default in (("limit", limit, 20), ("offset", offset, 0)):
+            if query.get(name, [str(default)]) != [str(actual)]:
+                raise ValueError(f"daily page {name} differs from request")
+        items = payload.get("items")
+        if not isinstance(items, list) or len(items) != min(limit, max(0, total - offset)):
+            raise ValueError("daily page count differs")
+        status, version = payload.get("status"), payload.get("list_version_id")
+        if status == "NO_CURRENT_LIST":
+            if version is not None or total != 0 or items or payload.get("summary") is not None:
+                raise ValueError("absent daily list contains recommendation data")
+        elif status == "PUBLISHED":
+            binding = payload.get("binding_version_id")
+            if (not isinstance(version, str) or not version or not isinstance(binding, str) or not binding
+                    or not isinstance(payload.get("summary"), dict)):
+                raise ValueError("published daily list identity is missing")
+            symbols = []
+            for row in items:
+                if (not isinstance(row, dict) or row.get("program_id") != match[1]
+                        or row.get("list_version_id") != version
+                        or row.get("binding_version_id") != payload.get("binding_version_id")
+                        or not isinstance(row.get("symbol"), str) or not re.fullmatch(r"[0-9]{6}\.(SH|SZ|BJ)", row["symbol"])):
+                    raise ValueError("daily row identity differs")
+                symbols.append(row["symbol"])
+            if len(symbols) != len(set(symbols)):
+                raise ValueError("daily page contains duplicate symbols")
+        else:
+            raise ValueError("daily page is not a saved publication or explicit absence")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return "failed", str(exc), {}
+    return "passed", None, {"program_id": match[1], "target_date": target, "snapshot_id": snapshot,
+        "status": status, "page_rows": len(items), "total_count": total, "economic_acceptance": "not_evaluated",
+        "default_explicit_roundtrip": "requires_separate_readback"}
+
+
 def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
     """Check the v2 reference-return snapshot, not economic quality or broker fills."""
     def failed(reason):
