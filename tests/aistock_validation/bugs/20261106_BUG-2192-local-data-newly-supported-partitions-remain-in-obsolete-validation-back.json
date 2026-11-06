@@ -14,16 +14,6 @@
   "assigned_agent": null,
   "bug_id": "BUG-2192",
   "closed_at": null,
-  "review_results": {
-    "correctness": "PASS：仅唤醒当前合同已可用、revision匹配的旧non_daily_dataset_contract/UNVERIFIED等待；不修改事实、验证结论或租约，仍由原生claim/validate/publish生成VALID。DEV原生SQL覆盖重复执行、活跃租约、revision变化、真实失败和未来日期。",
-    "completeness_and_regression": "PASS：中文名称覆盖日历详情、缺口、统计、任务、日志、健康检查及计划；保留技术ID与API参数。末轮复审补齐四个旧英文计划标签及可持续运行的名称单测；实际候选日历Chromium读回与截图通过。",
-    "design_compliance_001": [
-      "禁止简化交付：程序唤醒+正式验证及各本地状态视图均实现；164passed/1skipped、DEV原生测试与候选浏览器检查通过，线上生效待用户重启，未冒充运行态验收。",
-      "禁止静默错误：真实INCOMPLETE/ERROR保持原状态；未知名称明确显示未知并保留编号，不将缺失判为VALID。",
-      "禁止改变业务逻辑：可选数据不变成强制日频义务，不改变股票池、数据源、API键、版本和租约检查。",
-      "禁止私增门禁审批：复用现有10项/45秒worker预算、正式验证及既有L0/CI；无全历史事实扫描、无新服务或人工审批。"
-    ]
-  },
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -42,19 +32,30 @@
   "evidence_uris": [],
   "expected": "合同变为可用时自动唤醒旧待验目标，真实验证后发布版本匹配VALID；缺失/错误仍如实保留。全部本地数据集状态显示中文名称与技术编号，API请求代码不变。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_daily_data_integrity_dev.py",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2192-local-data-newly-supported-partitions-remain-in-obsolete-validation-back.json"
+    ],
     "added_files": [
       "frontend/src/app/local-data/datasetLabels.ts"
     ],
     "changed_files": [
       "backend/services/data_integrity/worker.py",
-      "backend/services/data_integrity/repository.py",
       "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_daily_data_integrity_dev.py",
-      "frontend/src/app/local-data/page.tsx",
       "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
-      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+      "frontend/src/app/local-data/datasetLabels.ts",
+      "frontend/src/app/local-data/page.tsx",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261106_BUG-2192-local-data-newly-supported-partitions-remain-in-obsolete-validation-back.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/worker.py",
@@ -219,22 +220,36 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_results": {
+    "completeness_and_regression": "PASS：中文名称覆盖日历详情、缺口、统计、任务、日志、健康检查及计划；保留技术ID与API参数。末轮复审补齐四个旧英文计划标签及可持续运行的名称单测；实际候选日历Chromium读回与截图通过。",
+    "correctness": "PASS：仅唤醒当前合同已可用、revision匹配的旧non_daily_dataset_contract/UNVERIFIED等待；不修改事实、验证结论或租约，仍由原生claim/validate/publish生成VALID。DEV原生SQL覆盖重复执行、活跃租约、revision变化、真实失败和未来日期。",
+    "design_compliance_001": [
+      "禁止简化交付：程序唤醒+正式验证及各本地状态视图均实现；164passed/1skipped、DEV原生测试与候选浏览器检查通过，线上生效待用户重启，未冒充运行态验收。",
+      "禁止静默错误：真实INCOMPLETE/ERROR保持原状态；未知名称明确显示未知并保留编号，不将缺失判为VALID。",
+      "禁止改变业务逻辑：可选数据不变成强制日频义务，不改变股票池、数据源、API键、版本和租约检查。",
+      "禁止私增门禁审批：复用现有10项/45秒worker预算、正式验证及既有L0/CI；无全历史事实扫描、无新服务或人工审批。"
+    ]
+  },
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
-    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "fresh_process_evidence": [
       "Fresh Python RED2->GREEN; related164passed1skipped. Existing DEV native SQL contract wakeup proves the budget, lease protection, revision-race rejection and no verdict mutation. Actual candidate calendar compiled and rendered in Chromium with Chinese names and unchanged daily_basic request key. No application/service started; production_write=false,runtime_action=false. Browser screenshot X:/AIstock_temp/DATA_PREPARATION/BUG-2192-contract-labels-20261106/calendar-chinese.png"
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
