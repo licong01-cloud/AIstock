@@ -185,6 +185,8 @@ DESIGN-COMPLIANCE-001四项逐项通过：无简化冒充完整、无静默失�
 继续跟踪Issue #7082；不修改QE/HMM/Advisory/LocalSIM/因子库，不替业务实现as-of信号或发起训练。
 允许修改文件仅：本设计、backend/data_service/shared_tushare_inputs.py、backend/data_service/api.py、
 scripts/export_tushare_shared_inputs.py、backend/tests/test_tushare_event_inputs.py。
+CI首轮发现新CLI未登记所属模块；范围补充tests/aistock_validation/catalog/file_ownership.yaml，
+仅将本批新reader及CLI登记到既有local_data计划，不修改公共流水线、验证引擎或触发逻辑。
 不新增数据库对象、HTTP路由、依赖、调度、审批或每日必需数据集；生产库仅SELECT。
 
 ### 读取合同与时间语义
