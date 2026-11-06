@@ -1085,6 +1085,52 @@ def test_final_recovery_sweep_repairs_schedule_even_when_targets_already_reconci
     assert calls == ["schedule_projection"]  # reuse the existing ten-minute sweep
 
 
+def test_alarm_recovery_candidates_are_fair_and_include_reconciled_targets():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._reconcile_recovered_schedule_states = lambda: None
+    captured = []
+    scheduler._fetchall = lambda query, params=(): captured.append(query) or []
+    scheduler._reconcile_recovered_final_targets()
+    query = captured[0]
+    assert "ROW_NUMBER() OVER (PARTITION BY dataset" in query
+    assert "'reconciled'" in query and "market.data_alerts" in query
+    assert "LIMIT 100" in query
+
+
+@pytest.mark.parametrize("validated", [False, True])
+def test_reconciled_target_alarm_requires_current_canonical_validation(monkeypatch, validated):
+    from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    partition = {"dataset": "stock_daily_afterhours", "data_revision": 1, "validated_revision": 1,
+                 "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION,
+                 "validation_status": "VALID" if validated else "UNVERIFIED", "validation_id": "check"}
+    scheduler._fetchall = lambda *_: [{"partition": partition}]
+    recovered, alarms = [], []
+    scheduler._reconcile_recovered_target_state = lambda **kw: recovered.append(kw)
+    monkeypatch.setattr(scheduler_module, "DataHealthAlerter", lambda *_: SimpleNamespace(
+        flush=lambda values: alarms.extend(values) or {}))
+    scheduler._flush_final_data_sync_alerts([{"target_status": "reconciled", "dataset": "stock_daily_afterhours",
+        "target_id": "already-done", "target_date": dt.date(2026, 11, 5)}])
+    assert bool(recovered) is validated
+    assert alarms == []  # neither target status alone nor source success can fabricate completeness
+
+
+def test_successful_sector_retry_clears_previous_active_error(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._execute = lambda query, params=(): queries.append((query, params))
+    scheduler._audit_sector_build = lambda **_: None
+    scheduler._log_ingestion_run = lambda *_a, **_kw: None
+    monkeypatch.setattr(sector_builder, "SectorDataBuilder", lambda: SimpleNamespace(build_range=lambda *_: 4920))
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "delayed_retry",
+        {"job_id": str(uuid.uuid4()), "start_date": "2026-11-06", "end_date": "2026-11-06"})
+    patch = next(json.loads(params[1]) for query, params in queries if "summary=" in query)
+    assert "error" in patch and patch["error"] is None
+    assert "delay_reason" in patch and patch["delay_reason"] is None
+
+
 def test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
