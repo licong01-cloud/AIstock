@@ -1,0 +1,211 @@
+{
+  "actual": "Formal P6 autocycle L2 run completed 2096/2096 fits and D5 correctly failed closed. Seed 46 is rejected for 801741.SI because D4-02-A computes expected covariance as (nu*R + posterior_mass*second_moment)/(nu + posterior_mass). The approved GaussianHMM profile uses covars_weight=1.0 and hmmlearn 0.3.3 actually divides diagonal covariance by max(covars_weight-1,0)+posterior_mass = posterior_mass. The mismatched audit denominator produces a false 0.0279676 M-step residual above the approved 0.02 threshold even though raw covariance matches the library update. Expected: replay the exact approved hmmlearn M-step denominator, preserve nu=1 prior numerator and all existing covariance bounds/zero-anomaly/tolerance semantics, add direct regression evidence, and do not alter occupancy, D5/D6, seeds, model or READY contracts.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260809_BUG-1002-hmm-d4-covariance-acceptance-uses-wrong-hmmlearn-denominator-and-falsely.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1002",
+  "closed_at": "2026-08-09T08:21:01Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-09T08:10:55.000135Z",
+  "description": "Formal P6 autocycle L2 run completed 2096/2096 fits and D5 correctly failed closed. Seed 46 is rejected for 801741.SI because D4-02-A computes expected covariance as (nu*R + posterior_mass*second_moment)/(nu + posterior_mass). The approved GaussianHMM profile uses covars_weight=1.0 and hmmlearn 0.3.3 actually divides diagonal covariance by max(covars_weight-1,0)+posterior_mass = posterior_mass. The mismatched audit denominator produces a false 0.0279676 M-step residual above the approved 0.02 threshold even though raw covariance matches the library update. Expected: replay the exact approved hmmlearn M-step denominator, preserve nu=1 prior numerator and all existing covariance bounds/zero-anomaly/tolerance semantics, add direct regression evidence, and do not alter occupancy, D5/D6, seeds, model or READY contracts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260809-dbc1bc008f5e",
+      "timestamp": "2026-08-09T08:10:55.000132Z"
+    },
+    {
+      "action": "recover_existing_github_resolution",
+      "actor": "merge_aftercare",
+      "evidence_refs": [
+        "https://github.com/licong01-cloud/AIstock/issues/3229#issuecomment-5230555627"
+      ],
+      "note": "根因假设不成立，按 GitHub 已有裁定保留 not planned；不代表修复或训练通过。",
+      "timestamp": "2026-11-06T17:49:37.671034+00:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-09T08:10:55.000135Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3229,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3229",
+  "last_seen_at": "2026-08-09T08:10:55.000135Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "registry_recovery": {
+    "github_closed_at": "2026-08-09T08:21:01Z",
+    "github_issue_state": "closed",
+    "github_observed_updated_at": "2026-08-09T08:21:01Z",
+    "github_state_reason": "not_planned",
+    "recovered_at": "2026-11-06T17:49:37.671034+00:00",
+    "resolution_refs": [
+      "https://github.com/licong01-cloud/AIstock/issues/3229#issuecomment-5230555627"
+    ],
+    "schema_version": "aistock_bug_registry_recovery_v1",
+    "scope": "metadata_only_no_business_fix_or_runtime_acceptance",
+    "source_blob_sha256": "80ee91eee29f66aa4b006fd2b136f16330e0ea54a14afe79103ec32b56e5690a",
+    "source_commit": "41da05df03e3a7788c3a673dfdde521719b737ed",
+    "source_path": "tests/aistock_validation/bugs/20260809_BUG-1002-hmm-d4-covariance-acceptance-uses-wrong-hmmlearn-denominator-and-falsely.json"
+  },
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "wontfix",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM D4 covariance acceptance uses wrong hmmlearn denominator and falsely blocks P6",
+  "trigger_condition": {
+    "fingerprint": "dbc1bc008f5e750bcaabea3d",
+    "source_event_id": "FE-20260809-dbc1bc008f5e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
