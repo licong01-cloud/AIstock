@@ -28,14 +28,22 @@
   "evidence_uris": [],
   "expected": "Concurrent activations use unique private temporary directories and all activate the absolute AIstock environment without starting services.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md",
       "start_all_ai_stock.bat",
       "start_backend.bat",
-      "backend/tests/platform_api/test_windows_launcher.py",
-      "docs/operations/windows_runtime_startup.md"
+      "tests/aistock_validation/bugs/20261022_BUG-2059-concurrent-service-tabs-collide-on-conda-activation-temporary-files.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md",
+      "start_all_ai_stock.bat",
+      "start_backend.bat",
+      "tests/aistock_validation/bugs/20261022_BUG-2059-concurrent-service-tabs-collide-on-conda-activation-temporary-files.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "start_all_ai_stock.bat",
@@ -110,8 +118,8 @@
   },
   "first_seen_at": "2026-10-22T04:07:40.033600Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a9d2bbf1006feb2970513c169e5615bada2e184b",
+  "fixed_at": "2026-10-22T04:15:46Z",
   "github_issue_number": 6570,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6570",
   "last_seen_at": "2026-10-22T04:07:40.033600Z",
@@ -119,6 +127,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6571",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -142,7 +151,9 @@
     "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -152,7 +163,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2059",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4b31176419b4670b",
+    "recorded_at": "2026-10-22T04:16:25.922026Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c60c0e48f5763f139273226f3d0daa504bb1a6d1",
+    "source_merge_commit": "a9d2bbf1006feb2970513c169e5615bada2e184b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6571",
+    "validation_evidence": [
+      "python -m pytest backend/tests/platform_api/test_windows_launcher.py -q --no-cov -> 32 passed",
+      "python -m nox -s l0 guardrail_changed_files -> passed; 5/5 files mapped; blocking=0"
+    ],
+    "validation_evidence_digest": "fa72c8e0e02926080e250d61eff99279513bcb44d7e49a6b1d7c6dc9eb006caa"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api"
   ],
@@ -161,6 +194,10 @@
     "fingerprint": "3ad8a42549bd73e3e91899fa",
     "source_event_id": "FE-20261022-3ad8a42549bd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/platform_api/test_windows_launcher.py -q --no-cov -> 32 passed",
+    "python -m nox -s l0 guardrail_changed_files -> passed; 5/5 files mapped; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
