@@ -79,11 +79,11 @@ DDL=noop；database/dataset/market-network/service/production-account操作为fa
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-401 | period_research.py；timing_campaign.py | 定向身份/来源顺序测试；冻结输入收据 | planned | none |
-| F-402 | dual_mode_research.py；period_research.py | 原生账户日及T+1/资金继承测试 | planned | none |
-| F-403 | dual_mode_research.py | 复用账户池与有界Reader测试 | planned | none |
-| F-404 | dual_mode_research.py；period_research.py | 部分提交/恢复/坏前缀测试 | planned | none |
-| F-405 | dual_mode_research.py；period_research.py | 实际重算计数、事实比较、不可变产物 | planned | none |
-| F-406 | period_research.py | 公开PeriodAnalysisSpec及来源验证 | planned | none |
-| F-407 | 本设计及验收报告 | WSL 221日、inspect和经济retry | planned | none |
-| F-408 | test_localsim_period_research.py；验收报告 | F2/L0、定向矩阵、最终PR CI | planned | none |
+| F-401 | period_research._sources/_inspect_request；timing_campaign.inspect_price_templates | pytest backend/tests/simulation_execution/test_localsim_period_research.py；2670文件整批来源检查先于收益 | passed | none |
+| F-402 | dual_mode_research.execute_account_days；period_research._initials | pytest backend/tests/simulation_execution/test_localsim_period_research.py；真实13户221日原生账本inspect | passed | none |
+| F-403 | dual_mode_research.execute_account_days；ResearchAccountPool/ResearchMarketWorkspace | artifact: X:/AIstock_temp/localsim-october-account-replay-20261106/delivery-source-equivalence-r2.json；57份消费源码一致，WSL batch3/workers2 | passed | none |
+| F-404 | dual_mode_research.py；period_research.py；TimingFileRepository | pytest backend/tests/simulation_execution/test_localsim_period_research.py::test_partial_day_prefix_resumes_without_duplicate_economics；差异拒绝及旧v1回归 | passed | none |
+| F-405 | dual_mode_research._verify_recomputed_account_day/_economic_account_payload；period_research.run_period | artifact: X:/AIstock_temp/localsim-october-account-replay-20261106/formal-delivery.json；真实221日重算一致，新提交0日，原产物不变 | passed | none |
+| F-406 | period_research._publish_results/_inspect_completed | artifact: X:/AIstock_temp/localsim-october-account-replay-20261106/read_only_inspect_receipt.json；13户17日公开PeriodAnalysisSpec及来源验证 | passed | none |
+| F-407 | 本设计及验收报告 | artifact: X:/AIstock_temp/localsim-october-account-replay-20261106/supervision_complete.json；WSL221日、inspect和经济retry完成，无DB/服务操作 | passed | none |
+| F-408 | test_localsim_period_research.py；验收报告 | artifact: X:/AIstock_temp/localsim-october-account-replay-20261106/source-review-r3.json；定向、多轮审核、F2/L0，最终HEAD的CI为独立必需合入门禁 | ready | none |
