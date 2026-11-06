@@ -29,15 +29,15 @@
   "expected": "103个计划收益日不得因reader冷启动人为缺失；真实合法NA继续保留，源缺失/hash漂移fail closed；新旧模型参数完全不变",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261009_BUG-1825-p1-hmm-na.json",
       "backend/services/hmm_risk/frozen_l2_history_input.py",
-      "backend/tests/hmm_risk/test_frozen_l2_history_input.py"
+      "backend/tests/hmm_risk/test_frozen_l2_history_input.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1825-p1-hmm-na.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261009_BUG-1825-p1-hmm-na.json",
       "backend/services/hmm_risk/frozen_l2_history_input.py",
-      "backend/tests/hmm_risk/test_frozen_l2_history_input.py"
+      "backend/tests/hmm_risk/test_frozen_l2_history_input.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1825-p1-hmm-na.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -85,8 +85,8 @@
   },
   "first_seen_at": "2026-10-09T05:52:07.383304Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "13afc8550ac903be8c21ce8482c756c9049e36b4",
+  "fixed_at": "2026-10-09T06:25:06Z",
   "github_issue_number": 5820,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5820",
   "last_seen_at": "2026-10-09T05:52:07.383304Z",
@@ -94,6 +94,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5821",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -118,6 +119,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -129,7 +131,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1825",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "097bb00d8ef797ad",
+    "recorded_at": "2026-10-09T06:25:48.519403Z",
+    "runtime_contract_digest": "3bd1771dfd27621c8836771a2cfbcd66dff00fa4e1dfffefff11e16650a92cef",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a2539943e67cb5535f90f3ddd017a8d4b7141a17",
+    "source_merge_commit": "13afc8550ac903be8c21ce8482c756c9049e36b4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5821",
+    "validation_evidence": [
+      "validation-receipt: id=77a4a1e4907717f1 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history.py backend/tests/hmm_risk/test_validate_frozen_l2_history.py` result=`passed`",
+      "validation-receipt: id=c40eea296ff90675 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=c8aa8928967386b3 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=2fbc85c825501670 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+      "validation-receipt: id=5ff3f87fcaaf18a9 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+      "validation-receipt: id=a439e3de7086e0ca commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "eb27d5f503317b0210e1a6572053b154fc50432476474d5b93b303ced21cb987"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -138,6 +166,14 @@
     "fingerprint": "3e85235452c6202931e8bd27",
     "source_event_id": "FE-20261009-3e85235452c6"
   },
+  "validation_evidence": [
+    "validation-receipt: id=77a4a1e4907717f1 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history.py backend/tests/hmm_risk/test_validate_frozen_l2_history.py` result=`passed`",
+    "validation-receipt: id=c40eea296ff90675 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=c8aa8928967386b3 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=2fbc85c825501670 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+    "validation-receipt: id=5ff3f87fcaaf18a9 commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+    "validation-receipt: id=a439e3de7086e0ca commit=a2539943e67cb5535f90f3ddd017a8d4b7141a17 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
