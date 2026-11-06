@@ -15,6 +15,7 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
         ("period_research.py", sdk + ".continuous_results"): {"PeriodAnalysisSpec", "period_source_preflight"},
         ("period_research.py", sdk + ".period_context"): {"load_period_context"},
         ("period_research.py", sdk + ".price_plan_campaign"): {"inspect"},
+        ("timing_campaign.py", sdk + ".period_context"): {"load_period_context"},
     }
     relative = path.relative_to(Path("backend/services/simulation_execution/localsim")).as_posix()
     if (relative, module) in period_seams:
@@ -102,6 +103,7 @@ def test_sdk_consumer_exception_does_not_open_other_consumers_or_internal_module
     assert not _approved_localsim_sdk_import(continuation, sdk + ".store", ["IntradayStore"])
     assert not _approved_localsim_sdk_import(continuation, sdk + ".store", ["*"])
     assert not _approved_localsim_sdk_import(period.parent/"other"/period.name, sdk + ".period_context", ["load_period_context"])
+    assert _approved_localsim_sdk_import(consumer.with_name("timing_campaign.py"), sdk + ".period_context", ["load_period_context"])
 
 
 def test_composition_root_has_only_thin_position_timing_router_wiring() -> None:
