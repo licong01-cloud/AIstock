@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2192",
-  "closed_at": null,
+  "closed_at": "2026-11-06T13:44:27.475289Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -202,8 +202,8 @@
   },
   "first_seen_at": "2026-11-06T13:13:23.318427Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "094c541a4b6210e539ed98e257378bb5ee2131cd",
+  "fixed_at": "2026-11-06T13:39:09Z",
   "github_issue_number": 7092,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7092",
   "last_seen_at": "2026-11-06T13:13:23.318427Z",
@@ -211,6 +211,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7094",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -247,9 +248,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/BUG-2192-contract-labels-20261106/post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2192",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "ddbaf05345a9a3005fa81a62fb6ea823acdb7c7d7a66697936079ff9abba3dd1",
+      "expected_identity": "094c541a4b6210e539ed98e257378bb5ee2131cd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-06T13:43:57.199798Z",
+      "mode": "read_only",
+      "observed_identity": "094c541a4b6210e539ed98e257378bb5ee2131cd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2c96ea40c624a15bc5c6f2a538df46aca05fd4e89fdefb41dcca4fb6a26fc0fc",
+      "receipt_sha256": "645348ee8fc2696334a3a434d2a44185cd631a819d40f666cf6f3e9f4a18dda9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a8a9262754b896795ef563878aedcf07fec5092441cd951079012cf4a5376044",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -259,7 +283,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2192",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6dcf77178fccb0f5",
+    "recorded_at": "2026-11-06T13:40:03.333094Z",
+    "runtime_contract_digest": "ddbaf05345a9a3005fa81a62fb6ea823acdb7c7d7a66697936079ff9abba3dd1",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "34294f4c42c8f94c24324ef275d46cc39113fbb3",
+    "source_merge_commit": "094c541a4b6210e539ed98e257378bb5ee2131cd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7094",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -303,6 +348,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
