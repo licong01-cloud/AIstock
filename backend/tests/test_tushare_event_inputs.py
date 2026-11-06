@@ -245,3 +245,23 @@ def test_failed_source_window_keeps_retry_target_and_stops_no_false_empty(monkey
     engine._refresh_audit.record_success.assert_not_called()
     engine._refresh_audit.record_failure.assert_called_once()
     assert engine._record_sync_attempt.call_args[0] == ('target', 'retry')
+
+
+@pytest.mark.parametrize('tamper', [False, True])
+def test_empty_current_query_never_erases_stored_row_count_and_history_is_verified(monkeypatch, tamper):
+    from backend.services.tushare_event_inputs import observation, validate_partition
+    from backend.services.data_integrity import validation
+    day = dt.date(2026, 10, 30)
+    raw = announcement(day)
+    key = observation('idx_anns', raw, day)['source_row_sha256']
+    physical = dict(source_row_sha256=key, raw_payload={**raw, 'title': 'tampered'} if tamper else raw,
+                    event_date=day, ts_code=None, published_at=None,
+                    publication_time_quality='UNKNOWN', vintage_quality='NON_VINTAGE')
+    observations = Mock(side_effect=[[
+        {'status': 'success', 'metadata': {'integrity_observed_revision': 1,
+            'event_scan': {'schema_version': 'tushare_event_scan_v1', 'complete': True,
+                           'source_rows_sha256': [], 'observed_rows': 0}}}], [physical]])
+    monkeypatch.setattr(validation, 'rows', observations)
+    result = validate_partition(Mock(), DATASET_REGISTRY['idx_anns'], day, 1)
+    assert result.checks['physical_rows'] == 1 and result.checks['provider_observed_rows'] == 0
+    assert result.state == ('INCOMPLETE' if tamper else 'VALID')

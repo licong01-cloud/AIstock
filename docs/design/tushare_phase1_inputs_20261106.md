@@ -158,10 +158,11 @@ market.index_announcements_raw、market.stock_seasoned_raw。五项DatasetSpec�
 | F-009 | backend/services/tushare_event_inputs.py; backend/ingestion/tdx_scheduler.py | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/tushare-event-inputs-20261106/dev-contracts.json | verified | - |
 | F-010 | backend/db/migrations/add_tushare_event_inputs_v1.sql; frontend/src/app/local-data/page.tsx | backend/tests/test_tushare_event_inputs.py; artifact:X:/AIstock_temp/DATA_PREPARATION/tushare-event-inputs-20261106/final-dev-readback.json | verified | - |
 
-第二、三批直接相关小矩阵71 passed；新增RED阶段13个缺实现失败，后续36个直接合同通过。
+第二、三批直接相关小矩阵71 passed；新增RED阶段13个缺实现失败，后续38个直接合同通过。
 既存DEV三表迁移重复两次通过，10月30..31十个分区PhysicalValidator均VALID，原文哈希不一致0。
 真实采集：异常17、严重异常2、重点提示5、指数公告2、增发8条（另有定向复查发现的旧公告原文保留）。
 重复相同内容written_rows=0而row_count保留覆盖；空日revision=0仍按真实完整查询验证，不制造事件。
+原文保留表的物理row_count不随最新响应为空而归零，所有该日期保留版本独立核验，真实损坏仍明确失败。
 DEV原生SQL故障注入证明原文/revision/审计整体回滚；修订产生新版本，旧revision无法冒充当前验证。
 已知增发查询范围实际复查、重复为0及原完整日期查询保留通过；不把查询范围当项目实体。
 三轮审核依次覆盖来源/日期/单位、限流/空值/原子性、跨API游标/项目冲突/界面查询语义，并修正发现问题。

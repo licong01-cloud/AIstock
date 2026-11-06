@@ -373,8 +373,8 @@ def validate_partition(conn, spec, day, revision):
         return unverified('complete_current_event_query_required')
     expected = set(scan.get('source_rows_sha256', []))
     physical = rows(conn, sql.SQL('SELECT source_row_sha256,raw_payload,event_date,ts_code,published_at,'
-        'publication_time_quality,vintage_quality FROM {} WHERE source_api=%s AND source_row_sha256=ANY(%s)').format(
-            sql.Identifier(*spec.target_table.split('.'))), (spec.name, sorted(expected)))
+        'publication_time_quality,vintage_quality FROM {} WHERE source_api=%s AND request_date=%s').format(
+            sql.Identifier(*spec.target_table.split('.'))), (spec.name, day))
     found, invalid = set(), set()
     for row in physical:
         key = row['source_row_sha256']
@@ -389,12 +389,15 @@ def validate_partition(conn, spec, day, revision):
         except (ValueError, TypeError, KeyError):
             invalid.add(key)
     missing = expected-found
-    count = CheckCounts('observed_raw_version', len(expected), len(found-invalid), 0, len(missing), len(invalid), 0)
+    bad_observed = invalid & expected
+    count = CheckCounts('observed_raw_version', len(expected), len(expected-missing-bad_observed), 0,
+                        len(missing), len(bad_observed), 0)
+    originals = CheckCounts('retained_raw_version', len(physical), len(physical)-len(invalid), 0, 0, len(invalid), 0)
     # The completed query itself is a non-vacuous check even on a legitimate
     # sparse empty day. It does not claim the provider's historic completeness.
     query = CheckCounts('completed_event_query', 1, 1, 0, 0, 0, 0)
-    return ValidationResult(PartitionState.VALID if count.complete else PartitionState.INCOMPLETE,
-        (query, count), {'physical_rows': len(found), 'provider_observed_rows': scan['observed_rows'],
+    return ValidationResult(PartitionState.VALID if count.complete and originals.complete else PartitionState.INCOMPLETE,
+        (query, count, originals), {'physical_rows': len(physical), 'provider_observed_rows': scan['observed_rows'],
                         'publication_time_quality': 'UNKNOWN', 'vintage_quality': 'NON_VINTAGE',
                         'coverage_basis': 'completed_provider_query_not_historical_PIT'},
         tuple({'classification': kind, 'source_rows_sha256': sorted(keys)}
