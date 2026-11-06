@@ -1,6 +1,8 @@
 {
   "actual": "stock_st omits four configured fields; normalizer supplies None. Missing success payload is interpreted as empty.",
   "allowed_write_scope": [
+    "scripts/ingest_tushare_stock_st.py",
+    "backend/services/event_signal/tushare_event_raw_sync.py",
     "backend/services/tushare_sync_engine.py",
     "backend/services/tushare_dataset_specs.py",
     "backend/tests/test_tushare_sync_engine.py",
@@ -15,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-06T06:05:23.662118Z",
-  "description": "stock_st omits four configured fields; normalizer supplies None. Missing success payload is interpreted as empty.",
+  "description": "stock_st omits four configured fields; normalizer supplies None. Missing success payload is interpreted as empty. Scope expanded after confirming installed SDK 1.4.24 masks HTTP failures as empty DataFrames and the scheduled financial raw producer still uses that path; repair only the shared source fetch, not event business logic.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,13 +31,24 @@
   ],
   "expected": "Requests match supported API fields; explicit NULL and valid empty results stay legal; malformed responses fail before writes with bounded retry; historical columns are preserved.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261106_BUG-2187-tushare-schema-drift-silently-fabricates-null-or-empty-facts-and-stock-s.json",
+      "backend/services/event_signal/tushare_event_raw_sync.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/ingest_tushare_stock_st.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261106_BUG-2187-tushare-schema-drift-silently-fabricates-null-or-empty-facts-and-stock-s.json",
+      "backend/services/event_signal/tushare_event_raw_sync.py",
       "backend/services/tushare_dataset_specs.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/ingest_tushare_stock_st.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -130,13 +143,35 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "配置将stock_st每日快照误当包含区间/交易所字段的接口；HTTP解析将缺失payload转为空、zip截断行，仅四类API检查遗漏字段。财务原始生产默认仍用会掩盖HTTP错误的SDK。旧ST脚本保留重复写入逻辑，可能再次覆盖非来源列。",
+  "verification_summary": {
+    "direct_tests": "210 passed; RED to GREEN for malformed contracts, ST non-overwrite and native financial errors",
+    "dev": "Existing aistock_dev:5433 real engine and legacy entrypoint repeated twice; legacy columns preserved; rollback independently read back PASS",
+    "performance": "6000 rows x 8 columns; 30-run median raw zip 1.590ms, validated parser 1.951ms; no added requests or DB queries",
+    "design_compliance": "Four checks passed: no partial-as-complete; no silent success; no PIT/model/business changes; no extra global gates. New datasets remain design only.",
+    "production_write": false,
+    "runtime_action": false,
+    "new_input_design": "X:/AIstock_temp/DATA_PREPARATION/tushare-compatibility-20261106/design.md"
+  },
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python loaded the tracked fix; 210 direct tests passed; existing DEV actual engine and legacy SQL repeated twice and fully rolled back; production/runtime unchanged.",
+      "Fresh Python loads tracked fixes; 210 direct regression tests and existing DEV actual SQL rollback passed; runtime_action=false,production_write=false"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

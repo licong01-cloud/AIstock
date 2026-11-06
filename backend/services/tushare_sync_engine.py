@@ -344,29 +344,31 @@ def _query_tushare_dataapi(
         raise TushareHttpError(
             f"tushare {api_name} returned non-JSON body: {exc}"
         ) from exc
+    if not isinstance(result, dict):
+        raise TushareHttpError(f"{api_name} response schema has no result object")
     code = result.get("code")
-    if code != 0:
+    if type(code) is not int or code != 0:
         raise TushareHttpError(
             f"tushare {api_name} code={code}: {result.get('msg')}"
         )
-    data = result.get("data") or {}
-    columns = list(data.get("fields") or [])
-    items = data.get("items") or []
-    if api_name in {"daily_basic", "stk_limit", "etf_share_size", "margin_detail"} and items:
-        # An omitted column is not an explicitly returned provider NULL.
-        # Validate before zip/row.get can fabricate NULLs that the ordinary
-        # upsert would write over existing facts. Other API contracts stay
-        # unchanged; nullable valuations and genuine empty responses remain
-        # valid and use the existing retry/coverage handling.
-        requested = {field.strip() for field in fields.split(",") if field.strip()}
-        if (
-            any(not isinstance(column, str) or not column for column in columns)
-            or len(set(columns)) != len(columns)
-            or not requested.issubset(columns)
-            or not isinstance(items, list)
-            or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
-        ):
-            raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
+    # BUG-2187: a missing payload is not a completed zero-event query. Do not
+    # coerce None/missing fields/items to [], or zip away malformed cells.
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise TushareHttpError(f"{api_name} response schema has no data object")
+    columns, items = data.get("fields"), data.get("items")
+    requested = {field.strip() for field in fields.split(",") if field.strip()}
+    if (
+        not isinstance(columns, list)
+        or any(not isinstance(column, str) or not column for column in columns)
+        or len(set(columns)) != len(columns)
+        or not isinstance(items, list)
+        or (items and not requested.issubset(columns))
+        or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
+    ):
+        raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
+    # Extra/reordered fields and explicit provider NULL remain legitimate.
+    # Empty fields+items is the provider's valid zero-record response.
     return [dict(zip(columns, item)) for item in items]
 
 
