@@ -588,7 +588,7 @@ def _asset_bindings(value):
 
 
 def inspect_selection_history(root: Path, *, package_id: str, manifest_sha256: str,
-                              trade_dates: list[str]) -> dict:
+                               trade_dates: list[str], committed_artifacts: list[dict] | None = None) -> dict:
     """Inspect the owner's committed artifacts; never turn a mark into a limit.
 
     Published projections, rather than a mutable active profile or a production
@@ -597,7 +597,20 @@ def inspect_selection_history(root: Path, *, package_id: str, manifest_sha256: s
     """
     expected = set(trade_dates)
     days, outside, conflicts = {}, [], []
-    for marker in sorted(root.glob("*/*/completion.json")):
+    pinned = {}
+    if committed_artifacts is not None:
+        for pair in committed_artifacts:
+            completion_ref = FileRef.model_validate(pair["completion"])
+            projection_ref = FileRef.model_validate(pair["projection"])
+            marker = checked_file(completion_ref)
+            projection_path = checked_file(projection_ref)
+            if marker in pinned or projection_path.resolve() != marker.with_name("projection.json").resolve():
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_COMMITTED_REFERENCE_CONFLICT")
+            pinned[marker] = projection_ref
+        markers = sorted(pinned)
+    else:
+        markers = sorted(root.glob("*/*/completion.json"))
+    for marker in markers:
         completion = read_json(marker)
         if completion.get("consumer_scope") != "LOCALSIM" or completion.get("status") != "SIGNAL_COMMITTED":
             continue
@@ -605,6 +618,8 @@ def inspect_selection_history(root: Path, *, package_id: str, manifest_sha256: s
         path = marker.with_name("projection.json")
         body = path.read_bytes()
         projection = json.loads(body)
+        if marker in pinned and hashlib.sha256(body).hexdigest() != pinned[marker].sha256:
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_COMMITTED_SOURCE_CHANGED")
         if projection.get("manifest_sha256_by_package", {}).get(package_id) != manifest_sha256:
             continue
         if set(projection["manifest_sha256_by_package"]) != {package_id}:
