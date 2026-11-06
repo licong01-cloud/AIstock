@@ -33,6 +33,7 @@ from .data_sync_targets import (
     publication_target_date,
 )
 from .tushare_rate_limiter import get_limiter
+from .tushare_event_inputs import EVENT_DATASETS
 from .tushare_dataset_specs import (
     DAILY_BASIC, DatasetSpec, QueryMode, complete_stk_limit_daily_references, stk_limit_prices_valid,
 )
@@ -49,6 +50,7 @@ ZERO_ROW_VALID_DATASETS = {
     "stock_st",
     "stock_st_events",
     *FINANCIAL_EVENT_RAW_DATASETS,
+    *EVENT_DATASETS,
 }
 DENSE_STOCK_PANELS = frozenset({"bak_basic", "cyq_perf"})
 NULL_PRESERVING_DATASETS = frozenset(LATE_PUBLICATION_TAIL_DAYS) | DENSE_STOCK_PANELS
@@ -344,29 +346,31 @@ def _query_tushare_dataapi(
         raise TushareHttpError(
             f"tushare {api_name} returned non-JSON body: {exc}"
         ) from exc
+    if not isinstance(result, dict):
+        raise TushareHttpError(f"{api_name} response schema has no result object")
     code = result.get("code")
-    if code != 0:
+    if type(code) is not int or code != 0:
         raise TushareHttpError(
             f"tushare {api_name} code={code}: {result.get('msg')}"
         )
-    data = result.get("data") or {}
-    columns = list(data.get("fields") or [])
-    items = data.get("items") or []
-    if api_name in {"daily_basic", "stk_limit", "etf_share_size", "margin_detail"} and items:
-        # An omitted column is not an explicitly returned provider NULL.
-        # Validate before zip/row.get can fabricate NULLs that the ordinary
-        # upsert would write over existing facts. Other API contracts stay
-        # unchanged; nullable valuations and genuine empty responses remain
-        # valid and use the existing retry/coverage handling.
-        requested = {field.strip() for field in fields.split(",") if field.strip()}
-        if (
-            any(not isinstance(column, str) or not column for column in columns)
-            or len(set(columns)) != len(columns)
-            or not requested.issubset(columns)
-            or not isinstance(items, list)
-            or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
-        ):
-            raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
+    # BUG-2187: a missing payload is not a completed zero-event query. Do not
+    # coerce None/missing fields/items to [], or zip away malformed cells.
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise TushareHttpError(f"{api_name} response schema has no data object")
+    columns, items = data.get("fields"), data.get("items")
+    requested = {field.strip() for field in fields.split(",") if field.strip()}
+    if (
+        not isinstance(columns, list)
+        or any(not isinstance(column, str) or not column for column in columns)
+        or len(set(columns)) != len(columns)
+        or not isinstance(items, list)
+        or (items and not requested.issubset(columns))
+        or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
+    ):
+        raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
+    # Extra/reordered fields and explicit provider NULL remain legitimate.
+    # Empty fields+items is the provider's valid zero-record response.
     return [dict(zip(columns, item)) for item in items]
 
 
@@ -736,6 +740,13 @@ class TushareSyncEngine:
             from .sw_industry_history_store import store_member_refresh
 
             return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        if spec.name in {"vix_index", "stock_daily_afterhours"}:
+            from .tushare_supplemental_inputs import store_observations
+            return store_observations(conn, spec, rows,
+                                      lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        if spec.name == "daily_basic":
+            from .tushare_supplemental_inputs import normalize_rows
+            rows = normalize_rows(spec, rows)
         return self._upsert_plain_batch(conn, spec, rows)
 
     def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, fill_only_reference=False) -> int:
@@ -978,6 +989,13 @@ class TushareSyncEngine:
 
     def _get_incremental_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
         """Return the safe incremental cursor without treating missing audit as cold start."""
+        if spec.name in EVENT_DATASETS:
+            # Raw risk events share a table. Never seed API A from API B.
+            with conn.cursor() as cur:
+                cur.execute("SELECT max(trade_date) FROM market.dataset_date_refresh_audit "
+                            "WHERE dataset=%s AND data_source='tushare' AND status='success' "
+                            "AND metadata#>>'{event_scan,complete}'='true'", (spec.name,))
+                return cur.fetchone()[0]
         if spec.incremental_cursor_from_audit:
             cursor = self._get_safe_audit_cursor(conn, spec)
             if cursor is not None:
@@ -1024,7 +1042,8 @@ class TushareSyncEngine:
             return None
 
         max_success = max(success_dates)
-        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        can_infer_gaps = (spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+                          and spec.name != "vix_index")
         if not can_infer_gaps:
             return max_success
 
@@ -1169,7 +1188,8 @@ class TushareSyncEngine:
         present_dates = sorted(row_counts)
         min_date = present_dates[0]
         max_date = present_dates[-1]
-        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        can_infer_gaps = (spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+                          and spec.name != "vix_index")
         target_dates = self._date_sequence_for_by_date(conn, spec, min_date, max_date) if can_infer_gaps else present_dates
         if not target_dates:
             target_dates = present_dates
@@ -1243,6 +1263,9 @@ class TushareSyncEngine:
         end_date: dt.date,
     ) -> tuple[dt.date, Dict[str, Any]]:
         """Resolve incremental start from safe audit cursor plus physical seeding."""
+        if spec.name in EVENT_DATASETS:
+            from .tushare_event_inputs import incremental_start
+            return incremental_start(self, conn, spec, end_date)
         metadata: Dict[str, Any] = {}
         cursor = self._get_incremental_cursor(conn, spec)
         if cursor is not None:
@@ -1476,11 +1499,73 @@ class TushareSyncEngine:
         return {**observation, "attempted_keys": min(len(pending), DENSE_PANEL_REPAIR_BATCH),
                 "source_empty_symbols": empty, "provider_absence_established": False}, written
 
+    def _sync_vix_range(self, conn, spec, start_date, end_date, job_id):
+        """Query US-date facts in bounded windows, without inventing a US calendar."""
+        from .tushare_supplemental_inputs import normalize_rows, request_windows
+        from .data_integrity.provider import provider_scan
+        windows = list(request_windows(start_date, end_date))
+        windows += [(day, day) for day in self._late_recheck_dates.get(spec.name, [])
+                    if not start_date <= day <= end_date]
+        result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id, total_batches=len(windows))
+        for start, end in windows:
+            params = {"start_date": start.strftime("%Y%m%d"), "end_date": end.strftime("%Y%m%d")}
+            try:
+                rows = self._fetch_from_tushare(spec, params)
+                normalize_rows(spec, rows)
+                by_date = {}
+                for row in rows:
+                    day = _parse_ymd(row['trade_date'])
+                    if not start <= day <= end or day in by_date:
+                        raise ValueError('vix_index: duplicate or out-of-window US date')
+                    by_date[day] = row
+                for day in _date_range(start, end):
+                    facts = [by_date[day]] if day in by_date else []
+                    target = self._upsert_sync_target(spec, day, metadata={"request": params})
+                    written = self._upsert_batch(conn, spec, facts)
+                    self._refresh_audit.record_success(
+                        dataset=spec.name, trade_date=day, row_count=len(facts), written_rows=written,
+                        job_id=str(job_id), data_source="tushare", conn=conn,
+                        quality_status="ok" if facts else "unknown",
+                        metadata={"tushare_api": spec.tushare_api, "mode": "by_date_range",
+                                  "provider_query_complete": True, "request": params,
+                                  "session_date_timezone": "America/New_York",
+                                  "session_calendar_completeness": "NOT_EVALUATED",
+                                  "empty_date_meaning": "UNKNOWN_NOT_PROVEN_HOLIDAY" if not facts else None,
+                                  "publication_time_quality": "UNKNOWN", "vintage_quality": "NON_VINTAGE",
+                                  "provider_scan": provider_scan(spec, facts, parameters=params)})
+                    result.inserted_rows += written
+                    self._record_sync_attempt(target, "reconciled", job_id=job_id,
+                        rows_written=written, rows_observed=len(facts),
+                        context={"provider_query_complete": True, "session_calendar_completeness": "NOT_EVALUATED"})
+                result.success_batches += 1  # completed provider query, not proven session-calendar completeness
+            except Exception as exc:
+                result.failed_batches += 1
+                result.error = '; '.join(filter(None, (result.error, str(exc))))[:4000]
+                for day in _date_range(start, end):
+                    target = self._upsert_sync_target(spec, day, metadata={"request": params})
+                    self._refresh_audit.record_failure(
+                        dataset=spec.name, trade_date=day, error_message=str(exc), job_id=str(job_id),
+                        data_source="tushare", conn=conn, quality_status="error",
+                        failure_category="provider_or_persistence_error", metadata={"request": params})
+                    self._record_sync_attempt(target, "retry", job_id=job_id, error_message=str(exc),
+                                              rows_written=0, rows_observed=0)
+            self._update_progress(conn, job_id, result)
+            if spec.batch_sleep:
+                time.sleep(spec.batch_sleep)
+        return result
+
     def _sync_by_date(
         self, conn, spec: DatasetSpec,
         start_date: dt.date, end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
+        if spec.name in EVENT_DATASETS:
+            from .tushare_event_inputs import sync_events
+            return sync_events(self, conn, spec, start_date, end_date, job_id)
+        if spec.name == "vix_index":
+            return self._sync_vix_range(conn, spec, start_date, end_date, job_id)
+        if spec.name == "stock_daily_afterhours":
+            start_date = max(start_date, _parse_ymd(spec.initial_start_date))
         days = self._iter_sync_dates(conn, spec, start_date, end_date)
         days = sorted(set(days).union(self._late_recheck_dates.get(spec.name, [])))
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
@@ -1539,6 +1624,14 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                if spec.name == "stock_daily_afterhours":
+                    audit_metadata["source_contract"] = {
+                        "volume_unit": "hand_100_shares", "amount_unit": "thousand_CNY",
+                        "source_floor": "2026-07-06", "publication_time_quality": "UNKNOWN",
+                        "vintage_quality": "NON_VINTAGE", "optional_for_daily_complete": True,
+                        "null_field_count": sum(row.get(field) is None for row in rows
+                                                for field in ("ah_vol", "ah_amount")),
+                    }
                 from .data_integrity.provider import provider_scan
                 audit_metadata["provider_scan"] = provider_scan(spec, rows, parameters={spec.date_param_name: ymd})
                 if dense_panel is not None:
@@ -2000,6 +2093,7 @@ class TushareSyncEngine:
         start_date: Optional[dt.date] = None,
         end_date: Optional[dt.date] = None,
         job_id: Optional[uuid.UUID] = None,
+        review_open_projects: bool = False,
     ) -> SyncResult:
         """Run a full sync for *spec*.
 
@@ -2010,9 +2104,14 @@ class TushareSyncEngine:
         job_id : attach to an existing ingestion_jobs row (API-created)
         """
         today = dt.date.today()
+        if review_open_projects and spec.name != 'stk_seasoned':
+            raise ValueError('project review is only defined for stk_seasoned')
         self._late_recheck_dates.pop(spec.name, None)
         if end_date is None:
             end_date = today
+            if spec.name == "vix_index":
+                from .tushare_supplemental_inputs import latest_vix_query_date
+                end_date = latest_vix_query_date()
             if spec.name in PUBLICATION_LAG_DAYS:
                 calendar = TradingCalendarStatusService()
                 latest = calendar.latest_trading_day_on_or_before(today)
@@ -2029,7 +2128,9 @@ class TushareSyncEngine:
         try:
             with get_conn() as conn:
                 self._ensure_target_table_exists(conn, spec)
-                if mode == "incremental" and start_date is None:
+                if review_open_projects:
+                    start_date = end_date  # separate bounded scope review, no history-range cursor
+                elif mode == "incremental" and start_date is None:
                     start_date, cursor_metadata = self._resolve_incremental_start_date(conn, spec, end_date)
 
                 if start_date is not None and start_date > end_date:
@@ -2078,7 +2179,11 @@ class TushareSyncEngine:
 
         # Phase 2: 按模式执行同步（BY_CODE 使用分批连接）
         try:
-            if spec.query_mode == QueryMode.SINGLE_CALL:
+            if review_open_projects:
+                from .tushare_event_inputs import review_seasoned_projects
+                with get_conn() as conn:
+                    result = review_seasoned_projects(self, conn, spec, end_date, job_id)
+            elif spec.query_mode == QueryMode.SINGLE_CALL:
                 with get_conn() as conn:
                     result = self._sync_single_call(conn, spec, job_id)
             elif spec.query_mode == QueryMode.BY_CODE:

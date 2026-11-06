@@ -172,12 +172,11 @@ def _start_existing_job(conn, job_id: uuid.UUID, summary: Dict[str, Any]) -> Non
     with conn.cursor() as cur:
         sql = """
             UPDATE market.ingestion_jobs
-               SET status='running', started_at=COALESCE(started_at, NOW()), summary=%s
+               SET status='running', started_at=COALESCE(started_at, NOW()),
+                   summary=(COALESCE(summary,'{}'::jsonb)-'error')||%s::jsonb
              WHERE job_id=%s
             """
         payload = (json.dumps(summary, ensure_ascii=False), job_id)
-        print("[DEBUG] _start_existing_job SQL:", sql.strip().replace("\n", " "))
-        print("[DEBUG] _start_existing_job params:", payload)
         cur.execute(
             sql,
             payload,

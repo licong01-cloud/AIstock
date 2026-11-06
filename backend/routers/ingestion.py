@@ -18,6 +18,7 @@ from ..db.init_tushare_schedules import get_default_schedule_catalog
 from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
+from ..services.tushare_event_inputs import EVENT_DATASETS
 from ..services.trading_calendar_status import TradingCalendarStatusService
 from ..services.trading_core.errors import DataUnavailableError
 
@@ -619,6 +620,9 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "stock_st_events",
         "bak_basic",
         "daily_basic",
+        "vix_index",
+        "stock_daily_afterhours",
+        *EVENT_DATASETS,
         "stk_limit",
         "suspend_d",
         "margin_detail",
@@ -1601,6 +1605,9 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
 
 # 每日定时调度目标数据集
 _DAILY_PRESETS = [
+    ("vix_index", "incremental"),
+    ("stock_daily_afterhours", "incremental"),
+    *((name, "incremental") for name in sorted(EVENT_DATASETS)),
     ("kline_daily_raw", "incremental"),
     ("kline_minute_raw", "incremental"),
     ("daily_basic", "incremental"),
@@ -1855,6 +1862,8 @@ def list_tushare_datasets() -> Dict[str, Any]:
             "target_table": spec.target_table,
             "query_mode": spec.query_mode.value,
             "supports_incremental": spec.supports_incremental,
+            "required_for_daily_complete": spec.required_for_daily_complete,
+            "initial_start_date": spec.initial_start_date,
         }
         if row:
             entry["last_job_id"] = str(row["job_id"])
@@ -1926,12 +1935,12 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="bak_basic init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="bak_basic init requires end_date")
-    elif dataset == "daily_basic":
+    elif dataset in {"daily_basic", "vix_index", "stock_daily_afterhours", *EVENT_DATASETS}:
         # init: 需要 start_date/end_date；incremental: start_date 可选
         if mode == "init" and not options.get("start_date"):
-            raise HTTPException(status_code=400, detail="daily_basic init requires start_date")
+            raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
         if mode == "init" and not options.get("end_date"):
-            raise HTTPException(status_code=400, detail="daily_basic init requires end_date")
+            raise HTTPException(status_code=400, detail=f"{dataset} init requires end_date")
     elif dataset == "stk_limit":
         # init: 需要 start_date/end_date；incremental: start_date 可选
         if mode == "init" and not options.get("start_date"):
@@ -2478,6 +2487,12 @@ def list_data_stats() -> Dict[str, Any]:
             "quality_blocked" if row.get("audit_quality_status") in {"error", "empty_invalid", "low_coverage", "unproven"}
             else "audit_success"
         )
+        if row.get("data_kind") == "vix_index":
+            row["session_calendar_completeness"] = "NOT_EVALUATED"
+            row["query_completed_through"] = _date_iso(audit_ready_date)
+            if row.get("audit_quality_status") == "unknown":
+                row["ready_date"] = None
+                row["readiness_status"] = "query_complete_calendar_not_evaluated"
         row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
         row["stats_scope"] = extra_info.get("stats_scope") or "full_table"
         row["stats_window_months"] = extra_info.get("window_months")
@@ -2549,6 +2564,35 @@ def get_data_gaps(
     """
 
     # 0) 如果不强制刷新且没有指定日期范围（即查全量），尝试读缓存
+    if data_kind == "vix_index":
+        return {"data_kind": data_kind, "status": "NOT_EVALUATED",
+                "missing_days": None, "missing_ranges": [], "total_trading_days": None,
+                "session_date_timezone": "America/New_York",
+                "reason": "formal_US_session_calendar_not_registered"}
+    if data_kind in EVENT_DATASETS:
+        if bool(start_date) != bool(end_date):
+            raise HTTPException(status_code=400, detail='start_date and end_date must both be provided')
+        try:
+            end = dt.date.fromisoformat(end_date) if end_date else dt.date.today()
+            start = dt.date.fromisoformat(start_date) if start_date else end-dt.timedelta(days=6)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail='invalid event query dates') from exc
+        if end < start:
+            raise HTTPException(status_code=400, detail='event query dates are inverted')
+        queries = _fetchall("SELECT trade_date,status,metadata FROM market.dataset_date_refresh_audit "
+            "WHERE dataset=%s AND data_source='tushare' AND trade_date BETWEEN %s AND %s",
+            (data_kind, start, end))
+        complete = {row['trade_date'] for row in queries if row['status'] == 'success'
+                    and _json_load(row['metadata']).get('event_scan', {}).get('complete') is True
+                    and not _json_load(row['metadata']).get('event_scan', {}).get('parameters', {}).get('ts_code')}
+        missing = [str(start+dt.timedelta(days=n)) for n in range((end-start).days+1)
+                   if start+dt.timedelta(days=n) not in complete]
+        return {'data_kind': data_kind, 'date_sequence': 'calendar',
+                'coverage_basis': 'completed_provider_queries_not_daily_event_count',
+                'status': 'QUERY_COVERED' if not missing else 'QUERY_INCOMPLETE',
+                'start_date': str(start), 'end_date': str(end), 'unqueried_dates': missing,
+                'covered_query_days': len(complete), 'expected_calendar_dates': (end-start).days+1,
+                'missing_event_count': None, 'historical_PIT': False}
     # 缓存有效期 1 小时，过期后重新计算
     _CACHE_TTL_SECONDS = 3600
     if not refresh and not start_date and not end_date:
@@ -2843,6 +2887,8 @@ def get_ingestion_auto_range(
     date_column = str(cfg.get("date_column") or "trade_date").strip()
     extra_info = cfg.get("extra_info")
     use_calendar_dates = _uses_calendar_date_sequence(extra_info)
+    if data_kind == "vix_index":
+        use_calendar_dates = True
     use_refresh_audit_cursor = _uses_refresh_audit_cursor(extra_info)
 
     table_max_date: Optional[dt.date] = None
@@ -2900,7 +2946,10 @@ def get_ingestion_auto_range(
 
     current_max_date = audit_max_date or (None if audit_required else table_max_date)
 
-    if use_calendar_dates:
+    if data_kind == "vix_index":
+        from backend.services.tushare_supplemental_inputs import latest_vix_query_date
+        latest_date = latest_vix_query_date()
+    elif use_calendar_dates:
         latest_date: Optional[dt.date] = dt.date.today()
     else:
         try:

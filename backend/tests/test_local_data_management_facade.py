@@ -382,7 +382,11 @@ def test_default_schedule_catalog_is_complete_and_router_uses_it(monkeypatch: py
     items = ingestion._ensure_default_ingestion_schedules()
 
     assert catalog["complete"] is True
-    assert len(catalog["templates"]) == 32
+    assert len(catalog["templates"]) == 46
+    assert {"vix_index", "_vix_index_midday", "stock_daily_afterhours", 'stk_shock', 'stk_high_shock',
+            'stk_alert', 'idx_anns', 'stk_seasoned', '_stk_seasoned_project_review'}.issubset(
+        {item["dataset"] for item in catalog["templates"]}
+    )
     assert len(items) == len(catalog["templates"])
     assert [(item[0], item[1]) for item in calls] == [
         (item["dataset"], item["mode"]) for item in catalog["templates"]

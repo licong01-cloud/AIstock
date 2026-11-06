@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import contextlib
@@ -697,6 +697,61 @@ def _workflow_rule_digests(root: Path | None = None) -> list[dict[str, Any]]:
     return refs
 
 
+def _agent_execution_policy(record: dict[str, Any] | None = None, *, root: Path | None = None) -> dict[str, Any]:
+    """Expose the approved agent procedure; never manufacture a review verdict."""
+    record = record or {}
+    catalog = (root or REPO_ROOT) / "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    defaults = flow._load_yaml(catalog).get("agent_execution_defaults", {}) if catalog.exists() else {}
+    delivery = defaults.get("source_delivery") or {}
+    restrictions = flow._as_list(record.get("execution_restrictions"))
+    known = {"analysis_only", "no_commit", "no_pr", "no_merge"}
+    invalid = set(restrictions) - known
+    enabled = delivery.get("enabled") is True and bool(delivery.get("authorization_ref"))
+    actions = ["commit", "push", "create_or_update_pr", "merge_source", "metadata_sync", "root_sync"] if enabled else []
+    excluded = {
+        "analysis_only": set(actions),
+        "no_commit": set(actions),
+        "no_pr": {"push", "create_or_update_pr", "merge_source"},
+        "no_merge": {"merge_source"},
+    }
+    denied = set().union(*(excluded.get(item, set(actions)) for item in restrictions))
+    return {
+        "standard_refs": ["DOC-MINIMUM-001", "AUTO-REVIEW-DELIVERY-001"],
+        "documentation": {"extra_narrative_files": 0, "context_markdown": "on_demand", "preserve_required_evidence": True},
+        "review": {
+            "enabled": True, "perspectives": ["correctness", "completeness_and_regression"],
+            "repair_and_recheck": True, "max_consecutive_no_progress": 3,
+            "final_revision_required": True, "executor": "active_agent", "independent_review": False,
+            "record": "existing_task_state_or_pr_only",
+        },
+        "source_delivery": {
+            "enabled": enabled and not invalid and bool(set(actions) - denied),
+            "authorization_ref": delivery.get("authorization_ref"),
+            "actions": [item for item in actions if item not in denied] if not invalid else [],
+            "requires": ["final_revision_review_passed", "current_head_required_ci_passed", "branch_protection_satisfied"],
+            "implies_runtime_db_training_or_cleanup": False,
+        },
+        "execution_restrictions": restrictions,
+        "warnings": [f"unknown execution restrictions: {', '.join(sorted(invalid))}"] if invalid else [],
+    }
+
+
+def _assert_task_source_restrictions(bug_id: str, action: str, issue_json: str | None = None) -> None:
+    state = _load_state(bug_id, REPO_ROOT) or {}
+    restrictions = set(flow._as_list(state.get("execution_restrictions")))
+    record_ref = issue_json or state.get("target_bug_json") or state.get("source_bug_json")
+    if record_ref:
+        record_path = Path(record_ref)
+        if not record_path.is_absolute():
+            record_path = REPO_ROOT / record_path
+        if record_path.exists():
+            restrictions.update(flow._as_list(_load_json(record_path).get("execution_restrictions")))
+    denied = {"analysis_only", "no_commit", "no_pr"} | ({"no_merge"} if action == "merge" else set())
+    unknown = restrictions - {"analysis_only", "no_commit", "no_pr", "no_merge"}
+    if restrictions & denied or unknown:
+        raise WorkflowError(f"task execution restrictions prohibit source {action}: {', '.join(sorted(restrictions))}")
+
+
 def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     allowed = flow._as_list(state.get("allowed_write_scope"))
     required = flow._as_list(state.get("required_verification"))
@@ -704,6 +759,7 @@ def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None 
     return {
         "schema_version": "aistock_workflow_context_resume_digest_v1",
         "rule_digests": _workflow_rule_digests(root),
+        "execution_policy": _agent_execution_policy(state, root=root),
         "reuse_policy": [
             "After context compaction, read this resume digest and task-card.md first.",
             "Do not re-read skills, project memory, standards README, quickstart, or RTK unless a listed hash changed, state is missing, or the user explicitly asks.",
@@ -731,7 +787,8 @@ def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None 
         "success_artifact_policy": {
             "stdout": "compact_by_default",
             "json": "diagnostic_only_on_failure_or_AISTOCK_WORKFLOW_ARTIFACTS=1",
-            "required_runtime_state": ["state.json", "events.jsonl", "task-card.md", "context-pack.md", "pr-body.md"],
+            "required_runtime_state": ["state.json", "events.jsonl", "task-card.json", "task-card.md"],
+            "on_demand": ["context-pack.md", "pr-body.md"],
         },
     }
 
@@ -8595,13 +8652,14 @@ def build_task_card(
         "module": record.get("module"),
         "severity": record.get("severity"),
         "risk_level": fix_ready.get("risk_level"),
+        "execution_policy": _agent_execution_policy(record, root=root),
         "branch": branch,
         "planned_branch": planned_branch,
         "worktree": worktree,
         "planned_worktree": planned_worktree,
         "artifact_refs": {
             "context_pack_json": _repo_rel(context_pack_json_path, root),
-            "context_pack_md": _repo_rel(context_pack_md_path, root),
+            "context_pack_md": None,
             "fix_ready_json": _repo_rel(fix_ready_path, root),
             "state_json": _repo_rel(state_path, root),
             "events_jsonl": _repo_rel(events_path, root),
@@ -8642,6 +8700,7 @@ def build_task_card(
                 "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
                 "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
                 "verification_budget": verification_budget,
+                "execution_restrictions": record.get("execution_restrictions") or [],
             },
             root=root,
         ),
@@ -8668,6 +8727,8 @@ def build_task_card(
             "for backend/worker/scheduler fixes, attach persistent-source and fresh-process evidence before PR readiness",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
+            "follow execution_policy: review correctness and completeness, repair findings and recheck the final revision; do not create review reports",
+            "when source_delivery is enabled, commit only task files and use existing PR/CI/merge commands without requesting the same authorization again; task restrictions win",
         ],
         "token_budget": {
             "context_pack_target_tokens": (context_pack.get("token_budget") or {}).get("target_tokens"),
@@ -8691,6 +8752,8 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         resume_digest.get("validation_loop_budget") if isinstance(resume_digest.get("validation_loop_budget"), dict) else {}
     )
     runtime_contract = task_card.get("runtime_contract") if isinstance(task_card.get("runtime_contract"), dict) else {}
+    execution = task_card.get("execution_policy") or {}
+    delivery = execution.get("source_delivery") or {}
     lines = [
         f"# AIstock Agent Task Card {task_card.get('bug_id')}",
         "",
@@ -8704,6 +8767,14 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "",
         "## Start Here",
         *[f"- {item}" for item in task_card.get("next_client_steps") or []],
+        "",
+        "## Execution Policy",
+        "- extra narrative files: `0`; context Markdown: `on_demand`; required evidence: `preserved`",
+        "- review: correctness + completeness/regression; repair and recheck final revision; stop after 3 consecutive attempts without progress",
+        f"- authorized source actions: `{', '.join(delivery.get('actions') or []) or 'none'}`",
+        f"- source authorization: `{delivery.get('authorization_ref') or 'not_enabled'}`",
+        f"- task restrictions: `{', '.join(execution.get('execution_restrictions') or []) or 'none'}`",
+        "- source delivery never authorizes runtime, DB, training or cleanup; review execution belongs to the active agent, not this CLI",
         "",
         "## Problem",
         f"- title: {((task_card.get('problem') or {}).get('title') if isinstance(task_card.get('problem'), dict) else None) or 'n/a'}",
@@ -9525,17 +9596,21 @@ def build_batch_workflow_smoke_plan() -> dict[str, Any]:
             task_slug="batch-smoke",
             allow_missing_linkage=False,
             allow_closed=False,
+            context_markdown=True,
             record_pairs=list(zip(records, issue_paths, strict=True)),
         )
         finish_payload = build_finish_batch_plan(
+            persist_pr_body=True,
             batch_id=str(start_payload["batch_id"]),
             bug_ids=[],
             changed_files=["scripts/aistock_issue_workflow.py"],
             base="origin/main",
             head="HEAD",
             validation_evidence=[
+                # Synthetic receipts exercise coverage only; this smoke is not source acceptance.
                 "python scripts/aistock_issue_workflow.py batch-workflow-smoke -> passed",
                 "python -m nox -s l0 -> passed",
+                "python -m nox -s validation_workflow_automation -> passed",
                 "python -m nox -s guardrail_changed_files -> passed",
             ],
             issue_commit=["BUG-000=synthetic-shared-pr", "BUG-001=synthetic-shared-pr"],
@@ -9772,6 +9847,7 @@ def build_start_plan(
     allow_closed: bool,
     active_decision: dict[str, Any] | None = None,
     code_intelligence_summary_override: dict[str, Any] | None = None,
+    context_markdown: bool = False,
 ) -> dict[str, Any]:
     if not issue_json and active_decision and active_decision.get("registry_issue_json"):
         issue_json = str(active_decision["registry_issue_json"])
@@ -9870,7 +9946,9 @@ def build_start_plan(
     if not dry_run:
         _write_json(fix_ready_path, fix_ready)
         _write_json(context_json_path, context_pack)
-        _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+        if context_markdown:
+            _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+            task_card["artifact_refs"]["context_pack_md"] = _repo_rel(context_md_path, target_root)
         _write_json(task_card_json_path, task_card)
         _write_text(task_card_md_path, render_task_card_markdown(task_card))
         context_metrics = {
@@ -9892,11 +9970,12 @@ def build_start_plan(
             base=worktree_plan.get("base"),
             source_bug_json=_repo_rel(source_path),
             target_bug_json=_repo_rel(target_bug_path, target_root),
-            context_pack_md=_repo_rel(context_md_path, target_root),
+            context_pack_md=task_card["artifact_refs"]["context_pack_md"],
             context_pack_json=_repo_rel(context_json_path, target_root),
             fix_ready_path=_repo_rel(fix_ready_path, target_root),
             task_card_json=_repo_rel(task_card_json_path, target_root),
             task_card_md=_repo_rel(task_card_md_path, target_root),
+            execution_restrictions=record.get("execution_restrictions") or [],
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
@@ -9945,7 +10024,7 @@ def build_start_plan(
         "worktree_plan": worktree_plan,
         "fix_ready_path": _repo_rel(fix_ready_path, target_root),
         "context_pack_json": _repo_rel(context_json_path, target_root),
-        "context_pack_md": _repo_rel(context_md_path, target_root),
+        "context_pack_md": task_card["artifact_refs"]["context_pack_md"],
         "task_card_json": _repo_rel(task_card_json_path, target_root),
         "task_card_md": _repo_rel(task_card_md_path, target_root),
         "state_path": _repo_rel(_state_path(canonical_bug_id, target_root), target_root),
@@ -9995,6 +10074,7 @@ def build_finish_plan(
     allow_missing_evidence: bool,
     fresh_process_evidence: list[str] | None = None,
     code_intelligence_summary_override: dict[str, Any] | None = None,
+    persist_pr_body: bool = False,
 ) -> dict[str, Any]:
     _assert_task_git_identity(REPO_ROOT)
     if _TASK_GIT_IDENTITY is not None and _git(["rev-parse", head], cwd=REPO_ROOT) != _TASK_GIT_IDENTITY[1]:
@@ -10121,14 +10201,16 @@ def build_finish_plan(
     elif finish_plan_path.exists():
         with contextlib.suppress(OSError):
             finish_plan_path.unlink()
-    _write_text(pr_body_path, pr_body)
+    if persist_pr_body:
+        _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
     _write_state(
         canonical_bug_id,
         state=next_state,
         changed_files=changed,
         validation_evidence=evidence,
-        pr_body_path=_repo_rel(pr_body_path),
+        pr_body_path=_repo_rel(pr_body_path) if persist_pr_body else None,
+        execution_restrictions=record.get("execution_restrictions") or [],
         allowed_write_scope=flow._as_list(record.get("allowed_write_scope")),
         required_verification=validation.get("required_plans") or [],
         verification_budget=record.get("verification_budget"),
@@ -10137,6 +10219,7 @@ def build_finish_plan(
                 "allowed_write_scope": flow._as_list(record.get("allowed_write_scope")),
                 "required_verification": validation.get("required_plans") or [],
                 "verification_budget": record.get("verification_budget"),
+                "execution_restrictions": record.get("execution_restrictions") or [],
             }
         ),
         production_gates=validation.get("production_gates") or {},
@@ -10244,7 +10327,7 @@ def build_finish_plan(
                 )
             )
         ),
-        "pr_body_path": _repo_rel(pr_body_path),
+        "pr_body_path": _repo_rel(pr_body_path) if persist_pr_body else None,
         "state_path": _repo_rel(_state_path(canonical_bug_id)),
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
         "artifact_metrics": {
@@ -10739,6 +10822,7 @@ def build_start_batch_plan(
     allow_missing_linkage: bool,
     allow_closed: bool,
     record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
+    context_markdown: bool = False,
 ) -> dict[str, Any]:
     if record_pairs is None:
         record_pairs = _records_for_bug_ids(
@@ -10793,7 +10877,8 @@ def build_start_batch_plan(
             context_pack["code_intelligence"] = batch_code_intelligence
             fix_ready["code_intelligence"] = batch_code_intelligence
             _write_json(context_dir / f"{bug_id}.json", context_pack)
-            _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
+            if context_markdown:
+                _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
             _write_json(fix_ready_dir / f"{bug_id}.json", fix_ready)
             context_metrics[bug_id] = {
                 "context_md": _size_and_token_estimate(context_dir / f"{bug_id}.md"),
@@ -10966,6 +11051,7 @@ def build_finish_batch_plan(
     plan_only: bool,
     allow_missing_evidence: bool,
     record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
+    persist_pr_body: bool = False,
 ) -> dict[str, Any]:
     if not batch_id and not bug_ids and record_pairs is None:
         raise WorkflowError("finish-batch requires --batch-id or at least two --bug-id values")
@@ -11067,20 +11153,19 @@ def build_finish_batch_plan(
     _write_json(output_dir / "finish-plan.json", finish_plan)
     if evidence:
         _write_json(output_dir / "validation-evidence.json", {"batch_id": canonical_batch_id, "items": evidence})
-    _write_text(
-        pr_body_path,
-        render_batch_pr_body(
-            canonical_batch_id,
-            records,
-            changed,
-            validation,
-            evidence,
-            commit_map,
-            code_intelligence_summary,
-            closure_ready,
-            runtime_contracts,
-        ),
+    pr_body = render_batch_pr_body(
+        canonical_batch_id,
+        records,
+        changed,
+        validation,
+        evidence,
+        commit_map,
+        code_intelligence_summary,
+        closure_ready,
+        runtime_contracts,
     )
+    if persist_pr_body:
+        _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
     _write_state(
         canonical_batch_id,
@@ -11089,7 +11174,7 @@ def build_finish_batch_plan(
         bug_ids=signature["bug_ids"],
         changed_files=changed,
         validation_evidence=evidence,
-        pr_body_path=_repo_rel(pr_body_path),
+        pr_body_path=_repo_rel(pr_body_path) if persist_pr_body else None,
         production_gates=validation.get("production_gates") or {},
         code_intelligence={
             "status": code_intelligence_summary.get("status"),
@@ -11138,7 +11223,7 @@ def build_finish_batch_plan(
             "fallback_used": code_intelligence_summary.get("fallback_used"),
         },
         "codegraph_suggested_tests": codegraph_tests,
-        "pr_body_path": _repo_rel(pr_body_path),
+        "pr_body_path": _repo_rel(pr_body_path) if persist_pr_body else None,
         "state_path": _repo_rel(_state_path(canonical_batch_id)),
         "events_path": _repo_rel(_events_path(canonical_batch_id)),
     }
@@ -19547,6 +19632,8 @@ def build_run_plan(
             "next_command": f"python scripts/aistock_issue_workflow.py resume --bug-id {start['bug_id']}",
         }
     if mode == "pr":
+        if push or create_pr:
+            _assert_task_source_restrictions(canonical_bug_id, "pr", issue_json)
         finish = build_finish_plan(
             bug_id=canonical_bug_id,
             issue_json=issue_json,
@@ -19556,6 +19643,7 @@ def build_run_plan(
             validation_evidence=validation_evidence,
             plan_only=not validation_evidence,
             allow_missing_evidence=False,
+            persist_pr_body=True,
         )
         state_name = "validation_passed" if finish.get("validation_evidence") else "validation_planned"
         _write_state(
@@ -19586,6 +19674,7 @@ def build_run_plan(
             else f"python scripts/aistock_issue_workflow.py finish --bug-id {canonical_bug_id} --validation-evidence \"<command> -> passed\"",
         }
     if mode == "merge":
+        _assert_task_source_restrictions(canonical_bug_id, "merge", issue_json)
         if not pr_url:
             raise WorkflowError("run --mode merge requires --pr-url")
         if not merge:
@@ -21592,6 +21681,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
         active_decision=None,
+        context_markdown=getattr(args, "context_markdown", False),
     )
     _emit_args(payload, args)
     return 0
@@ -21608,6 +21698,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
         fresh_process_evidence=list(args.fresh_process_evidence or []),
+        persist_pr_body=getattr(args, "write_pr_body", False),
     )
     _emit_args(payload, args)
     return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
@@ -21656,6 +21747,7 @@ def cmd_start_batch(args: argparse.Namespace) -> int:
         task_slug=args.task_slug,
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
+        context_markdown=getattr(args, "context_markdown", False),
     )
     _emit_args(payload, args)
     return 0
@@ -21672,6 +21764,7 @@ def cmd_finish_batch(args: argparse.Namespace) -> int:
         issue_commit=list(args.issue_commit or []),
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
+        persist_pr_body=getattr(args, "write_pr_body", False),
     )
     _emit_args(payload, args)
     return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
@@ -22373,6 +22466,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--task-slug")
     start.add_argument("--allow-missing-linkage", action="store_true")
     start.add_argument("--allow-closed", action="store_true")
+    start.add_argument("--context-markdown", action="store_true", help="Explicitly render the optional Context Pack Markdown; task-card.md is the default view.")
     add_output_options(start)
     start.set_defaults(func=cmd_start)
 
@@ -22390,6 +22484,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finish.add_argument("--plan-only", action="store_true")
     finish.add_argument("--allow-missing-evidence", action="store_true")
+    finish.add_argument("--write-pr-body", action="store_true", help="Render a PR body for an explicit consumer; run --mode pr does this automatically.")
     add_output_options(finish)
     finish.set_defaults(func=cmd_finish)
 
@@ -22434,6 +22529,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_batch.add_argument("--task-slug")
     start_batch.add_argument("--allow-missing-linkage", action="store_true")
     start_batch.add_argument("--allow-closed", action="store_true")
+    start_batch.add_argument("--context-markdown", action="store_true", help="Explicitly render per-issue Context Pack Markdown.")
     add_output_options(start_batch)
     start_batch.set_defaults(func=cmd_start_batch)
 
@@ -22447,6 +22543,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_batch.add_argument("--issue-commit", action="append", help="Per-issue commit map entry, e.g. BUG-123=<sha>.")
     finish_batch.add_argument("--plan-only", action="store_true")
     finish_batch.add_argument("--allow-missing-evidence", action="store_true")
+    finish_batch.add_argument("--write-pr-body", action="store_true", help="Render the batch PR body for an explicit consumer.")
     add_output_options(finish_batch)
     finish_batch.set_defaults(func=cmd_finish_batch)
 
@@ -22730,4 +22827,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

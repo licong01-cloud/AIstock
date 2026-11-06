@@ -606,7 +606,8 @@ def _validate_in_tree_codex_skill(session: nox.Session, skill_path: str) -> None
     """Validate the checked-in skill even when hosted CI lacks Codex system skills."""
     quick_validate = _codex_quick_validate_script()
     if quick_validate.exists():
-        session.run("python", str(quick_validate), skill_path, external=True)
+        # The external validator uses read_text() without an explicit encoding.
+        session.run("python", str(quick_validate), skill_path, env={"PYTHONUTF8": "1"}, external=True)
         return
 
     root = ROOT / skill_path
@@ -989,6 +990,7 @@ def qlib_data_backend(session: nox.Session) -> None:
     """Run Qlib exporter and PIT-universe regressions only."""
 
     full_targets = [
+        "backend/tests/dataset_release/test_dataset_release_industry_audit.py",
         "backend/tests/qlib_exporter",
         "backend/tests/test_qlib_export_stock_universe_filters.py",
         "backend/tests/core_index_membership",
@@ -1479,6 +1481,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_tushare_phase1_inputs.py",
+        "backend/tests/test_tushare_event_inputs.py",
         "backend/tests/test_report_rc_data.py",
         "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
         "backend/tests/ingestion/test_repair_minute_via_minute_api.py",

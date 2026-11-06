@@ -48,6 +48,14 @@ class Obligation:
         return datetime.combine(due_day, time.fromisoformat(self.ready_time), CN)
 
 
+def optional_input_contract(dataset: str) -> Obligation | None:
+    """Validate a requested optional partition without adding a global obligation."""
+    from ..tushare_event_inputs import EVENT_DATASETS
+    if dataset not in {"vix_index", "stock_daily_afterhours", *EVENT_DATASETS}:
+        return None
+    return Obligation(dataset, "daily_series" if dataset == "stock_daily_afterhours" else "event", "23:59")
+
+
 def obligations(extra_schedules: Iterable[Mapping[str, Any]] = (),
                 historical: Iterable[Mapping[str, Any]] = ()) -> tuple[list[Obligation], str]:
     catalogue = get_default_schedule_catalog()
@@ -62,6 +70,9 @@ def obligations(extra_schedules: Iterable[Mapping[str, Any]] = (),
         names = ("sw_index_classify", "sw_index_member", "sw_daily") if name == "sw_sector" else (canonical_dataset(name),)
         for dataset in names:
             spec_name = "stock_moneyflow_ts" if dataset == "moneyflow_ts" else dataset
+            spec = DATASET_REGISTRY.get(spec_name)
+            if spec is not None and not spec.required_for_daily_complete:
+                continue  # independently audited optional inputs, not A-share daily obligations
             known = spec_name in DATASET_REGISTRY or dataset in {
                 "kline_daily_raw", "kline_minute_raw", "moneyflow_ts", "sector_data", "anns_metadata"}
             if not known:

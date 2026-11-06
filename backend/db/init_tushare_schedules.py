@@ -16,6 +16,22 @@ from .pg_pool import get_conn
 
 
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
+    {"dataset": "stk_shock", "mode": "incremental", "frequency": "daily", "at": "21:10", "skip_auto_range": True},
+    {"dataset": "stk_high_shock", "mode": "incremental", "frequency": "daily", "at": "21:15", "skip_auto_range": True},
+    {"dataset": "stk_alert", "mode": "incremental", "frequency": "daily", "at": "21:20", "skip_auto_range": True},
+    {"dataset": "idx_anns", "mode": "incremental", "frequency": "daily", "at": "21:30", "skip_auto_range": True},
+    {"dataset": "stk_seasoned", "mode": "incremental", "frequency": "daily", "at": "21:40", "skip_auto_range": True},
+    {"dataset": "_stk_shock_morning", "mode": "incremental", "frequency": "daily", "at": "08:10", "skip_auto_range": True},
+    {"dataset": "_stk_high_shock_morning", "mode": "incremental", "frequency": "daily", "at": "08:12", "skip_auto_range": True},
+    {"dataset": "_stk_alert_morning", "mode": "incremental", "frequency": "daily", "at": "08:14", "skip_auto_range": True},
+    {"dataset": "_idx_anns_morning", "mode": "incremental", "frequency": "daily", "at": "08:20", "skip_auto_range": True},
+    {"dataset": "_stk_seasoned_morning", "mode": "incremental", "frequency": "daily", "at": "09:20", "skip_auto_range": True},
+    {"dataset": "_stk_seasoned_project_review", "mode": "incremental", "frequency": "1h", "skip_auto_range": True},
+    {"dataset": "vix_index", "mode": "incremental", "frequency": "daily", "at": "08:00",
+     "skip_auto_range": True},
+    {"dataset": "_vix_index_midday", "mode": "incremental", "frequency": "daily", "at": "12:00",
+     "skip_auto_range": True},
+    {"dataset": "stock_daily_afterhours", "mode": "incremental", "frequency": "daily", "at": "20:35"},
     # ── Phase 1 — 盘前 ──────────────────────────────────────────────
     {"dataset": "stk_limit",             "mode": "incremental", "frequency": "daily", "at": "09:01"},
     {"dataset": "dividend",              "mode": "incremental", "frequency": "daily", "at": "07:20",
@@ -78,8 +94,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v4"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "a1d89a26e53c6d18e725baf9b95ada1c818b569d946340032d7afb30ba8d599c"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v6"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "aa595b4d1839e97817819e204831b835ce6ca17d6cf72459fdb7d09ae5b9556c"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 

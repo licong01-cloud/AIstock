@@ -16,6 +16,134 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("restriction,expected", [
+    (None, {"commit", "push", "create_or_update_pr", "merge_source", "metadata_sync", "root_sync"}),
+    ("no_merge", {"commit", "push", "create_or_update_pr", "metadata_sync", "root_sync"}),
+    ("no_pr", {"commit", "metadata_sync", "root_sync"}),
+    ("no_commit", set()), ("analysis_only", set()), ("unknown", set()),
+])
+def test_minimal_delivery_policy_honors_task_restrictions(tmp_path, restriction, expected):
+    catalog = tmp_path / "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(json.dumps({"agent_execution_defaults": {"source_delivery": {
+        "enabled": True, "authorization_ref": "user-approved task",
+    }}}), encoding="utf-8")
+    record = {"execution_restrictions": [restriction]} if restriction else {}
+    policy = workflow._agent_execution_policy(record, root=tmp_path)
+    assert set(policy["source_delivery"]["actions"]) == expected
+    assert policy["documentation"]["extra_narrative_files"] == 0
+    assert bool(policy["warnings"]) == (restriction == "unknown")
+
+
+def test_minimal_delivery_policy_never_invents_merge_authorization(tmp_path):
+    assert not workflow._agent_execution_policy(root=tmp_path)["source_delivery"]["enabled"]
+    catalog = tmp_path / "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text('{"agent_execution_defaults":{"source_delivery":{"enabled":true}}}', encoding="utf-8")
+    assert not workflow._agent_execution_policy(root=tmp_path)["source_delivery"]["enabled"]
+
+
+@pytest.mark.parametrize("action,restriction", [("merge", "no_merge"), ("pr", "no_pr"), ("merge", "analysis_only")])
+def test_minimal_delivery_restriction_prevents_remote_mutation(tmp_path, monkeypatch, action, restriction):
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    record = tmp_path / "bug.json"
+    record.write_text(json.dumps({"execution_restrictions": [restriction]}), encoding="utf-8")
+    monkeypatch.setattr(workflow, "_load_state", lambda *args: {"target_bug_json": "bug.json"})
+    monkeypatch.setattr(workflow, "build_finish_plan", lambda **kw: pytest.fail("restricted PR reached finish"))
+    monkeypatch.setattr(workflow, "_merge_pr_if_ready_for_bug", lambda *args: pytest.fail("restricted merge reached GitHub"))
+    with pytest.raises(workflow.WorkflowError, match="execution restrictions"):
+        workflow.build_run_plan(bug_id="BUG-999", mode=action, issue_json=None, changed_files=[],
+            create_worktree=False, dry_run=False, validation_evidence=[], task_slug=None,
+            allow_missing_linkage=False, allow_closed=False, base="origin/main", head="HEAD",
+            push=True, create_pr=True, merge=True, pr_url="https://github.com/licong01-cloud/AIstock/pull/1")
+
+
+@pytest.fixture
+def minimal_artifact_workflow(tmp_path, monkeypatch):
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_TASK_GIT_IDENTITY", None)
+    monkeypatch.setattr(workflow, "_assert_task_git_identity", lambda *args: None)
+    monkeypatch.setattr(workflow, "_update_active_index", lambda *args, **kwargs: None)
+    record = {"bug_id": "BUG-999", "title": "minimal artifacts", "module": "validation", "status": "open",
+        "github_issue_number": 1, "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1",
+        "allowed_write_scope": ["scripts/aistock_issue_workflow.py"], "execution_restrictions": ["no_merge"]}
+    source = tmp_path / "bug.json"
+    source.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(workflow, "find_bug_record", lambda **kwargs: (record, source))
+    monkeypatch.setattr(workflow, "_maybe_create_worktree", lambda **kwargs: {"branch": "bug/test", "worktree": str(tmp_path), "reused": True})
+    validation = {"required_plans": [], "recommended_plans": [], "production_gates": {}}
+    monkeypatch.setattr(workflow.flow, "build_fix_ready", lambda *args: {"validation_selection": validation})
+    monkeypatch.setattr(workflow.flow, "build_context_pack", lambda *args: {"problem_statement": "scope"})
+    monkeypatch.setattr(workflow.flow, "select_validation", lambda *args, **kwargs: validation)
+    monkeypatch.setattr(workflow.flow, "build_pr_quality", lambda **kwargs: {"scope_check": {"status": "passed"}})
+    monkeypatch.setattr(workflow, "build_fast_path_plan", lambda **kwargs: {})
+    monkeypatch.setattr(workflow, "build_runtime_contract", lambda **kwargs: {"runtime_impact": "none", "blocking": []})
+    monkeypatch.setattr(workflow, "_pre_pr_gate", lambda **kwargs: {"workflow_gate": "passed", "blocking": []})
+    return tmp_path, {"status": "ok", "affected_tests": {"suggested_tests": []}}
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_minimal_context_is_optional_and_resume_preserves_policy(minimal_artifact_workflow, monkeypatch, requested):
+    root, intel = minimal_artifact_workflow
+    start = workflow.build_start_plan(bug_id="BUG-999", issue_json=None, changed_files=[],
+        create_worktree=False, dry_run=False, task_slug=None, allow_missing_linkage=False,
+        allow_closed=False, context_markdown=requested, code_intelligence_summary_override=intel)
+    directory = root / workflow.WORKFLOW_ROOT / "BUG-999"
+    assert (directory / "context-pack.md").exists() == requested
+    assert (directory / "task-card.md").exists() and (directory / "task-card.json").exists()
+    task_card = json.loads((directory / "task-card.json").read_text(encoding="utf-8"))
+    assert bool(task_card["artifact_refs"]["context_pack_md"]) == requested
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda *args: {"dirty": False, "branch": "bug/test"})
+    monkeypatch.setattr(workflow, "_build_resume_runtime_preflight", lambda *args: {})
+    resume = workflow.build_resume_plan(bug_id="BUG-999", worktree=str(root))
+    assert not resume["stop_conditions"]
+    assert resume["context_resume_digest"]["execution_policy"]["execution_restrictions"] == ["no_merge"]
+    assert start["context_pack_md"] == task_card["artifact_refs"]["context_pack_md"]
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_minimal_finish_renders_pr_body_only_for_a_consumer(minimal_artifact_workflow, requested):
+    root, intel = minimal_artifact_workflow
+    finish = workflow.build_finish_plan(bug_id="BUG-999", issue_json=None,
+        changed_files=["scripts/aistock_issue_workflow.py"], base="origin/main", head="HEAD",
+        validation_evidence=[], plan_only=True, allow_missing_evidence=False,
+        persist_pr_body=requested, code_intelligence_summary_override=intel)
+    directory = root / workflow.WORKFLOW_ROOT / "BUG-999"
+    assert (directory / "pr-body.md").exists() == requested
+    assert bool(finish["pr_body_path"]) == requested
+    assert finish["closure_ready"] is False  # Documentation reduction never supplies missing evidence.
+    assert not list(directory.glob("*review*.md"))
+
+
+def test_minimal_pr_command_supplies_its_real_body_consumer(minimal_artifact_workflow, monkeypatch):
+    root, intel = minimal_artifact_workflow
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: intel)
+    consumed = []
+    def consume(**kwargs):
+        body = root / kwargs["finish"]["pr_body_path"]
+        assert body.is_file() and "BUG-999" in body.read_text(encoding="utf-8")
+        consumed.append(body)
+        return {"dry_run": True}
+    monkeypatch.setattr(workflow, "_maybe_create_pr", consume)
+    workflow.build_run_plan(bug_id="BUG-999", mode="pr", issue_json=None, changed_files=[],
+        create_worktree=False, dry_run=False, validation_evidence=[], task_slug=None,
+        allow_missing_linkage=False, allow_closed=False, base="origin/main", head="HEAD")
+    assert len(consumed) == 1
+
+
+def test_minimal_finish_keeps_runtime_blocking_evidence(minimal_artifact_workflow, monkeypatch):
+    _, intel = minimal_artifact_workflow
+    monkeypatch.setattr(workflow, "build_runtime_contract", lambda **kwargs: {
+        "runtime_impact": "backend", "backend_restart_required": True, "blocking": ["identity contract missing"],
+    })
+    finish = workflow.build_finish_plan(bug_id="BUG-999", issue_json=None, changed_files=[],
+        base="origin/main", head="HEAD", validation_evidence=[], plan_only=True,
+        allow_missing_evidence=False, code_intelligence_summary_override=intel)
+    assert finish["workflow_gate"] == "blocked"
+    assert "identity contract missing" in finish["validation_evidence_errors"]
+    assert finish["closure_ready"] is False
+
+
 def test_runner_only_janitor_skips_business_nightly_before_reading_actions(monkeypatch, tmp_path):
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
     fingerprint = hashlib.sha256(b"module=advisory.modeling|group_kind=module").hexdigest()[:16]
