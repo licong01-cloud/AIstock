@@ -109,8 +109,8 @@
   },
   "first_seen_at": "2026-10-06T12:33:54.676716Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "90ce76c0dd53609f561aaf80a3e8316113bb87df",
+  "fixed_at": "2026-10-06T15:35:18Z",
   "github_issue_number": 5581,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5581",
   "last_seen_at": "2026-10-06T12:33:54.676716Z",
@@ -118,6 +118,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5614",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -144,6 +145,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -155,7 +157,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1761",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5e2708282affea28",
+    "recorded_at": "2026-10-06T15:36:10.427518Z",
+    "runtime_contract_digest": "a1d1195093506adc6454ebf91824df4de36eafac950473ce7a8e6b4c549b3689",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "df481af744eda9207818babb5da61e52c57c831c",
+    "source_merge_commit": "90ce76c0dd53609f561aaf80a3e8316113bb87df",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5614",
+    "validation_evidence": [
+      "rtk pytest backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_worker.py -q -p no:cacheprovider -> passed",
+      "rtk ruff check backend/services/hmm_evolution/worker.py backend/tests/hmm_evolution/test_repository_integration.py -> passed",
+      "python -m py_compile backend/services/hmm_evolution/worker.py -> passed",
+      "python -m nox -s l0 --no-install -db none -> passed",
+      "python -m nox -s validation_module_registry_l0 --no-install -db none -> passed",
+      "git diff --check origin/main...HEAD -> passed"
+    ],
+    "validation_evidence_digest": "bed71d836b9756f1681973c799d756a082a4b5fc8e4cf5397e75028f9ba44931"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.evolution"
   ],
@@ -164,6 +192,14 @@
     "fingerprint": "74915827a330fd630eb92b44",
     "source_event_id": "FE-20261006-74915827a330"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/hmm_evolution/test_repository_integration.py backend/tests/hmm_evolution/test_worker.py -q -p no:cacheprovider -> passed",
+    "rtk ruff check backend/services/hmm_evolution/worker.py backend/tests/hmm_evolution/test_repository_integration.py -> passed",
+    "python -m py_compile backend/services/hmm_evolution/worker.py -> passed",
+    "python -m nox -s l0 --no-install -db none -> passed",
+    "python -m nox -s validation_module_registry_l0 --no-install -db none -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
