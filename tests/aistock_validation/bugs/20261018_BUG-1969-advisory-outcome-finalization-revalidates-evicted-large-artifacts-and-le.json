@@ -148,7 +148,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_0e93d579a57c0d4393e711f350b87b1f/operations?limit=50",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-operations/ahrop_ede34d946b8873c24638cdf909be8c3f",
     "fresh_process_evidence": [
       "Fresh Python process: two core regressions RED then GREEN; eight new adversarial/parent-cache scenarios passed; one final related matrix 57 passed. No service restart, financial evaluation, publish, DDL/DML or production task execution.",
       "X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json -> READ_ONLY_NATIVE_CHAIN_PASS: real TCN final SUMMARY operation ahrop_ede34d946b8873c24638cdf909be8c3f, exact persisted attempt and result native validation; attempt 161.663s, result 0.818s; 20 large candidate artifacts each fully validated once. Two source file SHA256 values unchanged throughout. SELECT-only rollback for persisted attempt; validation repository forbids database access. No financial evaluator, artifact publish, mutation or runtime activation.",
@@ -315,5 +315,14 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "acceptance_scope_review": {
+    "review_bug": "BUG-2195",
+    "previous_probe": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_0e93d579a57c0d4393e711f350b87b1f/operations?limit=50",
+    "note": "将验收对象绑定原生 SUMMARY 操作 ahrop_ede34d946b8873c24638cdf909be8c3f，与既存原生源验证回执一致。整页历史操作的两个时间顺序冲突另行保留，不修改、不容差放宽，也不冒称所有历史操作已恢复。",
+    "source_fix_unchanged": true,
+    "historical_failures_preserved": true,
+    "receipt": "X:/AIstock_temp/ADVISORY/historical-cleanup-20261106-v2/BUG-1969-native-terminal-readback.json",
+    "receipt_sha256": "fb5944382359ca94a141319fd065f9b1b31253da65e4ce902ab759ecc193cf98"
   }
 }

@@ -1039,9 +1039,45 @@ def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
 
 
 def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, Any]:
-    return workflow._evaluate_business_smoke_semantics(
-        url, json.dumps(payload), response_sha256=response_hash,
-    )[1]
+    return workflow._evaluate_business_smoke_semantics(url, json.dumps(payload), response_sha256=response_hash)[1]
+
+
+@pytest.mark.parametrize("area,key,value,passed", [
+    (None, None, None, True), ("query", "expected_terminal_status", "COMPLETED", False),
+    ("query", "expected_receipt_sha256", "b" * 64, False), ("query", "expected_batch_id", "other", False),
+    ("query", "expected_terminal_status", ["PARTIAL", "PARTIAL"], False),
+    ("query", "expected_receipt_sha256", "", False), ("run", "range_run_id", "other", False),
+    ("run", "status", "RUNNING", False), ("run", "status", "COMPLETED", False),
+    ("run", "final_receipt_ref", None, False), ("ref", "file_sha256", "missing", False),
+    ("ref", "relative_path", "range-receipts/../escape", False), ("ref", "artifact_kind", "DAY_RECEIPT", False),
+    ("run", "failed_day_count", 0, False), ("run", "completed_day_count", True, False),
+    ("run", "total_day_count", 2, False), ("run", "retryable_day_count", 1, False),
+    ("run", "finished_at", None, False), ("run", "finished_at", "2020-01-01T00:00:00+00:00", False),
+    ("run", "error_json", {"reason": "unexpected"}, False), ("payload", "ok", False, False),
+    ("payload", "status", "FAILED", False), ("default", "status", "PARTIAL", False),
+    ("default", "status", "COMPLETED", True)])
+def test_advisory_partial_terminal_requires_explicit_original_receipt(area, key, value, passed):
+    ref = dict(schema_version="advisory_historical_range_artifact_ref_v1", artifact_kind="RANGE_RECEIPT",
+        payload_schema_version="advisory_historical_range_run_execution_receipt_v1", producer_contract_version="v1",
+        relative_path="range-receipts/a.json", semantic_content_hash="a" * 64, payload_sha256="c" * 64, file_sha256="d" * 64)
+    run = dict(range_run_id="ahrr_test", batch_id="ahrb_test", status="PARTIAL", final_receipt_ref=ref,
+        final_receipt_hash="a" * 64, completed_day_count=2, failed_day_count=1, waiting_day_count=0,
+        retryable_day_count=0, materialized_day_count=45, total_day_count=45, row_version=7,
+        resume_trade_date=None, error_json=None, **dict.fromkeys(
+            ("created_at", "started_at", "finished_at", "updated_at"), "2026-08-14T00:00:00+00:00"))
+    payload, query = {"ok": True, "data": {"run": run}}, dict(expected_terminal_status="PARTIAL",
+        expected_batch_id="ahrb_test", expected_receipt_sha256="a" * 64)
+    if area == "default":
+        query, run[key] = {}, value
+    elif area:
+        {"run": run, "ref": ref, "query": query, "payload": payload}[area][key] = value
+    semantic = _business_semantic("http://localhost/api/v1/advisory/historical-range-runs/ahrr_test?"
+        + urllib.parse.urlencode(query, doseq=True), payload, "e" * 64)
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed and area != "default":
+        assert semantic["facts"]["unexecuted_day_count"] == 42
+        assert semantic["facts"]["failure_preserved"] and not semantic["facts"]["execution_completed"]
+        assert not semantic["facts"]["artifact_content_verified"]
 
 
 @pytest.mark.parametrize("state,patch,area,field,value,passed", [
@@ -2242,33 +2278,16 @@ def test_workflow_smoke_does_not_call_full_doctor(tmp_path: Path, monkeypatch: p
 
 def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: dict[str, Any] = {}
-    monkeypatch.setattr(
-        workflow,
-        "build_close_sync_plan",
-        lambda **kwargs: {"bug_id": "BUG-199", "workflow_gate": "fixed_source_pending_user_restart"},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_maybe_commit_and_pr_close_sync",
-        lambda **kwargs: pytest.fail("intermediate close-sync PR created"),
-    )
-    monkeypatch.setattr(workflow, "_production_gates_payload", lambda args=None: {})
-    monkeypatch.setattr(workflow, "_emit_args", lambda payload, args: emitted.update(payload))
-    args = argparse.Namespace(
-        bug_id="BUG-199",
-        issue_json=None,
-        pr_url="https://github.example/pull/199",
-        apply=True,
-        allow_missing_linkage=False,
-        validation_evidence=["pytest -> passed"],
-        merge_commit="a" * 40,
-        skip_github_check=False,
-        create_registry_worktree=True,
-        allow_current_worktree=False,
-        post_restart_receipt=None,
-        create_pr=True,
-    )
-
+    for name, value in {
+        "build_close_sync_plan": lambda **kwargs: {"bug_id": "BUG-199", "workflow_gate": "fixed_source_pending_user_restart"},
+        "_maybe_commit_and_pr_close_sync": lambda **kwargs: pytest.fail("intermediate close-sync PR created"),
+        "_production_gates_payload": lambda args=None: {}, "_emit_args": lambda payload, args: emitted.update(payload),
+    }.items():
+        monkeypatch.setattr(workflow, name, value)
+    args = argparse.Namespace(bug_id="BUG-199", issue_json=None, pr_url="https://github.example/pull/199",
+        apply=True, allow_missing_linkage=False, validation_evidence=["pytest -> passed"], merge_commit="a" * 40,
+        skip_github_check=False, create_registry_worktree=True, allow_current_worktree=False,
+        post_restart_receipt=None, create_pr=True)
     assert workflow.cmd_close_sync(args) == 0
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
