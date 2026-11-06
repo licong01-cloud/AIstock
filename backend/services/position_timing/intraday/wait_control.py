@@ -58,7 +58,10 @@ def evaluate_wait_control(
     previous = state or WaitControlState(control_spec_sha256=spec_hash, base_state=State(plan_sha256=digest(plan)))
     base, base_state = evaluate(plan, market, execution_view, base_policy, previous.base_state, as_of)
     status, reasons, first = base.status, base.reason_codes, previous.first_opportunity_at
-    if previous.control_spec_sha256 != spec_hash or (first is not None and first > base.as_of):
+    previous_start, previous_clock = previous.base_state.batch_started_at, previous.base_state.last_as_of
+    invalid_first = first is not None and (previous_start is None or previous_clock is None or
+        first > previous_clock or first > base.as_of or trading_minutes(previous_start, first, plan.target_trade_date) < 15)
+    if previous.control_spec_sha256 != spec_hash or invalid_first:
         status, reasons = "UNAVAILABLE", ("WAIT_CONTROL_STATE_IDENTITY_OR_CLOCK_CONFLICT",)
         next_state = previous
     else:

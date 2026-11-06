@@ -95,6 +95,14 @@ def test_control_state_cannot_be_rebound_to_another_implementation():
     assert run(plan, market_at(market, "09:50:10"), bad, "09:50:10")[0].status == "UNAVAILABLE"
 
 
+def test_restored_first_opportunity_cannot_sneak_in_b0_visibility_time():
+    plan, market = case()
+    _, state = run(plan, market)
+    bad = state.model_copy(update={"first_opportunity_at": at()})
+    result, _ = run(plan, market_at(market, "09:50:10"), bad, "09:50:10")
+    assert result.status == "UNAVAILABLE" and result.advice_available_at is None
+
+
 @pytest.fixture
 def three_arm(request):
     source_period = request.getfixturevalue("period")
