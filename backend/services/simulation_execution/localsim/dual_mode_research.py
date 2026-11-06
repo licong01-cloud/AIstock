@@ -23,11 +23,13 @@ from backend.services.position_timing.intraday.research_inputs import CandidateR
 from backend.services.strategy_package.manifest import compute_manifest_json_sha256
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
+from backend.services.simulation_runtime.models import TradingRuleDecision
 from backend.services.trading_core.ledger import InMemoryLedger
-from backend.services.trading_core.models import PositionLot
+from backend.services.trading_core.models import Fill, Order, OrderEvent, PositionLot
 
 from .human_operation import HumanOperationPolicy, operation_snapshot, validate_operation_configuration
 from .economic import local_sim_fact_payload
+from .models import LocalSimExecutionStateV1
 from .human_portfolio import run_human_portfolio_day
 from .native_research import native_backend_for, run_native_portfolio_day, run_cash_only_portfolio_day
 from .research_performance import ResearchAccountPool, ResearchMarketWorkspace, ResearchPerformanceOptions
@@ -58,7 +60,7 @@ def implementation_identity():
     shared.update(root / name for name in (
         "backend/services/strategy_package/runtime.py", "backend/services/strategy_package/models.py",
         "backend/services/strategy_package/manifest.py", "backend/services/selection_center/models.py",
-        "backend/services/simulation_runtime/decision.py", "backend/execution_algos/base_algo.py",
+        "backend/services/simulation_runtime/decision.py", "backend/services/simulation_runtime/models.py", "backend/execution_algos/base_algo.py",
         "backend/execution_algos/registry.py"))
     files["shared_authorities"] = {p.relative_to(root).as_posix():hashlib.sha256(
         p.read_bytes().replace(b"\r\n",b"\n")).hexdigest() for p in sorted(shared)}
@@ -463,36 +465,70 @@ def _compute_account_day(job: dict) -> dict:
     return {"account": result["account"], "commit_request": commit}
 
 
-def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | None = None,
-                      performance: ResearchPerformanceOptions, pool: ResearchAccountPool, metrics: dict, resources: ExitStack) -> dict:
-    """Resume only complete day journals; exact retry reads immutable results."""
-    inspect_started = perf_counter()
-    request, inspected, candidate_ref = inspect_study(request_ref)
-    preflight = inspected["preflight"]
-    package = read_json(checked_file(FileRef.model_validate(preflight["inputs"]["package"])))["package"]
-    if compute_manifest_json_sha256(package["manifest"]) != request["manifest_sha256"]:
-        raise ValueError("LOCALSIM_DUAL_MODE_MANIFEST_CHANGED")
-    manifest = StrategyPackageManifest.model_validate(package["manifest"])
-    cost_ref = FileRef.model_validate(preflight["inputs"]["cost_policy"])
-    cost = CostContract.model_validate_json(checked_file(cost_ref).read_text(encoding="utf-8"))
-    candidate = resources.enter_context(ResearchMarketWorkspace(CandidateReader(candidate_ref), performance.batch_days))
-    root = checked_file(request_ref).parent
-    inspection = {"schema_version": "localsim_dual_mode_source_inspection_v1", "request": request_ref.model_dump(),
-                  "candidate_manifest": candidate_ref.model_dump(), "stage": "COMPLETE_SOURCE_BATCH_INSPECTED",
-                  "source_identity": request["source_identity"], "trade_dates": request["trade_dates"],
-                  "price_policy": inspected["templates"].policy_document.model_dump()}
-    publish(root / "source_inspection.json", inspection)
-    metrics["source_inspection_seconds"] = perf_counter() - inspect_started
+def _economic_account_payload(account: dict) -> dict:
+    """Canonicalize typed parent audits with the native durable fact contract.
+
+    Raw audits stay immutable. Validate their native state hash before replacing
+    that derived integrity proof with the hash of its canonical economic fact.
+    No causal clocks, fills, quantities, prices or account observations are cut.
+    """
+    normalized = deepcopy(account)
+    native = normalized["native_quantity_evidence"]
+    native["trading_rule_decisions"] = [
+        local_sim_fact_payload(TradingRuleDecision.model_validate(d), fact_type="trading_rule_decision")
+        for d in native["trading_rule_decisions"]
+    ]
+    for parent in normalized["parents"]:
+        audits = ([parent["session"]] if "session" in parent else []) + parent.get("sessions", [])
+        for audit in audits:
+            if audit.get("schema_version") != "localsim_timing_parent_audit_v1":
+                raise ValueError("LOCALSIM_PERIOD_RECOMPUTE_AUDIT_SCHEMA_CONFLICT")
+            audit["order"] = local_sim_fact_payload(Order.model_validate(audit["order"]), fact_type="order")
+            audit["fills"] = [local_sim_fact_payload(Fill.model_validate(f), fact_type="fill") for f in audit["fills"]]
+            audit["events"] = [local_sim_fact_payload(OrderEvent.model_validate(e), fact_type="order_event")
+                               for e in audit["events"]]
+            state = LocalSimExecutionStateV1.model_validate(audit["execution_state"])
+            fact = local_sim_fact_payload(state, fact_type="execution_state")
+            fact.pop("state_hash")  # Already validated; raw proof also binds process creation time.
+            audit["execution_state"] = {"fact": fact, "canonical_fact_sha256": digest(fact)}
+    return normalized
+
+
+def _verify_recomputed_account_day(result: dict, record: dict) -> None:
+    """Compare native canonical economic facts; never write during a retry."""
+    left = _economic_account_payload(result["account"])
+    right = _economic_account_payload(record["checkpoint"]["account"])
+    if left != right:
+        path = "account"
+        while isinstance(left, (dict, list)) and isinstance(right, type(left)):
+            if isinstance(left, dict):
+                if left.keys() != right.keys():
+                    break
+                key = next(k for k in left if left[k] != right[k])
+            else:
+                if len(left) != len(right):
+                    break
+                key = next(i for i in range(len(left)) if left[i] != right[i])
+            left, right, path = left[key], right[key], path + "." + str(key)
+        raise ValueError("LOCALSIM_PERIOD_RECOMPUTE_ACCOUNT_CONFLICT:" + path)
+    request = result["commit_request"]
+    for group, field, kind in (("orders", "order_id", "order"), ("fills", "fill_id", "fill"),
+                               ("events", "event_id", "order_event"), ("cash_entries", "fill_id", "cash_entry")):
+        facts = {getattr(item, field): local_sim_fact_payload(item, fact_type=kind)
+                 for item in getattr(request, group)}
+        if facts != record["facts"][group]:
+            raise ValueError("LOCALSIM_PERIOD_RECOMPUTE_FACTS_CONFLICT:" + group)
+
+
+def execute_account_days(*, request: dict, inspected: dict, initials: list[dict], manifest,
+                         cost, candidate, root: Path, pool: ResearchAccountPool, metrics: dict,
+                         performance: ResearchPerformanceOptions, stop_after_account_days: int | None = None,
+                         verify_recompute: bool = False, day_schema: str | None = None) -> dict:
+    """One account-day orchestrator; callers must first inspect complete sources."""
     completed = root / "results.json"
-    initials = []
-    for profile in request["population"]:
-        account_id = "lsdm_" + digest([request["identity"], profile])[:40]
-        initials.append({"account_id": account_id, "portfolio_id": account_id, "package_id": request["package_id"],
-                         "manifest_sha256": request["manifest_sha256"], "origin_initial_cash_cny": "10000000",
-                         "cash_cny": "10000000", "positions": {}, **profile})
     histories = {i["account_id"]: [] for i in initials}
     references = {i["account_id"]: [] for i in initials}
-    computed = 0
+    computed, recomputed = 0, 0
     prepared_projections = {}
     for index, day_string in enumerate(request["trade_dates"]):
         market_started = perf_counter()
@@ -502,9 +538,9 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
         projection_path = checked_file(projection_ref)
         projection = prepared_projections.get(day_string) or read_json(projection_path)
         symbols = {r["symbol"] for r in projection["aggregate_results"]}
-        for rows in histories.values():
-            if rows:
-                symbols.update(rows[-1]["positions"])
+        for initial in initials:
+            rows = histories[initial["account_id"]]
+            symbols.update((rows[-1] if rows else initial)["positions"])
         if performance.batch_days > 1 and index % performance.batch_days == 0:
             window = request["trade_dates"][index:index + performance.batch_days]
             prepared_projections = {}
@@ -526,7 +562,7 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
             identity = _account_day_identity(request_identity=request["identity"], account_id=account_id,
                                              trade_date=day_string, prior=prior)
             run_id = "lsdm_" + identity[:48]
-            if ((root / "journals" / run_id / "generations/00000001.json").exists()
+            if (not verify_recompute and (root / "journals" / run_id / "generations/00000001.json").exists()
                     or remaining is not None and missing_count >= remaining):
                 jobs.append(None)
                 continue
@@ -548,6 +584,10 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
             path = root / "days" / account_id / (day_string + ".json")
             record = store.latest()
             if record is not None:
+                if verify_recompute:
+                    replayed = computations.result(account_index)
+                    _verify_recomputed_account_day(replayed, record)
+                    recomputed += 1
                 if (record["generation"] != 1 or record["checkpoint"]["extra"] != {"input_identity": identity, "day_index": 0}
                         or record["checkpoint"]["account"]["portfolio_id"] != account_id
                         or record["checkpoint"]["account"]["trade_date"] != day_string):
@@ -564,7 +604,7 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
                     if Decimal(account["initial_account"]["cash_cny"]) != Decimal(prior["cash_cny"]) or account["initial_account"]["positions"] != actual:
                         raise ValueError("LOCALSIM_DUAL_MODE_OPENING_ACCOUNT_CONFLICT")
             else:
-                if completed.exists() or path.exists():
+                if verify_recompute or completed.exists() or path.exists():
                     raise ValueError("LOCALSIM_DUAL_MODE_COMMITTED_PREFIX_MISSING")
                 if stop_after_account_days is not None and computed >= stop_after_account_days:
                     return {"status": "CHECKPOINTED", "computed_account_days": computed, "outcomes_read": False}
@@ -593,6 +633,8 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
                        "view_counts": {"positions": len(account["positions"]), "pnl": 1,
                                        "trades": len(record["facts"]["fills"]), "orders": len(record["facts"]["orders"]),
                                        "actions": len(account.get("human_operation_state", {}).get("actions", []))}}
+            if day_schema is not None:
+                summary["schema_version"] = day_schema
             publish(path, summary)
             # Keep restart inputs and economic observations, not duplicated
             # multi-MB order/queue audit snapshots for every completed day.
@@ -604,6 +646,42 @@ def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | No
                                                 "reason_codes", "average_price_raw", "weighted_wait_seconds")}
                             for p in summary["parents"]]})
             references[account_id].append(ref(path))
+    return {"histories": histories, "references": references, "computed": computed, "recomputed": recomputed}
+
+
+def _run_study_locked(request_ref: FileRef, *, stop_after_account_days: int | None = None,
+                      performance: ResearchPerformanceOptions, pool: ResearchAccountPool, metrics: dict, resources: ExitStack) -> dict:
+    """Resume only complete day journals; exact retry reads immutable results."""
+    inspect_started = perf_counter()
+    request, inspected, candidate_ref = inspect_study(request_ref)
+    preflight = inspected["preflight"]
+    package = read_json(checked_file(FileRef.model_validate(preflight["inputs"]["package"])))["package"]
+    if compute_manifest_json_sha256(package["manifest"]) != request["manifest_sha256"]:
+        raise ValueError("LOCALSIM_DUAL_MODE_MANIFEST_CHANGED")
+    manifest = StrategyPackageManifest.model_validate(package["manifest"])
+    cost_ref = FileRef.model_validate(preflight["inputs"]["cost_policy"])
+    cost = CostContract.model_validate_json(checked_file(cost_ref).read_text(encoding="utf-8"))
+    candidate = resources.enter_context(ResearchMarketWorkspace(CandidateReader(candidate_ref), performance.batch_days))
+    root = checked_file(request_ref).parent
+    inspection = {"schema_version": "localsim_dual_mode_source_inspection_v1", "request": request_ref.model_dump(),
+                  "candidate_manifest": candidate_ref.model_dump(), "stage": "COMPLETE_SOURCE_BATCH_INSPECTED",
+                  "source_identity": request["source_identity"], "trade_dates": request["trade_dates"],
+                  "price_policy": inspected["templates"].policy_document.model_dump()}
+    publish(root / "source_inspection.json", inspection)
+    metrics["source_inspection_seconds"] = perf_counter() - inspect_started
+    completed = root / "results.json"
+    initials = []
+    for profile in request["population"]:
+        account_id = "lsdm_" + digest([request["identity"], profile])[:40]
+        initials.append({"account_id": account_id, "portfolio_id": account_id, "package_id": request["package_id"],
+                         "manifest_sha256": request["manifest_sha256"], "origin_initial_cash_cny": "10000000",
+                         "cash_cny": "10000000", "positions": {}, **profile})
+    days_result = execute_account_days(request=request, inspected=inspected, initials=initials,
+        manifest=manifest, cost=cost, candidate=candidate, root=root, pool=pool, metrics=metrics,
+        performance=performance, stop_after_account_days=stop_after_account_days)
+    if "status" in days_result:
+        return days_result
+    histories, references, computed = (days_result[k] for k in ("histories", "references", "computed"))
     accounts = []
     for initial in initials:
         days = histories[initial["account_id"]]
