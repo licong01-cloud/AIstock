@@ -1341,7 +1341,9 @@ class TDXScheduler:
                     OR (target_status = 'reconciled' AND EXISTS (
                         SELECT 1 FROM market.data_alerts AS a
                         WHERE a.dataset=t.dataset AND NOT a.acknowledged
-                          AND a.alert_type IN ('retry_exhausted','retry_pending')
+                          AND (a.alert_type IN ('retry_exhausted','retry_pending')
+                            OR (a.alert_type='gap' AND a.details->>'retry_result'='pending'
+                              AND a.details->>'alert_gate'='data_sync_targets_final_state'))
                           AND a.details->>'target_id'=t.target_id)))
                   AND t.data_source IN ('readiness_gate','tushare','integrity_repair')
                   AND target_date IS NOT NULL
@@ -2910,7 +2912,9 @@ class TDXScheduler:
                     """UPDATE market.data_alerts
                           SET acknowledged = TRUE, ack_at = NOW()
                         WHERE dataset = %s
-                          AND (alert_type = 'retry_exhausted' OR alert_type = 'retry_pending')
+                          AND (alert_type = 'retry_exhausted' OR alert_type = 'retry_pending'
+                            OR (alert_type='gap' AND details->>'retry_result'='pending'
+                              AND details->>'alert_gate'='data_sync_targets_final_state'))
                           AND acknowledged = FALSE
                           AND details->>'target_id' = ANY(%s)""",
                     (dataset_key, family_ids),
@@ -2921,7 +2925,9 @@ class TDXScheduler:
                     # when an older alarm belongs to another fetch target.
                     cur.execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
                         WHERE dataset=%s AND acknowledged=FALSE
-                          AND alert_type IN ('retry_exhausted','retry_pending')
+                          AND (alert_type IN ('retry_exhausted','retry_pending')
+                            OR (alert_type='gap' AND details->>'retry_result'='pending'
+                              AND details->>'alert_gate'='data_sync_targets_final_state'))
                           AND details->>'target_date'=%s
                           AND details->>'alert_gate'='data_sync_targets_final_state'""",
                         (dataset_key, str(target_date)))
@@ -3017,7 +3023,9 @@ class TDXScheduler:
                 # A failed source target is not exhaustion of the dated repair
                 # family. Keep the real gap visible without claiming success.
                 alerts[-1].severity = "warning"
-                alerts[-1].alert_type = "retry_pending"
+                # Keep the deployed alert vocabulary: pending is a detailed
+                # recovery state, not an unregistered database alert type.
+                alerts[-1].alert_type = "gap"
                 alerts[-1].title = f"{dataset} 数据待补齐，已安排自动修复"
                 alerts[-1].message = f"数据集 {dataset} / {target_date} 尚未通过完整性验证，已保留自动修复任务"
                 alerts[-1].details.update(retry_result="pending", recovery_target_ids=recovery_ids)

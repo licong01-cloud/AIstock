@@ -69,7 +69,8 @@ def test_partition_retry_alarm_reflects_current_data_and_active_repair(monkeypat
         assert not alerts and len(reconciled) == 1
     elif state == "recovering":
         assert not reconciled and len(alerts) == 1
-        assert alerts[0].alert_type == "retry_pending" and alerts[0].severity == "warning"
+        assert alerts[0].alert_type == "gap" and alerts[0].severity == "warning"
+        assert alerts[0].details["retry_result"] == "pending"
         assert alerts[0].details["recovery_target_ids"] == ["repair"]
         assert any("data_alerts" in query and "acknowledged" in query for query, _ in updates)
     else:
@@ -86,6 +87,22 @@ def test_native_tushare_schedule_preserves_failed_result_reason(monkeypatch):
     scheduler._run_tushare_engine_sync(uuid.uuid4(), "schedule", "bak_basic", "incremental", "unit", {})
     assert updates[0]["last_status"] == "failed"
     assert updates[0]["last_error"] == "bak_basic: provider permission denied"
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_pending_gap_warning_dedup_does_not_suppress_real_gap(monkeypatch, pending):
+    from unittest.mock import Mock
+    from backend.services.data_health_alerter import DataHealthAlerter
+    alerter = DataHealthAlerter({"dbname": "unused"})
+    cursor = Mock()
+    cursor.fetchone.return_value = None
+    conn = SimpleNamespace(cursor=lambda: nullcontext(cursor))
+    monkeypatch.setattr(alerter, "_conn", lambda: nullcontext(conn))
+    assert not alerter._alert_exists_today("stk_alert", "gap", "2024-04-01",
+        retry_result="pending" if pending else None)
+    query, params = cursor.execute.call_args.args
+    assert "retry_result" in query
+    assert params[-1] == ("pending" if pending else "")
 
 
 def test_pending_warning_write_failure_keeps_old_error_visible(monkeypatch):
