@@ -205,15 +205,20 @@ class DataHealthAlerter:
 
     # -- DB operations --------------------------------------------------------
 
-    def _alert_exists_today(self, dataset: str, alert_type: str, target_date: Optional[str] = None) -> bool:
+    def _alert_exists_today(self, dataset: str, alert_type: str, target_date: Optional[str] = None,
+                            *, retry_result: Optional[str] = None) -> bool:
         """Check if an alert for this dataset+type was already created today."""
+        # A recovery-in-progress warning and a real physical gap must not
+        # suppress each other just because they share the schema's gap type.
+        recovery_scope = " AND COALESCE(details->>'retry_result','')=%s" if alert_type == "gap" else ""
+        scope_params = (retry_result or "",) if recovery_scope else ()
         if target_date:
             with self._conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT 1 FROM market.data_alerts WHERE dataset=%s AND alert_type=%s "
-                        "AND details->>'target_date'=%s AND acknowledged=FALSE LIMIT 1",
-                        (dataset, alert_type, target_date),
+                        "AND details->>'target_date'=%s AND acknowledged=FALSE" + recovery_scope + " LIMIT 1",
+                        (dataset, alert_type, target_date, *scope_params),
                     )
                     return cur.fetchone() is not None
         with self._conn() as conn:
@@ -222,16 +227,17 @@ class DataHealthAlerter:
                     "SELECT 1 FROM market.data_alerts"
                     " WHERE dataset = %s AND alert_type = %s"
                     "   AND created_at >= CURRENT_DATE"
-                    " LIMIT 1",
-                    (dataset, alert_type),
+                    + recovery_scope + " LIMIT 1",
+                    (dataset, alert_type, *scope_params),
                 )
                 return cur.fetchone() is not None
 
     def _insert_alert(self, alert: DataAlert) -> Optional[str]:
         """Insert an alert row. Returns alert_id string or None on dedup."""
         target_date = alert.details.get("target_date")
-        if (self._alert_exists_today(alert.dataset, alert.alert_type, str(target_date)) if target_date
-                else self._alert_exists_today(alert.dataset, alert.alert_type)):
+        scope = {"retry_result": alert.details.get("retry_result")} if alert.alert_type == "gap" else {}
+        if (self._alert_exists_today(alert.dataset, alert.alert_type, str(target_date), **scope) if target_date
+                else self._alert_exists_today(alert.dataset, alert.alert_type, **scope)):
             _logger.debug("dedup: skip %s/%s (already alerted today)", alert.dataset, alert.alert_type)
             return None
 
