@@ -11,6 +11,7 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
     research_symbols = {
         sdk + ".wait_control": {"CONTROL_ID", "WaitControlSpec", "WaitControlState", "WaitControlDecision", "evaluate_wait_control"},
         sdk + ".wait_control_results": {"inspect_plan", "economic_opening", "WaitBudgetAnalysisSpec", "WaitBudgetFacts", "WaitBudgetAccount"},
+        sdk + ".wait_control_history": {"inspect_history_plan", "HistoryAnalysisSpec"},
     }
     if module in research_symbols:
         return bool(names) and set(names) <= research_symbols[module]
@@ -104,6 +105,9 @@ def test_sdk_consumer_exception_does_not_open_other_consumers_or_internal_module
     assert _approved_localsim_sdk_import(consumer, sdk + ".wait_control_results", ["inspect_plan", "WaitBudgetFacts"])
     for denied in ("prepare", "analyze", "source_preflight", "*"):
         assert not _approved_localsim_sdk_import(consumer, sdk + ".wait_control_results", [denied])
+        assert not _approved_localsim_sdk_import(consumer, sdk + ".wait_control_history", [denied])
+    assert _approved_localsim_sdk_import(consumer, sdk + ".wait_control_history", ["inspect_history_plan", "HistoryAnalysisSpec"])
+    assert not _approved_localsim_sdk_import(Path("backend/services/advisory/service.py"), sdk + ".wait_control_history", ["inspect_history_plan"])
     assert not _approved_localsim_sdk_import(Path("backend/services/advisory/service.py"), sdk + ".wait_control", ["evaluate_wait_control"])
     period = consumer.with_name("period_research.py")
     assert _approved_localsim_sdk_import(period, sdk + ".continuous_results", ["period_source_preflight"])
