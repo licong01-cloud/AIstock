@@ -1,4 +1,6 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.65
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.66
+
+> 2026-11-08单信号接续：原人口输入接收完成后，编制[ID1272单一隔夜价格坐标增量F1](advisory_lstm_overnight_increment_v1_f1_design_20261108.md)，执行与证据入口见[当前接续计划](../analysis/advisory_lstm_next_research_plan_20261107.md)。仅固定原54字段同Ridge B/B+F、未来最多3fit提案、原生Top10/5TD/100bps主目标及明确停止条件；本轮0金融fit、0收益标签读取、0新排序，三旧B只完成元数据验收，完整控制匹配须在未来fit前核验。该设计不恢复下列已结束模型搜索，不宣称历史PIT/独立经济确认或可上线模型；实施/训练/生产状态分别报告，当前金融fit授权仍0，累计266实际Advisory fit＋1旧index保持。
 
 > 2026-11-06跨期尺度审查已完成零拟合负分支：[原计划](../analysis/advisory_lstm_crosssection_scale_research_plan_20261106.md)及[结果报告](../analysis/advisory_lstm_crosssection_scale_review_20261106.md)。原21150行/423D、三旧Ridge身份和阶段链通过；68,526条统计、972,900秩坐标及162阈值独立核算PASS。开发没有满足尺度/贡献联合条件的因子；压力仅波动因子4D和既知VSTD5单日，没有两个因子达到20D且跨两个月。行支持97%以上，但开发/压力完整50股票D仅36/126、51/118，未达事前80%。终态NO_SCALE_CANDIDATE_EVIDENCE，P2/P3不执行，0新候选/金融fit/收益标签/推荐排序，累计266＋1保持；无新上线模型，不自动放宽门槛或恢复模型轮换。原生/V2、Top50→Top10/5TD/100bps及暂停方向保持；NON_VINTAGE和已消费历史不成为PIT或独立经济证明。
 
