@@ -32,18 +32,24 @@
   "evidence_uris": [],
   "expected": "历史事件补采按显式任务语义恢复；完整来源查询成功待验证不误报同步失败；真接口失败/物理缺口保留，验证当前revision后才自动关闭报警；有限队列只处理确需来源查询的日期。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/tushare_event_inputs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_event_inputs.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2199-historical-event-retries-expire-before-recovery-and-misreport-exhaustion.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/services/tushare_sync_engine.py",
       "backend/services/tushare_event_inputs.py",
-      "backend/services/data_integrity/worker.py",
+      "backend/services/tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_tushare_event_inputs.py",
-      "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "tests/aistock_validation/bugs/20261107_BUG-2199-historical-event-retries-expire-before-recovery-and-misreport-exhaustion.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -215,24 +221,30 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process verify_dev.py PASS: native DEV SQL, current source-proof/physical-verdict separation, source hashes recorded at X:/AIstock_temp/DATA_PREPARATION/stk-alert-retry-20261108/dev-verification.json; production_write=false; runtime_action=false"
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "business_smoke_contract_id": "local_data_freshness",
-    "database_readback_ref": "not_required",
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Fresh Python process verify_dev.py PASS: native DEV SQL, current source-proof/physical-verdict separation, source hashes recorded at X:/AIstock_temp/DATA_PREPARATION/stk-alert-retry-20261108/dev-verification.json; production_write=false; runtime_action=false"],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": [
+    "planned_target_ids": [
       "backend-main",
       "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
