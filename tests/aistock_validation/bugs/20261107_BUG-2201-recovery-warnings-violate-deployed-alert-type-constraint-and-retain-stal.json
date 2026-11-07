@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "恢复中警告可写入现有schema；精确验证通过后自动闭环，不关闭无关gap、不过早消除真实错误；不需要数据库迁移，不加行情扫描。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_health_alerter.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2201-recovery-warnings-violate-deployed-alert-type-constraint-and-retain-stal.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/data_health_alerter.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2201-recovery-warnings-violate-deployed-alert-type-constraint-and-retain-stal.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -125,18 +132,24 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process X:/AIstock_temp/DATA_PREPARATION/stk-alert-retry-20261108/verify_alert_dev.py -> PASS; exact source hashes and native DEV CHECK/dedup/recovery readback at alert-dev-verification.json. Existing DEV schema reproduced old CheckViolation; pending warning persists without DDL; both dedup directions distinct; only matching recovery warning closes after current VALID; unrelated real gap preserved; fixtures rolled back; production_write=false; runtime_action=false"
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "business_smoke_contract_id": "local_data_freshness",
-    "database_readback_ref": "not_required",
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Fresh Python process X:/AIstock_temp/DATA_PREPARATION/stk-alert-retry-20261108/verify_alert_dev.py -> PASS; exact source hashes and native DEV CHECK/dedup/recovery readback at alert-dev-verification.json. Existing DEV schema reproduced old CheckViolation; pending warning persists without DDL; both dedup directions distinct; only matching recovery warning closes after current VALID; unrelated real gap preserved; fixtures rolled back; production_write=false; runtime_action=false"],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
