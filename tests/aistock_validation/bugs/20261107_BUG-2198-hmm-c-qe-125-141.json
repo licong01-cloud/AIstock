@@ -28,12 +28,18 @@
   ],
   "expected": "同一受控合同六账户完成141日及9/30、10/29执行估值，0新模型训练或推理",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261107_BUG-2198-hmm-c-qe-125-141.json",
+      "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
+      "scripts/qe_terminal_interval_executor.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/qe_terminal_interval_executor.py",
-      "backend/tests/unified_engine/test_qe_terminal_interval_executor.py"
+      "tests/aistock_validation/bugs/20261107_BUG-2198-hmm-c-qe-125-141.json",
+      "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
+      "scripts/qe_terminal_interval_executor.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/qe_terminal_interval_executor.py",
@@ -88,6 +94,7 @@
   "first_seen_at": "2026-11-07T17:21:11.321004Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "终止边界取自各TradeCalendarManager实例的显式end_time；缺失/NaT拒绝，保留物理末栏、shift、越界及旧9月行为。只改worker脚本与对应测试。",
   "fixed_at": null,
   "github_issue_number": 7126,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7126",
@@ -105,14 +112,27 @@
     "l0",
     "qe_read_backend"
   ],
+  "review_results": {
+    "completeness_and_regression": "PASS：旧9月边界、10月跨月、独立实例、缺失end_time及非法补造栏均覆盖；两节点真实Qlib执行器reset验证通过",
+    "correctness": "PASS：以实际end_time替换旧常量；不改交易日期、价格、现金或消费公式",
+    "design_compliance": [
+      "原B0/C两臂三seed不变",
+      "冻结预测、数据、策略及费用不变",
+      "完整141日及两关键末日配置保留，经济验收待运行",
+      "没有提交不完整实现为经济结果；Windows无Qlib明确skip"
+    ]
+  },
   "risk_area": "bug",
+  "root_cause": "BoundedTerminalCalendar将旧125日研究终止日硬编码为2026-09-30，10月配置正常但执行器在125/141处拒绝。",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -176,6 +196,11 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "verification_evidence": [
+    "Ruff changed source/test PASS; git diff --check PASS",
+    "Windows focused test SKIPPED_NO_QLIB",
+    "Both native workers:8/8 test methods each +141 actual daily intervals +240 minute intervals each on2026-09-30 and2026-10-29 +actual Simulator reset/NestedExecutor PASS"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
