@@ -34,6 +34,7 @@ class DailyIntegrityWorker:
             return []
         if not 1 <= limit <= 50:
             raise ValueError("contract wakeup must share the bounded worker batch")
+        from backend.services.tushare_event_inputs import EVENT_DATASETS
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""WITH wake AS (
                 SELECT t.target_id FROM market.data_sync_targets t
@@ -43,7 +44,14 @@ class DailyIntegrityWorker:
                   AND t.dataset=ANY(%s::text[]) AND t.target_date<=%s
                   AND t.target_status IN ('pending','retry') AND t.next_retry_at>clock_timestamp()
                   AND p.validation_status='UNVERIFIED'
-                  AND p.metadata#>>'{validation,reason}'='non_daily_dataset_contract'
+                  AND (p.metadata#>>'{validation,reason}'='non_daily_dataset_contract'
+                    OR (p.dataset=ANY(%s::text[])
+                      AND p.metadata#>>'{validation,reason}'='complete_current_event_query_required'
+                      AND NOT EXISTS (SELECT 1 FROM market.data_sync_targets f
+                        WHERE f.dataset=t.dataset AND f.target_date=t.target_date
+                          AND f.data_source IN ('tushare','integrity_repair')
+                          AND COALESCE(f.target_scope->>'operation','FETCH')<>'VALIDATE_ONLY'
+                          AND f.target_status IN ('pending','retry'))))
                   AND p.data_revision=(t.metadata->>'desired_revision')::bigint
                   AND (t.metadata->>'lease_until' IS NULL
                        OR (t.metadata->>'lease_until')::timestamptz<=clock_timestamp())
@@ -52,7 +60,7 @@ class DailyIntegrityWorker:
                 UPDATE market.data_sync_targets t SET target_status='pending',
                     next_retry_at=clock_timestamp(),updated_at=clock_timestamp()
                 FROM wake WHERE t.target_id=wake.target_id
-                RETURNING t.dataset,t.target_date""", (sorted(set(datasets)), today, limit))
+                RETURNING t.dataset,t.target_date""", (sorted(set(datasets)), today, sorted(EVENT_DATASETS), limit))
             return [dict(row) for row in cur.fetchall()]
 
     def run_once(self, *, limit=10, budget_seconds=45):
@@ -169,7 +177,11 @@ class DailyIntegrityWorker:
                 for dataset in dependencies:
                     enqueue_validation(conn, dataset, day)
             return
+        from backend.services.tushare_event_inputs import EVENT_DATASETS
+        event_query_missing = (obligation.dataset in EVENT_DATASETS
+            and result.reason == "complete_current_event_query_required")
         if (result.state not in {PartitionState.INCOMPLETE, PartitionState.WAIT_UPSTREAM}
+                and not event_query_missing
                 and result.reason not in {"complete_source_scan_not_bound_to_revision",
                     "row_count_seed_is_not_a_complete_source_scan", "index_quote_query_scope_incomplete"}):
             return

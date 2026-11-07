@@ -29,7 +29,10 @@ def test_newly_supported_contract_wakes_validation_not_facts_or_a_valid_verdict(
     assert "UPDATE market.data_sync_targets" in query
     assert "UPDATE market.dataset_date_refresh_audit" not in query
     assert "VALID'" not in query and "market.kline" not in query
-    assert params == (["idx_anns"], date(2026, 11, 6), 10)
+    assert params[0:2] == (["idx_anns"], date(2026, 11, 6))
+    assert set(params[2]) == {"stk_shock", "stk_high_shock", "stk_alert", "idx_anns", "stk_seasoned"}
+    assert params[3] == 10
+    assert "complete_current_event_query_required" in query and "NOT EXISTS" in query
 
 
 def test_rearmed_contract_validation_gets_a_slot_without_increasing_worker_budget():
@@ -105,6 +108,27 @@ def test_unproven_source_scan_creates_exact_fetch_instead_of_endless_validation(
     record = repo.upsert_target.call_args.args[0]
     assert record.dataset == "index_daily" and record.target_date == date(2026, 10, 28)
     assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
+
+
+@pytest.mark.parametrize("dataset,expected", [("stk_alert", True), ("idx_anns", True), ("daily_basic", False)])
+def test_missing_event_query_proof_requeues_source_not_a_false_valid(monkeypatch, dataset, expected):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    import backend.services.data_sync_targets as targets
+    repo = Mock()
+    monkeypatch.setattr(targets, "DataSyncTargetRepository", lambda: repo)
+    worker = DailyIntegrityWorker(repository=SimpleNamespace(transaction=lambda: nullcontext(object())))
+    worker._repair_target(Obligation(dataset, "event", "23:59"), date(2024, 4, 1),
+        ValidationResult(PartitionState.UNVERIFIED, (), {}, reason="complete_current_event_query_required"))
+    assert repo.upsert_target.called is expected
+    if expected:
+        record = repo.upsert_target.call_args.args[0]
+        assert record.data_source == "integrity_repair" and record.target_status == "retry"
+        assert record.target_date == date(2024, 4, 1)
+        assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
 
 
 def test_fair_validation_query_uses_only_the_small_target_ledger():
