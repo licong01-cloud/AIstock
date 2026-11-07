@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2198",
-  "closed_at": null,
+  "closed_at": "2026-11-07T17:46:48Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,15 +29,15 @@
   "expected": "同一受控合同六账户完成141日及9/30、10/29执行估值，0新模型训练或推理",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261107_BUG-2198-hmm-c-qe-125-141.json",
       "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
-      "scripts/qe_terminal_interval_executor.py"
+      "scripts/qe_terminal_interval_executor.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2198-hmm-c-qe-125-141.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261107_BUG-2198-hmm-c-qe-125-141.json",
       "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
-      "scripts/qe_terminal_interval_executor.py"
+      "scripts/qe_terminal_interval_executor.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2198-hmm-c-qe-125-141.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -93,9 +93,9 @@
   },
   "first_seen_at": "2026-11-07T17:21:11.321004Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "0bd4fd3a431b786175a20c4ec75b9e9bdb4586b5",
   "fix_summary": "终止边界取自各TradeCalendarManager实例的显式end_time；缺失/NaT拒绝，保留物理末栏、shift、越界及旧9月行为。只改worker脚本与对应测试。",
-  "fixed_at": null,
+  "fixed_at": "2026-11-07T17:46:48Z",
   "github_issue_number": 7126,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7126",
   "last_seen_at": "2026-11-07T17:21:11.321004Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7130",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,6 +132,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -140,7 +142,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2198",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bbb23415251d0b0f",
+    "recorded_at": "2026-11-07T17:47:51.371989Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8fe6d174ca157dd423b2b948a30fa8e8e88ec606",
+    "source_merge_commit": "0bd4fd3a431b786175a20c4ec75b9e9bdb4586b5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7130",
+    "validation_evidence": [
+      "python -m nox -s l0 --reuse-existing-virtualenvs -> passed, guardrails zero findings",
+      "rtk ruff check scripts/qe_terminal_interval_executor.py backend/tests/unified_engine/test_qe_terminal_interval_executor.py -> passed"
+    ],
+    "validation_evidence_digest": "2b5763b50125460ce5a0f69e3b5937ff84025dd96997b0b3038137ca5549c7ed"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -149,6 +173,10 @@
     "fingerprint": "3fdf058ff55ec5e75c0c0f95",
     "source_event_id": "FE-20261107-3fdf058ff55e"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --reuse-existing-virtualenvs -> passed, guardrails zero findings",
+    "rtk ruff check scripts/qe_terminal_interval_executor.py backend/tests/unified_engine/test_qe_terminal_interval_executor.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
