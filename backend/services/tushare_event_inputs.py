@@ -259,6 +259,11 @@ def sync_events(engine, conn, spec, start, end, job_id):
     from .tushare_supplemental_inputs import request_windows
     result = SyncResult(dataset=spec.name, mode='sync', job_id=job_id)
     fetcher = EventFetcher(engine, conn, spec, job_id)
+    today = dt.datetime.now(ZoneInfo('Asia/Shanghai')).date()
+
+    def target_metadata(day, params):
+        return {'event_query': params, 'retry_intent':
+                'historical_event_backfill' if day < today else 'daily_event_query'}
     ranges = [(day, day) for day in engine._late_recheck_dates.get(spec.name, []) if not start <= day <= end]
     # initial_start_date seeds an absent incremental cursor; it is not a
     # provider availability boundary and must not clip an explicit backfill.
@@ -271,7 +276,7 @@ def sync_events(engine, conn, spec, start, end, job_id):
                 for row in facts:
                     by_day.setdefault(row['event_date'], []).append(row)
                 for day in _date_range(left, right):
-                    target = engine._upsert_sync_target(spec, day, metadata={'event_query': params})
+                    target = engine._upsert_sync_target(spec, day, metadata=target_metadata(day, params))
                     written, retained = store_day(engine, conn, spec, day, by_day.get(day, []), params, job_id)
                     completed.add(day)
                     result.inserted_rows += written
@@ -288,12 +293,14 @@ def sync_events(engine, conn, spec, start, end, job_id):
             for day in _date_range(outer_start, outer_end):
                 if day in completed:
                     continue
-                target = engine._upsert_sync_target(spec, day)
+                target = engine._upsert_sync_target(spec, day, metadata=target_metadata(day,
+                    {'start_date': outer_start.isoformat(), 'end_date': outer_end.isoformat()}))
                 engine._refresh_audit.record_failure(dataset=spec.name, trade_date=day,
                     error_message=str(exc), job_id=str(job_id), data_source='tushare', conn=conn,
                     quality_status='error', failure_category='event_query_incomplete')
                 engine._record_sync_attempt(target, 'retry', job_id=job_id, rows_written=0,
-                    rows_observed=0, error_message=str(exc))
+                    rows_observed=0, error_message=str(exc),
+                    context={'failure_category': 'event_query_incomplete'})
             break  # retain completed windows; never advance past an unexplained failed range
     return result
 

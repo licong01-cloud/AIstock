@@ -1297,6 +1297,26 @@ class TushareSyncEngine:
         # A bounded exact-date queue also repairs facts published after the tail.
         # Do not widen an old target into a contiguous full-history fetch.
         with conn.cursor() as cur:
+            if spec.name in EVENT_DATASETS:
+                # A validator waiting on an already completed source query is
+                # not another fetch obligation. Keep actual physical failures
+                # eligible, even if a provider query previously succeeded.
+                cur.execute("""SELECT DISTINCT t.target_date FROM market.data_sync_targets t
+                    LEFT JOIN market.dataset_date_refresh_audit p ON p.dataset=t.dataset
+                      AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                    LEFT JOIN market.dataset_date_refresh_audit s ON s.dataset=t.dataset
+                      AND s.trade_date=t.target_date AND s.data_source='tushare'
+                    WHERE t.dataset=%s AND t.target_date<=%s AND t.target_date IS NOT NULL
+                      AND t.data_source<>'canonical_db'
+                      AND COALESCE(t.target_scope->>'operation','')<>'VALIDATE_ONLY'
+                      AND t.target_status IN ('pending','retry','final_blocked')
+                      AND NOT COALESCE(s.status='success'
+                        AND s.metadata#>>'{event_scan,complete}'='true'
+                        AND s.metadata#>>'{event_scan,schema_version}'='tushare_event_scan_v1'
+                        AND s.metadata->'integrity_observed_revision'=to_jsonb(p.data_revision)
+                        AND p.validation_status IN ('UNVERIFIED','VALID'),false)
+                    ORDER BY t.target_date LIMIT 5""", (spec.name, end_date))
+                return [row[0] for row in cur.fetchall()]
             cur.execute(
                 "SELECT DISTINCT target_date FROM market.data_sync_targets "
                 "WHERE dataset=%s AND target_date<=%s AND target_date IS NOT NULL "

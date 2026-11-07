@@ -245,6 +245,9 @@ def test_failed_source_window_keeps_retry_target_and_stops_no_false_empty(monkey
     engine._refresh_audit.record_success.assert_not_called()
     engine._refresh_audit.record_failure.assert_called_once()
     assert engine._record_sync_attempt.call_args[0] == ('target', 'retry')
+    assert engine._record_sync_attempt.call_args.kwargs['error_message'] == 'source failed'
+    assert engine._record_sync_attempt.call_args.kwargs['context']['failure_category'] == 'event_query_incomplete'
+    assert engine._upsert_sync_target.call_args.kwargs['metadata']['retry_intent'] == 'historical_event_backfill'
 
 
 @pytest.mark.parametrize('tamper', [False, True])
@@ -302,6 +305,20 @@ def test_event_incremental_without_cursor_uses_training_floor():
     start, details = incremental_start(engine, conn, DATASET_REGISTRY['stk_alert'], dt.date(2026, 11, 6))
     assert start == dt.date(2018, 8, 1)
     assert details['safe_audit_cursor_date'] is None
+
+
+def test_event_late_queue_ignores_validation_only_and_completed_query_proofs():
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+    conn, cursor = Mock(), Mock()
+    conn.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    conn.cursor.return_value.__exit__ = Mock(return_value=False)
+    cursor.fetchall.return_value = [(dt.date(2024, 4, 1),)]
+    assert TushareSyncEngine._unclosed_publication_dates(conn, DATASET_REGISTRY['stk_alert'],
+        dt.date(2026, 11, 7)) == [dt.date(2024, 4, 1)]
+    query = cursor.execute.call_args.args[0]
+    assert "VALIDATE_ONLY" in query and "event_scan" in query
+    assert "integrity_observed_revision" in query and "data_revision" in query
+    assert "LIMIT 5" in query and "tushare_risk_event_raw" not in query
 
 
 def shared_row(dataset='stk_alert', *, revision=0):
