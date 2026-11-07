@@ -1,6 +1,6 @@
 # 盘中择时：同等待预算对照 F1 设计
 
-日期：2026-11-07。Owner：position_timing。状态：OCTOBER_DIAGNOSED_HISTORY_BLOCKED_SOURCE_FILES。
+日期：2026-11-07。Owner：position_timing。状态：HISTORY_SOFTWARE_VERIFIED_LOCALSIM_RUN_PENDING。
 10月三户51账户日已由LocalSIM完成并由择时消费；1—9月扩展研究的接口、来源与账户执行分别验收。
 
 ## Background
@@ -176,8 +176,8 @@ DESIGN_VERIFIED仅表示设计闭合；择时软件验证、LocalSIM接入和新
 | F-407 | intraday/wait_control_results.py::prepare/source_preflight | backend/tests/position_timing/test_intraday_wait_control.py | VERIFIED | none |
 | F-408 | intraday/continuous_results.py::period_account_rows；intraday/wait_control_results.py::analyze | backend/tests/position_timing/test_intraday_wait_control.py；backend/tests/position_timing/test_intraday_period_continuation.py | VERIFIED | none |
 | F-409 | 本文Contracts-7；intraday/wait_control_diagnostics.py | backend/tests/position_timing/test_intraday_wait_history.py；本文2026-11-07真实归因证据 | VERIFIED | none |
-| F-410 | 本文Contracts-8；intraday/wait_control_history.py | backend/tests/position_timing/test_intraday_wait_history.py；artifact:X:/AIstock_temp/position-timing-wait-history-20261107/source_blocker.json | BLOCKED | 原价格来源617份固定路径文件缺失，真实prepare未通过 |
-| F-411 | 本文Contracts-8；intraday/wait_control_history.py | backend/tests/position_timing/test_intraday_wait_history.py；backend/tests/position_timing/test_isolation.py | BLOCKED | 定向功能测试通过，真实历史plan及LocalSIM三户未接入；不得标完整交付 |
+| F-410 | 本文Contracts-8；intraday/wait_control_history.py | backend/tests/position_timing/test_intraday_wait_history.py；artifact:X:/AIstock_temp/position-timing-wait-history-20261107/resume_verification_r1.json | VERIFIED | none |
+| F-411 | 本文Contracts-8；intraday/wait_control_history.py | backend/tests/position_timing/test_intraday_wait_history.py；backend/tests/position_timing/test_isolation.py；artifact:X:/AIstock_temp/position-timing-wait-history-20261107/parent_reduction_verification_r1.json | VERIFIED | none |
 
 ## 2026-11-06离线软件交付证据（历史记录）
 
@@ -233,15 +233,30 @@ LocalSIM需要一个独立history request（`localsim_wait_budget_history_reques
 `HistoryAnalysisSpec`包含research_plan、facts和可选producer_economic_retry；新`analyze`先核验全部来源、三个opening及543个day SHA，再调用既有period_account_rows和三户诊断。source检查完成前不读取新研究NAV；少日/重复日/未知账户/资金漂移/非有限或未来NAV失败显式。分析产物不可变，exact retry只复用产物，不触发账户重算。
 全期间三项比较保持C2−W15主比较；月度和季度以各账户上一期间末NAV作为区间期初，MDD从该期初及区间全部分钟NAV重算，不能取每日MDD最大值。月/季报告不代表重置账户，不把月收益直接相加，不与独立10月共同opening研究拼接累计收益。
 不确定性只对全期间每日配对净PnL差/共同初始资本做5交易日循环区块bootstrap（2000次、seed=20261107）；报告均值bps/日的95%区间及三比较Bonferroni区间，不冒称实际累计收益或MDD的区间。月/季及BUY/SELL、波动/方向情形仅诊断，不回选规格；当前先输出月/季，行情分层须有明确前缀字段来源，缺少时UNAVAILABLE，不追加模型或数据依赖。不设置MDE或盈利准入。
-生产入口只有REAL_HISTORY；测试夹具仅为定向测试证据。WSL账户内逐日顺序、账户间有界并行由LocalSIM控制。当前真实543账户日状态为NOT_RUN_SOURCE_BLOCKED，来源修复后仍需OWNER_INTEGRATION，不将本地分析函数通过说成账户已回放。
+生产入口只有REAL_HISTORY；测试夹具仅为定向测试证据。WSL账户内逐日顺序、账户间有界并行由LocalSIM控制。当前真实543账户日状态为NOT_RUN_OWNER_INTEGRATION_REQUIRED：来源阻断已消除，择时侧完整软件合同及真实plan已验证，LocalSIM尚须接入现金起跑并返回真实三户事实。F-410/411验证的是本窗口的软件/来源/统计合同，不替代LocalSIM账户接入或543账户日经济结果验收。
 
-## 2026-11-07真实归因与研发阻断证据
+## 2026-11-07真实归因与历史阻断记录
 
 P0完整51账户日只读分析报告：`X:/AIstock_temp/position-timing-wait-history-20261107/artifacts/intraday_v1/wait_budget_detailed_diagnostics/c494b597de6a5412b4821c1931819d2e1138202223cd25155063508e0ad3aa66.json`，完整SHA `d6bde9206f080ce82fa310e54fe292f2480f8bdbcbe3266ec0b2a57a66ba517e`。
 69个C2提前机会对应69父计划，其中BUY全成4/未成31、SELL全成3/未成31。7个成交父计划的首次实际派单均不早于15交易分钟（6个15分钟、1个27分钟）；这批数据不能证明提前信号被提前执行。其余62个没有派单；失效细因继续UNKNOWN，不能从first/last审计推断。
 C2−W15同日同股同向同目标数量子集：BUY配对163（两侧全部父计划300/295），双方全成143，条件成交价改善合计-8,382.97元；SELL配对165（全部287/287），双方全成140，条件改善-4,105.49元。两项只对双方全成的条件化子集计算、不含费用，不外推全部账户收益或纯择时alpha。完整报告同时保留NO_FILL交叉分母。P2不因这组事后结果直接投产。
 
-P1真实来源检查失败于原价格来源candidate：`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260930-qe_hmm_full_v2-direct-monthly-v2-unified-candidate-correction-4ab0b48642c3-margin1-minute1/`。父preflight与价格source audit合并后617份FileRef在固定路径不存在，包含manifest和日线参考价组件；修正版321a…candidate存在，但不是这些缺失文件的同一身份。
+P1首次真实来源检查失败于原价格来源candidate：`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260930-qe_hmm_full_v2-direct-monthly-v2-unified-candidate-correction-4ab0b48642c3-margin1-minute1/`。当时父preflight与价格source audit合并后617份FileRef在固定路径不存在，包含manifest和日线参考价组件；修正版321a…candidate存在，但不是这些缺失文件的同一身份。
 不可变阻断回执：`X:/AIstock_temp/position-timing-wait-history-20261107/source_blocker.json`，完整SHA `f084b76462b919291297f13c50bb906157d9559d0cff5b03f985014e921ed437`。未修改数据、未尝试在线补数、未读取新研究NAV、未生成真实history plan或启动543账户日。数据owner需恢复准确固定源字节，或返回正式不可变迁移合同供另行设计消费；不能静默指向321a…、忽略源SHA或重建旧价格模板。
 新增12项定向测试通过，最终相关小矩阵33项通过（含原17项W15与4项隔离）；两轮代码审核修正了跨修订父计划重复计数及新研究day身份绑定。ruff、L0和diff-check通过；classifier覆盖全部6个变更文件，targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。P0同输入exact retry为ALREADY_MATERIALIZED，报告FileRef相同；旧plan绑定12份实现没有改动。
-F2蓝图验证12项通过；F1明确保留F-410/411未完成，验证FAIL，不把缺口改标VERIFIED来通过检查。尚未提交PR/运行远端CI，不满足完整合入条件；功能夹具不解除真实来源阻断，不合入或宣称P1已交付。工作稿与代码保存在独立任务分支，main没有本轮更新。
+当时F2蓝图验证12项通过，F1保留F-410/411未完成、验证FAIL；代码仅以WIP commit `ac27046f91b70d63a850bc415a4af20403e9f5e3`保存，未以夹具解除来源阻断或合入。下面记录恢复后的实际验证，不覆盖历史失败回执。
+
+## 2026-11-07来源恢复、真实plan与LocalSIM交接
+
+数据窗口原样恢复617/617份文件，旧manifest完整SHA仍为f5af…；Windows/WSL独立核验1176项来源通过。回执`X:/AIstock_temp/DATA_PREPARATION/position-timing-frozen-source-recovery-20261107/complete-source-readback-r2.json`完整SHA为`62f9748e408ea61527a4fa117e613915fbd0e5c935a2c37208b0b418df8a0b59`。恢复的是本研究所需历史引用，不宣称旧candidate全量行情重新就绪，也不改变14条冻结UNKNOWN或旧模板。
+择时在同步origin/main（`23fdf4caf581eb67f7930bf66fb260300bb7740e`）后，自行完整检查1178个去重source FileRef，再执行真实prepare→inspect→exact retry。inspect含plan/common_opening共1180引用；没有只采信数据侧成功标志。固定源码commit为`70e459c569020f09880d91c1f16d43e9e5d951f3`，后续仅文档不改变实现closure。
+
+- source spec：`X:/AIstock_temp/position-timing-wait-history-20261107/source_spec.json`；完整SHA `01f0c52f5734cef46e767ce1a4b9dd21fe846988a5df09d160c6926d154bbb01`。
+- 正式history plan：`X:/AIstock_temp/position-timing-wait-history-20261107/artifacts/intraday_v1/wait_history_plans/bcf316bce0db8a033694ac6e4989d0aab3850606891b9bdad5b57ebd24c6a3b5.json`；完整SHA `e9d41ab3186690350803e43a0659702b7b7b467b374c297dcc42230d22709f52`。
+- prepare/inspect/retry回执：`X:/AIstock_temp/position-timing-wait-history-20261107/resume_verification_r1.json`；完整SHA `4d160fc29ae78a4601ff111c67fe8f4190ac3fb7555579f1b76d7cd4710601fe`。inspect=VERIFIED，retry=ALREADY_MATERIALIZED，plan FileRef完全相同。
+- 既有父研究B0/C2真实362账户日归约回归：`X:/AIstock_temp/position-timing-wait-history-20261107/parent_reduction_verification_r1.json`；完整SHA `07fc1b4ccf6be7a9e4d38c5d61b8127c553f7f14cb98c5d4cf8d29bb0c72f7ad`。终值、费用和完整分钟MDD与原结果匹配；每户9个月/3个季度的前后NAV承接、PnL及费用闭合。它不是新W15结果，未创建替代账户或回放。
+
+公共消费入口仍为`wait_control_history.inspect_history_plan(FileRef)`与`HistoryAnalysisSpec`。CLI使用`python -m backend.services.position_timing.intraday.wait_control_history prepare|inspect|analyze --spec <绝对路径> --spec-sha256 <完整SHA> --timing-root <独立根>`；prepare额外传`--source-commit`，spec为HistorySourceSpec；inspect的spec是plan；analyze的spec是HistoryAnalysisSpec。WSL将X:/替换为/mnt/x/，保持JSON中的冻结FileRef不改写。
+
+交回LocalSIM：按Contracts-8.2增加独立历史request及1000万元现金/空仓初始化，复用既有W15/B0/C2执行和按日提交；181日/9050目标、60秒反应、15交易分钟预算、原费用及规则不变。行情Reader必须使用plan中的321a…effective candidate；f5af…仅是已恢复的价格来源身份，不能拿它当现成全量分钟行情版本。三户可有界并行、户内逐日顺序，先完整source检查再读取/产生新研究收益。返回三户543账户日facts、source_inspection、HistoryAnalysisSpec及不可变重试回执，之后由择时执行全期/月/季三比较；producer经济重算仍不是默认必需。
+本窗口交付状态为择时侧软件与真实输入冻结已验证、LocalSIM接入/新543账户日/新收益分析待其owner。无新训练、推理、数据库、行情网络、生产账户或服务操作，不需后端重启。
