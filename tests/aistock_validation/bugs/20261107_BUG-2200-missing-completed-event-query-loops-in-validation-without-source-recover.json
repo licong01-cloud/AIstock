@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "仅正式事件合同的缺完整查询凭证生成有限精确FETCH；保留UNVERIFIED，完成当前revision物理验证后才VALID。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2200-missing-completed-event-query-loops-in-validation-without-source-recover.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/data_integrity/worker.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261107_BUG-2200-missing-completed-event-query-loops-in-validation-without-source-recover.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/worker.py",
@@ -108,18 +114,24 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process verify_dev.py loads exact worker source and passes native DEV bounded wakeup, exact FETCH idempotence, stale-revision rejection. Receipt X:/AIstock_temp/DATA_PREPARATION/stk-alert-retry-20261108/dev-verification.json; DEV temporary fixtures rolled back; production_write=false; runtime_action=false"
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "business_smoke_contract_id": "local_data_freshness",
-    "database_readback_ref": "not_required",
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Fresh Python process verify_dev.py loads exact worker source and passes native DEV bounded wakeup, exact FETCH idempotence, stale-revision rejection. Receipt X:/AIstock_temp/DATA_PREPARATION/stk-alert-retry-20261108/dev-verification.json; DEV temporary fixtures rolled back; production_write=false; runtime_action=false"],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
