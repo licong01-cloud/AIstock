@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-469",
-  "closed_at": null,
+  "closed_at": "2026-06-22T17:00:57Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -43,17 +43,47 @@
   "evidence_uris": [],
   "expected": "Research Assistant navigation exposes only active pages; /research-assistant/admin, /research-assistant/streams, and /research-assistant/issue-candidates frontend routes and links are removed.",
   "first_seen_at": "2026-06-22T04:57:26.883842Z",
-  "fix_branch": null,
-  "fix_commit": "af8ca42fc81e",
-  "fixed_at": "2026-07-06T18:29:46.420833Z",
+  "fix_branch": "bug/BUG-469-remove-retired-research-assistant-frontend-route-20260622",
+  "fix_commit": "357ec08a74e3f98d931c4edd7a0bbbee4930fc57",
+  "fixed_at": "2026-06-22T17:00:57Z",
   "github_issue_number": 1452,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1452",
   "last_seen_at": "2026-06-22T04:57:26.883842Z",
+  "metadata_correction": {
+    "corrected_at": "2026-11-06T18:36:10.619030+00:00",
+    "historical_only": true,
+    "local_snapshot": {
+      "archive_path": "F:\\Dev\\AIstock_worktrees\\.cleanup-receipts\\metadata-cleanup-r2-20261107\\metadata-snapshots.json",
+      "archive_sha256": "c6f216cfc94f6d1f4ea6bf6472bba6b726886503a6fba3f1529a722349677c31",
+      "recovered_at": "2026-11-06T18:36:10.619030+00:00",
+      "source_branch": "bug/BUG-469-remove-retired-research-assistant-frontend-route-20260622",
+      "source_file_sha256": "0ebb811825485256c2d539844ec848a6b3df1d5db7800b5871365ff9a23e40a3",
+      "source_head": "946a87a50f4554227f36e50d2a78d4230cc7efd0",
+      "source_path": "tests/aistock_validation/bugs/20260622_BUG-469-remove-retired-research-assistant-frontend-routes.json",
+      "source_worktree": "F:\\Dev\\AIstock_worktrees\\BUG-469-remove-retired-research-assistant-frontend-route-20260622"
+    },
+    "previous_values": {
+      "closed_at": null,
+      "fix_branch": null,
+      "fix_commit": "af8ca42fc81e",
+      "fixed_at": "2026-07-06T18:29:46.420833Z",
+      "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
+      "validation_evidence": [
+        "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+      ]
+    },
+    "reason": "原台账错连到无关的 BUG-596 / PR #1887；按 GitHub Issue 关闭事件与真实合入 PR 恢复源码和历史验证归属。",
+    "schema_version": "aistock_historical_source_link_correction_v1",
+    "source_pr_body_sha256": "d543a706656c6d9cced0d6b5c35cc1ccfb7b16dc9718aff312c90dcb1ec42bb9",
+    "source_pr_head": "946a87a50f4554227f36e50d2a78d4230cc7efd0",
+    "tests_rerun": false,
+    "unconfirmed_local_claims": "NOT_EVALUATED; retained verbatim in external archive"
+  },
   "module": "research_assistant",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1455",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -108,7 +138,13 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+    "scoped route grep: rg /research-assistant/(admin|streams|issue-candidates) frontend/src -> no retired RA route hits",
+    "route directories: admin/streams/issue-candidates absent -> passed",
+    "rtk proxy git diff --check -> passed",
+    "python scripts/issue_flow.py pr-check --base origin/main --head HEAD --issue-json tests/aistock_validation/bugs/20260622_BUG-469-remove-retired-research-assistant-frontend-routes.json --fail-on-scope --enforce-p0-p1-evidence -> scope passed",
+    "frontend npm run lint -> passed (pre-existing warnings only)",
+    "frontend npm run build -> passed; route list no longer includes /research-assistant/admin, /research-assistant/streams, /research-assistant/issue-candidates",
+    "rtk proxy python -m nox -s l0 -> passed"
   ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
