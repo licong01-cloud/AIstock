@@ -180,6 +180,26 @@ DAILY_BASIC = DatasetSpec(
     trading_day_only=True,
 )
 
+US_INDEX_GLOBAL = DatasetSpec(
+    name="index_global", tushare_api="index_global", target_table="market.index_global",
+    primary_keys=["trade_date", "ts_code"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "ts_code": "text", **dict.fromkeys(
+        ("open", "close", "high", "low", "pre_close", "change", "pct_chg", "swing", "vol", "amount"), "numeric")},
+    row_limit=4000, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", incremental_cursor_from_audit=True,
+    required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_us_market_inputs_v1.sql",
+)
+
+US_TRADECAL = DatasetSpec(
+    name="us_tradecal", tushare_api="us_tradecal", target_table="market.us_tradecal",
+    primary_keys=["cal_date"], query_mode=QueryMode.BY_DATE,
+    columns={"cal_date": "date", "is_open": "smallint", "pretrade_date": "date"},
+    date_column="cal_date", row_limit=6000, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_us_market_inputs_v1.sql",
+)
+
 VIX_INDEX = DatasetSpec(
     name="vix_index", tushare_api="vix_index", target_table="market.vix_index",
     primary_keys=["trade_date"], query_mode=QueryMode.BY_DATE,
@@ -767,6 +787,8 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
     s.name: s
     for s in [
         VIX_INDEX,
+        US_INDEX_GLOBAL,
+        US_TRADECAL,
         STOCK_DAILY_AFTERHOURS,
         STK_SHOCK,
         STK_HIGH_SHOCK,

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg2.extras import Json, execute_values
 
-RAW_DATASETS = frozenset({'vix_index', 'stock_daily_afterhours'})
+RAW_DATASETS = frozenset({'vix_index', 'stock_daily_afterhours', 'index_global', 'us_tradecal'})
 
 
 def latest_vix_query_date(now=None):
@@ -19,6 +19,9 @@ def latest_vix_query_date(now=None):
 
 
 def normalize_rows(spec, rows):
+    if spec.name in {'index_global', 'us_tradecal'}:
+        from .tushare_us_market_inputs import normalize_us_rows
+        return normalize_us_rows(spec, rows)
     result = []
     for source in rows:
         row = dict(source)
@@ -63,8 +66,8 @@ def raw_observation(spec, source):
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'),
                          allow_nan=False, default=str)
     digest = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
-    day = dt.date.fromisoformat(str(source['trade_date'])) if '-' in str(source['trade_date']) else (
-        dt.datetime.strptime(str(source['trade_date']), '%Y%m%d').date())
+    value = str(source[spec.date_column])
+    day = dt.date.fromisoformat(value) if '-' in value else dt.datetime.strptime(value, '%Y%m%d').date()
     return spec.name, spec.tushare_api, day, source.get('ts_code'), digest, Json(json.loads(encoded))
 
 
