@@ -123,11 +123,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh-process CLI verified 2112 official daily closes against the pinned Cboe CSV; independent CSV/Arrow/hashlib readback verified zero missing/extra/close mismatches, all 2059 predecessor observations byte-preserved, and original manifest unchanged. X:/AIstock_temp/DATA_PREPARATION/vix-shared-reconciliation-20261109/independent-readback.json SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3. No DB, profile, model or process actions."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "business_smoke_contract_id": "local_data_freshness",
+    "database_readback_ref": "not_required",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -137,7 +145,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "local_data"
   ],
