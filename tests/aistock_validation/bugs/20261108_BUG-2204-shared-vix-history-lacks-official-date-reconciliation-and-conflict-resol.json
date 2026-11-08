@@ -31,16 +31,28 @@
   ],
   "expected": "Explicit official VIX daily-close authority, US session dates and unknown historical publication clocks; one corrected daily series plus preserved raw versions and per-date reconciliation.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/shared_vix_inputs.py",
+      "backend/tests/test_shared_vix_inputs.py",
+      "noxfile.py",
+      "scripts/reconcile_shared_vix_inputs.py",
+      "tests/aistock_validation/bugs/20261108_BUG-2204-shared-vix-history-lacks-official-date-reconciliation-and-conflict-resol.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/data_service/shared_vix_inputs.py",
       "scripts/reconcile_shared_vix_inputs.py",
       "backend/tests/test_shared_vix_inputs.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "noxfile.py"
+      "backend/data_service/shared_vix_inputs.py",
+      "backend/tests/test_shared_vix_inputs.py",
+      "noxfile.py",
+      "scripts/reconcile_shared_vix_inputs.py",
+      "tests/aistock_validation/bugs/20261108_BUG-2204-shared-vix-history-lacks-official-date-reconciliation-and-conflict-resol.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/data_service/shared_vix_inputs.py",
@@ -107,8 +119,8 @@
   },
   "first_seen_at": "2026-11-08T20:36:01.072306Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9eec4242638a6d85a0e407e924076a7abb58495b",
+  "fixed_at": "2026-11-08T21:01:46Z",
   "github_issue_number": 7155,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7155",
   "last_seen_at": "2026-11-08T20:36:01.072306Z",
@@ -116,6 +128,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7156",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,19 +141,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh-process CLI verified 2112 official daily closes against the pinned Cboe CSV; independent CSV/Arrow/hashlib readback verified zero missing/extra/close mismatches, all 2059 predecessor observations byte-preserved, and original manifest unchanged. X:/AIstock_temp/DATA_PREPARATION/vix-shared-reconciliation-20261109/independent-readback.json SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3. No DB, profile, model or process actions."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
-    "business_smoke_contract_id": "local_data_freshness",
-    "database_readback_ref": "not_required",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -150,7 +165,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2204",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dce9c0631ac34da6",
+    "recorded_at": "2026-11-08T21:02:49.168241Z",
+    "runtime_contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "332f66416f452551c418c06093f8bebde97f6f9b",
+    "source_merge_commit": "9eec4242638a6d85a0e407e924076a7abb58495b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7156",
+    "validation_evidence": [
+      "validation-receipt: id=de45487f47474862 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
+      "validation-receipt: id=3a1bd6cd44987d27 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
+      "validation-receipt: id=b092b2dae1e261a1 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
+      "validation-receipt: id=7490e3fef6ab247f commit=332f66416f452551c418c06093f8bebde97f6f9b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_shared_vix_inputs.py backend/tests/test_tushare_us_market_inputs.py backend/tests/test_tushare_phase1_inputs.py -q` result=`76 passed; independent CSV/Arrow file-only readback PASS with 2112 closes and retained 2059 raw rows, receipt SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3`"
+    ],
+    "validation_evidence_digest": "0e3a9eacae48e8ce4f426872a1dcd3ccfc23f663d4098392d152bf4f4003fa13"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -159,6 +198,12 @@
     "fingerprint": "3183cc3cf7978310dabcdf37",
     "source_event_id": "FE-20261108-3183cc3cf797"
   },
+  "validation_evidence": [
+    "validation-receipt: id=de45487f47474862 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
+    "validation-receipt: id=3a1bd6cd44987d27 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
+    "validation-receipt: id=b092b2dae1e261a1 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
+    "validation-receipt: id=7490e3fef6ab247f commit=332f66416f452551c418c06093f8bebde97f6f9b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_shared_vix_inputs.py backend/tests/test_tushare_us_market_inputs.py backend/tests/test_tushare_phase1_inputs.py -q` result=`76 passed; independent CSV/Arrow file-only readback PASS with 2112 closes and retained 2059 raw rows, receipt SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
