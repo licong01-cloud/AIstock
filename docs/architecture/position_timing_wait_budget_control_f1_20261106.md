@@ -144,7 +144,7 @@ CLI：`python -m backend.services.position_timing.intraday.wait_control_results 
 ## Implementation Plan
 
 设计交付#7091已合入。本次完成研究专用W15、三户来源/统计合同和直接测试；旧13户归约入口不放宽。WSL旧13户实际统计等价核验不重跑账户、不覆盖旧报告。
-原Contracts-4/6接入已由LocalSIM PR #7109完成，51账户日与不可变产物重试已通过；Contracts-8的1—9月543账户日和全期/月/季统计现亦完成，证据见文末。下一步保留B0/W15/C2三臂证据，围绕少成交、费用与排队开展只读归因并冻结唯一P2候选；本轮不启动P2或训练。普通回放不自动整批经济重算。
+原Contracts-4/6接入已由LocalSIM PR #7109完成，51账户日与不可变产物重试已通过；Contracts-8的1—9月543账户日和全期/月/季统计现亦完成，证据见文末。保留B0/W15/C2三臂证据，围绕少成交、费用与排队开展只读归因；该次消费未启动P2或训练，后续授权的P2独立实施见文末链接。普通回放不自动整批经济重算。
 不拆更多阶段，不等待在线重启或未来行情。账户接口未接入时交回准确需求，不在择时侧临时模拟收益。
 
 ## Verification Plan
@@ -210,7 +210,7 @@ LocalSIM交付`X:/AIstock_temp/localsim-w15-wait-budget-20261106/delivery.json`�
 三户生成父计划589/582/587，未派单13/22/82；动作失效原因均为OPPORTUNITY_WAIT，而非明确的TTL超时。C2首次外层机会早于15分钟的修订为69/587；首次机会不等于实际派单或成交。现有signal_revisions只保存首次机会和最后状态，不能从最终reason集合恢复转WAIT当刻的细分原因与完整生命周期。无该证据时记录UNKNOWN，不推断成价格反转或现金不足。
 
 P0只读消费完整51账户日，逐BUY/SELL报告提前机会的派单/成交/失效去向、原始动作原因、数量与费用；同日同股同向同目标数量的价格比较仅是条件化子集，保留配对覆盖与双方未成交人口，不宣称纯执行alpha。所有收益读取前完成来源检查。
-P1固定B0/W15/C2做1—9月历史稳健性检验。P2保留一个“价格朝本次交易不利方向持续移动时提前执行”的候选，当前不实现、不训练、不扫描参数。模型仅在需要预测等待相对立即执行的成本差时另立单一假设；未见数据不作为本轮开跑前提。
+当时P1固定B0/W15/C2做1—9月历史稳健性检验，P2保留一个“价格朝本次交易不利方向持续移动时提前执行”的候选，尚未实现、训练或扫描参数。后续授权的P2独立实施见文末链接。模型仅在需要预测等待相对立即执行的成本差时另立单一假设；未见数据不作为本轮开跑前提。
 本轮producer exact retry为EXACT_ARTIFACT_RETRY_VERIFIED，账户重算0、新提交0；producer_economic_retry=NOT_SUPPLIED合法。时间加权暴露0/17日覆盖，保持UNAVAILABLE，日终现金均值不替代。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false。
 
 ## Contracts-8：1—9月独立历史研究合同
@@ -314,4 +314,6 @@ C2相对W15的净差仅4/9个月为正（区间收益率差5/9为正，5月两�
 
 独立Decimal复算全部543账户日、三户全期及36个月/季面板，检查终值、收益、完整分钟MDD、费用、区间NAV承接和父计划分母；回执为`X:/AIstock_temp/position-timing-w15-history-analysis-20261109/independent_result_audit_r1.json`，完整SHA `38930c7deda9435c34615f6f2924fc886f195ac6bcd5c0a4c3210528f0544a8d`。相同分析CLI exact retry返回ALREADY_MATERIALIZED及完全相同report FileRef。最终消费回执为`X:/AIstock_temp/position-timing-w15-history-analysis-20261109/source_delivery_receipt_r1.json`，完整SHA `be09b1bb95dfa82e346b51c20c3304a8a69ce52ade9a4bac2e20ee92e25516a8`；producer产物exact retry为543日原样复用、账户重算0、新提交0，producer_economic_retry=NOT_SUPPLIED符合原合同。
 
-下一研究顺序：保留原C2为已有候选、W15为简单对照、B0为执行基准；围绕既有事实内的少成交、提前机会真实派单、排队、费用及月份集中性开展只读归因，并单独冻结原P2“交易不利方向持续移动时提前执行”假设。缺失的完整生命周期或时间加权暴露保留UNKNOWN/UNAVAILABLE，不成为P2设计或离线研究准入条件。P2本轮不实现、不调参、不训练；不得以本轮收益自动替换规则或上线。继续保持quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false；本窗口只分析冻结结果并更新自身文档，未重放账户、改数据库/数据集或操作服务。
+下一研究顺序：保留原C2为已有候选、W15为简单对照、B0为执行基准；围绕既有事实内的少成交、提前机会真实派单、排队、费用及月份集中性开展只读归因，并单独冻结原P2“交易不利方向持续移动时提前执行”假设。缺失的完整生命周期或时间加权暴露保留UNKNOWN/UNAVAILABLE，不成为P2设计或离线研究准入条件。该次543日消费未实现P2、调参或训练，不得以本轮收益自动替换规则或上线。继续保持quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false；该次仅分析冻结结果并更新自身文档，未重放账户、改数据库/数据集或操作服务。
+
+后续用户已授权推进P2，独立实施合同为[不利方向持续移动P2 F1](position_timing_adverse_wait_p2_f1_20261109.md)。P2新增一个181日账户，本文三户543日只读复用；不改变本文规则、来源身份、价格/费用或统计结果。纯函数和plan在择时窗口实施，LocalSIM owner执行新账户，完整经济结果取得前不宣称P2优于任何基准。
