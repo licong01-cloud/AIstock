@@ -1456,6 +1456,11 @@ rules:
       - backend/data_service/shared_tushare_inputs.py
       - scripts/export_tushare_shared_inputs.py
       - backend/services/tushare_supplemental_inputs.py
+      - backend/services/tushare_us_market_inputs.py
+      - backend/tests/test_tushare_us_market_inputs.py
+      - scripts/validate_tushare_us_market_inputs.py
+      - backend/db/migrations/add_tushare_us_market_inputs_v1.sql
+      - docs/design/tushare_us_market_inputs_20261109.md
       - backend/services/tushare_event_inputs.py
       - docs/design/tushare_phase1_inputs_20261106.md
       - backend/db/migrations/add_tushare_event_inputs_v1.sql

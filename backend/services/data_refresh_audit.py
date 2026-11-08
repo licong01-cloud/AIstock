@@ -337,7 +337,9 @@ class DataRefreshAuditRepository:
         # A successful empty US-date query is NOT a proven closed session.
         # Keep its source observation, but do not seed an endless daily-coverage
         # validation target for a calendar we have not registered.
-        query_only = (dataset == "vix_index" and row_count == 0)
+        # US coverage is validated against its own calendar by the source adapter;
+        # never enqueue the equity/PIT partition validator for these inputs.
+        query_only = dataset in {'index_global', 'us_tradecal', 'vix_index'}
         if data_source != "canonical_db" and not query_only and schema_installed(conn):
             completed = (status == "success" and quality_status in {"ok", "empty_valid"}
                          and (bool(metadata.get("provider_scan"))

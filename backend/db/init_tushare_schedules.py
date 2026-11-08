@@ -16,6 +16,9 @@ from .pg_pool import get_conn
 
 
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
+    {"dataset": "us_tradecal", "mode": "incremental", "frequency": "daily", "at": "07:30", "skip_auto_range": True},
+    {"dataset": "index_global", "mode": "incremental", "frequency": "daily", "at": "08:05", "skip_auto_range": True},
+    {"dataset": "_index_global_midday", "mode": "incremental", "frequency": "daily", "at": "12:05", "skip_auto_range": True},
     {"dataset": "stk_shock", "mode": "incremental", "frequency": "daily", "at": "21:10", "skip_auto_range": True},
     {"dataset": "stk_high_shock", "mode": "incremental", "frequency": "daily", "at": "21:15", "skip_auto_range": True},
     {"dataset": "stk_alert", "mode": "incremental", "frequency": "daily", "at": "21:20", "skip_auto_range": True},
@@ -94,8 +97,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v6"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "aa595b4d1839e97817819e204831b835ce6ca17d6cf72459fdb7d09ae5b9556c"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v7"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "c1724b7d774c8cc746cd5563a002087adf52be5ab18ecf8f2dd777fa398d4615"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 

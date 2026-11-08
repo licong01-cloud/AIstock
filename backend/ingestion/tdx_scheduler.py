@@ -2209,8 +2209,8 @@ class TDXScheduler:
     def _scheduled_ingestion_run(
         self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any], frequency: str = ""
     ) -> None:
-        if dataset == "_vix_index_midday":
-            dataset = "vix_index"  # same job/overlap owner; only the schedule clock differs
+        if dataset in {"_vix_index_midday", "_index_global_midday"}:
+            dataset = {"_vix_index_midday": "vix_index", "_index_global_midday": "index_global"}[dataset]
         event_aliases = {'_stk_shock_morning': 'stk_shock', '_stk_high_shock_morning': 'stk_high_shock',
                          '_stk_alert_morning': 'stk_alert', '_idx_anns_morning': 'idx_anns',
                          '_stk_seasoned_morning': 'stk_seasoned', '_stk_seasoned_project_review': 'stk_seasoned'}

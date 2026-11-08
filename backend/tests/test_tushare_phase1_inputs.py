@@ -127,6 +127,8 @@ def test_original_and_projection_atomic_transaction(monkeypatch, write_error):
 
 def vix_engine(monkeypatch, rows):
     import backend.services.tushare_sync_engine as module
+    import backend.services.tushare_us_market_inputs as us
+    monkeypatch.setattr(us, 'read_calendar', lambda *_: {})
     engine = module.TushareSyncEngine()
     audits, writes = [], []
     monkeypatch.setattr(engine, '_fetch_from_tushare', lambda _s, params: rows)
@@ -145,7 +147,7 @@ def test_vix_empty_date_never_proves_holiday_or_calendar_complete(monkeypatch):
     result = engine._sync_by_date(None, DATASET_REGISTRY['vix_index'], dt.date(2026, 11, 5),
                                   dt.date(2026, 11, 7), uuid.uuid4())
     assert result.ok and len(writes) == 1 and len(audits) == 3
-    assert [audit['quality_status'] for audit in audits] == ['ok', 'unknown', 'unknown']
+    assert [audit['quality_status'] for audit in audits] == ['unknown', 'unknown', 'unknown']
     assert all(audit['metadata']['session_calendar_completeness'] == 'NOT_EVALUATED' for audit in audits)
 
 
@@ -208,12 +210,15 @@ def test_actual_ingestion_catalogue_and_range_use_US_clock(monkeypatch):
     monkeypatch.setattr(ingestion, '_latest_trading_day_on_or_before',
                         lambda *_: pytest.fail('must not query Chinese calendar for VIX'))
     result = ingestion.get_ingestion_auto_range('vix_index')
-    assert result['start_date'] == '2026-11-05' and result['latest_date'] == '2026-11-05'
+    assert result['start_date'] == '2026-10-30' and result['latest_date'] == '2026-11-05'
     catalogue = {r['name']: r for r in ingestion.list_tushare_datasets()['datasets']}
     assert catalogue['vix_index']['required_for_daily_complete'] is False
     assert catalogue['stock_daily_afterhours']['initial_start_date'] == '2026-07-06'
     assert ingestion._infer_source('stock_daily_afterhours') == 'tushare'
-    assert ingestion.get_data_gaps('vix_index')['status'] == 'NOT_EVALUATED'
+    monkeypatch.setattr(ingestion, 'get_conn', lambda: conn)
+    import backend.services.tushare_us_market_inputs as us
+    monkeypatch.setattr(us, 'gap_report', lambda *_: {'status': 'UNKNOWN'})
+    assert ingestion.get_data_gaps('vix_index', start_date=None, end_date=None, refresh=False)['status'] == 'UNKNOWN'
 
 
 @pytest.mark.parametrize('dataset', ['vix_index', 'stock_daily_afterhours'])
