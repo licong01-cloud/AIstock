@@ -1080,6 +1080,7 @@ class AutoEvolutionScheduler:
                 "QE_PREDICTION_REPLAY_CATALOG_INVALID: files/assets must be a list"
             )
         matches: List[tuple[str, Dict[str, Any]]] = []
+        recorder_entries: List[Dict[str, Any]] = []
         for item in rows:
             if not isinstance(item, dict):
                 continue
@@ -1087,11 +1088,45 @@ class AutoEvolutionScheduler:
             normalized_path = str(raw_path or "").replace("\\", "/")
             while normalized_path.startswith("./"):
                 normalized_path = normalized_path[2:]
+            if normalized_path == "qe_current_recorder.json":
+                recorder_entries.append(item)
             if (
                 normalized_path == "artifacts/pred.pkl"
                 or normalized_path.endswith("/artifacts/pred.pkl")
             ):
                 matches.append((normalized_path, item))
+        current_recorder = None
+        if recorder_entries:
+            # A frozen-inference workspace also contains source_model/mlruns.
+            # The root recorder identifies this run; source copies are neither
+            # alternative current predictions nor candidates for hash guessing.
+            marker = recorder_entries[0]
+            if (
+                len(recorder_entries) != 1
+                or bool(marker.get("is_symlink"))
+                or str(marker.get("file_type") or "").lower() in {"directory", "symlink", "junction"}
+            ):
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID")
+            try:
+                current_recorder = await source_client.get_workspace_file(
+                    source_task_id, source_loop, "qe_current_recorder.json",
+                )
+                if isinstance(current_recorder, str):
+                    current_recorder = json.loads(current_recorder)
+                if not isinstance(current_recorder, dict) or any(
+                    not isinstance(current_recorder.get(key), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", current_recorder[key])
+                    or current_recorder[key] in {".", ".."}
+                    for key in ("experiment_id", "recorder_id")
+                ):
+                    raise ValueError("invalid recorder identity")
+            except Exception as exc:
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID") from exc
+            current_path = (
+                f"mlruns/{current_recorder['experiment_id']}/"
+                f"{current_recorder['recorder_id']}/artifacts/pred.pkl"
+            )
+            matches = [(path, item) for path, item in matches if path == current_path]
         if len(matches) != 1:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_ARTIFACT_CARDINALITY: "
@@ -1131,6 +1166,14 @@ class AutoEvolutionScheduler:
                 "QE_PREDICTION_REPLAY_ARTIFACT_SHA256_MISMATCH: "
                 f"expected={expected_sha256} observed={observed_sha256}"
             )
+        if current_recorder is not None:
+            latest_recorder = await source_client.get_workspace_file(
+                source_task_id, source_loop, "qe_current_recorder.json",
+            )
+            if isinstance(latest_recorder, str):
+                latest_recorder = json.loads(latest_recorder)
+            if latest_recorder != current_recorder:
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_CHANGED")
         source_ref: Dict[str, Any] = {
             "schema_version": "qe_prediction_replay_source_ref_v1",
             "mode": "prediction_replay",
