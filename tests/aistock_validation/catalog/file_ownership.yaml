@@ -158,6 +158,7 @@ rules:
       - scripts/advisory_lstm_frozen_specialist_stress.py
       - scripts/advisory_lstm_factor_information.py
       - scripts/advisory_lstm_factor_nonlinear.py
+      - scripts/advisory_lstm_overnight_increment.py
       - scripts/advisory_lstm_pool_relation.py
       - scripts/advisory_lstm_frozen_representation.py
       - scripts/advisory_lstm_linear_rank_replay.py
