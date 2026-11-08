@@ -38,7 +38,8 @@ class _Proposal:
 
 def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                             policy: HumanOperationPolicy, run_id: str, optimized: bool = False,
-                            research_control: str | None = None, research_audit: bool = False) -> dict:
+                            research_control: str | None = None, research_audit: bool = False,
+                            research_control_spec: dict | None = None) -> dict:
     """A single account, one operator, native feedback, and an atomic day result.
 
     Full bars are only supplied to native post-interval matching. Core evaluate
@@ -46,7 +47,15 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
     """
     if not markets:
         raise ValueError("LOCALSIM_HUMAN_MARKETS_REQUIRED")
+    if research_control_spec is not None:
+        from .adverse_wait_execution import CONTROL_ID, AdverseWaitSpec
+        if research_control != CONTROL_ID:
+            raise ValueError("LOCALSIM_ADVERSE_CONTROL_SPEC_SCOPE_CONFLICT")
+        AdverseWaitSpec.model_validate(research_control_spec)
     def new_facade(plan):
+        if research_control_spec is not None:
+            from .adverse_wait_execution import research_facade as adverse_facade
+            return adverse_facade(plan, research_control, spec=research_control_spec)
         if research_control is None:
             return TimingFacade(plan, 0, mode=CLOSED_LOOP_MODE)
         # The new SDK is loaded only by explicitly opted-in offline research.
