@@ -414,6 +414,19 @@ def _account_day_identity(*, request_identity: str, account_id: str, trade_date:
 def _compute_account_day(job: dict) -> dict:
     """Only compute native facts; a worker cannot publish a journal or result."""
     initial, prior = job["initial"], job["prior"]
+    control = job.get("research_control")
+    if control is not None:
+        from .wait_budget_execution import CONTROL_ID
+        from .adverse_wait_execution import CONTROL_ID as ADVERSE_CONTROL_ID, AdverseWaitSpec
+        if (control not in {CONTROL_ID, ADVERSE_CONTROL_ID} or initial["rule"] != control
+                or initial["operation"]["operation_mode"] != "HUMAN_SIM"):
+            raise ValueError("LOCALSIM_WAIT_CONTROL_PROFILE_CONFLICT")
+        if control == ADVERSE_CONTROL_ID:
+            AdverseWaitSpec.model_validate(job.get("research_control_spec"))
+    if job.get("research_control_spec") is not None:
+        from .adverse_wait_execution import CONTROL_ID as ADVERSE_CONTROL_ID
+        if control != ADVERSE_CONTROL_ID:
+            raise ValueError("LOCALSIM_ADVERSE_CONTROL_SPEC_SCOPE_CONFLICT")
     markets, projection, cost = job["markets"], job["projection"], job["cost"]
     day, identity, manifest = job["day"], job["identity"], job["manifest"]
     account_input = {**initial, "cash_cny": prior["cash_cny"], "positions": prior["positions"]}
@@ -452,11 +465,6 @@ def _compute_account_day(job: dict) -> dict:
             initial_marks=prices, run_id=job["run_id"], source_commit=job["producer_commit"], optimized=job["optimized"])
     else:
         source = job["source"]
-        control = job.get("research_control")
-        if control is not None:
-            from .wait_budget_execution import CONTROL_ID
-            if control != CONTROL_ID or initial["rule"] != CONTROL_ID:
-                raise ValueError("LOCALSIM_WAIT_CONTROL_PROFILE_CONFLICT")
         events, unavailable = build_timing_plan_events(intents=native.order_intents,
             series=source["series"], rule="FIRST_OBSERVABLE_V1" if control else initial["rule"],
             source_commit=job.get("timing_source_commit", job["producer_commit"]),
@@ -464,7 +472,8 @@ def _compute_account_day(job: dict) -> dict:
         result = run_human_portfolio_day(backend=backend, markets=markets, events=events,
             initial_marks=prices, policy=HumanOperationPolicy.model_validate(initial["operation"]["human_policy"]),
             run_id=job["run_id"], optimized=job["optimized"],
-            research_control=control, research_audit=job.get("research_audit", False))
+            research_control=control, research_audit=job.get("research_audit", False),
+            research_control_spec=job.get("research_control_spec"))
     attach_native_quantity_evidence(result, targets=targets, native=native,
         projection_ref=job["projection_ref"], price_policy_sha256=job["price_policy_sha256"], unavailable=unavailable)
     if job.get("research_audit"):
@@ -473,6 +482,9 @@ def _compute_account_day(job: dict) -> dict:
              "first_fill_at": p.get("research_timing", {}).get("first_fill_at")}
             for p in result["account"]["parents"]]
     result["account"].update(operation=initial["operation"], rule=initial["rule"], delay_seconds=initial["delay_seconds"])
+    if job.get("research_control_spec") is not None:
+        from .adverse_wait_execution import release_evidence_from_account
+        result["account"]["p2_release_evidence"] = release_evidence_from_account(result["account"])
     commit = prepare_portfolio_commit(result=result, run_id=job["run_id"], input_identity=identity, day_index=0)
     return {"account": result["account"], "commit_request": commit}
 
@@ -536,12 +548,15 @@ def execute_account_days(*, request: dict, inspected: dict, initials: list[dict]
                          cost, candidate, root: Path, pool: ResearchAccountPool, metrics: dict,
                          performance: ResearchPerformanceOptions, stop_after_account_days: int | None = None,
                          verify_recompute: bool = False, day_schema: str | None = None,
-                         research_controls: dict | None = None, research_audit: bool = False) -> dict:
+                         research_controls: dict | None = None, research_audit: bool = False,
+                         research_control_specs: dict | None = None) -> dict:
     """One account-day orchestrator; callers must first inspect complete sources."""
     completed = root / "results.json"
     histories = {i["account_id"]: [] for i in initials}
     if research_controls is not None and not set(research_controls).issubset(histories):
         raise ValueError("LOCALSIM_WAIT_CONTROL_ACCOUNT_SCOPE_CONFLICT")
+    if research_control_specs is not None and not set(research_control_specs).issubset(histories):
+        raise ValueError("LOCALSIM_ADVERSE_CONTROL_SPEC_ACCOUNT_SCOPE_CONFLICT")
     references = {i["account_id"]: [] for i in initials}
     computed, recomputed = 0, 0
     prepared_projections = {}
@@ -588,6 +603,7 @@ def execute_account_days(*, request: dict, inspected: dict, initials: list[dict]
                          "producer_commit": request["producer_source_commit"], "day": day,
                          "timing_source_commit": request.get("timing_source_commit", request["producer_source_commit"]),
                          "research_control": (research_controls or {}).get(account_id), "research_audit": research_audit,
+                         "research_control_spec": (research_control_specs or {}).get(account_id),
                          "identity": identity, "run_id": run_id, "optimized": performance.optimized,
                          "price_policy_sha256": inspected["templates"].policy_document.sha256})
         computations = pool.prepare(jobs)
@@ -652,6 +668,12 @@ def execute_account_days(*, request: dict, inspected: dict, initials: list[dict]
                                        "actions": len(account.get("human_operation_state", {}).get("actions", []))}}
             if day_schema is not None:
                 summary["schema_version"] = day_schema
+            if (research_control_specs or {}).get(account_id) is not None:
+                evidence_path = root / "release_evidence" / account_id / (day_string + ".json")
+                publish(evidence_path, {"schema_version": "localsim_adverse_wait_release_evidence_v1",
+                    "study_identity": request["identity"], "account_id": account_id, "trade_date": day_string,
+                    "control_spec": research_control_specs[account_id], "releases": account["p2_release_evidence"]})
+                summary["p2_release_evidence_ref"] = ref(evidence_path)
             publish(path, summary)
             # Keep restart inputs and economic observations, not duplicated
             # multi-MB order/queue audit snapshots for every completed day.
