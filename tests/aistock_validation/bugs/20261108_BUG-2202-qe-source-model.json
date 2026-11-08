@@ -36,15 +36,15 @@
   "expected": "明确本轮recorder时只消费其精确pred.pkl；身份缺失或冲突仍fail closed，旧单一资产工作区保持兼容。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -109,9 +109,9 @@
   },
   "first_seen_at": "2026-11-08T16:17:27.498975Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "07a1791390d8f8e0281f27c588d98269d28c5a3d",
   "fix_summary": "按根qe_current_recorder精确选择本轮pred.pkl，保留source_model旧副本；缺失/歧义/无效身份、身份变化、目录完整性、路径/大小/SHA验证保持fail closed。旧无marker且唯一预测工作区兼容。",
-  "fixed_at": null,
+  "fixed_at": "2026-11-08T16:38:17Z",
   "github_issue_number": 7143,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7143",
   "last_seen_at": "2026-11-08T16:17:27.498975Z",
@@ -119,6 +119,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7145",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -145,6 +146,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -157,6 +159,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2202",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "517a899f4bd0864c",
+    "recorded_at": "2026-11-08T16:39:10.242476Z",
+    "runtime_contract_digest": "e361bdde487d1216948458b488056ebc29c6c1aac125cf15f26615a708d724d5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7233c97f2facf29c172e12a625ea0cbf9ea867f5",
+    "source_merge_commit": "07a1791390d8f8e0281f27c588d98269d28c5a3d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7145",
+    "validation_evidence": [
+      "validation-receipt: id=bf9ba0cedcbd0e72 commit=7233c97f2facf29c172e12a625ea0cbf9ea867f5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_evolution_service.py backend/tests/unified_engine/test_qe_prediction_replay.py tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json` result=`passed`",
+      "validation-receipt: id=63c1679f40262bec commit=7233c97f2facf29c172e12a625ea0cbf9ea867f5 kind=pytest plan=direct status=passed command=`pytest backend/tests/unified_engine/test_qe_prediction_replay.py -q` result=`passed (47 tests)`"
+    ],
+    "validation_evidence_digest": "9f09e530e85f1644a9aa9beb1202f6a9f868470d57b24de41f4a1901f28949c8"
+  },
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
@@ -166,6 +190,10 @@
     "fingerprint": "07d86e66b865a2cc5c86daf3",
     "source_event_id": "FE-20261108-07d86e66b865"
   },
+  "validation_evidence": [
+    "validation-receipt: id=bf9ba0cedcbd0e72 commit=7233c97f2facf29c172e12a625ea0cbf9ea867f5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_evolution_service.py backend/tests/unified_engine/test_qe_prediction_replay.py tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json` result=`passed`",
+    "validation-receipt: id=63c1679f40262bec commit=7233c97f2facf29c172e12a625ea0cbf9ea867f5 kind=pytest plan=direct status=passed command=`pytest backend/tests/unified_engine/test_qe_prediction_replay.py -q` result=`passed (47 tests)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
