@@ -2,9 +2,9 @@
 
 2026-11-08；Advisory/model_first；`LSTM_OVERNIGHT_RATIO_INCREMENT_FIXED5_V1`；`EXPLORATORY_SCREEN`。
 
-最新实施接续：P0/P1已完成新叶、独立CLI和44项直接合同测试。真实预检通过原21,150行/423D、21,124有限值/26NA及旧B完整来源/阶段链；完整训练KEY/目标与共同编码的真实数值比对留在获准实验的各折fit前。三折随机合成数据已走通冻结、训练、预测、评价、登记和0fit复用，仅属程序验证，不是历史研究成果。真实金融fit、标签数组解码、推荐排序均0，累计266＋1保持。当前回执入口为`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-implementation-20261108-v1/task.json`，最终源码/CI/合入见同根`delivery_receipt.json`。
+2026-11-08最新研究终态：用户授权下一阶段后，P2/P3真实3个STARTED/FINISHED、两窗评价和独立算术审核均完成，`STOP_EXACT_OVERNIGHT_INCREMENT_CANDIDATE`/`CLOSED_NEGATIVE_EXACT_CANDIDATE`，追加预算0，累计269实际Advisory fit＋1旧index。相对原生Top10开发+46.714083bps、压力−75.666671bps；相对原54字段Ridge为−4.262869/+5.970900bps。未达100bps且触发事前停止，无新可上线模型；不是所有重排序或隔夜信息的普遍否定。完整分母、区间和证据见§12。
 
-设计交付时只完成单候选合同，现已按用户下一步指令实施P0/P1。金融fit授权仍为0，本文3fit是未来实验的预算提案，不是已授权或已执行次数。已完成的输入接收见[接续计划§9](../analysis/advisory_lstm_next_research_plan_20261107.md)及其原回执；未重算源面板。设计、代码能力、源码合入、实验、经济和生产准入分别报告。
+当前权威任务为`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/task.json`，同根完整阶段链、`independent_audit.json`、`validation_receipt.json`及`delivery_receipt.json`分别承载实验、审核和源码交付。此前P0/P1及其44项直接合同、只读预检与源码#7141保持原回执；其“0fit、未读标签、P2未授权”只代表前阶段，不覆盖本次用户明确的三次实验授权。原输入接收见[接续计划§9](../analysis/advisory_lstm_next_research_plan_20261107.md)，源面板未重算。设计、程序、实验、经济及生产状态分开。
 
 ## 1. Background / Goal
 
@@ -22,9 +22,9 @@
 
 原KEY为`package_id/decision_as_of_trade_date/target_trade_date/instrument`，保留原manifest、rank及所有未知槽。原八字段资格继续决定可监督组和推理支持；新增信号不能删股票/日期、改变Top50、填补收益或把不完整原槽改成现金。正常缺失、源身份错误和未知历史可得时间分别处理。
 
-本次编辑前已登记精确写范围：本文、接续计划、蓝图、新叶`backend/services/advisory_model_first/lstm_overnight_increment_v1.py`、CLI `scripts/advisory_lstm_overnight_increment.py`、直接测试`backend/tests/advisory_model_first/test_lstm_overnight_increment_v1.py`、`scripts/ci_change_classifier.py`和`tests/aistock_validation/catalog/file_ownership.yaml`，共8文件。机器记录复用上述implementation任务根的task/preflight/validation/delivery及必要测试工件；原设计根`lstm-overnight-increment-design-20261108-v1`和输入接收根只读。没有真实金融拟合、数据库查询/写入、收益数组解码、因子重算、QE或服务操作。
+P0/P1的8文件实现范围保留原记录。本次编辑前只登记本文、接续计划、蓝图3个源码文档；实验仅使用原已合入新叶/CLI，不改学习器、参数、源输入或评价合同。机器写入仅在上述新实验根内的任务、既有CLI阶段/claim/checkpoint/registry、一次独立审核脚本与必要回执；原设计、实现及输入接收根只读。已按授权解码本候选三折训练及指定评价金融值；没有数据库查询/写入、因子重算、QE控制或服务操作。
 
-三个新文件及必要的CI classifier/ownership登记均已实现。旧学习器、公共因子、父包、Selection、API/UI、研报、现金流、ETF、价格/Exit、数据集发布及V2自然观察均不在实施范围。没有创建真实实验根、冻结金融实验协议或使用提议预算。
+三个新文件及必要的CI classifier/ownership登记已在#7141合入；本次从干净producer `405fb26f2315d319153e9d8f917feada554d0210`冻结并使用唯一实验根，恰好用尽三次预算。旧学习器、公共因子、父包、Selection、API/UI、研报、现金流、ETF、价格/Exit、数据集发布及V2自然观察均保持边界，不使用其受保护结果补确认。
 
 ## 3. Architecture / Documentation Discovery / Allowed APIs
 
@@ -65,11 +65,11 @@ B严格为旧`lstm_factor_information_v1.FEATURES`有序54字段，B+F只在末�
 | 2 | 2025-05-30 | 9,750 / 195 | `9ce62adcdd790d0d4ae3b3b9b2cbf3f04d7107b44e47d6a8979587cec59f80b4` |
 | 3 | 2025-07-31 | 11,850 / 237 | `d43c61e7ff7e09f57fbc83ca57dd59822ffdc240eaddaa376baf60f327c520fe` |
 
-本轮已只读验证三模型物理hash与各自stage manifest相符、canonical payload hash正确、54字段顺序/参数与旧协议一致、54组有限median/正scale及108系数维度。具体物理hash、编码摘要、训练支持和KEY记录在`control_metadata.json`。这是`PASS_METADATA_ONLY`，**没有重新验证完整训练KEY/目标、共同编码数值或整个上游阶段链**，不能提前宣称完全匹配。
+原设计阶段只读验证过三模型物理hash/stage manifest、canonical payload、54字段顺序/参数、54组有限median/正scale及108系数维度，保留在原设计根`control_metadata.json`，当时仅`PASS_METADATA_ONLY`，不包含完整训练KEY/目标、共同编码或上游链证明。本次P2/P3才完成下述真实匹配及独立复核，不把早期metadata验收追认为当时已经完成训练验证。
 
 未来fit前须核对旧producer依赖闭包和完整阶段链、原train_finance物理hash/资格/成熟H/费用/目标单位、每折新旧完整训练KEY顺序与统计，以及B各列的active mask、median、scale和编码规则。新增F缺失不能改变监督KEY，B统计必须与旧模型匹配。对照按字段名映射共同坐标，不能因missing bits在55字段布局中位置后移而错配。共同编码及B手算分数须满足旧实现既有精度。
 
-实施澄清了原“首次fit前”与标签时序的关系：无需解码收益的所有源/阶段/元数据检查在首次fit前完成；真实训练KEY、共同编码及目标的正规方程检验在**本折fit前**按顺序执行，不能提前打开较晚折标签。失配为`CONTROL_NOT_MATCHED`；较晚折失配保留已经使用的STARTED并停止，不恢复预算。不得重训B、替换模型、换solver或降低一致性门槛。新协议和发布模型绑定原训练金融工件，不仅绑定KEY字符串。当前只完成这些校验代码及合成验证，没有宣称真实标签匹配已通过。
+实施澄清了原“首次fit前”与标签时序的关系：无需解码收益的所有源/阶段/元数据检查在首次fit前完成；真实训练KEY、共同编码及目标的正规方程检验在**本折fit前**按顺序执行，不能提前打开较晚折标签。失配为`CONTROL_NOT_MATCHED`；较晚折失配保留已经使用的STARTED并停止，不恢复预算。不得重训B、替换模型、换solver或降低一致性门槛。新协议和发布模型绑定原训练金融工件，不仅绑定KEY字符串。本次三折真实训练和旧B控制均通过完整匹配，独立第二路径复核相同8,300/9,750/11,850训练行、166/195/237D及原KEY；目标残差、train-only编码和两臂分数通过。
 
 ## 4. Encoding / Learner / 推理合同
 
@@ -91,11 +91,11 @@ B严格为旧`lstm_factor_information_v1.FEATURES`有序54字段，B+F只在末�
 | 2 | 2025-05-30 | 2025-06-01～07-31 | 1 | 原B第2折，0fit |
 | 3 | 2025-07-31 | 2025-08-01～09-30，另固定用于原压力118D | 1 | 原B第3折，0fit |
 
-未来单独获准执行时实际新fit上限为3个STARTED，仅B+F每折一次；失败仍消耗，未用条件预算和266次历史fit不可借用。无第四fit、最终重训、恢复赠送、超参/模型/方向搜索或择折。若全部完成，累计为269实际Advisory fit＋1旧index；本轮仍266＋1。
+事前批准的新fit上限为3个STARTED，仅B+F每折一次；失败仍消耗，未用条件预算和266次历史fit不可借用。无第四fit、最终重训、恢复赠送、超参/模型/方向搜索或择折。本次3/3全部完成，累计269实际Advisory fit＋1旧index，残余及追加预算0；三份旧B只读复用，未重训。
 
 原各折训练金融工件仅在实现验证通过且该实验执行获准后读取；H=`label_information_end`必须≤本折cutoff，CASH合法零与UNKNOWN严格按原合同。先完成本折训练并不可变保存模型及该折两臂预测，再允许读取较晚折的合法训练标签。第3折同时冻结开发末折及原压力预测。全部预测冻结后，才解码评价收益并一次执行§7判断。旧对照训练曾消费的历史窗口不可恢复成盲测，这个顺序只约束本次新实现，不声称抹去既有知识。
 
-未来独立研究根建议`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1`，本轮不创建该根或preregistered实验。未来从干净已提交producer冻结代码闭包、环境、完整来源与协议，按既有`preregistered→prepared→fold{1,2,3}/trained→evaluated→terminal/evaluated`发布不可变阶段。old B作为只读绑定工件；单owner锁及create-only claim防重复fit，partial STARTED不能隐式重训。每折完成模型后、预测前立即create-only保存`fit_checkpoints/foldN.json`，将引用纳入trained回执；后续预测/发布失败也保留模型。完整阶段链、checkpoint绑定、三STARTED/FINISHED及registry齐全时再次调用只读复用、0fit；缺件或漂移拒绝伪称完整。不覆盖旧实验或失败回执。
+实际独立研究根为`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1`。从干净已提交producer冻结代码闭包、环境、完整来源与协议，按既有`preregistered→prepared→fold{1,2,3}/trained→evaluated→terminal/evaluated`发布不可变阶段。old B作为只读绑定工件；单owner锁及create-only claim防重复fit，partial STARTED不能隐式重训。每折完成模型后、预测前create-only保存`fit_checkpoints/foldN.json`并绑定trained回执。本次完整链、checkpoint、三STARTED/FINISHED及唯一registry记录均通过；新进程再次调用为`STUDY_REUSED`、0fit，claim hash前后不变。不覆盖旧实验或失败回执。
 
 资源沿已有实际容量规则：2CPU线程、0GPU、自身RSS≤2GiB、金融运行≤1800秒、输出≤200MiB；读取训练标签前及每次STARTED前检查本机可用CPU估计≥2、available内存≥2GiB、输出空间≥200MiB，资源不足形成有界终态，不建后台等待器。远端QE不得阻断，本机资源充足也不得被QE running/pending阻断；QE观测仅best-effort且有超时，不可用保留UNKNOWN，不控制任何任务或服务。训练能力和程序开发均不等待新交易日。
 
@@ -105,11 +105,11 @@ B严格为旧`lstm_factor_information_v1.FEATURES`有序54字段，B+F只在末�
 | --- | --- | --- |
 | P0，约1小时 | 读本设计/当前回执；从最新main建新树，登记新叶、CLI、直接测试及必要CI登记的精确写范围；只读核对所有源和B模型依赖/阶段链 | 身份可闭合则继续；漂移/缺件即精确停止，不采集或重算，不恢复已结束分支 |
 | P1，约3小时 | 参照§3真实接口实现原KEY一对一装配、54/55字段独立合同、train-only编码、Ridge导出与稳定排名、一次claim/阶段/registry；本次已完成 | 44项直接合同通过，含随机原规模三折阶段链；0真实金融fit。代码在历史只读输入/合成数据完成，不等待新D |
-| P2，约1小时＋运行≤1800秒 | 若覆盖本实验的具体执行授权存在，核对完整训练控制后，按§5精确运行最多3fit并冻结全部预测；无该授权只完成P0/P1并保留0fit | 失配或工程失败停止；所有STARTED诚实计数，无加赠。预算仅在本阶段适用 |
-| P3，约2小时 | 仅在P2预测完整后，按原金融投影一次评价、第二算术路径审核并形成终态；若P2未执行则经济明确NOT_EVALUATED | 全126/118D对账、主辅共同分母、UNKNOWN、费用/四项损益/区间及停止条件；不挑季度或完整子集救结论 |
+| P2，约1小时＋运行≤1800秒 | 本次获准后核对完整训练控制，完成3fit和全部不可变预测；实耗金融运行约10.37秒 | 3个STARTED/FINISHED，无加赠、final或搜索；完整复用再次调用0fit |
+| P3，约2小时 | P2预测完整后按原金融投影一次评价，独立第二算术路径通过，按事前规则停止精确候选 | 原126/118D完整保留，主/辅各101/108个共同完整D；负面结果不挑季度或子集改判 |
 | P4，约1小时 | 同一任务三轮自审/修复与最终版本复核，直接小矩阵、changed-file/ownership、F1/符合性，CI及已有授权的源码交付 | 实现、经济、源码、运行各自验收；失败或未执行阶段保留真实状态，无自动生产接入 |
 
-约8小时是原实施估算，不是成果承诺。本次P0/P1及其P4源码验证适用部分完成，P2未获授权、P3经济NOT_EVALUATED，不能把代码合入当作实验已完成。P1没有绕过授权的默认run；P2须绑定本候选、预算和冻结协议，不能把裸源码合入授权解释为训练授权。
+约8小时是原实施估算，不是成果承诺。本次P0～P3已完成，P4结果/设计逐项审核与文档交付按最终回执独立报告。P1没有默认run；P2实际使用了本候选、3fit及冻结协议的用户授权，没有将源码合入授权泛化为其它训练。约10.37秒只指金融研究进程内运行，不是整个开发/研究任务耗时。
 
 ## 7. Economic Contract / 唯一事前判断
 
@@ -131,20 +131,20 @@ B严格为旧`lstm_factor_information_v1.FEATURES`有序54字段，B+F只在末�
 
 未来最小直接测试必须区分：重复/外来/缺失KEY与正常26NA；原54源及新投影hash漂移；字段顺序和B missing-bit位置；原八字段支持及全部原槽不变；新增字段缺失不改变训练KEY；非法Inf/字符串/bool拒绝；训练全未知/恒定坐标停止；未来数据及评价标签毒化不影响编码、训练与预测；官方/JSON/第二路径分数和全部稳定排名；费用/CASH/UNKNOWN分母及5TD成熟时钟；三STARTED耗尽、partial恢复拒绝、完整复用0fit、无第四fit；远端QE/查询UNKNOWN且本机容量充分时可执行。
 
-本次最小验证为新叶44项直接合同、真实无标签预检、changed-file Ruff/语法、相对链接、精确写范围、`git diff --check`和`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_lstm_overnight_increment_v1_f1_design_20261108.md --tier F1`。三轮当前Agent自审分别覆盖输入/控制/逐折时序，模型/预算/完整复用，经济主辅分母/默认授权/最终交付范围；修复首次Ruff问题，保留既有失败回执并拒绝登记不完整的复用。自审不是第三方或独立经济确认；跨模块回归交既有CI/Nightly，不在本地重复跑模块全量。
+P0/P1的新叶44项直接合同与#7141 CI保留原证明，不因本次仅文档变化重跑模型测试。当前真实研究的第二路径不导入后端fit/predict/cohort/费用/区间函数，独立核验24,400个分数/排名、两臂各244日日表、各11,111条AVAILABLE费用及4组区间；最大分数差7.28e-12。三轮当前Agent审核覆盖冻结来源/三折时序/计数、算术与UNKNOWN/分母、终态/授权/逐项文档和最终版本；这不是第三方外审或独立经济样本。当前直接检查为审核脚本语法、链接、3文档范围、diff及F1校验，CI状态另见最终回执。
 
-按`DESIGN-COMPLIANCE-001`逐项：仅将本轮完整设计交付报完成，不冒充模型实现；缺失、失配、资源不足和未执行均显式失败/未评估；原业务人口/5TD/成本/100bps不改；没有额外审批流、生产门或新数据等待。本设计中的原控制一致性和预算检查是本实验既有正确性与执行边界，不要求新增备份、数据库或服务。
+按`DESIGN-COMPLIANCE-001`逐项：完整研究已执行并报告负面，不以完成模型或审核冒充经济通过；UNKNOWN/NA和所有原D保留，审计脚本最初的metadata列序假设已记录并改为按同一列名核对全部值，没有修改研究工件；原人口/5TD/费用/100bps及事前停止规则不改；没有新增审批服务、数据库或等待新D。
 
 ## 9. Design Acceptance Index
 
-本次索引验收对象是用户已要求的**P0/P1代码能力**，不是P2/P3真实实验；`PASS_P0_P1`仅表示下面代码/直接合同或只读来源证据通过。真实训练目标匹配、经济实验和独立确认仍明确未评估，不把设计状态或合成结果继承为研究成功。
+本次索引验收对象扩至用户已授权的P2/P3完整实验；`PASS_EXECUTED_NEGATIVE`表示实现和真实研究按合同执行、算术复核通过，但经济结论为停止，不能解释为业务达标、独立确认或生产准入。
 
 | ID | 本轮设计验收要求 |
 | --- | --- |
 | F-971 | 单一业务假设、原研究差异及非因果/探索边界明确 |
 | F-972 | 原人口、信号身份/公式/单位、缺失、修订和两个时钟完整固定 |
 | F-973 | B/B+F、三旧Ridge及完整匹配前置、train-only编码和同学习器明确 |
-| F-974 | 三折、最多3次未来fit、当前0授权、标签/预测时序、恢复及资源合同完整 |
+| F-974 | 三折、获准3次fit且实际恰好3次、预测时序/恢复/资源合同及残余0预算 |
 | F-975 | 原生主与匹配B辅助、100bps/支持/风险、UNKNOWN和唯一终态预先确定 |
 | F-976 | 真实接口、实施阶段/直接验证、允许范围、分态交付和三轮设计审核完整 |
 
@@ -152,15 +152,32 @@ B严格为旧`lstm_factor_information_v1.FEATURES`有序54字段，B+F只在末�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-971 | 新叶CONTRACT与本文§1；唯一坐标/旧研究终态保持 | artifact: X:/AIstock_temp/ADVISORY/single-signal-intake-20261108-v1/selection_review.json | PASS_P0_P1 | none |
-| F-972 | 新叶assemble/check_inputs；CLI preflight/verify_control，无标签原人口和完整阶段链 | backend/tests/advisory_model_first/test_lstm_overnight_increment_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-implementation-20261108-v1/preflight.json | PASS_P0_P1 | none |
-| F-973 | 新叶training/fit/validate_model/predict，字段名映射/目标残差/JSON推理，真实目标比对尚未执行 | backend/tests/advisory_model_first/test_lstm_overnight_increment_v1.py | PASS_P0_P1 | none |
-| F-974 | FitClaims及CLI authorization/freeze/run/completed；合成全链、标签顺序/3预算/0fit复用 | backend/tests/advisory_model_first/test_lstm_overnight_increment_v1.py | PASS_P0_P1 | none |
-| F-975 | summarize/decision；主辅共同分母、UNKNOWN、100bps和终态数学合同，真实经济未评估 | backend/tests/advisory_model_first/test_lstm_overnight_increment_v1.py | PASS_P0_P1 | none |
-| F-976 | 44直接项、CI/ownership登记、F1/符合性/三轮自审，源码交付独立 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-implementation-20261108-v1/validation_receipt.json | PASS_P0_P1 | none |
+| F-971 | 新叶CONTRACT与本文§1；唯一坐标/旧研究终态保持 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/study/preregistered/protocol.json | PASS_EXECUTED_NEGATIVE | none |
+| F-972 | assemble/check_inputs及原人口/22源角色前后hash，26NA不改 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/independent_audit.json | PASS_EXECUTED_NEGATIVE | none |
+| F-973 | 三折真实KEY/目标/训练编码、同Ridge/JSON/独立分数排名及证书 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/independent_audit.json | PASS_EXECUTED_NEGATIVE | none |
+| F-974 | 3个STARTED/FINISHED、完整阶段/registry/checkpoint和新进程0fit复用 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/study/terminal/evaluated/receipt.json; artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/reuse_cli.json | PASS_EXECUTED_NEGATIVE | none |
+| F-975 | 原生主/匹配B辅助、四项损益/区间和事前停止，经济不达标 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/study/evaluated/report.json; artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/independent_audit.json | PASS_EXECUTED_NEGATIVE | none |
+| F-976 | 原44项及源码CI保持；本次三轮审核、F1/符合性、精确文档交付独立 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/validation_receipt.json | PASS_EXECUTED_NEGATIVE | none |
 
 ## 11. Risks / Production Gates
 
 源高覆盖、非恒定、旧模型可读和设计合入不证明Alpha。旧窗口反复消费、上游提名选择、额外坐标容量、价格未调整、不同源修订、正常缺失及未知历史公开时间都会限制解释；本实验即使正面，也不证明真实PIT、实盘可交易或已满足独立经济确认。缺失字段原因未解的旧行业源仍`UNRESOLVED_SOURCE`，不借本实验关闭它。
 
-本轮`source_delivery`按最终回执独立报告；`implementation=P0_P1_COMPLETE`、`financial_fit_budget_authorized=0`、`new_financial_fits=0`、`economic_acceptance=NOT_EVALUATED`、`production_ready=false`。合成数学测试不计金融研究fit，不生成真实推荐排序。`production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`backend_restart_required=false`、`runtime_activation=noop`、`QE=noop`、`cleanup=noop`。无需后端重启，不创建真实训练进程，不清理任何旧树或共享资产。
+本轮`source_delivery`按最终回执独立报告；`implementation=P0_P3_COMPLETE`、`financial_fit_budget_authorized=3`、`new_financial_fits=3`、`remaining_fit_budget=0`、`economic_acceptance=STOP_EXACT_OVERNIGHT_INCREMENT_CANDIDATE`、`production_ready=false`。没有激活推荐，三份新模型及预测只在研究根保留。`production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`backend_restart_required=false`、`runtime_activation=noop`、`QE_control=noop`、`cleanup=noop`。无需重启服务；旧树、模型、评价、前向与恢复材料均保留。
+
+## 12. 真实研究结果与精确候选关闭
+
+producer=`405fb26f2315d319153e9d8f917feada554d0210`，protocol SHA=`0f5627b21d19168e297ab81a0957173c0a25e14328d14c2062ebd76ef79efd80`，完整阶段链终点=`00a36233a627f8f7fa2fd79f662ee0c3cd1c2d7efce82c2b331701ffdd09f198`。三折在其各自fit前匹配真实训练人口/目标/编码，原三B模型只读；本次恰好3次拟合，无第四fit、final、参数/方向搜索或恢复拟合。
+
+| 比较，净bps/5TD | 开发共同完整D | 开发均值及95%描述性区间 | 压力共同完整D | 压力均值及95%描述性区间 |
+| --- | ---: | --- | ---: | --- |
+| B+F－原生Top10，业务主比较 | 101 | +46.714083 [−13.033510, 106.474933] | 108 | −75.666671 [−196.213205, 49.696533] |
+| B+F－原54字段Ridge，坐标增量辅助 | 101 | −4.262869 [−20.694770, 9.384455] | 108 | +5.970900 [−11.580200, 26.606927] |
+
+所有原开发126D/6,300行与压力118D/5,900行均保留。成熟D分别111/113，完整主比较101/108，覆盖90.9910%/95.5752%；辅助本次恰好也为101/108D，仍独立配对计算，不由异分母均值相减。成熟日干预111/112D；UNKNOWN比例相对原生变化0/−0.176991个百分点，下尾10%均值变化+23.797052/+66.457599bps。覆盖和风险项通过不能挽救主端点/增量失败。开发三折主均值为−47.207039/+63.494656/+91.723721bps，不择折或季度。
+
+独立新进程不调用生产学习/预测/cohort/费用/区间函数，复算24,400分数和完整排名、两臂各244日日表与四项损益、各11,111条AVAILABLE费用、4组10D/10,000次区间。最大分数差7.28e-12；全部原64字段按列名保持相等，唯一新坐标26NA保持，22个源角色hash前后相同。独立脚本首次把metadata物理列序当作合同，发现`parent_score/source_id`投影顺序后，在相同列集上逐列核对全部值；该脚本修正未改源、模型、预测、金融值或预算。最终`independent_audit.json=PASS`。
+
+金融研究进程实耗10.3672秒、结束RSS约347.78MiB、2CPU线程/0GPU；7次本机资源快照最少估计25.6空闲CPU线程、约27.68GiB available内存。21条best-effort QE观测均成功且active=0，仅记录当次观测，不证明全平台任务不存在，也未用QE状态作否决。新进程完整复用为0fit，六份claim hash不变。
+
+按事前§7第3条，压力主均值≤0、开发辅助增量≤0，且两窗主均值均未达到100bps，故关闭本次精确候选并保持追加预算0。区间均跨零，停止是预定价值规则的决定，不是对总体效应的统计证伪。没有可上线的新模型、独立经济确认或历史PIT成立；NON_VINTAGE、原生未调整价格比值和修订混杂限制保留。当前54字段模型轮换及已暂停方向保持；没有自动排下一模型/另一信号或等待新交易日的研究任务。

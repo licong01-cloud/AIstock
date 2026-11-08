@@ -1,5 +1,7 @@
 # Advisory研究接续：输入审查终态与单信号交付计划
 
+2026-11-08研究执行终态：用户授权后，[ID1272唯一F1的P2/P3](../architecture/advisory_lstm_overnight_increment_v1_f1_design_20261108.md)已完成3次真实拟合、原两窗固定评价、独立算术审核及新进程0fit复用。终态`STOP_EXACT_OVERNIGHT_INCREMENT_CANDIDATE`/`CLOSED_NEGATIVE_EXACT_CANDIDATE`，累计269实际fit＋1旧index、追加预算0；没有可上线新模型，不恢复旧负面分支或自动排下一候选。全部原人口、26NA、Top50→Top10/5TD/费用/100bps、原生/V2及暂停方向保持，详细均值/区间/分母以F1§12为唯一结果正文。权威任务为`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/task.json`，同根保存完整阶段、模型、独立审核和最终交付；下方0fit/未授权/未实现段落均为各阶段历史，不再作为当前队列。
+
 2026-11-08实施接续：ID1272唯一F1的P0/P1完成，新叶/独立CLI/44项直接合同已实现；真实原人口21,150行、26NA及旧B来源/完整阶段链只读核验通过，未解码金融标签。随机合成三折验证了预测冻结顺序、一次3个STARTED、完整登记及重复0fit复用；不是经济研究。下一步仅在覆盖该实验的具体授权下，按固定协议执行P2最多3次新fit、冻结全部预测，再一次完成P3评价与独立算术复核；完整训练KEY/目标/共同编码按各折fit前验证。当前金融预算仍0、累计266＋1、真实经济NOT_EVALUATED，不扩方向、不等新D。权威状态与源码交付见`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-implementation-20261108-v1/task.json`及同根最终回执。下方设计接续的“未实现”是历史状态。
 
 2026-11-08设计接续：ID1272的[单候选F1](../architecture/advisory_lstm_overnight_increment_v1_f1_design_20261108.md)已固定原54字段B与B+F的同Ridge对照、三折/未来最多3fit提案、原生Top10主比较及100bps/辅助增量停止规则。三旧B的manifest/payload/字段/参数元数据核对通过；完整训练KEY/目标/共同编码和上游阶段链仍须在未来fit前验证。当前只完成设计，0新增fit/收益标签/排序，未实现模型；§9的“尚未创建F1”是当时状态，不再作为当前待办。下一步是实现该唯一设计的P0/P1；训练须有覆盖本实验的具体预算授权，不借旧额度。设计审核、CI/合入见新任务根的最终回执。
