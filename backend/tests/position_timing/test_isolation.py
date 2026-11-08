@@ -12,6 +12,8 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
         sdk + ".wait_control": {"CONTROL_ID", "WaitControlSpec", "WaitControlState", "WaitControlDecision", "evaluate_wait_control"},
         sdk + ".wait_control_results": {"inspect_plan", "economic_opening", "WaitBudgetAnalysisSpec", "WaitBudgetFacts", "WaitBudgetAccount"},
         sdk + ".wait_control_history": {"inspect_history_plan", "HistoryAnalysisSpec"},
+        sdk + ".adverse_wait_control": {"CONTROL_ID", "AdverseWaitSpec", "AdverseWaitState", "AdverseWaitDecision", "ReleaseEvidence", "evaluate_adverse_wait"},
+        sdk + ".adverse_wait_research": {"inspect_adverse_plan"},
     }
     if module in research_symbols:
         return bool(names) and set(names) <= research_symbols[module]
@@ -107,6 +109,10 @@ def test_sdk_consumer_exception_does_not_open_other_consumers_or_internal_module
         assert not _approved_localsim_sdk_import(consumer, sdk + ".wait_control_results", [denied])
         assert not _approved_localsim_sdk_import(consumer, sdk + ".wait_control_history", [denied])
     assert _approved_localsim_sdk_import(consumer, sdk + ".wait_control_history", ["inspect_history_plan", "HistoryAnalysisSpec"])
+    assert _approved_localsim_sdk_import(consumer, sdk + ".adverse_wait_control", ["evaluate_adverse_wait", "AdverseWaitState"])
+    assert _approved_localsim_sdk_import(consumer, sdk + ".adverse_wait_research", ["inspect_adverse_plan"])
+    assert not _approved_localsim_sdk_import(consumer, sdk + ".adverse_wait_research", ["prepare"])
+    assert not _approved_localsim_sdk_import(Path("backend/services/advisory/service.py"), sdk + ".adverse_wait_control", ["evaluate_adverse_wait"])
     assert not _approved_localsim_sdk_import(Path("backend/services/advisory/service.py"), sdk + ".wait_control_history", ["inspect_history_plan"])
     assert not _approved_localsim_sdk_import(Path("backend/services/advisory/service.py"), sdk + ".wait_control", ["evaluate_wait_control"])
     period = consumer.with_name("period_research.py")
