@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-11-08T16:17:27.498975Z",
   "description": "三个seed均QE_PREDICTION_REPLAY_ARTIFACT_CARDINALITY expected=1 actual=2；未提交新实验。",
+  "design_compliance_review": {
+    "business_semantics_unchanged": "PASS only artifact selection; no fit, signal, portfolio, cost or data changes",
+    "no_extra_approval_gate": "PASS existing immutable-source contract preserved; user-owned restart separate",
+    "no_partial_delivery": "PASS real3 predictions and6 complete Composer captures; no economic pass claimed",
+    "no_silent_errors": "PASS corrupt/missing/changed recorder and ambiguous source reject; no fallback to copied prediction"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -24,16 +30,23 @@
     }
   ],
   "evidence_uris": [
-    "F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts.json"
+    "F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts.json",
+    "F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts_fixed.json"
   ],
   "expected": "明确本轮recorder时只消费其精确pred.pkl；身份缺失或冲突仍fail closed，旧单一资产工作区保持兼容。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/unified_engine/test_qe_prediction_replay.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261108_BUG-2202-qe-source-model.json",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_evolution_service.py",
@@ -97,6 +110,7 @@
   "first_seen_at": "2026-11-08T16:17:27.498975Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "按根qe_current_recorder精确选择本轮pred.pkl，保留source_model旧副本；缺失/歧义/无效身份、身份变化、目录完整性、路径/大小/SHA验证保持fail closed。旧无marker且唯一预测工作区兼容。",
   "fixed_at": null,
   "github_issue_number": 7143,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7143",
@@ -117,12 +131,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261108_005112_a29b?detail=summary",
+    "fresh_process_evidence": [
+      "Isolated Python loaded the task worktree persistent resolver and consumed all3 actual completed October predictions by exact current-recorder path and originalSHA; captured6 complete NEW/OLD Composers, zero fits/inference/accounts. Receipt=F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts_fixed.json; SHA256=1c484dc86319c2519cb86568ab679c3ba0faafcc19c8a5626005666857201c63",
+      "Direct regression: current-recorder tests failed2 before fix, passed2 after fix; final related prediction-replay matrix47 passed; ruff and diff-check passed. No backend or worker process control.",
+      "Task-worktree source consumed actual3 frozen October predictions by exact recorder and SHA;6 full NEW/OLD Composer captures; zero fit/inference/account; F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts_fixed.json",
+      "Task-worktree source consumed actual3 frozen October predictions by exact recorder and SHA;6 complete Composer captures; zero fit/inference/account; F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts_fixed.json",
+      "Isolated task-worktree source consumed3 actual October prediction assets by exact current recorder and originalSHA;6 complete Composers captured; zero fit/inference/account; F:/Dev/AIstock/tmp/handoff/qe-independent-horizon-station-20261108/snapshots/compose_receipts_fixed.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
+    "runtime_source": "backend/services/quantevolver/qe_evolution_service.py",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
@@ -131,7 +157,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],

@@ -345,6 +345,87 @@ def test_source_resolver_rejects_incomplete_or_ambiguous_catalog(catalog, error)
         )
 
 
+def _recorder_catalog_client():
+    prediction = b"current-prediction"
+    client = AsyncMock()
+    current = "mlruns/1/current/artifacts/pred.pkl"
+    client.list_workspace_files.return_value = {
+        "catalog_completeness": "complete",
+        "files": [
+            {"relative_path": "qe_current_recorder.json", "file_type": "file", "size_bytes": 90},
+            {"relative_path": "source_model/mlruns/2/old/artifacts/pred.pkl", "size_bytes": 3},
+            {"relative_path": current, "file_type": "file", "size_bytes": len(prediction)},
+        ],
+    }
+    client.get_workspace_file.return_value = {"experiment_id": "1", "recorder_id": "current"}
+    client.download_workspace_file_bytes.return_value = prediction
+    return client, prediction, current
+
+
+@pytest.mark.parametrize("node", ["wsl2-5080", "rdagent-node1"])
+def test_source_resolver_uses_current_recorder_not_nested_frozen_source(node) -> None:
+    client, prediction, current = _recorder_catalog_client()
+    source, files = asyncio.run(AutoEvolutionScheduler._build_prediction_replay_payload(
+        None, client, "qe_source", 2, source_node_id=node,
+        expected_sha256=hashlib.sha256(prediction).hexdigest(),
+    ))
+    assert source["catalog_path"] == current
+    assert base64.b64decode(files["frozen_prediction.pkl.b64"]) == prediction
+    client.download_workspace_file_bytes.assert_awaited_once_with("qe_source", "Loop2", current)
+
+
+@pytest.mark.parametrize("recorder", [
+    {}, None, [], "invalid JSON", {"experiment_id": "../1", "recorder_id": "current"},
+    {"experiment_id": "1", "recorder_id": "old/../current"},
+    {"experiment_id": "1", "recorder_id": "old\\current"},
+    {"experiment_id": "1", "recorder_id": "."},
+])
+def test_source_resolver_does_not_fallback_from_invalid_current_recorder(recorder) -> None:
+    client, prediction, _ = _recorder_catalog_client()
+    client.get_workspace_file.return_value = recorder
+    with pytest.raises(ValueError, match="RECORDER_INVALID"):
+        asyncio.run(AutoEvolutionScheduler._build_prediction_replay_payload(
+            None, client, "qe_source", 2, source_node_id="rdagent-node1",
+            expected_sha256=hashlib.sha256(prediction).hexdigest(),
+        ))
+    client.download_workspace_file_bytes.assert_not_awaited()
+
+
+def test_source_resolver_requires_recorders_exact_catalog_path_even_with_one_other_prediction() -> None:
+    client, prediction, _ = _recorder_catalog_client()
+    client.list_workspace_files.return_value["files"].pop()
+    with pytest.raises(ValueError, match="ARTIFACT_CARDINALITY"):
+        asyncio.run(AutoEvolutionScheduler._build_prediction_replay_payload(
+            None, client, "qe_source", 2, source_node_id="rdagent-node1", expected_sha256=None,
+        ))
+    client.download_workspace_file_bytes.assert_not_awaited()
+
+
+def test_source_resolver_rejects_recorder_change_during_download() -> None:
+    client, prediction, _ = _recorder_catalog_client()
+    client.get_workspace_file.side_effect = [
+        {"experiment_id": "1", "recorder_id": "current"},
+        {"experiment_id": "1", "recorder_id": "another"},
+    ]
+    with pytest.raises(ValueError, match="RECORDER_CHANGED"):
+        asyncio.run(AutoEvolutionScheduler._build_prediction_replay_payload(
+            None, client, "qe_source", 2, source_node_id="rdagent-node1",
+            expected_sha256=hashlib.sha256(prediction).hexdigest(),
+        ))
+
+
+def test_source_resolver_keeps_duplicate_current_prediction_ambiguous() -> None:
+    client, _, _ = _recorder_catalog_client()
+    client.list_workspace_files.return_value["files"].append(
+        dict(client.list_workspace_files.return_value["files"][-1])
+    )
+    with pytest.raises(ValueError, match="ARTIFACT_CARDINALITY"):
+        asyncio.run(AutoEvolutionScheduler._build_prediction_replay_payload(
+            None, client, "qe_source", 2, source_node_id="rdagent-node1", expected_sha256=None,
+        ))
+    client.download_workspace_file_bytes.assert_not_awaited()
+
+
 def test_source_resolver_rejects_digest_and_size_drift() -> None:
     client = AsyncMock()
     client.list_workspace_files.return_value = {
