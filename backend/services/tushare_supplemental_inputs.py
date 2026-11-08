@@ -76,18 +76,11 @@ def store_observations(conn, spec, rows, write_facts):
     if not rows:
         return 0
     normalized = normalize_rows(spec, rows)  # reject before writing any original row
-    observations = [raw_observation(spec, row) for row in rows]
     owns_transaction = conn.autocommit
     if owns_transaction:
         conn.autocommit = False
     try:
-        with conn.cursor() as cur:
-            execute_values(cur, """
-                INSERT INTO market.tushare_supplemental_raw
-                  (dataset, source_api, trade_date, ts_code, source_row_sha256, raw_payload)
-                VALUES %s ON CONFLICT (dataset, source_row_sha256) DO UPDATE
-                  SET last_observed_at=clock_timestamp()
-            """, observations)
+        store_raw_observations(conn, spec, rows)
         count = write_facts(normalized)
         if owns_transaction:
             conn.commit()
@@ -99,3 +92,19 @@ def store_observations(conn, spec, rows, write_facts):
     finally:
         if owns_transaction:
             conn.autocommit = True
+
+
+def store_raw_observations(conn, spec, rows):
+    """Preserve rejected provider originals without promoting them to valid facts."""
+    if spec.name not in RAW_DATASETS:
+        raise ValueError('unsupported supplemental raw dataset')
+    if not rows:
+        return
+    observations = [raw_observation(spec, row) for row in rows]
+    with conn.cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO market.tushare_supplemental_raw
+              (dataset, source_api, trade_date, ts_code, source_row_sha256, raw_payload)
+            VALUES %s ON CONFLICT (dataset, source_row_sha256) DO UPDATE
+              SET last_observed_at=clock_timestamp()
+        """, observations)

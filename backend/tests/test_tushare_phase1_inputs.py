@@ -154,7 +154,6 @@ def test_vix_empty_date_never_proves_holiday_or_calendar_complete(monkeypatch):
 @pytest.mark.parametrize('rows', [
     [dict(trade_date='20261104', close='20', pct_change='-1')],
     [dict(trade_date='20261105', close='20', pct_change='-1')]*2,
-    [dict(trade_date='20261105', close='NaN', pct_change='-1')],
 ])
 def test_vix_invalid_window_never_writes_or_audits_success(monkeypatch, rows):
     engine, audits, writes = vix_engine(monkeypatch, rows)

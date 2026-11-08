@@ -208,3 +208,68 @@ def test_known_US_gap_is_retried_after_rolling_tail(monkeypatch):
     start, _ = engine._resolve_incremental_start_date(conn, DATASET_REGISTRY['index_global'], dt.date(2026, 11, 6))
     assert start == dt.date(2026, 10, 31)
     assert engine._late_recheck_dates['index_global'] == [dt.date(2026, 8, 3)]
+
+
+def test_bad_source_key_does_not_discard_valid_neighbours(monkeypatch):
+    from types import SimpleNamespace
+    import uuid
+    import backend.services.tushare_us_market_inputs as us
+    import backend.services.tushare_supplemental_inputs as raw
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+    engine, audits, written, rejected = TushareSyncEngine(), [], [], []
+    day = dt.date(2026,11,5)
+    monkeypatch.setattr(us,'read_calendar',lambda *_:{day:1,day+dt.timedelta(days=1):1})
+    def fetch(_spec,params):
+        first=index_row()
+        first['ts_code']=params['ts_code']
+        if first['ts_code']=='SPX':
+            first['open']=1
+        second=index_row()
+        second.update(ts_code=params['ts_code'],trade_date='20261106')
+        return [first,second]
+    monkeypatch.setattr(engine,'_fetch_from_tushare',fetch)
+    monkeypatch.setattr(engine,'_upsert_batch',lambda _c,_s,rows:written.extend(rows) or len(rows))
+    monkeypatch.setattr(engine,'_update_progress',lambda *_:None)
+    monkeypatch.setattr(raw,'store_raw_observations',lambda _c,_s,rows:rejected.extend(rows))
+    engine._refresh_audit=SimpleNamespace(record_success=lambda **kw:audits.append(kw),
+                                        record_failure=lambda **kw:pytest.fail(str(kw)))
+    result=us.sync_ranges(engine,None,DATASET_REGISTRY['index_global'],day,day+dt.timedelta(days=1),uuid.uuid4())
+    assert len(written)==5 and len(rejected)==1
+    assert [item['quality_status'] for item in audits]==['low_coverage','ok']
+    assert result.as_dict()['quality_warnings'][0]['invalid_source_rows']==1
+    assert len(audits[0]['metadata']['rejected_source_rows'])==1
+
+
+def test_closed_date_source_quote_is_preserved_raw_not_a_fake_bar(monkeypatch):
+    from types import SimpleNamespace
+    import uuid
+    import backend.services.tushare_us_market_inputs as us
+    import backend.services.tushare_supplemental_inputs as raw
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+    engine, originals, audits = TushareSyncEngine(),[],[]
+    day=dt.date(2026,11,5)
+    monkeypatch.setattr(us,'read_calendar',lambda *_:{day:0})
+    def fetch(_spec,params):
+        row=index_row()
+        row['ts_code']=params['ts_code']
+        return [row]
+    monkeypatch.setattr(engine,'_fetch_from_tushare',fetch)
+    monkeypatch.setattr(engine,'_upsert_batch',lambda _c,_s,rows:0 if not rows else pytest.fail('closed quote'))
+    monkeypatch.setattr(engine,'_update_progress',lambda *_:None)
+    monkeypatch.setattr(raw,'store_raw_observations',lambda _c,_s,rows:originals.extend(rows))
+    engine._refresh_audit=SimpleNamespace(record_success=lambda **kw:audits.append(kw),
+                                        record_failure=lambda **kw:pytest.fail(str(kw)))
+    result=us.sync_ranges(engine,None,DATASET_REGISTRY['index_global'],day,day,uuid.uuid4())
+    assert len(originals)==3 and result.quality_warnings
+    assert audits[0]['row_count']==0 and not audits[0]['metadata']['coverage_complete']
+    assert audits[0]['quality_status']=='unknown'
+
+
+def test_old_off_calendar_fact_cannot_be_reported_complete(monkeypatch):
+    from backend.tests.test_tushare_sync_engine import _FakeConn, _FakeCursor
+    import backend.services.tushare_us_market_inputs as us
+    day=dt.date(2026,4,3)
+    monkeypatch.setattr(_FakeCursor,'fetchall',lambda _:[(day,)])
+    monkeypatch.setattr(us,'read_calendar',lambda *_:{day:0})
+    result=us.gap_report(_FakeConn(),DATASET_REGISTRY['vix_index'],day,day)
+    assert result['status']=='CONFLICT' and result['unexpected_key_count']==1

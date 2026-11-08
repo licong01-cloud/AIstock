@@ -1271,10 +1271,12 @@ class TushareSyncEngine:
             from .tushare_us_market_inputs import incremental_start
             start, metadata = incremental_start(conn, spec, end_date)
             with conn.cursor() as cur:
-                cur.execute("SELECT trade_date FROM market.dataset_date_refresh_audit "
-                            "WHERE dataset=%s AND data_source='tushare' AND trade_date<%s "
-                            "AND quality_status NOT IN ('ok','empty_valid') "
-                            "ORDER BY trade_date LIMIT 7", (spec.name, start))
+                cur.execute("SELECT a.trade_date FROM market.dataset_date_refresh_audit a "
+                            "LEFT JOIN market.us_tradecal c ON c.cal_date=a.trade_date "
+                            "WHERE a.dataset=%s AND a.data_source='tushare' AND a.trade_date<%s "
+                            "AND a.quality_status NOT IN ('ok','empty_valid') "
+                            "AND (%s='us_tradecal' OR c.is_open IS DISTINCT FROM 0) "
+                            "ORDER BY a.trade_date LIMIT 7", (spec.name, start, spec.name))
                 self._late_recheck_dates[spec.name] = [row[0] for row in cur.fetchall()]
             return start, metadata
         if spec.name in EVENT_DATASETS:

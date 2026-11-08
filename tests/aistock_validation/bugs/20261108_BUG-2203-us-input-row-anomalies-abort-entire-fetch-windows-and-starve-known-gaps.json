@@ -1,0 +1,310 @@
+{
+  "actual": "index_global 31/34窗口成功5760行，3窗口被4条源异常整窗拒绝",
+  "allowed_write_scope": [
+    "backend/services/tushare_us_market_inputs.py",
+    "backend/services/tushare_supplemental_inputs.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_us_market_inputs.py",
+    "backend/tests/test_tushare_phase1_inputs.py",
+    "tests/aistock_validation/bugs/20261108_BUG-2203-us-input-row-anomalies-abort-entire-fetch-windows-and-starve-known-gaps.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2203",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-08T19:07:53.025839Z",
+  "description": "index_global 31/34窗口成功5760行，3窗口被4条源异常整窗拒绝",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261108-4b2e9b64c4a9",
+      "timestamp": "2026-11-08T19:07:53.025839Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/DATA_PREPARATION/us-market-inputs-20261109/initial-source-diagnosis.json"
+  ],
+  "expected": "单条源异常不丢弃同窗其他真实事实，真实缺口和冲突继续可见",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/tushare_us_market_inputs.py",
+      "backend/services/tushare_supplemental_inputs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_us_market_inputs.py",
+      "backend/tests/test_tushare_phase1_inputs.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/tushare_us_market_inputs.py",
+        "backend/services/tushare_supplemental_inputs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_us_market_inputs.py",
+        "backend/tests/test_tushare_phase1_inputs.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/tushare_us_market_inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/tushare_supplemental_inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_tushare_us_market_inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_tushare_phase1_inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/tushare_us_market_inputs.py",
+        "backend/services/tushare_supplemental_inputs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_us_market_inputs.py",
+        "backend/tests/test_tushare_phase1_inputs.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/tushare_us_market_inputs.py",
+      "backend/services/tushare_supplemental_inputs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_us_market_inputs.py",
+      "backend/tests/test_tushare_phase1_inputs.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/tushare_us_market_inputs.py",
+      "backend/services/tushare_supplemental_inputs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_us_market_inputs.py",
+      "backend/tests/test_tushare_phase1_inputs.py"
+    ]
+  },
+  "first_seen_at": "2026-11-08T19:07:53.025839Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7152,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7152",
+  "last_seen_at": "2026-11-08T19:07:53.025839Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh Python verify_bug2203_dev.py PASS: replay captured real Tushare rows through native DEV sync; 4 rejected originals retained with SHA, only 3 genuinely invalid quote keys remain missing; repeat writes=0. Receipt X:/AIstock_temp/DATA_PREPARATION/us-market-inputs-20261109/bug2203-dev-validation.json SHA256=3375ef4c11823293da1f9ac632d1b444fe9b1fd984f9f158b1c491c39a233bc1; production_write=false; runtime_action=false."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "business_smoke_contract_id": "local_data_freshness",
+    "database_readback_ref": "not_required",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "US input row anomalies abort entire fetch windows and starve known gaps",
+  "trigger_condition": {
+    "fingerprint": "4b2e9b64c4a94d883f5fdc22",
+    "source_event_id": "FE-20261108-4b2e9b64c4a9"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
