@@ -4,6 +4,8 @@
     "backend/data_service/shared_vix_inputs.py",
     "scripts/reconcile_shared_vix_inputs.py",
     "backend/tests/test_shared_vix_inputs.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20261108_BUG-2204-shared-vix-history-lacks-official-date-reconciliation-and-conflict-resol.json"
   ],
   "assigned_agent": null,
@@ -34,7 +36,10 @@
       "scripts/reconcile_shared_vix_inputs.py",
       "backend/tests/test_shared_vix_inputs.py"
     ],
-    "changed_files": [],
+    "changed_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
