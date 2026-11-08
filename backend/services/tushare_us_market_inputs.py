@@ -97,7 +97,7 @@ def read_calendar(conn, start, end):
 
 
 def sync_ranges(engine, conn, spec, start, end, job_id):
-    from .tushare_supplemental_inputs import normalize_rows, request_windows
+    from .tushare_supplemental_inputs import normalize_rows, request_windows, raw_observation, store_raw_observations
     from .tushare_sync_engine import SyncResult, _date_range
 
     windows = list(request_windows(start, end))
@@ -113,7 +113,6 @@ def sync_ranges(engine, conn, spec, start, end, job_id):
                 if code and any(row.get('ts_code') != code for row in batch):
                     raise ValueError('index_global: requested code differs from returned code')
                 rows.extend(batch)
-            normalize_rows(spec, rows)
             by_date, keys = {}, set()
             for row in rows:
                 day = parse_day(row[spec.date_column])
@@ -123,20 +122,36 @@ def sync_ranges(engine, conn, spec, start, end, job_id):
                 keys.add(key)
                 by_date.setdefault(day, []).append(row)
             calendar = read_calendar(conn, first, last) if spec.name != 'us_tradecal' else {}
-            # Validate the entire fetched window before persisting any facts.
-            qualities = {}
+            # Protocol/key ambiguity still rejects the request. A known bad
+            # source value quarantines only that key, not 90 days of neighbours.
+            qualities, rejected, rejected_rows = {}, {}, {}
             for day in _date_range(first, last):
-                facts = by_date.get(day, [])
+                facts, invalid, originals = [], [], []
+                for row in by_date.get(day, []):
+                    try:
+                        normalize_rows(spec, [row])
+                        if spec.name != 'us_tradecal' and calendar.get(day) == 0:
+                            raise ValueError('provider_quote_on_closed_US_date')
+                        facts.append(row)
+                    except ValueError as exc:
+                        originals.append(row)
+                        invalid.append({'ts_code':row.get('ts_code'), 'reason':str(exc),
+                                        'source_row_sha256':raw_observation(spec,row)[4]})
+                by_date[day], rejected[day], rejected_rows[day] = facts, invalid, originals
                 qualities[day] = (('ok', 1) if facts else ('low_coverage', 1)) if spec.name == 'us_tradecal' else (
                     partition_quality(spec.name, calendar.get(day), len(facts)))
+                if invalid and qualities[day][0] == 'empty_valid':
+                    qualities[day] = ('unknown', 0)  # conflict is not a clean empty response
             for day in _date_range(first, last):
                 facts = by_date.get(day, [])
                 quality, expected = qualities[day]
-                if quality not in {'ok', 'empty_valid'}:
+                if quality not in {'ok', 'empty_valid'} or rejected[day]:
                     if result.quality_warnings is None:
                         result.quality_warnings = []
                     result.quality_warnings.append({'trade_date': str(day), 'quality_status': quality,
-                                                   'expected_rows': expected, 'source_rows': len(facts)})
+                                                   'expected_rows': expected, 'source_rows': len(facts),
+                                                   'invalid_source_rows': len(rejected[day])})
+                store_raw_observations(conn, spec, rejected_rows[day])
                 written = engine._upsert_batch(conn, spec, facts)
                 engine._refresh_audit.record_success(
                     dataset=spec.name, trade_date=day, row_count=len(facts), written_rows=written,
@@ -146,6 +161,7 @@ def sync_ranges(engine, conn, spec, start, end, job_id):
                               'request': params, 'session_date_timezone': 'America/New_York',
                               'calendar_authority': 'tushare.us_tradecal', 'is_open': calendar.get(day),
                               'publication_time_quality': 'UNKNOWN', 'vintage_quality': 'NON_VINTAGE',
+                              'rejected_source_rows': rejected[day],
                               'coverage_complete': quality in {'ok', 'empty_valid'},
                               'session_calendar_completeness': 'COMPLETE' if expected is not None else 'NOT_EVALUATED',
                               'missing_reason': None if quality in {'ok', 'empty_valid'} else (
@@ -184,10 +200,13 @@ def gap_report(conn, spec, start, end):
         for code in expected:
             if (day, code) not in observed:
                 missing.append({'trade_date': str(day), 'ts_code': code})
+    unexpected = [{'trade_date':str(day),'ts_code':code} for day,code in sorted(observed)
+                  if spec.name != 'us_tradecal' and calendar.get(day) == 0]
     dates = sorted({key['trade_date'] for key in missing})
-    return {'data_kind': spec.name, 'status': 'INCOMPLETE' if missing else 'UNKNOWN' if unknown else 'COMPLETE',
+    return {'data_kind': spec.name, 'status': 'INCOMPLETE' if missing else 'CONFLICT' if unexpected else 'UNKNOWN' if unknown else 'COMPLETE',
             'start_date': str(start), 'end_date': str(end), 'missing_keys': missing,
             'missing_days': len(dates), 'missing_key_count': len(missing),
             'missing_ranges': [{'start_date': day, 'end_date': day, 'days': 1} for day in dates],
             'unknown_calendar_dates': unknown, 'calendar_authority': 'tushare.us_tradecal',
+            'unexpected_keys':unexpected, 'unexpected_key_count':len(unexpected),
             'total_trading_days': sum(calendar.values()), 'session_date_timezone': 'America/New_York'}
