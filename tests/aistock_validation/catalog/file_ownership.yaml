@@ -1454,6 +1454,9 @@ rules:
     priority: 97
     include:
       - backend/data_service/shared_tushare_inputs.py
+      - backend/data_service/shared_vix_inputs.py
+      - scripts/reconcile_shared_vix_inputs.py
+      - backend/tests/test_shared_vix_inputs.py
       - scripts/export_tushare_shared_inputs.py
       - backend/services/tushare_supplemental_inputs.py
       - backend/services/tushare_us_market_inputs.py
