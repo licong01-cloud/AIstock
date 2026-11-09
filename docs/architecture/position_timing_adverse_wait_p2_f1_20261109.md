@@ -1,11 +1,11 @@
 # P2：不利方向持续移动时提前结束等待
 
-日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：RESULTS_VERIFIED_EXPLORATORY_NOT_PROMOTED。
+日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：DIAGNOSTICS_VERIFIED_CONTINUATION_DESIGNED_NOT_PROMOTED。
 
 ## Background
 
 终极目标是改善明确BUY/SELL计划的成本后结果和回撤。既有181日三户研究中，C2相对B0净增584,422.39元、MDD降低2.8724个百分点；相对W15净增120,234.09元，但区块校正区间跨零且8月贡献超过全期。保留三者，不以收益回选月份或阈值。
-本轮只研究一个假设：价格已经连续朝本次交易的不利方向移动时，继续等固定15交易分钟可能增加机会成本。BUY的不利方向是上涨，SELL是下跌。该假设不承诺盈利，也不预测当日最高最低点。前轮权威结果与完整SHA见[同等待预算设计](position_timing_wait_budget_control_f1_20261106.md)末尾。
+初次P2只研究一个假设：价格已经连续朝本次交易的不利方向移动时，继续等固定15交易分钟可能增加机会成本。BUY的不利方向是上涨，SELL是下跌。该假设不承诺盈利，也不预测当日最高最低点。前轮权威结果与完整SHA见[同等待预算设计](position_timing_wait_budget_control_f1_20261106.md)末尾。本次只补充冻结事实诊断与下一轮设计，不新增策略假设。
 
 ## Scope
 
@@ -73,6 +73,7 @@ LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_de
 固定输出全部四户、全期和所有月份，不按收益筛选日期。对 BUY/SELL 分别报告全部父计划、完整/部分/未成交/不可用、费用覆盖及金额、SUBMIT/派单/失效、已派单样本的等待中位数、已成交父计划的首笔成交延迟；分母和缺失覆盖必须显式。预算前机会及15分钟前派单/成交只在可归属的单修订父计划上比较，不能把机会当成交或把不同人口的计数当因果提升。费用差按方向拆分；双方同日同股同方向同目标数量且完整成交的价格比较仅作有选择偏差的条件诊断。
 
 逐月净差必须与原报告逐分一致，费用加回只作算术恒等式；不建立 BUY/SELL 收益归因或假设“不成交的订单本来可以成交”。盘中时间加权暴露仍由原投影覆盖决定，完整失效转换原因仍为 UNKNOWN，不以日终现金均值、first/last 状态或推断 TTL 填补。本轮诊断不新增假设检验、参数搜索、规则、训练、推理或实时输入。
+规模固定四户181日，模型上限沿用原每户512日；只保留所需日投影/父计划/操作动作，不保留完整分钟NAV数组、市场bin或原始journal。配对键为`(date,symbol,side,target_quantity)`且必须唯一，仅作两侧键交集，不发生多对多join或笛卡尔扩张。全期和9个月共40个账户面板、80个方向面板、30个比较面板；排队中位数从各期原始已派单样本计算，不能平均每日或方向中位数。
 
 ### 8. 10月自然承接的下一轮冻结设计（仅设计，不运行）
 
@@ -84,6 +85,15 @@ LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_de
 
 本次交付下一轮可复制给LocalSIM owner的设计和精确来源引用，不声称已生成可执行账户request或已通过10月新账户验收；尚未交付的兼容opening/完整历史SELL模板由各owner在下一轮消费预检中核实，不以等待未来行情或经济显著性作为研发门槛。
 接口差异须明示：现有`adverse_wait_results`只消费1—9月四户、`wait_control_results`只消费共同opening三户；原13户期间来源校验也不能直接当四户自然承接消费者。下一轮由LocalSIM owner沿既有`period_continuation`及W15/P2 facade准备本户opening、有序days、来源检查和retry FileRef；择时仅补最小的四户期间消费适配，复用`continuous_results.period_account_rows`和现有期间/累计统计。不能将本节声明性设计或历史spec传给不兼容的旧CLI冒充接入完成。
+
+下一轮输入与owner交接合同（本节即权威设计，不另建一套计划文件）：
+
+- 1—9月四户分析报告与spec沿用本文冻结证据段的`5a610f…`/`48b9f3…`；三户facts完整SHA为`1be364909b7ef928ce416725b3c8210de1ee454b5a81b8d80316029e53b9afc5`，P2事实从原LocalSIM交付回执`f2af7d…`读回。四户9月30日day/receipt/state必须从这些有序事实取最后一日，不按账户名称猜路径或只按NAV金额配对。
+- 10月准备preflight：`X:/AIstock_temp/localsim-october-continuation-20261106/prepared/465cb1fd201b93e9fda412ec85e8c5219752198c84a6d6a4bf708f23c0c5f706/preflight.json`，完整SHA `12bdae08351b363f9da871b70e20e1a2faee4caafdad897d7146fb7e61636e56`；其`inputs.candidate_manifest`完整SHA为`2242c44261dc0eaaf54cda3416a260cf6712ec960cff8bfbb46a527f6587b958`，`selection_inventory`完整SHA为`d55b4fff01b79f55c223e35b6f185200410290ce9921468f68b90b6aada6b6fc`。本次已核验交接preflight身份；不声称已检查四户新增持仓所需全部10月市场文件。
+- 旧13户10月analysis spec：`X:/AIstock_temp/localsim-october-account-replay-20261106/studies/63fb7784ae238513c74d7d3bfed86cf10b822573d0ffddff79fddf5703868bd1/analysis_spec.json`，完整SHA `a48db077873ca0cfd1b3494816eda33d2d0adc086bc960a43beb39429ef8df21`。只作为B0/C2复用候选，不把旧13户全部当新四户输入；该旧研究已有producer经济重试，不能误称其NOT_SUPPLIED。
+- LocalSIM交回新四户的opening、原parent映射、有序17日FileRef及新建/复用分类；绑定冻结包、candidate、inventory、价集、费用、基础策略commit和W15/P2 spec、producer身份。完整检查先于新收益；每个opening提供真实现金/持仓/成本、原始资本、此前累计费用、NAV高水位和累计MDD及其来源，不把序列化hash不同等同经济不一致，也不只比较NAV/现金后忽略持仓或成本。
+- 需要的历史SELL是四户实际期末持仓与既有10月目标的并集；原13户73只历史SELL并集不保证覆盖W15/P2。LocalSIM先交本户opening/股票并集和必要只读输入预检，择时再冻结所需共享模板。缺价格/资格由数据owner处理，不在任一业务窗口补造或改candidate。数量、资金、原生T+1结算、费用、撮合及账户提交继续归LocalSIM。
+- 只在上述owner消费准备就绪后，由LocalSIM执行缺少兼容产物的10月账户；返回inspect和不可变exact retry（零重算、零新增提交）。若另执行producer经济重试必须单独报告，未提供不算失败。本次任务不执行这些后续步骤、不控制其进程；离线准备不等待后端重启。
 
 ## Implementation Plan
 
@@ -141,10 +151,10 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-511 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/verify_receipt.json；artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/interval_verification.json | VERIFIED | none |
 | F-512 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/mechanism_analysis.json；backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
 | F-513 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/retry_receipt.json；backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
-| F-514 | 本文Contracts-7；intraday/adverse_wait_diagnostics.py | 定向测试及真实冻结来源验收待执行 | PENDING | implementation_pending |
-| F-515 | 本文Contracts-7；intraday/adverse_wait_diagnostics.py | 定向测试及全期/月/方向诊断待执行 | PENDING | implementation_pending |
-| F-516 | 本文Contracts-7；intraday/adverse_wait_diagnostics.py | 原报告逐分一致性与独立复算待执行 | PENDING | implementation_pending |
-| F-517 | 本文Contracts-8 | 本次仅设计，下一轮由LocalSIM owner消费验收 | DESIGN_VERIFIED | none |
+| F-514 | backend/services/position_timing/intraday/adverse_wait_diagnostics.py::source_preflight/analyze | backend/tests/position_timing/test_intraday_adverse_diagnostics.py；artifact:X:/AIstock_temp/position-timing-mechanism-october-20261109/inspect_receipt.json及retry_receipt.json | VERIFIED | none |
+| F-515 | backend/services/position_timing/intraday/adverse_wait_diagnostics.py::side_panel/diagnose | backend/tests/position_timing/test_intraday_adverse_diagnostics.py；artifact:X:/AIstock_temp/position-timing-mechanism-october-20261109/independent_readback_r2.json | VERIFIED | none |
+| F-516 | backend/services/position_timing/intraday/adverse_wait_diagnostics.py::matched_panel/diagnose | backend/tests/position_timing/test_intraday_adverse_diagnostics.py；artifact:X:/AIstock_temp/position-timing-mechanism-october-20261109/independent_readback_r2.json | VERIFIED | none |
+| F-517 | 本文Contracts-8 | artifact:X:/AIstock_temp/localsim-october-continuation-20261106/prepared/465cb1fd201b93e9fda412ec85e8c5219752198c84a6d6a4bf708f23c0c5f706/preflight.json；设计逐项审核，本次非账户验收 | DESIGN_VERIFIED | none |
 
 ## 初次纯函数实施与交接证据
 
@@ -203,3 +213,38 @@ P2有成交父计划5,998/6,419，W15为5,896/6,435，C2为5,115/6,586。P2较C2
 正式CLI：`python -m backend.services.position_timing.intraday.adverse_wait_results analyze --spec <analysis_spec_wsl绝对路径> --spec-sha256 48b9f3ba1f691986eab560bbeaeda4796b43199b2f08a263823dad9a10370273 --timing-root <独立结果根>/artifacts`；同入口`inspect`只做来源检查、不读P2 NAV。报告以NumPy 2.2.5在WSL生成，版本写入报告，不修改原统计函数。
 初次报告已原子发布，临时operator封装环境信息时`platform.platform()`拟调用uname子进程，被离线guard拒绝；仅改为不启动子进程的系统信息读取，按唯一已发布报告恢复回执。随后独立复算和exact retry均通过，未重算账户、覆盖报告或改变策略。回执保留首轮operator SHA及恢复原因。
 当前Agent完成正确性、来源/前缀与完整性多轮自审，未声称独立agent审核。10项直接测试、45项相关矩阵、Ruff及两项changed-file L0均通过；classifier保持targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。F1共13项与F2共12项验证通过；源码PR #7158的最终CI/合入及root同步以`source_delivery_receipt_r1.json`记录为准，源代码合入、线上激活及经济确认分别报告。
+
+## 2026-11-09：月份/方向补充诊断与10月自然承接设计
+
+本次消费者源码commit为`cc191252e69c3d9854d071727f488eb3b5b5e61d`；新增诊断模块和直接测试，不改变原P2、B0/W15/C2或旧分析implementation closure。来源先验完整核查8810项引用，才消费724个账户日投影；发布前再次核验。报告完整覆盖40个全期/月度账户面板、80个方向面板及30个比较面板，不按结果剔除股票、月份或未成交。
+
+新增事实及结论边界：
+
+1. P2相对W15的非8月净差为-12,597.71元；非8月费用加回差仍为-5,614.77元。因此集中性不能只用手续费差解释；这不是证明其他月份无信号，也不据此筛掉月份。8月净差110,697.13元、费用反而多1,149.42元；双方全成且同目标数量的条件价格改善BUY为17,065元、SELL为-6,904元，覆盖仅42/65对，不能用两者相减的“残差”归因为持仓收益或纯alpha。
+2. P2相对C2的费用多57,584.59元，其中BUY 7,866.23元、SELL 49,718.36元；相对W15多8,132.36元，其中BUY 1,117.21元、SELL 7,015.15元。方向费用是实际账户算术分解，不表示SELL信号本身贡献了同额负收益，也不证明额外交易无必要。
+3. 就绪到派单的墙钟等待有明显方向差异：P2 BUY中位数1200秒（3027个已派单SUBMIT），SELL 360秒（2975个）；C2分别1260秒（2586个）和360秒（2536个）。两者派单到首笔成交中位数均50秒，按已成交父计划另计分母。60秒人工响应不等于60秒总执行延迟，分钟信号与操作排队的交互应优先考虑，不能据此推算取消排队后的收益。
+
+| 规则/方向 | 预算前机会父计划 | 15分钟前派单 | 15分钟前首笔成交 | 全部父计划/有成交父计划 |
+|---|---:|---:|---:|---:|
+| C2 BUY | 603 | 21 | 19 | 3428 / 2579 |
+| C2 SELL | 611 | 23 | 23 | 3158 / 2536 |
+| P2 BUY | 372 | 311 | 308 | 3355 / 3023 |
+| P2 SELL | 419 | 373 | 373 | 3064 / 2975 |
+
+上表前两类执行只对可归属的单修订提前机会计数，各组人口和数量不同，不报告因果提升倍数。P2释放后锁定与C2短暂机会、人工排队的交互是与事实相容的解释，不是已识别的单独因果效果。
+
+4. 跨月账户路径分化很明显。P2/W15在8月的BUY双方全成同目标配对42（两侧全部BUY父计划440/449）、SELL配对65（398/395）；9月仅BUY 10（308/310）、SELL 10（291/289）。不能把少数条件配对的价格优势推广到全部账户，也不能宣称只要改成交分钟就能复制整个NAV差。下一轮自然承接回答的是完整执行政策的账户结果，不是固定数量的纯成交价效应。
+5. 因此不在本轮回选BUY/SELL阈值、调5根/15分钟或训练模型；下一轮先按Contracts-8保持规则不变、各户自然承接。只有后续确需分离持续机会/排队与价格选择的贡献时，另冻结单一机制对照，不把缺失的完整生命周期或暴露重建变成研发门槛。
+
+本次权威产物位于`X:/AIstock_temp/position-timing-mechanism-october-20261109/`（WSL同文件为`/mnt/x/…`）：
+
+- `diagnostic_spec.json`，完整SHA `bab70b7ae3a4c95b167a94fc587c08cd06852cc92cffb1efcd12223b2081b34e`。
+- `inspect_receipt.json`，完整SHA `0a698350c88af5a7f968aa747b2534479a99154e6671cb5f8c4fe75378340a1f`；源引用8810、账户日724、诊断收益尚未消费。
+- 诊断报告 `artifacts/intraday_v1/adverse_wait_diagnostics/c67c9fcd335cc1c97d778f772066d3cffb23693f42d53da7807d16999a7e101b.json`，完整SHA `4603b5f66667b358fe67305f3656ebd3fbd2077d9bf4c2977e2b824b94c0d0a5`。
+- `analyze_receipt.json`，完整SHA `2a06e6ffe74e4208a93a9b886c1e735f2f901f77c529ffc87705396765fc4262`。
+- `independent_readback_r2.json`，完整SHA `354ba6f9d430a69f156cf9b43640c1d3d33fc833bd5b1b507053cd9793d516ac`；独立逐标量复算724日、80个方向面板和30个比较面板，父计划/费用/排队分母与中位数、原收益端点和条件配对均通过。
+- `retry_receipt.json`，完整SHA `11fe38b570416896af5b3cff34215bb008f25fb5ed9e3b2862f153b138faa659`；ALREADY_MATERIALIZED、同report FileRef、账户重算0、新经济提交0。
+
+公共入口：`python -m backend.services.position_timing.intraday.adverse_wait_diagnostics analyze --spec <上述diagnostic_spec绝对路径> --spec-sha256 bab70b7ae3a4c95b167a94fc587c08cd06852cc92cffb1efcd12223b2081b34e --timing-root <独立结果根>/artifacts`；同入口`inspect`只验证来源/父报告身份，不消费诊断经济值。原operator未设置PYTHONPATH时导入失败，后使用显式本任务worktree路径；独立复算R1未兼容Python 3.10的UTC `Z`后缀，另存R2验证器修正并完成全批复算，保留原operator SHA和首轮失败原因；正式消费者早已正确处理Z，策略、数据和报告均未改变。
+
+当前Agent完成正确性、来源/数值和完整性多轮自审，不冒称第三方/独立agent审核。8项新直接测试、22项最终相关小矩阵通过，Ruff及两项changed-file L0均0 findings；classifier为targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]，无需DEV数据库。独立统计复算与产物重试均完成；F1 17项/F2 12项设计核查及最终源码/CI/合入状态由本根目录`source_delivery_receipt_r1.json`记录。无BUG登记：这是新增研究能力，验证operator修订不改产品语义。10月仅Contracts-8设计冻结、owner准备/账户运行待后续；线上激活未执行且本次不需要后端重启。
