@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from backend.services.hmm_risk import risk_l2_member_return as h
-from backend.services.hmm_risk.contracts import canonical_sha256
+from backend.services.hmm_risk.contracts import StateModelSetError, canonical_sha256
 from backend.services.hmm_risk.formal_state_model import FormalStateError, receipt
 from scripts.hmm_risk import run_risk_l2_member_return as cli
 
@@ -342,3 +342,31 @@ print(canonical_sha256(h._fit_weighted_ridge(rows)))
     env = {**os.environ, **dict.fromkeys(h.THREAD_VARIABLES, "1"), "PYTHONPATH": str(cli.ROOT)}
     results = [subprocess.check_output([sys.executable, "-c", code], env=env, cwd=tmp_path) for _ in (1, 2)]
     assert results[0] == results[1] and len(results[0].strip()) == 64
+
+
+def test_explicit_relocated_provider_same_identity_only(tmp_path):
+    from pathlib import Path
+    import json
+
+    original = Path(h.__file__).parent / "manifests" / "provider_absence_v1.json"
+    relocated = tmp_path / "authority.json"
+    relocated.write_bytes(original.read_bytes())
+    pin = canonical_sha256(json.loads(original.read_text(encoding="utf-8")))
+    cached = dict(
+        provider_absence_manifest="Z:/retired-worktree/provider.json",
+        provider_absence_sha256=pin,
+        work_parent="Z:/old-work",
+        candidate_root="X:/same-frozen-release",
+    )
+    current = {**cached, "provider_absence_manifest": str(relocated), "work_parent": str(tmp_path)}
+    h.validate_cached_source(current, cached)
+    for changed in (
+        {"provider_absence_sha256": "0" * 64},
+        {"candidate_root": "X:/other-release"},
+        {"provider_absence_manifest": str(tmp_path / "absent.json")},
+    ):
+        with pytest.raises((FormalStateError, ValueError, FileNotFoundError)):
+            h.validate_cached_source({**current, **changed}, cached)
+    relocated.write_text("{}", encoding="utf-8")
+    with pytest.raises((FormalStateError, StateModelSetError)):
+        h.validate_cached_source(current, cached)

@@ -100,7 +100,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "2026-11-09 Conda base fresh-process imports backend.services.hmm_risk.risk_l2_member_return, backend.routers.hmm_risk, backend.routers.health PASS; validate_cached_source against original request_v3 and canonical provider_absence_v1.json PASS; canonical authority SHA=494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba; no fit, no DB/service action"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -113,6 +115,17 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "fix_review": {
+    "round_1": "区分显式provider文件locator与冻结内容identity；新路径只按原canonical SHA验证，其他source字段仍精确比较。无目录搜索、fallback或重授权hash。",
+    "round_2": "复核未知路径、hash漂移、candidate root变化、内容篡改均fail closed；保留旧request/缓存/数据集。25项定向测试及fresh-process真实provider读回通过。",
+    "design_compliance_001": [
+      "完整修复同hash显式定位，不提供placeholder或仅mock成功",
+      "缺文件及身份漂移仍失败，无silent fallback",
+      "模型/参数/训练窗口/fit预算及共享数据不变",
+      "不增审批或经济门禁；正式训练仍0/10"
+    ],
+    "runtime_source_role": "定向全backend/scripts引用仅为scripts/hmm_risk/run_risk_l2_member_return.py及对应测试；没有router/worker/scheduler消费者。保持canonical推断backend，不自行修改runtime catalog或降级none；请流水线owner核验离线调用闭包。"
+  },
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
