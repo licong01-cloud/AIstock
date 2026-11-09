@@ -28,12 +28,18 @@
   ],
   "expected": "显式新provider路径在原canonical SHA一致时可读取；内容漂移/未知路径fail closed",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/risk_l2_member_return.py",
+      "backend/tests/hmm_risk/test_risk_l2_member_return.py",
+      "tests/aistock_validation/bugs/20261109_BUG-2206-hmm-signed-member-reader-rejects-relocated-identical-provider-authority.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/risk_l2_member_return.py",
-      "backend/tests/hmm_risk/test_risk_l2_member_return.py"
+      "backend/tests/hmm_risk/test_risk_l2_member_return.py",
+      "tests/aistock_validation/bugs/20261109_BUG-2206-hmm-signed-member-reader-rejects-relocated-identical-provider-authority.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/risk_l2_member_return.py",
@@ -80,6 +86,17 @@
   "first_seen_at": "2026-11-09T09:16:37.421066Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_review": {
+    "design_compliance_001": [
+      "完整修复同hash显式定位，不提供placeholder或仅mock成功",
+      "缺文件及身份漂移仍失败，无silent fallback",
+      "模型/参数/训练窗口/fit预算及共享数据不变",
+      "不增审批或经济门禁；正式训练仍0/10"
+    ],
+    "round_1": "区分显式provider文件locator与冻结内容identity；新路径只按原canonical SHA验证，其他source字段仍精确比较。无目录搜索、fallback或重授权hash。",
+    "round_2": "复核未知路径、hash漂移、candidate root变化、内容篡改均fail closed；保留旧request/缓存/数据集。25项定向测试及fresh-process真实provider读回通过。",
+    "runtime_source_role": "定向全backend/scripts引用仅为scripts/hmm_risk/run_risk_l2_member_return.py及对应测试；没有router/worker/scheduler消费者。流水线PR #7175/#7176已合入，本树同步后canonical finish核验runtime_impact=none、target_ids=[]、restart_required=false；分类来自正式catalog，不是HMM自行豁免。"
+  },
   "fixed_at": null,
   "github_issue_number": 7171,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7171",
@@ -100,32 +117,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "2026-11-09 Conda base fresh-process imports backend.services.hmm_risk.risk_l2_member_return, backend.routers.hmm_risk, backend.routers.health PASS; validate_cached_source against original request_v3 and canonical provider_absence_v1.json PASS; canonical authority SHA=494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba; no fit, no DB/service action"
-    ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "fix_review": {
-    "round_1": "区分显式provider文件locator与冻结内容identity；新路径只按原canonical SHA验证，其他source字段仍精确比较。无目录搜索、fallback或重授权hash。",
-    "round_2": "复核未知路径、hash漂移、candidate root变化、内容篡改均fail closed；保留旧request/缓存/数据集。25项定向测试及fresh-process真实provider读回通过。",
-    "design_compliance_001": [
-      "完整修复同hash显式定位，不提供placeholder或仅mock成功",
-      "缺文件及身份漂移仍失败，无silent fallback",
-      "模型/参数/训练窗口/fit预算及共享数据不变",
-      "不增审批或经济门禁；正式训练仍0/10"
-    ],
-    "runtime_source_role": "定向全backend/scripts引用仅为scripts/hmm_risk/run_risk_l2_member_return.py及对应测试；没有router/worker/scheduler消费者。保持canonical推断backend，不自行修改runtime catalog或降级none；请流水线owner核验离线调用闭包。"
-  },
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
