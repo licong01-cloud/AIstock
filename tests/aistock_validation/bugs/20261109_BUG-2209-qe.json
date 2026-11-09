@@ -5,7 +5,10 @@
     "backend/services/quantevolver/qe_evolution_service.py",
     "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
     "backend/tests/unified_engine/test_qe_prediction_replay.py",
-    "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json"
+    "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json",
+    "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+    "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+    "docs/operations/qe_wsl_resource_isolation_runbook.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2209",
@@ -16,7 +19,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-09T13:20:45.780657Z",
-  "description": "GET断连即失败，传输超时被误归为recorder内容无效；原任务未安全接续。",
+  "description": "GET断连即失败，传输超时被误归为recorder内容无效；原任务未安全接续。 同轮原模型backtest_only恢复仍需dataset/推理，必须与纯pred-backtest区分内存预算；未知模式采用保守预算，不得按6GiB误分类。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -43,7 +46,10 @@
       "backend/services/quantevolver/qe_workspace_client.py",
       "backend/tests/unified_engine/test_qe_prediction_replay.py",
       "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
-      "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json"
+      "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -130,14 +136,20 @@
       "backend/services/quantevolver/qe_workspace_client.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_workspace_client.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
     ]
   },
   "first_seen_at": "2026-11-09T13:20:45.780657Z",
@@ -200,7 +212,8 @@
     "review_passes": [
       "correctness: GET-only retry bound3; permanent error/cancellation/invalid content not retried",
       "completeness: catalog, recorder and raw prediction bytes covered; recorder before/after read typed errors preserved; fixed prediction bytes unchanged"
-    ]
+    ],
+    "additional_scope_reason": "Original LSTM recovery uses backtest-only model inference; source.backtest_only alone is not evidence of pure prediction replay. Fix only resource classification, preserving original commands and input hashes."
   },
   "status": "open",
   "suspected_modules": [

@@ -6,6 +6,7 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import re
 import shlex
 
 GIB = 1024**3
@@ -16,14 +17,22 @@ COMMAND_NAME = "qe_wsl_workload_command.sh"
 POLICY_NAME = "qe_wsl_workload_policy.json"
 
 
-def memory_slot_limit(compute_kind: str | None, *, backtest_only: bool) -> int:
-    kind = "replay" if backtest_only else ("cpu" if compute_kind == "cpu" else "gpu")
+def memory_slot_limit(
+    compute_kind: str | None, *, backtest_only: bool, prediction_replay: bool = False,
+) -> int:
+    kind = "replay" if backtest_only and prediction_replay else ("cpu" if compute_kind == "cpu" else "gpu")
     return TRAINING_MEMORY_BYTES // PEAK_BYTES[kind]
 
 
 def isolate_payload(payload, *, source, compute_kind: str | None):
     """Wrap only a not-yet-POSTed payload, never modify an existing worker."""
-    kind = "replay" if source.backtest_only else ("cpu" if compute_kind == "cpu" else "gpu")
+    # BACKTEST_ONLY reloads a model/dataset and predicts; it is not pure replay.
+    # Unknown model inference retains the conservative GPU-sized memory budget.
+    pure_replay = source.backtest_only and (
+        payload.config.get("prediction_replay") is True
+        or bool(re.search(r"(?:^|\s)--pred-backtest(?:\s|$)", payload.wsl_command))
+    )
+    kind = "replay" if pure_replay else ("cpu" if compute_kind == "cpu" else "gpu")
     lexer = shlex.shlex(payload.wsl_command, posix=True, punctuation_chars=";&|()<>")
     first = [lexer.get_token() for _ in range(3)]
     if first[0:2] == ["cd", "--"]:
