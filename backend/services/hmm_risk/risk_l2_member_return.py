@@ -89,6 +89,19 @@ def schedule(calendar, vintage):
     return dict(train=train, fit=member.target_dates(calendar, train, vintage["train_end"])["mature"], predict=predict)
 
 
+def validate_cached_source(current, cached):
+    """An explicit same-content locator is not a new provider authority."""
+    locator_fields = {"work_parent", "provider_absence_manifest"}
+    require(
+        {k: v for k, v in current.items() if k not in locator_fields}
+        == {k: v for k, v in cached.items() if k not in locator_fields},
+        "cached source identity differs",
+        "identity_mismatch",
+    )
+    # Authenticate the explicitly supplied file, never discover/fallback to a path.
+    member.provider_path(current["provider_absence_manifest"], cached["provider_absence_sha256"])
+
+
 def load_request(path, expected):
     request = member.pinned_json(path, expected)
     require(
@@ -116,12 +129,9 @@ def load_request(path, expected):
         "identity_mismatch",
     )
 
-    def clean_source(s):
-        return {k: v for k, v in s.items() if k != "work_parent"}
-
+    validate_cached_source(original["source"], features["source"])
     require(
-        clean_source(original["source"]) == clean_source(features["source"])
-        and features["model_identity"]["feature_definition_sha256"] == PINS["feature_definition"],
+        features["model_identity"]["feature_definition_sha256"] == PINS["feature_definition"],
         "cached authority or feature definition differs",
         "identity_mismatch",
     )
@@ -131,8 +141,9 @@ def load_request(path, expected):
     acceptance = member.pinned_json(request["q4_acceptance_path"], PINS["control_acceptance_file"])
     core.verify_receipt(sealed)
     core.verify_receipt(acceptance, PINS["control_acceptance"])
-    old_process = core.inputs._asset(str(Path(request["q4_control_path"]).parent / "process.json"),
-                                    acceptance["process_sha256"])
+    old_process = core.inputs._asset(
+        str(Path(request["q4_control_path"]).parent / "process.json"), acceptance["process_sha256"]
+    )
     validate_numeric(old_process["numeric_environment"])
     require(old_process["sealed"]["C"] == sealed, "Q4 numerical receipt/model differs")
     control = sealed["model"]
