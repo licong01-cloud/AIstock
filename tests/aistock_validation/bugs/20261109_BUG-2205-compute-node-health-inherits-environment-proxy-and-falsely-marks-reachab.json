@@ -51,25 +51,25 @@
   "expected": "内网节点HTTP不继承环境代理，真实故障保留offline及类型和延迟证据。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
       "backend/infra/compute_node_client.py",
       "backend/services/dispatch_service.py",
+      "backend/tests/test_compute_node_client_direct_transport.py",
       "backend/tests/test_dispatch_observer_quiet.py",
       "noxfile.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/test_compute_node_client_direct_transport.py"
+      "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "backend/tests/test_compute_node_client_direct_transport.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
       "backend/infra/compute_node_client.py",
       "backend/services/dispatch_service.py",
+      "backend/tests/test_compute_node_client_direct_transport.py",
       "backend/tests/test_dispatch_observer_quiet.py",
       "noxfile.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/test_compute_node_client_direct_transport.py"
+      "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -146,9 +146,9 @@
   },
   "first_seen_at": "2026-11-09T05:33:26.724880Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "361709ed8112369602f7830fce0fa42917a3eafe",
   "fix_summary": "Set trust_env=False for all sixteen node HTTP client contexts; retain fail-closed health semantics and single attempts; add typed health-failure evidence and warning logs; register exact transport ownership and regressions.",
-  "fixed_at": null,
+  "fixed_at": "2026-11-09T05:50:09Z",
   "github_issue_number": 7159,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7159",
   "last_seen_at": "2026-11-09T05:33:26.724880Z",
@@ -156,6 +156,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7160",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -189,6 +190,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -200,7 +202,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2205",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dbfcc8946940e94c",
+    "recorded_at": "2026-11-09T05:51:04.794799Z",
+    "runtime_contract_digest": "5e8d56e5427f693b1c373933d20c73e6dfb8ca1ab8d031388aae10ac9368f2b4",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7372ed3509f1abed38face87b2e393735168a8d4",
+    "source_merge_commit": "361709ed8112369602f7830fce0fa42917a3eafe",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7160",
+    "validation_evidence": [
+      "gh pr checks 7160 -> CI verdict passed at head7372ed3509f1abed38face87b2e393735168a8d4;32 direct tests,134 routing tests,16 catalog tests and fresh-process two-node health passed"
+    ],
+    "validation_evidence_digest": "c941bb9092fdc8b0bda8204f28382fc5e3230853739b94244e6b086b645fe357"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.core"
   ],
@@ -217,7 +240,8 @@
     "rtk pytest backend/tests/test_noxfile_validation_env.py -q ->134 passed",
     "python -m nox -s validation_module_registry_l0 validation_catalog_integrity ->2 sessions passed;16 tests;findings0",
     "CI classifier ->passed; both changed test files selected by qe_read_backend; no unexecuted test files",
-    "workflow-smoke --bug-id BUG-2205 --changed-file noxfile.py --changed-file tests/aistock_validation/catalog/file_ownership.yaml --module validation ->passed"
+    "workflow-smoke --bug-id BUG-2205 --changed-file noxfile.py --changed-file tests/aistock_validation/catalog/file_ownership.yaml --module validation ->passed",
+    "gh pr checks 7160 -> CI verdict passed at head7372ed3509f1abed38face87b2e393735168a8d4;32 direct tests,134 routing tests,16 catalog tests and fresh-process two-node health passed"
   ],
   "verification_budget": {
     "budget": "standard",
