@@ -29,13 +29,20 @@
   ],
   "expected": "当前完整账户纯回放及CPU模型预算20GiB，GPU模型32GiB；内存准入收紧实际并行，保留节点4/2/4上限；不得把预算当实测峰值。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261109_BUG-2210-qe-wsl-scope-oom.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
-      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261109_BUG-2210-qe-wsl-scope-oom.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_wsl_workload_isolation.py",
@@ -108,8 +115,8 @@
   },
   "first_seen_at": "2026-11-09T14:03:16.572374Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "91ecb33a7c4d3f5a90f0d06c6d835eb2589d3755",
+  "fixed_at": "2026-11-09T14:20:32Z",
   "github_issue_number": 7185,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7185",
   "last_seen_at": "2026-11-09T14:03:16.572374Z",
@@ -117,6 +124,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7186",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,29 +137,64 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python loaded final worktree isolation helper; original scientific command/input preserved and pure replay budget20GiB. Real accepted565-day account scope read back after explicit20GiB runtime override; original6GiB launch policy preserved. Full account success not yet claimed. tmp/issue_workflow/BUG-2210/fresh-process-evidence.json."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2210",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "33553d90e0fe4e57",
+    "recorded_at": "2026-11-09T14:21:25.281123Z",
+    "runtime_contract_digest": "0ab7dcfe725a28b4d109b2145c034dd20973585e06cd1fcbaa2346ab0c434661",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9ecaedaca938685b69813a27892f3ca47a140e54",
+    "source_merge_commit": "91ecb33a7c4d3f5a90f0d06c6d835eb2589d3755",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7186",
+    "validation_evidence": [
+      "validation-receipt: id=d11fc2b8253e27c5 commit=9ecaedaca938685b69813a27892f3ca47a140e54 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=70a19e86cb409b0d commit=9ecaedaca938685b69813a27892f3ca47a140e54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q` result=`62 passed`"
+    ],
+    "validation_evidence_digest": "11b94c007e34b9ec1e618c6803f57299d6b3c7676d0cb4f367e962b797b1f25d"
+  },
+  "source_validation": {
+    "design_compliance": {
+      "complete_scope": "PASS; future GPU32/CPU20/replay20 and aggregate40 admission share canonical submit; remote source unchanged",
+      "no_added_approval_gate": "PASS; only existing resource admission tightened; node maximum4/2/4 retained",
+      "no_silent_error": "PASS; original scope OOM retained, new budgets are conservative reservations, not measured peaks",
+      "unchanged_science": "PASS; no factor/model/prediction/window/order/fee change"
+    },
+    "direct_tests": "62 isolation/guard/coordinator tests passed",
+    "remaining_business_validation": "complete565-day recovery must finish and be archived; not replaced by microprobe",
+    "ruff": "passed"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -160,6 +203,10 @@
     "fingerprint": "ef34fd1620be5974b903d4d5",
     "source_event_id": "FE-20261109-ef34fd1620be"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d11fc2b8253e27c5 commit=9ecaedaca938685b69813a27892f3ca47a140e54 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=70a19e86cb409b0d commit=9ecaedaca938685b69813a27892f3ca47a140e54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q` result=`62 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -267,16 +314,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "source_validation": {
-    "direct_tests": "62 isolation/guard/coordinator tests passed",
-    "ruff": "passed",
-    "design_compliance": {
-      "complete_scope": "PASS; future GPU32/CPU20/replay20 and aggregate40 admission share canonical submit; remote source unchanged",
-      "no_silent_error": "PASS; original scope OOM retained, new budgets are conservative reservations, not measured peaks",
-      "unchanged_science": "PASS; no factor/model/prediction/window/order/fee change",
-      "no_added_approval_gate": "PASS; only existing resource admission tightened; node maximum4/2/4 retained"
-    },
-    "remaining_business_validation": "complete565-day recovery must finish and be archived; not replaced by microprobe"
   }
 }
