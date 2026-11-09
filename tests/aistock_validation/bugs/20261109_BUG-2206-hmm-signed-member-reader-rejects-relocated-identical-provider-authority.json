@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2206",
-  "closed_at": null,
+  "closed_at": "2026-11-09T13:38:49Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -85,7 +85,7 @@
   },
   "first_seen_at": "2026-11-09T09:16:37.421066Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "e59ad2964b139e43e82c615034b0e2f5d05870de",
   "fix_review": {
     "design_compliance_001": [
       "完整修复同hash显式定位，不提供placeholder或仅mock成功",
@@ -97,7 +97,7 @@
     "round_2": "复核未知路径、hash漂移、candidate root变化、内容篡改均fail closed；保留旧request/缓存/数据集。25项定向测试及fresh-process真实provider读回通过。",
     "runtime_source_role": "定向全backend/scripts引用仅为scripts/hmm_risk/run_risk_l2_member_return.py及对应测试；没有router/worker/scheduler消费者。流水线PR #7175/#7176已合入，本树同步后canonical finish核验runtime_impact=none、target_ids=[]、restart_required=false；分类来自正式catalog，不是HMM自行豁免。"
   },
-  "fixed_at": null,
+  "fixed_at": "2026-11-09T13:38:49Z",
   "github_issue_number": 7171,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7171",
   "last_seen_at": "2026-11-09T09:16:37.421066Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7181",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -124,6 +125,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -133,7 +135,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2206",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "850109faeded2717",
+    "recorded_at": "2026-11-09T13:39:51.799481Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "37e8b2175ade09031120c641a32c2130cf95f01e",
+    "source_merge_commit": "e59ad2964b139e43e82c615034b0e2f5d05870de",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7181",
+    "validation_evidence": [
+      "nox -s l0 --no-venv -> PASS; focused relocation regression PASS; PR7181 current HEAD CI PASS"
+    ],
+    "validation_evidence_digest": "c887d73485ab0ce535c9ab1285e5e2e493ea21ff9c7a48adeccf2da154f481ad"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -142,6 +165,9 @@
     "fingerprint": "9b122d230905c0d76597666b",
     "source_event_id": "FE-20261109-9b122d230905"
   },
+  "validation_evidence": [
+    "nox -s l0 --no-venv -> PASS; focused relocation regression PASS; PR7181 current HEAD CI PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
