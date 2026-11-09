@@ -33,6 +33,15 @@ from backend.services.multi_alpha.durable_execution_adapter import (
 )
 
 
+@pytest.fixture(autouse=True)
+def protocol_tests_do_not_materialize_linux_runtime(monkeypatch):
+    """These tests use dummy shell strings; real envelopes have their own matrix."""
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_wsl_workload_isolation.isolate_payload",
+        lambda payload, **_: payload,
+    )
+
+
 @pytest.mark.parametrize("released,remote_status,pid", [(True, "not_reserved", None),
                                                        (False, "not_reserved", None),
                                                        (False, "running", None),
