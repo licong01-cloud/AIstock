@@ -1920,6 +1920,8 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
     targets = [
+        "backend/tests/test_compute_node_client_direct_transport.py",
+        "backend/tests/test_dispatch_observer_quiet.py",
         "backend/tests/quantevolver/test_qe_l2_risk_consumer.py",
         "backend/tests/unified_engine/test_qe_l2_risk_strategy.py",
         "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
@@ -1987,10 +1989,14 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/tests/quantevolver/test_*.py",
             "backend/tests/unified_engine/test_*.py",
             "backend/tests/test_multi_alpha*.py",
+            "backend/tests/test_compute_node_client_direct_transport.py",
+            "backend/tests/test_dispatch_observer_quiet.py",
             "backend/tests/test_dispatch_service_env.py",
             "backend/tests/test_correlation_compute_independence.py",
         ),
         overrides={
+            "backend/infra/compute_node_client.py": "backend/tests/test_compute_node_client_direct_transport.py",
+            "backend/services/dispatch_service.py": "backend/tests/test_dispatch_observer_quiet.py",
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
         },
     )
