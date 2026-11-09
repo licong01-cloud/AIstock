@@ -226,7 +226,7 @@
 
 ### 10.4 性能与接口
 
-现有overview仅作兼容；新增brief模式批量读取配置/最新名单/首日/运行摘要，不读episode大payload或全历史行情hash。比较拆成摘要与曲线，后者在图表可见时请求；相同参数复用有界TTL缓存、同请求去重、并发最多2，数据修订刷新必须失效，响应携带源身份和生成时刻。统计按请求范围批量读取名单/股价/调整/停牌/限价/指数，不逐股查。缓存不依赖MAX(trade_date)冒充行情内容身份，短TTL与强制刷新重新读取真实源。图表轻量SVG，不新增依赖；降采样只影响绘图，完整统计及极值保留。每条线至多800点，曲线响应目标300KB以内。
+现有overview仅作兼容；新增brief模式批量读取配置/最新名单/首日/运行摘要，不读episode大payload或全历史行情hash。比较拆成摘要与曲线，后者在图表可见时请求；相同参数复用有界TTL缓存、同请求去重、每个服务进程并发最多2（缓存容量8、TTL90秒），数据修订刷新必须失效，响应携带源身份和生成时刻。统计按请求范围批量读取名单/股价/调整/停牌/限价/指数，不逐股查。缓存不依赖MAX(trade_date)冒充行情内容身份，短TTL与强制刷新重新读取真实源。图表轻量SVG，不新增依赖；降采样只影响绘图，完整统计及极值保留。每条线至多800点，曲线响应目标300KB以内。
 
 历史元数据分页不调用全历史市场watermark，不读取全部名单条目。详情单版只取该版/必要前序，收益由已存在可见股票批量接口加载。浏览器取消过时请求，选择应用后统一刷新，滚动/行情高度变化不重查名单；固定骨架高度和可见性加载避免卡顿。
 
@@ -240,18 +240,22 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-015 | backend/services/advisory_workbench/comparison_service.py | backend/tests/advisory_workbench/test_comparison_service.py | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
-| F-016 | frontend/src/components/advisory/workbench/Comparison.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
-| F-017 | backend/services/advisory_workbench/comparison_portfolio.py | backend/tests/advisory_workbench/test_comparison_portfolio.py | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
-| F-018 | backend/services/advisory_workbench/history.py; frontend/src/components/advisory/workbench/HistoricalLists.tsx | backend/tests/advisory_workbench/test_history.py | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
-| F-019 | backend/services/advisory_workbench/recommendations.py | backend/tests/advisory_workbench/test_history.py | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
-| F-020 | backend/services/advisory_workbench/brief.py; backend/services/advisory_workbench/comparison_cache.py | backend/tests/advisory_workbench/test_comparison_repository.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
-| F-021 | docs/architecture/advisory_recommendation_workbench_f2_design_20261028.md | frontend/tests/paper-v2/advisory-workbench.spec.ts | design_approved_by_user | 用户已批准完整设计；本PR冻结规格，实现验收在代码PR核实 |
+| F-015 | backend/services/advisory_workbench/comparison_service.py | backend/tests/advisory_workbench/test_comparison_service.py | verified | none |
+| F-016 | frontend/src/components/advisory/workbench/Comparison.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-017 | backend/services/advisory_workbench/comparison_portfolio.py | backend/tests/advisory_workbench/test_comparison_portfolio.py | verified | none |
+| F-018 | backend/services/advisory_workbench/history.py; frontend/src/components/advisory/workbench/HistoricalLists.tsx | backend/tests/advisory_workbench/test_history.py | verified | none |
+| F-019 | backend/services/advisory_workbench/recommendations.py | backend/tests/advisory_workbench/test_history.py | verified | none |
+| F-020 | backend/services/advisory_workbench/brief.py; backend/services/advisory_workbench/comparison_cache.py | backend/tests/advisory_workbench/test_comparison_repository.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-021 | docs/architecture/advisory_recommendation_workbench_f2_design_20261028.md | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
 
 回滚通过正常代码回退恢复旧入口，不删业务数据或配置，不回退数据 owner 的就绪合同。旧管理组件保持可用以支持已有操作，但不作为新工作台失败时的静默跳转。
 
 风险：旧 episode 来源不足→UNKNOWN；daily integrity 尚未迁移/激活→显示不可用；父包资产缺失→卡片阻断；并发写入→409刷新；昂贵统计→小请求、只读超时和明显失败；当前估值用于历史 episode→标明当前估值日期；列表成员超过配置目标→保留实际发布集合，不截断或重新排名。
 
-四项设计符合性：完整交付按14项验收；错误和UNKNOWN可见；不改变推荐/交易语义；不引入额外审批或生产门禁。用户授权继续覆盖设计与代码两次合入，无需重复询问。
+四项设计符合性：完整交付按原F-001～F-014及新增F-015～F-021共21项验收；错误和UNKNOWN可见；不改变推荐/交易语义；不引入额外审批或生产门禁。用户授权继续覆盖设计与代码两次合入，无需重复询问。
 
-本设计PR仅冻结2026-11-09用户已批准的F-015～F-021规格；表内测试路径为实施计划，不声称本设计PR已完成代码或经济验收。源码合入、用户重启和后续运行验收继续分别报告。
+设计PR #7169已冻结用户批准的F-015～F-021规格；代码实施按上述21项核对，本地69项后端合同及9类直接浏览器场景通过，类型/静态检查通过。真实数据库只读响应在隔离浏览器复核，包含原名单IN_SCOPE计数、连续荐股分段冻结与精确版本直达。回执及桌面/移动端图片：`docs/operations/evidence/advisory_comparison_history_20261109/receipt.json`，对应代码blob清单与摘要绑定其中。
+
+10次新进程ASGI HTTP请求（共享DB/连接池已热、强制应用缓存未命中）P95：概况74ms、策略元数据51ms、历史分页51ms、比较摘要736ms；这不是线上网络P95。隔离浏览器8次合成响应测量LCP P75 112ms、INP实验代理P75 24ms，非现场INP。10包×5年、10万episode/652500保存条目的合成规模：构建5.56秒、曲线91583字节、每线最多146点；页面交互最大事件16ms。规模证据不冒充大规模生产SQL时延或经济结果。
+
+源码PR的当前HEAD CI与合入状态另行记录；用户后端未重启，运行态激活及现场验收待用户重启后核实。无DDL/DML、无模型/生产名单激活、0新增fit，累计269次实际fit加1次旧index不变。100bps研究目标、费用、UNKNOWN合同不变，经济验收为NOT_EVALUATED。
