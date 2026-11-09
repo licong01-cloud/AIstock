@@ -1,6 +1,6 @@
 # P2：不利方向持续移动时提前结束等待
 
-日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：SOFTWARE_AND_INPUTS_VERIFIED_LOCALSIM_PENDING。
+日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：LOCALSIM_ACCOUNT_VERIFIED_ANALYSIS_IN_PROGRESS。
 
 ## Background
 
@@ -10,7 +10,7 @@
 ## Scope
 
 本窗口交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner另行执行新P2账户181日，并交回事实后由择时继续经济分析。
-允许写入以下7个文件；operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
+纯函数交付允许写入以下7个文件；该次operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
 
 - `backend/services/position_timing/intraday/adverse_wait_control.py`
 - `backend/services/position_timing/intraday/adverse_wait_research.py`
@@ -19,6 +19,8 @@
 - `docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md`
 - `docs/architecture/position_timing_wait_budget_control_f1_20261106.md`
 - `docs/architecture/position_timing_intraday_advice_localsim_blueprint_f2_20261023.md`
+
+LocalSIM #7150交付后，追加结果消费范围为`backend/services/position_timing/intraday/adverse_wait_results.py`、`backend/tests/position_timing/test_intraday_adverse_results.py`及上述两份设计文档；本次operator和不可变分析证据仅在`X:/AIstock_temp/position-timing-p2-analysis-20261109/`。不修改原7个文件中的算法、来源冻结或统计实现，以免改变既有plan的implementation closure。
 复用core.evaluate、分钟/日级合同、CandidateReader、交易分钟时钟、freeze、原history来源预检；不修改旧core、W15、原统计函数或其冻结implementation closure，不另建Reader、撮合、账本或研究平台。
 
 ## Non-goals
@@ -56,6 +58,13 @@ LocalSIM新请求schema为`localsim_adverse_wait_history_request_v1`，绑定pla
 主比较P2−W15，次比较P2−C2、P2−B0，共3项新增比较。沿用同初始资本成本后PnL/收益、全分钟NAV正向MDD、费用和BUY/SELL全部父计划分母；月/季按各自上期期末NAV承接。5交易日循环区块bootstrap、2000次、seed=20261107，报告每日配对净PnL差/共同初始资本的nominal 95%和三比较Bonferroni区间；不把它称为累计收益/MDD区间。
 不挑月份、指数或成交子集做晋升，未成交保留；预算前机会、实际派单、成交分别报告。数据已被用于前轮机制研究，所有新结果属于探索性历史研究。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false；软件通过不晋升规则，不设置MDE、自然日等待或盈利准入。
 
+### 6. P2事实消费与不可变分析
+
+LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_delivery_receipt_r1.json`，完整SHA256为`f2af7d04c9bb4c655cbc926552f67fb794dd1b3dd9a21465a05e8d3fcccc9206`；#7150已完成单P2的181日及inspect/artifact exact retry，旧543日只读复用。此事实不代表经济有效。
+`AdverseAnalysisSpec`仅绑定该交付FileRef；新入口核验plan、candidate/价集/费用/包/selection身份、原三户及新一户的opening/有序days、producer request、来源检查、共享经济兼容证据、release FileRef和artifact retry。全部来源内容SHA通过后才解析P2 NAV；分析结束前再次核验来源，漂移不发布报告。不导入LocalSIM内部实现、不运行账户或重建模板。
+统计复用现有`period_account_rows`、`period_panels`和单户诊断；新模块固定三项P2比较及同规格区块区间，不修改原三户分析器或其closure。全期、月、季报告全部四户和三个比较；各期承接本户上期期末NAV，MDD使用完整分钟观察而非仅日终。BUY/SELL完整父计划分母保留，释放证据、提交/派单/成交区分，缺失暴露/生命周期明确UNAVAILABLE/UNKNOWN。producer经济重算未提供不是失败，不发起重算。
+报告绑定spec、全部来源FileRef及分析实现身份；同输入exact retry返回相同报告FileRef，已有产物不覆盖。独立Decimal复算收益、费用、分钟MDD和月季承接；软件及来源验收与探索性经济结论分开记录。
+
 ## Implementation Plan
 
 一个交付块完成本窗口：冻结本设计→纯函数/plan实现和定向验证→真实冻结来源prepare/inspect/exact retry与LocalSIM交接。账户经济验证由LocalSIM接入后继续，不新增细碎阶段或基础设施。
@@ -86,6 +95,10 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-507 | 单一新181日账户与旧三户只读对照，owner边界明确 |
 | F-508 | 真实来源及前缀机制验收、inspect和exact retry |
 | F-509 | 研究SDK隔离、无订单/服务/DB/旧资产写入 |
+| F-510 | 单P2及原三户完整来源先验、身份/顺序/内容漂移fail-closed |
+| F-511 | 四户全期/月/季、三个冻结比较与区块区间，无收益回选 |
+| F-512 | 全父计划诊断、机会/派单/成交分离，未知不补造 |
+| F-513 | 不可变分析exact retry与独立统计复算，无账户重放 |
 
 ## Design Acceptance Matrix
 
@@ -100,6 +113,10 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-507 | 本文Contracts-3/4 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
 | F-508 | backend/services/position_timing/intraday/adverse_wait_research.py | artifact:X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/validation_receipt.json | VERIFIED | none |
 | F-509 | backend/services/position_timing/intraday/adverse_wait_control.py；test_isolation.py | backend/tests/position_timing/test_isolation.py | VERIFIED | none |
+| F-510 | 本文Contracts-6 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
+| F-511 | 本文Contracts-5/6 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
+| F-512 | 本文Contracts-6 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
+| F-513 | 本文Contracts-6 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
 
 ## 本窗口实施与交接证据
 
