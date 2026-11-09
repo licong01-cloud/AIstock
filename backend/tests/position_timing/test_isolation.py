@@ -31,6 +31,8 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
         ("period_research.py", sdk + ".price_plan_campaign"): {"inspect"},
         ("timing_campaign.py", sdk + ".period_context"): {"load_period_context"},
         ("natural_period_preparation.py", sdk): set(NATURAL_READONLY_MODULES),
+        ("natural_period_research.py", sdk + ".natural_period_context"): {"load_context"},
+        ("natural_period_research.py", sdk + ".natural_period_prices"): {"inspect"},
     }
     relative = path.relative_to(Path("backend/services/simulation_execution/localsim")).as_posix()
     if (relative, module) in period_seams:
@@ -157,3 +159,20 @@ def test_natural_preparation_exception_is_exact_and_readonly():
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in aliases:
             assert node.attr in NATURAL_READONLY_MODULES[aliases[node.value.id]]
+
+
+def test_natural_replay_exception_is_exact_and_readonly():
+    sdk = "backend.services.position_timing.intraday"
+    consumer = Path("backend/services/simulation_execution/localsim/natural_period_research.py")
+    for suffix, symbol in (("natural_period_context", "load_context"), ("natural_period_prices", "inspect")):
+        module = sdk + "." + suffix
+        assert _approved_localsim_sdk_import(consumer, module, [symbol])
+        for path in (consumer.with_name("timing.py"), consumer.with_name("natural_period_preparation.py"),
+                     consumer.parent/"nested"/consumer.name,
+                     Path("backend/services/advisory/natural_period_research.py")):
+            assert not _approved_localsim_sdk_import(path, module, [symbol])
+        for names in ((), ["*"], ["_" + symbol], ["build"], ["analyze"], [symbol, "pins"],
+                      ["inspect" if symbol == "load_context" else "load_context"]):
+            assert not _approved_localsim_sdk_import(consumer, module, names)
+        assert not _approved_localsim_sdk_import(consumer, sdk, [suffix])
+    assert not _approved_localsim_sdk_import(consumer, sdk + ".natural_period_results", ["analyze"])

@@ -112,6 +112,8 @@ LocalSIM #7174已交付四户真实期初、17日850目标、53只历史SELL并�
 
 #7174的离线准备文件 `backend/services/simulation_execution/localsim/natural_period_preparation.py` 属于本合同的已批准SDK消费者，不是线上反向依赖。隔离测试仅为此精确文件登记现有模块别名导入：`adverse_wait_diagnostics`只可访问`DiagnosticSpec/source_preflight`，`continuous_results`只可访问`PeriodAnalysisSpec/period_source_preflight`。使用AST核查实际成员，其他LocalSIM文件、子目录同名文件、其他业务模块、发布/分析/私有成员及通配符均不获得该例外；不扩大runtime分类、不修改LocalSIM源码。
 
+后续四户离线回放的 `backend/services/simulation_execution/localsim/natural_period_research.py` 仅获两项额外公共函数导入授权：`natural_period_context.load_context`、`natural_period_prices.inspect`（允许本地别名）。授权按相对文件路径、完整模块及导入符号同时匹配；不授权整模块、子目录同名文件、其他消费者、构建/发布/分析/私有成员或通配符，不开放`natural_period_results`。登记只调整本模块`test_isolation.py`及本文，不改变SDK实现、冻结价集或来源身份；LocalSIM消费代码与68账户日仍由其owner交付。隔离合同测试不要求尚未合入的消费者文件存在，后续合入时由既有全仓AST导入检查验证实际入口。
+
 ## Implementation Plan
 
 初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry。本次再以单一交付块补齐Contracts-7机制诊断，并冻结Contracts-8的下一轮自然承接设计；不在本次执行10月账户，不新增细碎阶段或基础设施。
@@ -181,7 +183,7 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-518 | natural_period_context.py::load_context | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/inspect_receipt.json，完整10962项来源闭合 | VERIFIED | none |
 | F-519 | natural_period_prices.py::build/inspect；原price_plan_campaign引擎 | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/independent_readback.json及retry_receipt.json | VERIFIED | none |
 | F-520 | backend/services/position_timing/intraday/natural_period_results.py::source_preflight/analyze | backend/tests/position_timing/test_intraday_natural_period.py，软件合同验收；真实10月账户未运行、不属于本条软件验收 | VERIFIED | none |
-| F-521 | 本文Contracts-8.1及三个natural_period模块；backend/tests/position_timing/test_isolation.py | artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/l0.json及ownership.json；31项相关回归和5项隔离定向测试，旧实现closure零改动 | VERIFIED | none |
+| F-521 | 本文Contracts-8.1及三个natural_period模块；backend/tests/position_timing/test_isolation.py | artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/l0.json及ownership.json；既有31项相关回归；test_natural_preparation_exception_is_exact_and_readonly/test_natural_replay_exception_is_exact_and_readonly覆盖精确SDK登记及拒绝边界，旧实现closure零改动 | VERIFIED | none |
 
 ## 初次纯函数实施与交接证据
 
