@@ -19,7 +19,7 @@ def test_envelope_preserves_entire_scientific_command_and_frozen_inputs(cd):
     policy = json.loads(out.experiment_files["qe_wsl_workload_policy.json"])
     assert out.experiment_files["qe_wsl_workload_command.sh"] == command
     assert policy["original_command_sha256"] == hashlib.sha256(command.encode()).hexdigest()
-    assert policy["peak_bytes"] == 24 * GIB and policy["budget_bytes"] == 40 * GIB
+    assert policy["peak_bytes"] == 32 * GIB and policy["budget_bytes"] == 40 * GIB
     assert out.config == p.config and out.experiment_files["factors/f.py"] == "original"
     assert p.experiment_files == {"factors/f.py": "original", "conf.yaml": "original"}
     assert out.wsl_command.startswith("cd -- '/mnt/f/job with spaces' && exec /bin/bash --noprofile --norc -c ")
@@ -77,9 +77,9 @@ def test_unsupported_or_ambiguous_workspace_fails_before_post(command):
 def test_unknown_model_uses_conservative_peak_and_replay_is_separate():
     assert memory_slot_limit(None, backtest_only=False) == 1
     assert memory_slot_limit("gpu", backtest_only=False) == 1
-    assert memory_slot_limit("cpu", backtest_only=False) == 4
+    assert memory_slot_limit("cpu", backtest_only=False) == 2
     assert memory_slot_limit(None, backtest_only=True) == 1
-    assert memory_slot_limit(None, backtest_only=True, prediction_replay=True) == 6
+    assert memory_slot_limit(None, backtest_only=True, prediction_replay=True) == 2
     p = QEWorkspaceSubmissionPayload(
         "qe_example", 1, {}, {"qe_wsl_workload_policy.json": "existing"}, "cd -- /tmp/job && exec x"
     )
@@ -90,13 +90,13 @@ def test_unknown_model_uses_conservative_peak_and_replay_is_separate():
 
 
 @pytest.mark.parametrize("command,config,expected", [
-    ("python qrun_limit_minute.py conf.yaml --backtest-only", {}, 24),
-    ("python qrun_limit_minute.py conf.yaml --backtest-only", {"frozen_inference": {}}, 24),
-    ("python qrun_limit_minute.py conf.yaml --pred-backtest", {}, 6),
-    ("python qrun_limit_minute.py --pred-backtest conf.yaml", {}, 6),
-    ("python qrun_limit_minute.py conf.yaml --pred-backtest-invalid", {}, 24),
-    ("python qrun_limit_minute.py conf.yaml", {"prediction_replay": True}, 6),
-    ("python qrun_limit_minute.py conf.yaml", {"prediction_replay": "true"}, 24),
+    ("python qrun_limit_minute.py conf.yaml --backtest-only", {}, 32),
+    ("python qrun_limit_minute.py conf.yaml --backtest-only", {"frozen_inference": {}}, 32),
+    ("python qrun_limit_minute.py conf.yaml --pred-backtest", {}, 20),
+    ("python qrun_limit_minute.py --pred-backtest conf.yaml", {}, 20),
+    ("python qrun_limit_minute.py conf.yaml --pred-backtest-invalid", {}, 32),
+    ("python qrun_limit_minute.py conf.yaml", {"prediction_replay": True}, 20),
+    ("python qrun_limit_minute.py conf.yaml", {"prediction_replay": "true"}, 32),
 ])
 def test_model_reuse_prediction_is_not_misclassified_as_pure_replay(command, config, expected):
     original = "cd -- /tmp/job && " + command

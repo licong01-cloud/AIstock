@@ -11,7 +11,9 @@ import shlex
 
 GIB = 1024**3
 TRAINING_MEMORY_BYTES = 40 * GIB
-PEAK_BYTES = {"gpu": 24 * GIB, "cpu": 10 * GIB, "replay": 6 * GIB}
+# Conservative whole-job reservations, not measured peaks. A full-market
+# 565-day replay exceeded the old6GiB cap while the API remained isolated.
+PEAK_BYTES = {"gpu": 32 * GIB, "cpu": 20 * GIB, "replay": 20 * GIB}
 GUARD_NAME = "qe_wsl_workload_guard.py"
 COMMAND_NAME = "qe_wsl_workload_command.sh"
 POLICY_NAME = "qe_wsl_workload_policy.json"

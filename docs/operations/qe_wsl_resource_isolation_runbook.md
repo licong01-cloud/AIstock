@@ -12,13 +12,15 @@ BUG-2208：原9000 API及其训练子进程共用`qe-execution.slice`的软限�
 ## 内存准入与并行
 
 保留既有GPU最多2、CPU最多4、纯回测最多4及跨来源reservation规则。
-节点内存锁同时约束所有WSL来源；完整GPU拟合暂按24GiB峰值、CPU拟合10GiB、
-纯回放6GiB预算。峰值是保守运行预算，不是已证明每个模型峰值；超出单作业硬限
+节点内存锁同时约束所有WSL来源；完整GPU拟合暂按32GiB、CPU拟合20GiB、
+纯回放20GiB预算。它们是保守运行预算，不是已证明每个模型峰值；超出单作业硬限
 会形成明确执行失败，不能重训冒充原资产。
-40GiB预算下两个24GiB作业不能同时进入scope；允许有预算的混合作业。
-`backtest_only`会加载模型、数据集并重新推理，不能据此认定为6GiB纯回放。
-只有明确的`prediction_replay`或`--pred-backtest`消费采用6GiB预算；
-其他模型推理按已知CPU类别或未知类别的24GiB保守预算准入。
+40GiB预算下两个32GiB作业不能同时进入scope；允许两个20GiB回放作业。
+这是实际内存约束，不改变远端CPU4并行或节点原有并发上限。
+`backtest_only`会加载模型、数据集并重新推理，不能据此认定为纯回放。
+只有明确的`prediction_replay`或`--pred-backtest`消费采用20GiB预算；
+其他模型推理按已知CPU类别或未知类别的32GiB保守预算准入。
+旧6GiB纯回放预算已在完整565日账户中触发scope OOM，不得再次使用。
 同时扣除尚未实际分配的内存预留，并要求WSL至少保留4GiB可用余量，避免只看资源组限额。
 等内存期间写`qe_wsl_workload_receipt.json`的WAITING_MEMORY状态，不标记节点offline。
 进程启动时间和scope状态共同验证租约；包装进程退出但scope仍活跃时不释放预算。

@@ -129,17 +129,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh Python loaded final worktree isolation helper; original scientific command/input preserved and pure replay budget20GiB. Real accepted565-day account scope read back after explicit20GiB runtime override; original6GiB launch policy preserved. Full account success not yet claimed. tmp/issue_workflow/BUG-2210/fresh-process-evidence.json."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -259,5 +267,16 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "source_validation": {
+    "direct_tests": "62 isolation/guard/coordinator tests passed",
+    "ruff": "passed",
+    "design_compliance": {
+      "complete_scope": "PASS; future GPU32/CPU20/replay20 and aggregate40 admission share canonical submit; remote source unchanged",
+      "no_silent_error": "PASS; original scope OOM retained, new budgets are conservative reservations, not measured peaks",
+      "unchanged_science": "PASS; no factor/model/prediction/window/order/fee change",
+      "no_added_approval_gate": "PASS; only existing resource admission tightened; node maximum4/2/4 retained"
+    },
+    "remaining_business_validation": "complete565-day recovery must finish and be archived; not replaced by microprobe"
   }
 }
