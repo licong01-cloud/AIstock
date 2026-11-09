@@ -3,12 +3,13 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/qe_active_execution_capacity.py",
     "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-    "scripts/qe_wsl_workload_guard.py",
-    "scripts/qe_wsl_resource_isolation.py",
+    "backend/services/quantevolver/qe_wsl_workload_guard.py",
+    "backend/services/quantevolver/qe_wsl_resource_isolation.py",
     "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
     "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
     "docs/operations/qe_wsl_resource_isolation_runbook.md",
-    "tests/aistock_validation/bugs/20261109_BUG-2208-qe-wsl-api-api.json"
+    "tests/aistock_validation/bugs/20261109_BUG-2208-qe-wsl-api-api.json",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2208",
@@ -35,22 +36,23 @@
   "file_scope_contract": {
     "added_files": [
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-      "scripts/qe_wsl_workload_guard.py",
-      "scripts/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
       "docs/operations/qe_wsl_resource_isolation_runbook.md"
     ],
     "changed_files": [
-      "backend/services/quantevolver/qe_active_execution_capacity.py"
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_active_execution_capacity.py",
         "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-        "scripts/qe_wsl_workload_guard.py",
-        "scripts/qe_wsl_resource_isolation.py",
+        "backend/services/quantevolver/qe_wsl_workload_guard.py",
+        "backend/services/quantevolver/qe_wsl_resource_isolation.py",
         "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
         "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
         "docs/operations/qe_wsl_resource_isolation_runbook.md"
@@ -93,14 +95,14 @@
           "rule_id": "qe_services"
         },
         {
-          "file": "scripts/qe_wsl_workload_guard.py",
+          "file": "backend/services/quantevolver/qe_wsl_workload_guard.py",
           "impact_modules": [],
           "primary_module": "scripts",
           "risk_level": "medium",
           "rule_id": "scripts_default"
         },
         {
-          "file": "scripts/qe_wsl_resource_isolation.py",
+          "file": "backend/services/quantevolver/qe_wsl_resource_isolation.py",
           "impact_modules": [],
           "primary_module": "scripts",
           "risk_level": "medium",
@@ -141,8 +143,8 @@
       "suggested_scope": [
         "backend/services/quantevolver/qe_active_execution_capacity.py",
         "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-        "scripts/qe_wsl_workload_guard.py",
-        "scripts/qe_wsl_resource_isolation.py",
+        "backend/services/quantevolver/qe_wsl_workload_guard.py",
+        "backend/services/quantevolver/qe_wsl_resource_isolation.py",
         "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
         "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
         "docs/operations/qe_wsl_resource_isolation_runbook.md"
@@ -152,21 +154,23 @@
     "planned_files": [
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-      "scripts/qe_wsl_workload_guard.py",
-      "scripts/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
-      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-      "scripts/qe_wsl_workload_guard.py",
-      "scripts/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
-      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
     ]
   },
   "first_seen_at": "2026-11-09T09:44:06.079368Z",
@@ -192,17 +196,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh Python -B imported final isolated-worktree coordinator/helpers and wrapped30 real full-Composer payloads without transport, preserving original command/files. WSL native32MiB scopes verified normal/exit7, system-service-origin handoff, exec PID/PGID/SID preservation and exact owned-probe cancellation. Receipts tmp/issue_workflow/BUG-2208/fresh-process-evidence.json and native-lifecycle-receipt.json. Production segregation still pending drain and user activation; existing APIs/experiments/containers were not controlled."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/dispatch/nodes",
+    "database_readback_ref": "not_required"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -322,5 +334,16 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "scope_expansion_notes": [
+    "2026-11-09: add coordinator protocol fixture boundary; actual runtime envelope integration remains tested in dedicated regression tests, no production opt-out.",
+    "Keep standalone worker/deployment helpers in QE module, replacing two planned scripts paths; no CI framework change. Exact own new files only moved within isolated worktree."
+  ],
+  "implementation_status": "source_fixed_pending_CI_and_user_activation",
+  "design_compliance_review": {
+    "no_partial_delivery": "source implementation complete; production segregation explicitly pending, not represented as operational acceptance",
+    "no_silent_errors": "invalid isolation, unknown liveness, changed command/hash, wrong kernel limits fail closed with original identities",
+    "business_semantics": "exact original scientific command/files retained; only runtime envelope and memory admission added",
+    "no_unapproved_gates": "memory admission and API/worker segregation explicitly authorized by user2026-11-09; backend restart remains user-owned"
   }
 }
