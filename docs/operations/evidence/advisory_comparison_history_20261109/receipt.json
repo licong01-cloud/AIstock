@@ -1,11 +1,11 @@
 {
   "schema": "advisory_comparison_history_source_acceptance_v1",
   "receipt_id": "ADVISORY-COMPARISON-HISTORY-20261109",
-  "generated_at": "2026-11-09T10:45:38.709277+00:00",
+  "generated_at": "2026-11-09T10:54:33.065635+00:00",
   "design_pr": 7169,
   "design_merge": "0eb34f92f",
-  "code_commit": "3d8470bc4629d21c3c32084b72b467dc698bbdf4",
-  "validated_code_digest": "b370b7a54effff4a248966a7b0cbdc591412091b41f6f871cec8b946daa0f0b1",
+  "code_commit": "9323b685d17000024efa2767369de5cd2d00b1e7",
+  "validated_code_digest": "0b0ce2198ed5648229e0301d694a6df6e8b42e4a8b860f401fe9e7180d96ca43",
   "code_manifest": [
     {
       "path": "backend/routers/advisory_workbench.py",
@@ -129,7 +129,7 @@
     },
     {
       "path": "frontend/tests/paper-v2/advisory-workbench.spec.ts",
-      "blob": "2b9e561a279d57ea04c222720d334a64e3af6883"
+      "blob": "ea20fc1e95153244bcceda0895186350f8df3138"
     }
   ],
   "scope": "F-015 through F-021; native frozen publication reference statistics and detail-only saved history",
@@ -142,7 +142,8 @@
     "typescript": "PASS",
     "scope": "PASS",
     "history_metadata_no_financial_read": "PASS backend and exact deep-link browser",
-    "feature_validator": "PASS F2 21/21 warnings0"
+    "feature_validator": "PASS F2 21/21 warnings0",
+    "existing_navigation_regressions": "2 passed; targeted reproduction of CI failures; unchanged assertions"
   },
   "actual_http": {
     "kind": "REAL_READ_ONLY_ASGI_HTTP_NO_USER_SERVICE_CONTROL",
@@ -470,9 +471,10 @@
       "saved version deep-link and return state",
       "page-specific confirmed episode links",
       "invalid exit before entry remains UNKNOWN",
-      "history metadata shell avoids legacy full financial reads"
+      "history metadata shell avoids legacy full financial reads",
+      "existing UI navigation scoped to overview cards with comparison links present"
     ],
-    "code_commit": "3d8470bc4629d21c3c32084b72b467dc698bbdf4",
+    "code_commit": "9323b685d17000024efa2767369de5cd2d00b1e7",
     "design_item_count": 21,
     "scope_files": 36,
     "regression_selection": "7 direct backend files; existing CI module plan owns broad regression"
@@ -495,5 +497,15 @@
     "ASGI HTTP is fresh-process in-process transport, not production network P95",
     "browser LCP and INP proxy use synthetic transport; not field metrics",
     "five-year 100k-episode/652500-item workload is synthetic; not a financial result or large production SQL latency proof"
+  ],
+  "ci_attempts": [
+    {
+      "run": 42603744839,
+      "head": "a9d8b08f8a40a87c99c3eccfcd7205a6ae019518",
+      "result": "FAIL",
+      "backend": "PASS",
+      "root_cause": "Two legacy UI selectors became ambiguous after comparison added same-name links",
+      "resolution": "Scope existing navigation to overview card region; production code unchanged; targeted regressions PASS"
+    }
   ]
 }
