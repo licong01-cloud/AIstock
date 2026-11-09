@@ -1,6 +1,6 @@
 # 申万L2已有持仓：VIX辅助的五日风险处理参考
 
-> v1.0；2026-11-09；F2；父蓝图§1.29/§7。状态：`SOURCE_REVIEWED_REFERENCE_PENDING`。用户于2026-11-09明确答复“批准完整推荐合同”，批准下列 `L2-HELD-VIX-D1～D6`，允许实施及一次零fit参考；不是已批准QE消费或生产仓位公式。批准设计#7163已合入；源码及两轮作者审修完成，正式参考计算和新QE账户未执行。
+> v1.1；2026-11-09；F2；父蓝图§1.29～§1.31/§7。状态：`REFERENCE_COMPLETED_STOP_NO_INCREMENTAL_CASE`。用户于2026-11-09明确答复“批准完整推荐合同”，批准下列 `L2-HELD-VIX-D1～D6`，允许实施及一次零fit参考；不是已批准QE消费或生产仓位公式。批准设计#7163、源码#7165已合入；唯一参考及独立算术读回完成，结论见§12。不新增QE账户或搜索第二公式。
 
 ## 1. Background / 目标与证据边界
 
@@ -116,7 +116,7 @@ HMM负责一个离线纯计算service、一个CLI及直接测试，输出一次�
 
 ## 8. Contracts D6 / L2-HELD-VIX-D6：实施、验证与停止
 
-用户已精确批准D1～D6，批准设计#7163已合入，源码已实施并接续交付/执行本参考。审批仅针对新增消费语义/参数，沿用既有权限边界，不为旧已完成诊断另加审批。正式执行无fit、无新推断、无QE任务、无DB连接、无服务控制；旧C/M0/M1/preset_A及资产身份不改。
+用户已精确批准D1～D6，批准设计#7163及源码#7165已合入，唯一参考已执行并以§12的STOP终态结束。审批仅针对新增消费语义/参数，沿用既有权限边界，不为旧已完成诊断另加审批。正式执行无fit、无新推断、无QE任务、无DB连接、无服务控制；旧C/M0/M1/preset_A及资产身份不改。
 
 源码完成后最小HMM定向测试、Ruff、compile、diff/scope、F2及实际changed-files对应门禁，至少两轮作者审修；完整矩阵交CI，不本地反复运行。固定最终源码和输入pin，只执行一次正式参考；独立算术复核复用同一输入，不增加模型候选/账户/实验预算。失败保留具体错误，不换参数重试到成功；真实源码错误另走BUG修复，并保持合同和原失败结果可区分。
 
@@ -136,7 +136,7 @@ HMM负责一个离线纯计算service、一个CLI及直接测试，输出一次�
 | F-012 | backend/services/hmm_risk/risk_l2_holding_vix_reference.py：signal_ranks/vix_context/_native_extract/ReferencePrices | backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py：完整目录/时间/原生前持仓/hash漂移/合法NA/退出PIT | VERIFIED_SOURCE_ONLY | 无 |
 | F-013 | backend/services/hmm_risk/risk_l2_holding_vix_reference.py：episode_schedule/evaluate_basket/summarize | backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py：48组费用算术/现金守恒/共同episode/配对mask | VERIFIED_SOURCE_ONLY | 无 |
 
-本矩阵验设计和源码合同，不代报真实经济结果；D1～D6已由用户单独明确批准。源码定向28项通过，覆盖无fit/predict/DB、0.10上界、原C pin、DST/重复observation/未来来源/缺pin/全目录/持仓退出/全同分/合法NA，以及金额/现金/费用/不叠加/末端未成熟。一次正式参考、真实QE账户与生产采用仍未完成；28项合成与隔离测试不是这些业务状态的完成证明。
+本矩阵验设计和源码合同，不代报真实经济结果；D1～D6已由用户单独明确批准。源码定向28项通过，覆盖无fit/predict/DB、0.10上界、原C pin、DST/重复observation/未来来源/缺pin/全目录/持仓退出/全同分/合法NA，以及金额/现金/费用/不叠加/末端未成熟。正式参考已完成，独立结果/取舍见§12；真实QE账户与生产采用未执行，28项合成与隔离测试不是这些业务状态的完成证明。
 
 补充必须验证：打乱原文件行序不改变结果；末日仍在清单而不是缩窗；NA和unknown不混；未知行业不填安全值；reference λ的开盘信息不得进入09:15信号；新买记录不得进入已有持仓集合；三臂同分时R=X；独立实现重算差分/权重与现金守恒。测试只验证合同，不伪造真实收益、数据缺口闭合或已完成的研究结果。
 
@@ -148,10 +148,39 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 
 ## 11. 设计审修与交付状态
 
-当前基线`origin/main=f0a995f3c77c48c3a0de45b2627813f52c6899e6`，父蓝图v3.07；本轮核实上轮verified_result与VIX manifest原SHA，未重跑原统计或读取新outcome。Codex当前profile的router/docs_handoff只读校验ready、blocking=0、warnings=0、不需重启。默认Claude全局目录router/docs_handoff过期，未修改/安装该客户端，也不冒称两个客户端均ready。
+设计起草时基线`origin/main=f0a995f3c77c48c3a0de45b2627813f52c6899e6`，父蓝图v3.07；当时核实上轮verified_result与VIX manifest原SHA，未重跑原统计或读取新outcome。Codex当前profile的router/docs_handoff只读校验ready、blocking=0、warnings=0、不需重启。默认Claude全局目录router/docs_handoff过期，未修改/安装该客户端，也不冒称两个客户端均ready。
 
 两轮作者审核（非独立第三方）：第一轮修正各seed各自触发造成episode不可比的问题，改为共同VIX/calendar时序；补齐空持仓/零减仓/合法NA和恢复不借款。第二轮核对实际C schema及`expected_member_loss`字段，明确原10日标签与本参考时段不同；X开盘金额匹配只作归因、分数股/示意费用不冒充实际交易，旧历史及合同保持。48组精确分数算术反例验证三臂、现金恢复、正负收益、费用及全同分恒等；3个DST用例和episode重复来源/恢复日/末端截尾检查通过。这些是设计算术检查，不是已实施业务测试或研究结果。F2结果及最终版本在PR记录。
 
 批准记录：2026-11-09本窗口用户通过对应完整推荐合同问题明确答复“批准完整推荐合同”；问题同时列明VIX变化>0、共同episode、全L2平均秩、最大10%减持、五session现金恢复、同开盘金额X及10bp主展示/0/5/20bp敏感性。文档审修通过/合入不报告源码/研究/经济效果已完成。DESIGN-COMPLIANCE-001逐项：没有把封闭参考简化冒充完整账户；NA/成本/执行限制不隐藏、不造成功；原模型/旧消费及其他模块语义不改；没有全行业必过/额外审批或结果后阈值，新精确参数按本次用户批准固定。
 
-源码两轮作者审修（非独立第三方）：第一轮核对共同episode、前收盘原生持仓、排序及三个金额路径，补齐路径形状/报价因子核验；第二轮核对冻结输入和文件输出隔离，未知参数/分类歧义fail closed，保留退出PIT但仍持有的合法成员，原生pickle必须先通过固定hash。定向28项、Ruff、compile和fresh-process CLI加载通过；ownership为hmm.risk，CI分类仅l0+hmm_risk_pr_slice，不本地盲跑完整历史矩阵。源码提交/CI与正式研究结果按后续真实状态更新。
+源码两轮作者审修（非独立第三方）：第一轮核对共同episode、前收盘原生持仓、排序及三个金额路径，补齐路径形状/报价因子核验；第二轮核对冻结输入和文件输出隔离，未知参数/分类歧义fail closed，保留退出PIT但仍持有的合法成员，原生pickle必须先通过固定hash。定向28项、Ruff、compile和fresh-process CLI加载通过；ownership为hmm.risk，CI分类仅l0+hmm_risk_pr_slice，不本地盲跑完整历史矩阵。#7165最终HEAD `21ac1a6884cddbd314f1bcfa3b109d4fa6598a02` CI通过，merge=`09cd55b0d75983453283ad694d4941d13b9b6ba2`。本节前文设计/源码起草状态是当时快照；当前正式结果以下节为准。
+
+## 12. 唯一参考结果与停止取舍（2026-11-09）
+
+正式CLI在干净的合入HEAD `09cd55b0d75983453283ad694d4941d13b9b6ba2` 执行一次，结果未覆盖或重跑。输出：
+
+- `F:/Dev/AIstock_runtime/hmm_l2_held_vix_reference/20261109/run_v1/result.json`；3,095,861 bytes；文件SHA `6d7c8d45ddb69e1c5d6bb559fbe27be2759d8a88b63a07d2be281c86970ba015`；canonical receipt `3ffd9467cdc8e99f1fd1f44e1a3f2951fb751cc3c7ebd814c32ff6f98e657d7d`。
+- 同目录`request.json` SHA `e232fff31fc663ab70f10449d1ef6841a8e10f1becc15796ad5e6e01e0d8cdf8`；`verify_arithmetic.py` SHA `052f446586c0e70d95c03868a6760a48babf46c3badb71c304b4fcf41041a803`；取舍为同目录`review.json`，不回写不可变计算结果。
+- 141个decision完整：19启动、76活跃等待、19恢复、27非正VIX不行动；19个共同episode×3seed=57个事件均可估值。142×131=18,602原C输入完整，末日10/29仍在审计清单，最后episode10/19→10/26；本次无未成熟恢复或配对估值NA，并非删去尾部后获得完整。
+- 同一作者使用另一条Fraction库存＋现金算术路径完成8,468项复核（不是第三方审核）：金额匹配、直接库存价值、四档成本、现金恢复、每日敞口与共同episode均通过。后续文档HEAD不冒充上述执行HEAD。
+
+以下均为**单次事件、原持仓预算分母的平均百分点**，不是账户累计/年化收益：
+
+| 切片 | 事件数 | R−B（主展示10bp） | R−X（同金额归因参照） |
+|---|---:|---:|---:|
+| 全期三seed先配对后平均 | 19 | −0.0408657 | +0.0002019 |
+| Q2 | 8 | −0.0092064 | +0.0010413 |
+| Q3 | 9 | −0.1016577 | +0.0004806 |
+| 10月 | 2 | +0.1060606 | −0.0044100 |
+| 剔除最大绝对R−X贡献6/4，仅敏感性 | 18 | −0.0511721 | +0.0022958 |
+
+全期0/5/10/20bp来回成本下R−B依次为−0.0351796/−0.0380227/−0.0408657/−0.0465519个百分点；**零成本时已为负**，不是交易费门禁阻挡一个有价值的公式。平均减仓仅为原持仓预算5.68614%；避免负贡献+0.1231402个百分点，小于错过正贡献0.1583198个百分点，主展示成本再减少0.0056861个百分点。19共同事件中11个R−X为正、9个R−B为正，但前者量级接近零；不是“所有月份/seed必须赢”的验收门。
+
+seed42/2024/2026各19事件，R−X分别+0.0025709/−0.0023397/+0.0003746个百分点，R−B均为负；三个seed共享市场历史，不算57个独立市场样本。未拼接NAV、未计算账户MDD/Sharpe，不能把分散事件相加后宣称累计收益。参考路径R/X最大股票敞口差约0.002747个百分点，金额匹配不意味着每日敞口严格恒等。
+
+完整2,866条持仓-事件记录中，`002542.SZ`在4/21的三个seed均为`classification_authority_unavailable`，按批准合同保留原持有、不应用overlay，不用未来分类或默认低风险替代。30条持仓-事件包含合法停牌事实（14条触发端、6条恢复端）；仍保留参考价格及`NOT_SIMULATED`，不声称可以卖出/恢复，不将自然约束判模型失败。限价/微观成交与实际费用未模拟，真实QE仍有额外约束；历史VIX发布时间UNKNOWN、NON_VINTAGE、回溯分类及已消费历史边界保持。
+
+**取舍：`STOP_NO_INCREMENTAL_CASE`。** 在本次明确公式和时间窗内，行业定向相对同金额减仓没有值得继续投入的增量，错过上涨和恢复成本又抵消风险收益。停止这一精确消费组合，不追加阈值/天数/幅度/seed/fit，不将本结果交QE启动新账户；也不外推为所有VIX、全部L2风险研究或其他冻结模型均无效。其他窗口无需为本研究补数据或修改业务。若以后有独立的新信息或更贴持仓损失的目标，应重新提出单一可检验问题，而不是复活本次公式。
+
+结果同步两轮作者审核：第一轮逐字段核对原回执、单位、分段/费用和三seed配对；第二轮核对停牌/分类NA、开盘匹配可执行性、没有NAV/晋升/新实验及原历史/数值合同不变。source/CI已完成；本CLI参考已完成；backend运行加载未验证且不是本研究前置。fit=0、模型推断=0、QE任务=0、数据库访问/写入=0、数据集/profile修改=0、服务操作=0。
