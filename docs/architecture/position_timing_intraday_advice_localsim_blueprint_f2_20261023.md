@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.6；更新日期：2026-11-09；Feature tier：F2。
-> 状态：`P2_SOFTWARE_AND_INPUTS_VERIFIED_LOCALSIM_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、1—10月原13户分析、10月W15三户比较及1—9月三户543账户日全期/月/季分析已完成；P2本窗口软件/输入冻结验收通过，新账户经济验证仍待LocalSIM。上述均不等于荐股嵌入、线上策略替换或样本外经济确认。最新研究边界见§7.4。
+> 版本：v1.7；更新日期：2026-11-09；Feature tier：F2。
+> 状态：`P2_ACCOUNT_VERIFIED_ANALYSIS_IN_PROGRESS`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、1—10月原13户分析、10月W15三户比较及1—9月三户543账户日全期/月/季分析已完成；LocalSIM #7150已交付P2单户181日及零重算产物重试，当前择时消费四户724日。上述均不等于荐股嵌入、线上策略替换或样本外经济确认。最新研究边界见§7.4。
 > 本轮P2实现源码基线：`f02cf9358a463cebd3043bf4813886864360ea51`（由最新origin/main基线c5a9e01b…在独立工作树实施）；既有543日分析源码基线仍为`85c1fb73965d188bca9f607c45ed799d1580fcfa`。历史plan与验收保持各自原commit/implementation身份。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
 > 范围：独立分钟择时核心、LocalSIM 分钟模拟执行适配、荐股可嵌入提醒；不接实盘，不适配 MiniQMT。
@@ -314,4 +314,4 @@ C2少成交和省费同时存在：有成交父计划为5115/6586，W15为5896/6
 
 外层P2实现commit与底层B0 policy commit分开绑定；LocalSIM沿base_history_plan恢复原B0 policy，自己的新adapter独立绑定，目标和操作员排序不因账户/策略ID变化。既有原始数据文件、共享核心和账户引擎不在本窗口修改；不等待自然日、日志补齐或模型训练，也不把工程前缀通过称为新增收益证据。真实plan与验收状态见P2设计文末。
 
-已交付源码commit f02cf935…；新增19项定向测试、相关小矩阵40项通过，真实plan prepare/inspect/exact retry通过且FileRef相同。WSL固定8条工程机会流、1896次前缀评估及8次未来输入拒绝通过；小样本全部走预算释放，未观察到真实提前信号，保留该结果不回选样本。新P2账户完成0/181日，原三户重算0；这是一项本模块软件/来源交付，不是P2盈利或完整消费者接入验收。
+初次已交付源码commit f02cf935…；新增19项定向测试、相关小矩阵40项通过，真实plan prepare/inspect/exact retry通过且FileRef相同。WSL固定8条工程机会流、1896次前缀评估及8次未来输入拒绝通过；小样本全部走预算释放，未观察到真实提前信号，保留该结果不回选样本。当时新P2账户完成0/181日；该历史软件/来源交付不是P2盈利证据。当前LocalSIM #7150已完成181/181日、9050目标，原三户543日只读复用；完整inspect与artifact exact retry通过、重算及重试新增经济提交为0。正式交付回执及完整SHA见P2 F1 Contracts-6。择时在独立结果目录进行完整来源先验、四户全期/月/季比较、独立复算与报告exact retry，不重跑账户、不改规则或原价集。

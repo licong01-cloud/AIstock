@@ -9,7 +9,7 @@
 
 ## Scope
 
-本窗口交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner另行执行新P2账户181日，并交回事实后由择时继续经济分析。
+本设计初次交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner随后在#7150完成新P2账户181日。当前择时只消费交回事实继续经济分析，不重新回放账户。
 纯函数交付允许写入以下7个文件；该次operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
 
 - `backend/services/position_timing/intraday/adverse_wait_control.py`
@@ -67,7 +67,7 @@ LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_de
 
 ## Implementation Plan
 
-一个交付块完成本窗口：冻结本设计→纯函数/plan实现和定向验证→真实冻结来源prepare/inspect/exact retry与LocalSIM交接。账户经济验证由LocalSIM接入后继续，不新增细碎阶段或基础设施。
+初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，本次一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry；不新增细碎阶段或基础设施。
 
 ## Verification Plan
 
@@ -130,6 +130,6 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 
 WSL离线验收覆盖预声明8条机会流、1896次前缀评估、8次未过滤未来输入拒绝，24份实际消费市场文件pin复核通过。所有合法前缀在未来尾部价格扰动下的decision/state完全一致。8条工程流的首次释放均为BUDGET；真实小样本未出现提前信号，不换股或调5根窗口。ADVERSE_PREFIX正向及锁定分支由定向测试覆盖，不宣称已有真实提前成交或收益证据。
 
-本窗口没有创建/重跑任何账户；新P2完成0/181日、旧三户重算0/543。LocalSIM接入和经济评价仍待其owner完成，不影响已交付的纯函数、真实来源和只读plan验收；不把F-507 DESIGN_VERIFIED称为消费者已接入。
+截至初次纯函数交付，本窗口没有创建/重跑任何账户；当时新P2完成0/181日、旧三户重算0/543。该历史状态不代表当前进度：LocalSIM #7150已交付181/181日，当前择时执行Contracts-6结果消费；后续经济结论另记，不把当时F-507 DESIGN_VERIFIED称为消费者已接入。
 
-消费命令：`python -m backend.services.position_timing.intraday.adverse_wait_research inspect --spec <上述plan绝对路径> --spec-sha256 89cc858463058cb7e2445285a7373f4ac13096019766058ef160f57e236a3fa9 --timing-root <独立X盘根>`。WSL将X:/改为/mnt/x/，不改JSON内的冻结FileRef。公共函数为`adverse_wait_control.evaluate_adverse_wait`及模型、`adverse_wait_research.inspect_adverse_plan`；后者只读返回完整输入和来源身份，不生成请求/账户。LocalSIM按Contracts-4接入后返回单P2账户181日及兼容/来源/重试回执；随后择时按Contracts-5完成三比较，不等待后端重启。
+原plan消费命令：`python -m backend.services.position_timing.intraday.adverse_wait_research inspect --spec <上述plan绝对路径> --spec-sha256 89cc858463058cb7e2445285a7373f4ac13096019766058ef160f57e236a3fa9 --timing-root <独立X盘根>`。WSL调用路径使用/mnt/x/，不改冻结JSON/FileRef。公共函数为`adverse_wait_control.evaluate_adverse_wait`及模型、`adverse_wait_research.inspect_adverse_plan`；后者只读返回完整输入和来源身份，不生成请求/账户。LocalSIM已按Contracts-4返回单P2账户181日及兼容/来源/重试回执；择时按Contracts-5/6消费，不等待后端重启。
