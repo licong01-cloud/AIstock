@@ -241,6 +241,37 @@ test("model waiting shows precise source reason without a task action", async ({
   expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
 });
 
+for (const mode of ["matched", "mismatch", "legacy"] as const) {
+  test(`research assessment ${mode} stays separate from positive current observation`, async ({ page }) => {
+    const state: State = { seen: [], business: "complete" }; await setup(page, state);
+    const payload: Record<string, any> = businessShadow("complete");
+    if (mode !== "legacy") {
+      payload.release = { sha256: "a".repeat(64), model_sha256: "b".repeat(64) };
+      payload.research_assessment = { schema: "lstm_top10_research_assessment_v1", status: "ACTIVE_DEVELOPMENT_STOPPED",
+        matched_release_sha256: (mode === "matched" ? "a" : "c").repeat(64), model_sha256: "b".repeat(64), training_cutoff: "2025-07-31",
+        stress: { start_date: "2026-03-11", end_date: "2026-08-28", original_days: 118, mature_days: 113, complete_pair_days: 106, incomplete_mature_days: 7, immature_days: 5, mean_delta_bps: -136.02374797220642, ci95_bps: [-245.23549275982637, -24.895915564910403], specialist_unknown_slots: 53, native_unknown_slots: 54 },
+        source: { source_pr: "https://github.com/licong01-cloud/AIstock/pull/7016", report_sha256: "d".repeat(64) } };
+    }
+    await page.route("**/reranking-shadow?**", route => json(route, payload));
+    await page.goto("/paper-v2/advisory?program_id=lstm");
+    await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
+    await expect(page.getByTestId("reranking-selected-review")).toContainText("当前点估计达到参考目标");
+    if (mode === "matched") {
+      const evidence = page.getByTestId("reranking-research-assessment");
+      await expect(evidence).toContainText("已停止该冻结模型的主动研发");
+      await expect(evidence).toContainText("-136.02bps");
+      await expect(evidence).toContainText("成熟不完整 7，截止未成熟 5");
+      await expect(evidence).toContainText("53 / 54");
+      await evidence.getByText("查看研究来源", { exact: true }).click();
+      await expect(evidence.getByRole("link", { name: "查看原研究交付" })).toHaveAttribute("href", payload.research_assessment.source.source_pr);
+    } else {
+      await expect(page.getByTestId("reranking-research-unknown")).toContainText(mode === "legacy" ? "尚未加载" : "身份未能确认");
+      await expect(page.getByTestId("reranking-research-assessment")).toHaveCount(0);
+    }
+    expect(state.seen.every(request => request.startsWith("GET "))).toBe(true);
+  });
+}
+
 test("LSTM auxiliary business review shows both arms, user target and exact membership filters", async ({ page }) => {
   const state: State = { seen: [], business: "complete" }; await setup(page, state);
   await page.setViewportSize({ width: 1700, height: 1000 });
