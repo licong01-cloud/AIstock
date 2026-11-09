@@ -1,6 +1,6 @@
 # P2：不利方向持续移动时提前结束等待
 
-日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：DIAGNOSTICS_VERIFIED_CONTINUATION_DESIGNED_NOT_PROMOTED。
+日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：NATURAL_PERIOD_PRICE_AND_SOFTWARE_VERIFIED_AWAITING_LOCALSIM_FACTS。
 
 ## Background
 
@@ -9,7 +9,7 @@
 
 ## Scope
 
-本设计初次交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner随后在#7150完成新P2账户181日。当前择时只消费交回事实继续经济分析，不重新回放账户。
+本设计初次交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner随后在#7150完成新P2账户181日，择时已完成四户结果与机制诊断。本轮续接#7174准备输入，补共享价集及四户期间结果消费软件，不运行账户；新10月经济分析等待owner交回实际事实，而非等待未来行情。
 纯函数交付允许写入以下7个文件；该次operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
 
 - `backend/services/position_timing/intraday/adverse_wait_control.py`
@@ -68,7 +68,7 @@ LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_de
 统计复用现有`period_account_rows`、`period_panels`和单户诊断；新模块固定三项P2比较及同规格区块区间，不修改原三户分析器或其closure。全期、月、季报告全部四户和三个比较；各期承接本户上期期末NAV，MDD使用完整分钟观察而非仅日终。BUY/SELL完整父计划分母保留，释放证据、提交/派单/成交区分，缺失暴露/生命周期明确UNAVAILABLE/UNKNOWN。producer经济重算未提供不是失败，不发起重算。
 报告绑定spec、全部来源FileRef及分析实现身份；同输入exact retry返回相同报告FileRef，已有产物不覆盖。独立Decimal复算收益、费用、分钟MDD和月季承接；软件及来源验收与探索性经济结论分开记录。
 
-### 7. 四户机制诊断的有界补充（本次实施）
+### 7. 四户机制诊断的有界补充（已交付）
 
 本次只消费已冻结四户报告及其原始事实，不重放账户。新增 `adverse_wait_diagnostics` 的 `inspect/analyze` 接缝，输入仅为原 analysis spec 与报告 FileRef；先复用 Contracts-6 的完整 source preflight，再核验父报告实现/人口/日期身份，最后才读取账户收益及明细。发布前重验全部来源，输出自有不可变结果；exact retry 必须复用同一 FileRef。旧结果消费者及其实现 closure 不变。
 
@@ -85,7 +85,7 @@ LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_de
 
 10月来源使用其冻结candidate/inventory并披露相对9月来源的差异，不切换active/profile。期间PnL以各户真实opening为起点；主要比较仍 P2−W15，次比较 P2−C2/P2−B0，报告NAV变化之差，不能把9月末财富差算成10月优势。累计收益保留1月1000万元原点；累计MDD继承本户全分钟高水位和既有MDD，期间MDD从各户opening另算。不得重置锚点后拼接MDD，或把差异期初的期间收益率之差当资本匹配因果效果。全期/月/季、完整BUY/SELL分母及UNKNOWN边界保持原合同；现有历史已被观察，仍是探索性而非sealed holdout。
 
-本次交付下一轮可复制给LocalSIM owner的设计和精确来源引用，不声称已生成可执行账户request或已通过10月新账户验收；尚未交付的兼容opening/完整历史SELL模板由各owner在下一轮消费预检中核实，不以等待未来行情或经济显著性作为研发门槛。
+Contracts-8初次仅交付可复制给LocalSIM owner的设计和精确来源引用，未生成可执行账户request或通过10月新账户验收；随后收到的准备输入及本轮最小适配见8.1。真实账户仍归LocalSIM，不以等待未来行情或经济显著性作为研发门槛。
 接口差异须明示：现有`adverse_wait_results`只消费1—9月四户、`wait_control_results`只消费共同opening三户；原13户期间来源校验也不能直接当四户自然承接消费者。下一轮由LocalSIM owner沿既有`period_continuation`及W15/P2 facade准备本户opening、有序days、来源检查和retry FileRef；择时仅补最小的四户期间消费适配，复用`continuous_results.period_account_rows`和现有期间/累计统计。不能将本节声明性设计或历史spec传给不兼容的旧CLI冒充接入完成。
 
 下一轮输入与owner交接合同（本节即权威设计，不另建一套计划文件）：
@@ -113,11 +113,13 @@ LocalSIM #7174已交付四户真实期初、17日850目标、53只历史SELL并�
 ## Implementation Plan
 
 初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry。本次再以单一交付块补齐Contracts-7机制诊断，并冻结Contracts-8的下一轮自然承接设计；不在本次执行10月账户，不新增细碎阶段或基础设施。
+Contracts-8.1续接仍为单一交付块：新准备合同适配→同一价格引擎build/inspect/exact retry及独立覆盖复核→四户分析合同/归约软件与owner交接。真实账户回放由LocalSIM后续执行，不把软件测试称为该账户的经济验收。
 
 ## Verification Plan
 
 定向测试覆盖BUY/SELL对称、只用t0以后5个连续已闭合close、无趋势预算释放、锁定后安全约束仍有效、午休/缺bar、未来/重述、状态恢复与时钟/spec篡改、机会身份隔离、源缺失fail-closed及不可变重试。复用已有core测试夹具，不复制API/账本fixture。
 真实验收只读冻结candidate/原价集和历史来源，先验证所有引用，再对固定预声明的小型真实分钟样本做前缀一致性和尾部扰动检查。工程人口预声明为000001.SZ/600000.SH、2026-01-05/01-06、BUY/SELL，共8条无量机会流；使用明确NONE工程约束，不改原共享价集或新经济研究的0.5%价集。缺数据不换股/日期，合法停牌保留。样本不挑收益，不宣称自然账户目标或新P2账户回测。运行于WSL的离线环境；旧账户/报告实现closure保持可核验。
+Contracts-8.1直接测试覆盖candidate相对描述符、源漂移、历史SELL无BUY/无未来目标、四户本户期初/命名空间、完整来源先于收益、发布前漂移拒绝、期间/累计MDD、原始资本归一的区块统计及不可变重试。真实价集独立逐区间复算raw bin与Decimal公式，并在Windows回读21份价格产物SHA；真实四户收益必须另消费owner的68个有序账户日。
 
 ## Risks
 
@@ -174,10 +176,10 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-515 | backend/services/position_timing/intraday/adverse_wait_diagnostics.py::side_panel/diagnose | backend/tests/position_timing/test_intraday_adverse_diagnostics.py；artifact:X:/AIstock_temp/position-timing-mechanism-october-20261109/independent_readback_r2.json | VERIFIED | none |
 | F-516 | backend/services/position_timing/intraday/adverse_wait_diagnostics.py::matched_panel/diagnose | backend/tests/position_timing/test_intraday_adverse_diagnostics.py；artifact:X:/AIstock_temp/position-timing-mechanism-october-20261109/independent_readback_r2.json | VERIFIED | none |
 | F-517 | 本文Contracts-8 | artifact:X:/AIstock_temp/localsim-october-continuation-20261106/prepared/465cb1fd201b93e9fda412ec85e8c5219752198c84a6d6a4bf708f23c0c5f706/preflight.json；设计逐项审核，本次非账户验收 | DESIGN_VERIFIED | none |
-| F-518 | natural_period_context.py::load_context | test_intraday_natural_period.py；真实来源核验进行中 | PENDING | WSL完整来源验收未完成，不申报交付就绪 |
-| F-519 | natural_period_prices.py::build/inspect；原price_plan_campaign引擎 | test_intraday_natural_period.py；真实价集验收待执行 | PENDING | 真实共享价集尚未发布，不申报就绪 |
-| F-520 | natural_period_results.py::source_preflight/analyze | test_intraday_natural_period.py | PENDING | 定向软件验收进行中；真实四户事实由owner后续交回 |
-| F-521 | 本文Contracts-8.1及三个natural_period模块 | scope/来源/状态证据待汇总 | PENDING | 最终版本复核进行中 |
+| F-518 | natural_period_context.py::load_context | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/inspect_receipt.json，完整10962项来源闭合 | VERIFIED | none |
+| F-519 | natural_period_prices.py::build/inspect；原price_plan_campaign引擎 | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/independent_readback.json及retry_receipt.json | VERIFIED | none |
+| F-520 | backend/services/position_timing/intraday/natural_period_results.py::source_preflight/analyze | backend/tests/position_timing/test_intraday_natural_period.py，软件合同验收；真实10月账户未运行、不属于本条软件验收 | VERIFIED | none |
+| F-521 | 本文Contracts-8.1及三个natural_period模块 | artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/l0.json及ownership.json；31项相关回归及git scope复核，旧实现closure零改动 | VERIFIED | none |
 
 ## 初次纯函数实施与交接证据
 
@@ -270,4 +272,23 @@ P2有成交父计划5,998/6,419，W15为5,896/6,435，C2为5,115/6,586。P2较C2
 
 公共入口：`python -m backend.services.position_timing.intraday.adverse_wait_diagnostics analyze --spec <上述diagnostic_spec绝对路径> --spec-sha256 bab70b7ae3a4c95b167a94fc587c08cd06852cc92cffb1efcd12223b2081b34e --timing-root <独立结果根>/artifacts`；同入口`inspect`只验证来源/父报告身份，不消费诊断经济值。原operator未设置PYTHONPATH时导入失败，后使用显式本任务worktree路径；独立复算R1未兼容Python 3.10的UTC `Z`后缀，另存R2验证器修正并完成全批复算，保留原operator SHA和首轮失败原因；正式消费者早已正确处理Z，策略、数据和报告均未改变。
 
-当前Agent完成正确性、来源/数值和完整性多轮自审，不冒称第三方/独立agent审核。8项新直接测试、22项最终相关小矩阵通过，Ruff及两项changed-file L0均0 findings；classifier为targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]，无需DEV数据库。独立统计复算与产物重试均完成；F1 17项/F2 12项设计核查及最终源码/CI/合入状态由本根目录`source_delivery_receipt_r1.json`记录。无BUG登记：这是新增研究能力，验证operator修订不改产品语义。10月仅Contracts-8设计冻结、owner准备/账户运行待后续；线上激活未执行且本次不需要后端重启。
+该次Agent完成正确性、来源/数值和完整性多轮自审，不冒称第三方/独立agent审核。8项新直接测试、22项最终相关小矩阵通过，Ruff及两项changed-file L0均0 findings；classifier为targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]，无需DEV数据库。独立统计复算与产物重试均完成；当时F1 17项/F2 12项设计核查及源码/CI/合入状态由该根目录`source_delivery_receipt_r1.json`记录。无BUG登记：这是新增研究能力，验证operator修订不改产品语义。当时10月仅Contracts-8设计冻结；其后准备/适配见8.1及下文。线上激活未执行且本次不需要后端重启。
+
+## 2026-11-09：10月自然承接价集与四户分析软件（非账户结果）
+
+新增源码基线 `d96cd2c6a65e2fc7aff06067e3b6086c1ecd7c33`。WSL从#7174正式回执核验准备提交与完整来源，生成新研究身份的共享价集；10962项来源引用闭合。7项candidate相对描述符按绑定candidate根解析并校验内容SHA，不跳过、不相对cwd猜路径。独立复核17日、850条BUY、2141条SELL，全部2991条可用、UNKNOWN=0，175份真实raw前收盘价bin的Decimal区间逐条一致；53只历史SELL覆盖完整，不为历史持仓补BUY、不提前使用未来目标。Windows另回读21份价格产物完整SHA通过。
+
+权威产物根 `X:/AIstock_temp/position-timing-natural-october-consumer-20261109/`，WSL为同文件 `/mnt/x/AIstock_temp/position-timing-natural-october-consumer-20261109/`：
+
+- `price_spec.json` 完整SHA `c3a05f853389e21420485d423a4fdf771931d4c3d0d23f161cda09177747c115`。
+- 价集目录 `artifacts/intraday_v1/shared_price_plans/13f4d83944286cd43e67332301a76a1124cb454bc9a146f1f39d1c71d537b65c/`；其中 `manifest.json` 完整SHA `842cf72d760d3ca1512b2bf6f749a58e76ed4087bec0d097e1b773c3c85d6639`、`templates.json` 完整SHA `5a080214d341996031bd8d1d9636ef3abf314acf48f0b9894d070577db4cda1a`、`policy_document.json` 完整SHA `d50e19ebf66688272f5c0663910e6e46c4058aa782af0fd78741892e9d2d7336`。
+- `inspect_receipt.json` 完整SHA `d022e528f9892a3a0b9b39bf6e0973295c39b3592383b4655872ab9eabc73328`。
+- `independent_readback.json` 完整SHA `0fad99e719c4785a51df32932651886180149020c3d277207b8d10a13df21915`。
+- `retry_receipt.json` 完整SHA `dd27111cc15da9f8d17e964f4785900e343b2579b15f7989686be2b3abf14381`，ALREADY_MATERIALIZED、同manifest FileRef，账户重算及新增经济提交均0。
+- `consumer_contract.json` 完整SHA `1642a731d690440dbc407e0bc9366c919e6da7d5c14b72c6250dc12f8f9070fa`，提供facts/spec JSON schema、冻结producer字段及inspection/retry合同；明确不是可执行账户请求。
+
+WSL真实build→inspect→exact retry全部通过，总耗时1217.30秒，主要为完整冻结来源内容校验，不是账户回放。9项直接测试与31项最终相关矩阵、Ruff、两项L0和归属检查通过；不登记新BUG，这是新增合同适配。自审修正了相对描述符解析、preflight纳入完整复核及跨日新峰值下的测试回撤oracle，并补充发布前漂移与旧命名空间拒绝、原始资本归一的区块统计测试。最终CI/合入状态由本轮根目录`source_delivery_receipt_r1.json`记录，不冒称独立agent审核。
+
+公共入口 `natural_period_prices.build/inspect` 及 `python -m backend.services.position_timing.intraday.natural_period_results inspect|analyze --spec <owner事实交回后冻结的spec路径> --spec-sha256 <完整SHA> --timing-root <独立分析根>`。分析spec/facts模型分别为 `NaturalAnalysisSpec`、`NaturalFacts`；最小producer字段绑定随 `consumer_contract.json` 交接，该文件不是可执行账户请求。旧B0/C2不复用；由LocalSIM owner最小对接并仅新跑10月四户68账户日，交回完整来源检查和artifact exact retry，再由本窗口做正式期间/累计比较。
+
+本轮新10月账户运行0、收益读取0；database/network/runtime/service_process_control均false，仅在WSL运行离线验证脚本。旧1—9月、原13户、288案例及价格模板未改，无需后端重启。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false；本轮软件和价集通过不等于四户LocalSIM接入/账户验收、线上激活或经济有效。
