@@ -383,7 +383,7 @@ test("refresh error retains labelled old cards and model observation is loaded o
   await main(page).getByRole("button", { name: "刷新", exact: true }).click();
   await expect(main(page).getByRole("alert")).toContainText("最后一次成功");
   await expect(main(page).locator("article")).toHaveCount(5); state.fail = false;
-  await main(page).getByRole("link", { name: "LSTM 策略包", exact: true }).click();
+  await main(page).getByLabel("策略荐股概况", { exact: true }).getByRole("link", { name: "LSTM 策略包", exact: true }).click();
   await expect(main(page).getByRole("heading", { name: "当日推荐名单" })).toBeVisible();
   expect(state.seen.some(x => x.includes("reranking-shadow"))).toBe(false);
   await main(page).getByRole("button", { name: "模型观察", exact: true }).click();
@@ -407,7 +407,7 @@ test("a slow response from the previous program cannot replace the selected prog
   const state: State = { seen: [], hold: new Promise<void>(resolve => { release = resolve; }) };
   await setup(page, state); await page.goto("/paper-v2/advisory?program_id=lstm");
   await main(page).getByRole("link", { name: /返回荐股总览/ }).click();
-  await main(page).getByRole("link", { name: "TCN 策略包", exact: true }).click();
+  await main(page).getByLabel("策略荐股概况", { exact: true }).getByRole("link", { name: "TCN 策略包", exact: true }).click();
   await expect(main(page).getByRole("heading", { name: "TCN 策略包", exact: true })).toBeVisible();
   release();
   await expect(main(page).getByRole("heading", { name: "当日推荐名单" })).toBeVisible();
