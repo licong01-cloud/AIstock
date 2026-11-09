@@ -11,6 +11,7 @@ from backend.services.position_timing.intraday.replay import FileRef
 from backend.services.position_timing.intraday.research import CostContract
 from backend.services.position_timing.intraday.store import IntradayError
 from backend.services.simulation_execution.localsim import natural_period_preparation as natural
+from backend.services.simulation_execution.localsim import period_continuation as period
 from backend.services.simulation_execution.localsim.timing_research import ref
 from backend.services.simulation_execution.localsim.timing_store import publish, read_json
 
@@ -160,3 +161,23 @@ def test_delivery_hash_failure_precedes_any_history_economic_read(tmp_path, monk
     with pytest.raises((FileNotFoundError, ValueError, IntradayError)):
         natural.prepare(delivery_ref=bad, old_period_spec_ref=bad, output_root=tmp_path/'out', producer_commit='1'*40)
     assert not (tmp_path/'out').exists()
+
+
+@pytest.mark.parametrize('schema', ['localsim_wait_budget_day_v1', 'localsim_adverse_wait_day_v1'])
+def test_explicit_history_schema_adapter_retains_strict_default(schema):
+    checkpoint = {'schema_version': 'localsim_timing_portfolio_day_account_v1',
+                  'cash_cny': '123.45', 'positions': {'SH600000': {'quantity': 100, 'avg_cost': 12.3}}}
+    exported = {**deepcopy(checkpoint), 'schema_version': schema, 'export_metadata': 'preserved'}
+    assert not period._checkpoint_account_matches(exported, checkpoint)
+    assert period._checkpoint_account_matches(exported, checkpoint, schema)
+    assert not period._checkpoint_account_matches(exported, checkpoint, 'unapproved_schema')
+    assert period._checkpoint_account_matches(checkpoint, checkpoint)
+
+
+@pytest.mark.parametrize('field', ['cash_cny', 'positions', 'schema_version'])
+def test_history_schema_adapter_never_masks_economic_or_native_contract_difference(field):
+    native = {'schema_version': 'localsim_timing_portfolio_day_account_v1',
+              'cash_cny': '123.45', 'positions': {'SH600000': {'quantity': 100, 'avg_cost': 12.3}}}
+    exported = {**deepcopy(native), 'schema_version': 'localsim_wait_budget_day_v1'}
+    native[field] = {'cash_cny': '123.46', 'positions': {}, 'schema_version': 'unknown_native_schema'}[field]
+    assert not period._checkpoint_account_matches(exported, native, exported['schema_version'])

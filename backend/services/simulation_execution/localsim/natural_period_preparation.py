@@ -168,7 +168,10 @@ def prepare(*, delivery_ref: FileRef, old_period_spec_ref: FileRef, output_root:
                              'initial_cash_cny': summary['origin_initial_cash_cny'], 'trade_dates': plan['trade_dates']},
                   'results': {'accounts': [normalized]}, 'results_ref': spec.analysis_report, 'cost': cost}
         endpoint = {'account_id': account.account_id, 'day': day_ref, 'account_receipt': day['account_receipt']}
-        inherited = period._endpoint(parent, endpoint, {k: summary[k] for k in ('rule', 'delay_seconds', 'operation')}, '2026-09-30')
+        exported_schema = 'localsim_adverse_wait_day_v1' if account.arm_id == 'P2' else 'localsim_wait_budget_day_v1'
+        require(day['schema_version'] == exported_schema, 'HISTORY_EXPORT_SCHEMA')
+        inherited = period._endpoint(parent, endpoint, {k: summary[k] for k in ('rule', 'delay_seconds', 'operation')},
+                                     '2026-09-30', exported_schema=exported_schema)
         anchor = period._nav_anchor(parent, inherited)
         require(Decimal(anchor['prior_nav_high_water_cny']) == Decimal(summary['nav_high_water_cny']), 'HIGH_WATER')
         aid = 'lsnatural_' + digest([identity, account.account_id])[:40]
@@ -182,6 +185,9 @@ def prepare(*, delivery_ref: FileRef, old_period_spec_ref: FileRef, output_root:
                    'cash_cny': day['cash_cny'], 'positions': settled_positions(day, aid, days[0], cost),
                    'opening_nav_cny': day['terminal_nav_cny'], 'opening_marks_raw_cny': day['marks_raw_cny'],
                    'period_start': days[0], 'available_quantity_as_of': days[0], 'analysis_anchor': anchor}
+        opening['source_format_adapter'] = {'exported_schema': exported_schema,
+            'native_checkpoint_schema': 'localsim_timing_portfolio_day_account_v1',
+            'economic_field_differences': [], 'source_day_rewritten': False}
         openings.append(opening)
     held = {s for a in openings for s in a['positions']}
     targets = {t['symbol'] for d in inventory['days'] for t in d['targets']}
@@ -237,7 +243,10 @@ def prepare(*, delivery_ref: FileRef, old_period_spec_ref: FileRef, output_root:
                  'minimum_interface_difference': {'preflight_schema': PREFLIGHT, 'account_count': 4,
                      'opening_schema': 'localsim_natural_period_opening_v1',
                      'shared_statistical_reducer': 'continuous_results.period_account_rows',
-                     'old_13_validator_unchanged': True, 'executable_request_supplied': False},
+                     'history_export_schema_aliases': ['localsim_wait_budget_day_v1', 'localsim_adverse_wait_day_v1'],
+                     'native_checkpoint_schema': 'localsim_timing_portfolio_day_account_v1',
+                     'old_13_population_and_default_checkpoint_contract_unchanged': True,
+                     'executable_request_supplied': False},
                  'executable_study_request': False, 'replay_started': False, 'new_period_outcomes_read': False,
                  'account_days_recomputed': 0, 'new_economic_commits': 0}
     publish(root/'preflight.json', preflight)
