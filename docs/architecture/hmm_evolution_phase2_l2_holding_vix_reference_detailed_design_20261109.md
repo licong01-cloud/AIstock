@@ -1,6 +1,6 @@
 # 申万L2已有持仓：VIX辅助的五日风险处理参考
 
-> v1.0；2026-11-09；F2；父蓝图§1.29/§7。状态：`CONTRACT_APPROVED_SOURCE_PENDING`。用户于2026-11-09明确答复“批准完整推荐合同”，批准下列 `L2-HELD-VIX-D1～D6`，允许实施及一次零fit参考；不是已批准QE消费或生产仓位公式。源码、正式参考计算和新QE账户均未执行。
+> v1.0；2026-11-09；F2；父蓝图§1.29/§7。状态：`SOURCE_REVIEWED_REFERENCE_PENDING`。用户于2026-11-09明确答复“批准完整推荐合同”，批准下列 `L2-HELD-VIX-D1～D6`，允许实施及一次零fit参考；不是已批准QE消费或生产仓位公式。批准设计#7163已合入；源码及两轮作者审修完成，正式参考计算和新QE账户未执行。
 
 ## 1. Background / 目标与证据边界
 
@@ -14,7 +14,7 @@
 
 HMM负责一个离线纯计算service、一个CLI及直接测试，输出一次紧凑结果；不开发调度、数据库表、API/UI、研究登记平台或环境变量开关。正式账户接线和实验始终归QE，荐股/LocalSIM本轮不接入。
 
-拟实施范围仅为 `backend/services/hmm_risk/risk_l2_holding_vix_reference.py`、`scripts/hmm_risk/run_risk_l2_holding_vix_reference.py`、`backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py` 及本设计/父蓝图。上述三个源码路径当前尚不存在，不在文档交付中创建占位实现。
+实施范围仅为 `backend/services/hmm_risk/risk_l2_holding_vix_reference.py`、`scripts/hmm_risk/run_risk_l2_holding_vix_reference.py`、`backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py` 及本设计/父蓝图。三份源码已实现，未修改其他业务模块。正式request显式提供原资产绝对路径和WSL/node1只读文件解释器/连接目标，不使用环境变量或默认数据路径；不向远端写入程序或启动服务。
 
 已核实的可复用入口：
 
@@ -116,7 +116,7 @@ HMM负责一个离线纯计算service、一个CLI及直接测试，输出一次�
 
 ## 8. Contracts D6 / L2-HELD-VIX-D6：实施、验证与停止
 
-用户已精确批准D1～D6，当前交付批准设计并接续实施和执行本参考。审批仅针对新增消费语义/参数，沿用既有权限边界，不为旧已完成诊断另加审批。正式执行无fit、无新推断、无QE任务、无DB连接、无服务控制；旧C/M0/M1/preset_A及资产身份不改。
+用户已精确批准D1～D6，批准设计#7163已合入，源码已实施并接续交付/执行本参考。审批仅针对新增消费语义/参数，沿用既有权限边界，不为旧已完成诊断另加审批。正式执行无fit、无新推断、无QE任务、无DB连接、无服务控制；旧C/M0/M1/preset_A及资产身份不改。
 
 源码完成后最小HMM定向测试、Ruff、compile、diff/scope、F2及实际changed-files对应门禁，至少两轮作者审修；完整矩阵交CI，不本地反复运行。固定最终源码和输入pin，只执行一次正式参考；独立算术复核复用同一输入，不增加模型候选/账户/实验预算。失败保留具体错误，不换参数重试到成功；真实源码错误另走BUG修复，并保持合同和原失败结果可区分。
 
@@ -132,11 +132,11 @@ HMM负责一个离线纯计算service、一个CLI及直接测试，输出一次�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计§3/§5/§7：唯一假设和参数的文档定义 | artifact: docs/architecture/hmm_evolution_phase2_l2_holding_vix_reference_detailed_design_20261109.md；定义及原批准合同不变的作者审修 | VERIFIED_DESIGN_ONLY | 无 |
-| F-012 | 本设计§4/§5：真实来源与时间/人口的文档定义 | artifact: F:/Dev/AIstock_worktrees/hmm-vix-actionable-value-20261109/tmp/handoff/hmm-vix-actionable-value-20261109/verified_result.json；本轮SHA复核和引用核对 | VERIFIED_DESIGN_ONLY | 无 |
-| F-013 | 本设计§5～§8：三臂/恢复/费用/停止的文档定义 | artifact: docs/architecture/hmm_evolution_phase2_l2_holding_vix_reference_detailed_design_20261109.md；反例算术与边界作者审修 | VERIFIED_DESIGN_ONLY | 无 |
+| F-011 | backend/services/hmm_risk/risk_l2_holding_vix_reference.py；scripts/hmm_risk/run_risk_l2_holding_vix_reference.py：固定参数/零计算守卫 | backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py：公式、参数、fit/inference/DB poison | VERIFIED_SOURCE_ONLY | 无 |
+| F-012 | backend/services/hmm_risk/risk_l2_holding_vix_reference.py：signal_ranks/vix_context/_native_extract/ReferencePrices | backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py：完整目录/时间/原生前持仓/hash漂移/合法NA/退出PIT | VERIFIED_SOURCE_ONLY | 无 |
+| F-013 | backend/services/hmm_risk/risk_l2_holding_vix_reference.py：episode_schedule/evaluate_basket/summarize | backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py：48组费用算术/现金守恒/共同episode/配对mask | VERIFIED_SOURCE_ONLY | 无 |
 
-本矩阵**只验设计文档是否完整定义**，不验源码或经济结果；D1～D6已由用户单独明确批准。源码、一次正式参考、真实QE账户与生产采用仍未完成。拟测试文件为`backend/tests/hmm_risk/test_risk_l2_holding_vix_reference.py`：无fit/predict、0.10上界、原C hash不变；DST/假日/重复observation/未来来源/缺pin/稀疏行业/持仓退出/全同分/合法NA；金额/现金/费用/不叠加/末端未成熟。该文件当前不存在，不引用为已通过测试。
+本矩阵验设计和源码合同，不代报真实经济结果；D1～D6已由用户单独明确批准。源码定向28项通过，覆盖无fit/predict/DB、0.10上界、原C pin、DST/重复observation/未来来源/缺pin/全目录/持仓退出/全同分/合法NA，以及金额/现金/费用/不叠加/末端未成熟。一次正式参考、真实QE账户与生产采用仍未完成；28项合成与隔离测试不是这些业务状态的完成证明。
 
 补充必须验证：打乱原文件行序不改变结果；末日仍在清单而不是缩窗；NA和unknown不混；未知行业不填安全值；reference λ的开盘信息不得进入09:15信号；新买记录不得进入已有持仓集合；三臂同分时R=X；独立实现重算差分/权重与现金守恒。测试只验证合同，不伪造真实收益、数据缺口闭合或已完成的研究结果。
 
@@ -144,7 +144,7 @@ HMM负责一个离线纯计算service、一个CLI及直接测试，输出一次�
 
 风险：10D C未必适合5日持仓；VIX只是条件关联；平均减仓规模可能很小；反弹和恢复摩擦可能消耗风险收益；公司行动/可成交性/历史publication不能从相关系数推导。接受负结果而非再修公式。未来QE账户会有卖出、再买、现金和原交易反馈，必须由其owner在自己的合同中验证，本设计不能提前保证增益。
 
-production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false。本次文档变更runtime_impact=none；未来源码按实际changed-files分类，不预判其无运行影响。回滚只撤销未采用的研究提案/新结果指针，旧资产和消费者从未被本包替换。
+production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false。批准文档PR的runtime_impact=none；当前源码由canonical目录分类为backend、target_ids=[backend-main]、catalog_error=null，不降级分类。本CLI为独立离线入口，不因服务尚未加载新源码而阻断其clean-source参考；服务加载仍须用户重启及对应运行验证，不为记录结果申请重启。回滚只撤销未采用的新源码/结果指针，旧资产和消费者从未被本包替换。
 
 ## 11. 设计审修与交付状态
 
@@ -153,3 +153,5 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 两轮作者审核（非独立第三方）：第一轮修正各seed各自触发造成episode不可比的问题，改为共同VIX/calendar时序；补齐空持仓/零减仓/合法NA和恢复不借款。第二轮核对实际C schema及`expected_member_loss`字段，明确原10日标签与本参考时段不同；X开盘金额匹配只作归因、分数股/示意费用不冒充实际交易，旧历史及合同保持。48组精确分数算术反例验证三臂、现金恢复、正负收益、费用及全同分恒等；3个DST用例和episode重复来源/恢复日/末端截尾检查通过。这些是设计算术检查，不是已实施业务测试或研究结果。F2结果及最终版本在PR记录。
 
 批准记录：2026-11-09本窗口用户通过对应完整推荐合同问题明确答复“批准完整推荐合同”；问题同时列明VIX变化>0、共同episode、全L2平均秩、最大10%减持、五session现金恢复、同开盘金额X及10bp主展示/0/5/20bp敏感性。文档审修通过/合入不报告源码/研究/经济效果已完成。DESIGN-COMPLIANCE-001逐项：没有把封闭参考简化冒充完整账户；NA/成本/执行限制不隐藏、不造成功；原模型/旧消费及其他模块语义不改；没有全行业必过/额外审批或结果后阈值，新精确参数按本次用户批准固定。
+
+源码两轮作者审修（非独立第三方）：第一轮核对共同episode、前收盘原生持仓、排序及三个金额路径，补齐路径形状/报价因子核验；第二轮核对冻结输入和文件输出隔离，未知参数/分类歧义fail closed，保留退出PIT但仍持有的合法成员，原生pickle必须先通过固定hash。定向28项、Ruff、compile和fresh-process CLI加载通过；ownership为hmm.risk，CI分类仅l0+hmm_risk_pr_slice，不本地盲跑完整历史矩阵。源码提交/CI与正式研究结果按后续真实状态更新。
