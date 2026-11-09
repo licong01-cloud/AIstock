@@ -78,7 +78,8 @@ def test_unknown_model_uses_conservative_peak_and_replay_is_separate():
     assert memory_slot_limit(None, backtest_only=False) == 1
     assert memory_slot_limit("gpu", backtest_only=False) == 1
     assert memory_slot_limit("cpu", backtest_only=False) == 4
-    assert memory_slot_limit(None, backtest_only=True) == 6
+    assert memory_slot_limit(None, backtest_only=True) == 1
+    assert memory_slot_limit(None, backtest_only=True, prediction_replay=True) == 6
     p = QEWorkspaceSubmissionPayload(
         "qe_example", 1, {}, {"qe_wsl_workload_policy.json": "existing"}, "cd -- /tmp/job && exec x"
     )
@@ -86,3 +87,24 @@ def test_unknown_model_uses_conservative_peak_and_replay_is_separate():
         isolate_payload(
             p, source=SimpleNamespace(backtest_only=True, submission_intent_hash="b" * 64), compute_kind=None
         )
+
+
+@pytest.mark.parametrize("command,config,expected", [
+    ("python qrun_limit_minute.py conf.yaml --backtest-only", {}, 24),
+    ("python qrun_limit_minute.py conf.yaml --backtest-only", {"frozen_inference": {}}, 24),
+    ("python qrun_limit_minute.py conf.yaml --pred-backtest", {}, 6),
+    ("python qrun_limit_minute.py --pred-backtest conf.yaml", {}, 6),
+    ("python qrun_limit_minute.py conf.yaml --pred-backtest-invalid", {}, 24),
+    ("python qrun_limit_minute.py conf.yaml", {"prediction_replay": True}, 6),
+    ("python qrun_limit_minute.py conf.yaml", {"prediction_replay": "true"}, 24),
+])
+def test_model_reuse_prediction_is_not_misclassified_as_pure_replay(command, config, expected):
+    original = "cd -- /tmp/job && " + command
+    payload = QEWorkspaceSubmissionPayload("qe_recovery", 1, config, {"conf.yaml": "frozen"}, original)
+    wrapped = isolate_payload(
+        payload, source=SimpleNamespace(backtest_only=True, submission_intent_hash="c" * 64), compute_kind=None,
+    )
+    policy = json.loads(wrapped.experiment_files["qe_wsl_workload_policy.json"])
+    assert policy["peak_bytes"] == expected * GIB
+    assert wrapped.experiment_files["qe_wsl_workload_command.sh"] == original
+    assert wrapped.config == payload.config

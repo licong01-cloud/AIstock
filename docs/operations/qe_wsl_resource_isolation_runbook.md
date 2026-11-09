@@ -16,6 +16,9 @@ BUG-2208：原9000 API及其训练子进程共用`qe-execution.slice`的软限�
 纯回放6GiB预算。峰值是保守运行预算，不是已证明每个模型峰值；超出单作业硬限
 会形成明确执行失败，不能重训冒充原资产。
 40GiB预算下两个24GiB作业不能同时进入scope；允许有预算的混合作业。
+`backtest_only`会加载模型、数据集并重新推理，不能据此认定为6GiB纯回放。
+只有明确的`prediction_replay`或`--pred-backtest`消费采用6GiB预算；
+其他模型推理按已知CPU类别或未知类别的24GiB保守预算准入。
 同时扣除尚未实际分配的内存预留，并要求WSL至少保留4GiB可用余量，避免只看资源组限额。
 等内存期间写`qe_wsl_workload_receipt.json`的WAITING_MEMORY状态，不标记节点offline。
 进程启动时间和scope状态共同验证租约；包装进程退出但scope仍活跃时不释放预算。

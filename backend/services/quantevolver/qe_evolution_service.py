@@ -22,6 +22,7 @@ from .qe_workspace_client import (
     QEWorkspaceLogEvent,
     QELoopWorkspaceCleanupUnavailable,
     QEWorkspaceResultReadUnavailable,
+    QEWorkspaceAssetReadUnavailable,
 )
 from .qe_log_broker import QELogBrokerSource, get_qe_log_broker
 from .qe_log_store import get_qe_live_log_store
@@ -1120,6 +1121,8 @@ class AutoEvolutionScheduler:
                     for key in ("experiment_id", "recorder_id")
                 ):
                     raise ValueError("invalid recorder identity")
+            except QEWorkspaceAssetReadUnavailable:
+                raise
             except Exception as exc:
                 raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID") from exc
             current_path = (
