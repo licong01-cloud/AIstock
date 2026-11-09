@@ -63,6 +63,12 @@ source_role_rules:
     role: non_runtime
     source_globs:
       - backend/services/hmm_risk/observed_industry_authority.py
+  # 调用闭包仅为 signed-member 离线研究 CLI 和测试；只登记此精确路径。
+  # 产物生成与运行激活分离，相邻 reader 和线上消费者继续按运行态验收。
+  - rule_id: offline-hmm-signed-member-return
+    role: non_runtime
+    source_globs:
+      - backend/services/hmm_risk/risk_l2_member_return.py
   # Exact offline sources pending their business PR; do not exempt adjacent versions or API consumers.
   - rule_id: offline-advisory-fixed5-valuation
     role: non_runtime
