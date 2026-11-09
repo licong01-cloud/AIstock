@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2207",
-  "closed_at": null,
+  "closed_at": "2026-11-09T10:26:25Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-11-09T09:40:30.951630Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cabfe9c41b2275e41662826a6afe78d433a81e09",
+  "fixed_at": "2026-11-09T10:26:25Z",
   "github_issue_number": 7172,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7172",
   "last_seen_at": "2026-11-09T09:40:30.951630Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7175",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -121,6 +122,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -130,7 +132,35 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2207",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "95fbe47d859c24a4",
+    "recorded_at": "2026-11-09T10:27:23.380511Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "627c5de16fd75855461680f0f7c5d5d4342fa679",
+    "source_merge_commit": "cabfe9c41b2275e41662826a6afe78d433a81e09",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7175",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator backend/tests/scripts/test_aistock_issue_workflow_fast.py -q --no-cov -k 'honest_production_denominator or exact_offline_roles_cannot_downgrade_mixed_online_scope or catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets or factor_research_provisional_backend_contract_reconciles_to_offline or required_check_unknown_bucket_fails_closed' -> 51 passed",
+      "python -m nox -s l0 -- docs/standards/aistock_runtime_targets_v1.yaml backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261109_BUG-2207-exact-offline-hmm-signed-member-research-source-is-misclassified-as-back.json -> passed; explicit files=3, findings=0, blocking=0",
+      "python -m nox -s guardrail_changed_files -> passed; staged files=1, mapped=1, unmapped=0, ambiguous=0",
+      "rtk ruff check backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "python -m py_compile backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "rtk git diff --check -> passed",
+      "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2207 --changed-file docs/standards/aistock_runtime_targets_v1.yaml --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py --module validation -> passed; unexpected_dirty_paths=0",
+      "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_factor_research_provisional_backend_contract_reconciles_to_offline -q --no-cov -> 4 passed"
+    ],
+    "validation_evidence_digest": "e23cfb07560b32f06e4c1ceabbb0f7ba04260f3aa928ac50854eaa5b0d9e310c"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -139,6 +169,16 @@
     "fingerprint": "4ce2b7df02db38e3e52ec7c9",
     "source_event_id": "FE-20261109-4ce2b7df02db"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator backend/tests/scripts/test_aistock_issue_workflow_fast.py -q --no-cov -k 'honest_production_denominator or exact_offline_roles_cannot_downgrade_mixed_online_scope or catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets or factor_research_provisional_backend_contract_reconciles_to_offline or required_check_unknown_bucket_fails_closed' -> 51 passed",
+    "python -m nox -s l0 -- docs/standards/aistock_runtime_targets_v1.yaml backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261109_BUG-2207-exact-offline-hmm-signed-member-research-source-is-misclassified-as-back.json -> passed; explicit files=3, findings=0, blocking=0",
+    "python -m nox -s guardrail_changed_files -> passed; staged files=1, mapped=1, unmapped=0, ambiguous=0",
+    "rtk ruff check backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "python -m py_compile backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "rtk git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2207 --changed-file docs/standards/aistock_runtime_targets_v1.yaml --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py --module validation -> passed; unexpected_dirty_paths=0",
+    "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_factor_research_provisional_backend_contract_reconciles_to_offline -q --no-cov -> 4 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
