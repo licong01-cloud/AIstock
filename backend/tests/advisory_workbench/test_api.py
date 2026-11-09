@@ -43,7 +43,7 @@ def test_snapshot_conflict_and_source_errors_are_not_empty_success():
 def test_operator_routes_never_offer_mutation_or_inference():
     app = client(SimpleNamespace()).app
     routes = [r for r in app.routes if r.path.startswith("/workbench")]
-    assert len(routes) == 10 and all(r.methods == {"GET"} for r in routes)
+    assert len(routes) == 14 and all(r.methods == {"GET"} for r in routes)
     assert client(SimpleNamespace()).post("/workbench/overview").status_code == 405
 
 
@@ -63,3 +63,29 @@ def test_returns_requires_a_pinned_list_and_preserves_identity_errors():
     assert c.get(prefix + 'list_version_id=wrong&symbols=600001.SH').status_code == 409
     assert c.get(prefix + 'list_version_id=v&symbols=600001.SH').json() == dict(program_id='p', list_version_id='v')
     assert c.post(prefix + 'list_version_id=v&symbols=600001.SH').status_code == 405
+
+
+def test_comparison_and_history_routes_preserve_bounded_read_contracts():
+    from backend.routers.advisory_workbench import get_comparison, get_history
+    c = client(SimpleNamespace())
+    c.app.dependency_overrides[get_comparison] = lambda: SimpleNamespace(get=lambda **kwargs: kwargs)
+    c.app.dependency_overrides[get_history] = lambda: SimpleNamespace(detail=lambda p, v, **kw: dict(program_id=p, list_version_id=v, **kw))
+    valid = c.get('/workbench/comparison?period=CUSTOM&start=2026-10-01&end=2026-10-30&force_refresh=true')
+    assert valid.status_code == 200 and valid.json()['force_refresh'] is True
+    assert valid.json()['buy_bps'] == .95 and valid.json()['source'] == 'FORWARD'
+    assert c.get('/workbench/comparison/series').json()['series'] is True
+    for query in ('period=bad', 'buy_bps=-1', 'sell_bps=NaN', 'slippage_bps=1001', 'sample=foo'):
+        assert c.get('/workbench/comparison?' + query).status_code == 422
+    pinned = c.get('/workbench/programs/p/history/v2?limit=50&offset=20').json()
+    assert pinned['list_version_id'] == 'v2' and pinned['limit'] == 50
+    assert c.post('/workbench/comparison').status_code == 405
+    assert c.post('/workbench/programs/p/history/v2').status_code == 405
+
+
+def test_history_shell_program_mode_skips_full_service(monkeypatch):
+    from backend.routers import advisory_workbench as module
+    def forbidden(*args, **kwargs):
+        pytest.fail('History shell called full financial program summary')
+    monkeypatch.setattr(module, 'BriefService', lambda: SimpleNamespace(program=lambda pid, **kw: dict(program_id=pid, metric_read='NOT_REQUESTED')))
+    response = client(SimpleNamespace(program=forbidden)).get('/workbench/programs/p?mode=brief')
+    assert response.status_code == 200 and response.json()['metric_read'] == 'NOT_REQUESTED'
