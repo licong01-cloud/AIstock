@@ -1,0 +1,499 @@
+{
+  "schema": "advisory_comparison_history_source_acceptance_v1",
+  "receipt_id": "ADVISORY-COMPARISON-HISTORY-20261109",
+  "generated_at": "2026-11-09T10:45:38.709277+00:00",
+  "design_pr": 7169,
+  "design_merge": "0eb34f92f",
+  "code_commit": "3d8470bc4629d21c3c32084b72b467dc698bbdf4",
+  "validated_code_digest": "b370b7a54effff4a248966a7b0cbdc591412091b41f6f871cec8b946daa0f0b1",
+  "code_manifest": [
+    {
+      "path": "backend/routers/advisory_workbench.py",
+      "blob": "8a1b653fbdd108f199aba4ed7e5b4b6ea7cec553"
+    },
+    {
+      "path": "backend/services/advisory_workbench/brief.py",
+      "blob": "93f034baa3deab1a10fd260ea64b4b7849cf8b19"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_cache.py",
+      "blob": "7de5db4ebd52403cd498489539c0c7bdd7df51e6"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_market.py",
+      "blob": "0946fa1d953cbaa8a1be7a92b1329d5349b9f0f4"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_metrics.py",
+      "blob": "6b15c843fe2351532e148d1f9ea8bbfd43e18f7c"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_portfolio.py",
+      "blob": "c32e91db73f7e776e249b323ea038fed800d0e77"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_repository.py",
+      "blob": "d1549a48a5821ac226fd42c16af4df6e92cbc43f"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_service.py",
+      "blob": "c8cbbe763f202e18cd468e55604b96fa843c03b6"
+    },
+    {
+      "path": "backend/services/advisory_workbench/comparison_tracking.py",
+      "blob": "1f9e3949810ba1527197a841d90562cd1146864e"
+    },
+    {
+      "path": "backend/services/advisory_workbench/history.py",
+      "blob": "8618c901befb7e406b8a09fafc1e09c8b9762996"
+    },
+    {
+      "path": "backend/services/advisory_workbench/recommendations.py",
+      "blob": "851ab238ce815b50e47c2874a39c552d7c446f91"
+    },
+    {
+      "path": "backend/tests/advisory_workbench/test_api.py",
+      "blob": "003c7d7c6251c9b0d4ddd1217e520b0bc046ebfe"
+    },
+    {
+      "path": "backend/tests/advisory_workbench/test_comparison_metrics.py",
+      "blob": "0e9be4cd05922f0c595929f680a341fe3303c161"
+    },
+    {
+      "path": "backend/tests/advisory_workbench/test_comparison_portfolio.py",
+      "blob": "b82f3eaa3055ae7290e2ebc10eec7799763f0b43"
+    },
+    {
+      "path": "backend/tests/advisory_workbench/test_comparison_repository.py",
+      "blob": "da6edc04c7ae5e97eb9425346a38a8969a28b4bb"
+    },
+    {
+      "path": "backend/tests/advisory_workbench/test_comparison_service.py",
+      "blob": "dd310761a23cd1ba3d3001c4e782de8489b319f7"
+    },
+    {
+      "path": "backend/tests/advisory_workbench/test_history.py",
+      "blob": "a6fcb3bb568fc7ec1f9fb94093af5c748b41f78d"
+    },
+    {
+      "path": "frontend/src/components/advisory/LiveQuotes.tsx",
+      "blob": "331b1af7e65ea082a36454275adf02f7cd038302"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/Comparison.tsx",
+      "blob": "189bdf39ec7e67db7afc0e22a6b78f60c721ab81"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/ComparisonCharts.tsx",
+      "blob": "41207cc7597e04eececf589884ad04f632b42737"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/ComparisonFilters.tsx",
+      "blob": "9848bfed31b48054f51469ce2e91fe602fe3b290"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/ComparisonTable.tsx",
+      "blob": "e6effd8d3bc3d5df09fcedd1fff59be0a35602c2"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "blob": "97dc58b35c9fae5b5b5a2f26abda3105f0fcd8ef"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "blob": "534ddfdba787aa34d7df9157a814b9a273f37b42"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/Overview.tsx",
+      "blob": "90d3799241b2e59ebaf742f369c686501d5aa1c0"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "blob": "0b18b225b7c0a6640385031dae94c60590c58a0f"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/StockDrawer.tsx",
+      "blob": "6a383528bbff4afd286eb574d47a90d811506e38"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/Workbench.tsx",
+      "blob": "780252f1017a0717f503c05a13375d2ba557dd11"
+    },
+    {
+      "path": "frontend/src/components/advisory/workbench/workbench.module.css",
+      "blob": "f18d61d27d5c357b848f4e9b2d1645cbc1fce66c"
+    },
+    {
+      "path": "frontend/src/lib/api/advisoryComparison.ts",
+      "blob": "4b0ae7797d06387f222ea542acca40b3a3c12147"
+    },
+    {
+      "path": "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "blob": "2b9e561a279d57ea04c222720d334a64e3af6883"
+    }
+  ],
+  "scope": "F-015 through F-021; native frozen publication reference statistics and detail-only saved history",
+  "local_gate": {
+    "backend_contracts": 69,
+    "browser_scenarios": 9,
+    "real_capture_browser": "PASS",
+    "ruff": "PASS",
+    "eslint": "PASS",
+    "typescript": "PASS",
+    "scope": "PASS",
+    "history_metadata_no_financial_read": "PASS backend and exact deep-link browser",
+    "feature_validator": "PASS F2 21/21 warnings0"
+  },
+  "actual_http": {
+    "kind": "REAL_READ_ONLY_ASGI_HTTP_NO_USER_SERVICE_CONTROL",
+    "samples": {
+      "brief": {
+        "n": 10,
+        "p95_ms": 74.33,
+        "mean_ms": 53.6011,
+        "values_ms": [
+          59.391,
+          34.996,
+          60.752,
+          74.33,
+          48.288,
+          57.036,
+          55.013,
+          44.473,
+          53.761,
+          47.971
+        ]
+      },
+      "program_metadata": {
+        "n": 10,
+        "p95_ms": 51.005,
+        "mean_ms": 35.0765,
+        "values_ms": [
+          51.005,
+          41.254,
+          38.366,
+          49.839,
+          25.898,
+          25.739,
+          27.033,
+          39.303,
+          27.029,
+          25.299
+        ]
+      },
+      "history": {
+        "n": 10,
+        "p95_ms": 50.93,
+        "mean_ms": 39.229,
+        "values_ms": [
+          43.321,
+          42.638,
+          50.93,
+          44.54,
+          23.962,
+          41.376,
+          38.457,
+          43.018,
+          42.493,
+          21.555
+        ]
+      },
+      "summary_forced": {
+        "n": 10,
+        "p95_ms": 736.146,
+        "mean_ms": 604.9874,
+        "values_ms": [
+          591.862,
+          703.895,
+          736.146,
+          561.487,
+          541.864,
+          556.04,
+          569.459,
+          667.332,
+          562.336,
+          559.453
+        ]
+      },
+      "summary_cached": {
+        "n": 10,
+        "p95_ms": 3.661,
+        "mean_ms": 2.6894,
+        "values_ms": [
+          2.469,
+          3.661,
+          3.375,
+          2.481,
+          2.803,
+          2.317,
+          2.815,
+          2.297,
+          2.407,
+          2.269
+        ]
+      },
+      "series_cached": {
+        "n": 10,
+        "p95_ms": 2.764,
+        "mean_ms": 2.3086,
+        "values_ms": [
+          2.0,
+          2.764,
+          2.444,
+          2.234,
+          2.449,
+          2.175,
+          2.278,
+          2.116,
+          2.301,
+          2.325
+        ]
+      }
+    },
+    "response_bytes": {
+      "brief": 11489,
+      "program_metadata": 3670,
+      "history": 13023,
+      "summary_forced": 21937,
+      "summary_cached": 21937,
+      "series_cached": 13895
+    },
+    "schemas": {
+      "brief": "advisory_overview_brief_v1",
+      "program_metadata": "advisory_program_metadata_v1",
+      "history": "advisory_history_v1",
+      "summary_forced": "advisory_native_comparison_v1",
+      "summary_cached": "advisory_native_comparison_v1",
+      "series_cached": "advisory_native_comparison_v1"
+    },
+    "method": "10 sequential requests through fresh FastAPI router and JSON encoding; warm shared DB/pool; forced application cache misses; in-process ASGI transport, not network/field performance",
+    "latest_in_scope_parity": "PASS_vs_saved_items_not_active_episodes",
+    "fresh_process_routes": 14,
+    "user_backend_restarted": false,
+    "database_writes": 0,
+    "training_fits": 0
+  },
+  "laboratory_browser": {
+    "sample_count": 8,
+    "transport": "synthetic API fixture; isolated warmed Next dev process; max interaction EventTiming per navigation is an INP laboratory proxy, not field INP; no entries means below 16ms observation threshold",
+    "lcp_p75_ms": 112,
+    "inp_proxy_p75_ms": 24,
+    "event_count": 45,
+    "samples": [
+      {
+        "lcp": 148,
+        "events": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "longTasks": [
+          83
+        ]
+      },
+      {
+        "lcp": 124,
+        "events": [
+          24,
+          24,
+          24,
+          24,
+          24,
+          24
+        ],
+        "longTasks": [
+          73
+        ]
+      },
+      {
+        "lcp": 88,
+        "events": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "longTasks": [
+          91
+        ]
+      },
+      {
+        "lcp": 108,
+        "events": [
+          16,
+          16,
+          16,
+          24,
+          24,
+          24
+        ],
+        "longTasks": [
+          67
+        ]
+      },
+      {
+        "lcp": 100,
+        "events": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "longTasks": [
+          98
+        ]
+      },
+      {
+        "lcp": 112,
+        "events": [
+          16,
+          16,
+          16
+        ],
+        "longTasks": [
+          100
+        ]
+      },
+      {
+        "lcp": 92,
+        "events": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "longTasks": [
+          86
+        ]
+      },
+      {
+        "lcp": 112,
+        "events": [
+          16,
+          16,
+          16,
+          24,
+          24,
+          24
+        ],
+        "longTasks": [
+          109
+        ]
+      }
+    ]
+  },
+  "synthetic_scale": {
+    "kind": "SYNTHETIC_SCALE_NOT_FINANCIAL_EVIDENCE",
+    "programs": 10,
+    "years": 5,
+    "episodes": 100000,
+    "original_items": 261000,
+    "stored_items": 652500,
+    "versions": 13050,
+    "market_rows": 130500,
+    "build_ms": 5558.9,
+    "peak_process_rss_mb": 784.9,
+    "summary_bytes": 38975,
+    "series_bytes": 91583,
+    "max_points_per_line": 146,
+    "common_count": 1301,
+    "training_fits": 0
+  },
+  "synthetic_scale_browser": {
+    "kind": "SYNTHETIC_SCALE_NOT_FINANCIAL_EVIDENCE",
+    "programs": 10,
+    "max_interaction_event_ms": 16,
+    "event_count": 15,
+    "curve_bytes": 90083,
+    "max_points": 146
+  },
+  "actual_read_only": {
+    "program_count": 5,
+    "latest_scope_counts": [
+      21,
+      22,
+      23,
+      21,
+      20
+    ],
+    "lstm_saved_versions": 21,
+    "selected_3_arm_window": {
+      "start": "2026-10-26",
+      "end": "2026-11-06",
+      "period": "CUSTOM"
+    },
+    "common_days": 6,
+    "source_version": "071317acef55f0b840096872073e282ba44c3e08ad584ae573e72eb8e0353f83"
+  },
+  "assets": {
+    "comparison.png": {
+      "bytes": 496369,
+      "sha256": "eca4a09f3ba2f99bce6fcc8cbdcd1a0486afc12d96aec58bb113b8f57a7a9298",
+      "provenance": "isolated browser rendering real read-only captured responses; not production activation"
+    },
+    "historical-list.png": {
+      "bytes": 504985,
+      "sha256": "9b240b3079aef6743db889d38e4e34c0fff16a7bccd2289d22fced8d1188f15c",
+      "provenance": "isolated browser rendering real read-only captured responses; not production activation"
+    },
+    "mobile.png": {
+      "bytes": 385687,
+      "sha256": "358788b5bfc31e87b9fe8b780179c0beebbbbf8898d1eafd69e9dcb212a1c5c9",
+      "provenance": "isolated browser rendering real read-only captured responses; not production activation"
+    }
+  },
+  "design_compliance": {
+    "no_simplified_delivery": true,
+    "no_silent_failure": true,
+    "business_contracts_preserved": true,
+    "no_added_approval": true
+  },
+  "review": {
+    "executor": "active_agent_not_independent_review",
+    "correctness": "PASS",
+    "completeness_and_regression": "PASS",
+    "scope_and_boundaries": "PASS",
+    "fixed_findings": [
+      "original IN_SCOPE includes pending entries; ACTIVE is not the recommendation denominator",
+      "full list identity including outside rows",
+      "cash constraints do not require an irrelevant adjustment factor",
+      "unknown calendar flags fail closed",
+      "saved version deep-link and return state",
+      "page-specific confirmed episode links",
+      "invalid exit before entry remains UNKNOWN",
+      "history metadata shell avoids legacy full financial reads"
+    ],
+    "code_commit": "3d8470bc4629d21c3c32084b72b467dc698bbdf4",
+    "design_item_count": 21,
+    "scope_files": 36,
+    "regression_selection": "7 direct backend files; existing CI module plan owns broad regression"
+  },
+  "boundaries": {
+    "new_training_fits": 0,
+    "cumulative_fits_user_authorized": "269 plus 1 old-index receipt",
+    "research_target_increment_bps": 100,
+    "database_ddl": "noop",
+    "database_dml": "not_requested",
+    "production_lists_changed": false,
+    "models_activated": false,
+    "user_services_controlled": false,
+    "source_delivery": "pending_code_pr_current_head_ci",
+    "runtime_activation": "pending_user_restart",
+    "economic_acceptance": "NOT_EVALUATED",
+    "cleanup": "not_requested"
+  },
+  "method_limits": [
+    "ASGI HTTP is fresh-process in-process transport, not production network P95",
+    "browser LCP and INP proxy use synthetic transport; not field metrics",
+    "five-year 100k-episode/652500-item workload is synthetic; not a financial result or large production SQL latency proof"
+  ]
+}
