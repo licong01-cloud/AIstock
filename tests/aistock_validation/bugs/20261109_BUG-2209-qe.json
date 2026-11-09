@@ -155,17 +155,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh Python -B imported this worktree source and exercised actual remote catalog, raw bytes and text reads against completed qe_20261109_155308_8116/Loop1. Catalog complete; conf SHA04787f2af14f7bfa971538afca4009e98fd0ce199d18ea0370c6f4c37c724cfa. No submissions/training. Evidence tmp/issue_workflow/BUG-2209/fresh-process-evidence.json."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/workspace-preflight/rdagent-node1",
+    "database_readback_ref": "not_required"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -284,6 +292,21 @@
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "source_validation": {
+    "direct_related_matrix": "147 passed: source read retry, prediction replay and asset catalog contracts",
+    "lint": "changed-file ruff passed",
+    "l0": "passed; guardrails blocking0",
+    "review_passes": [
+      "correctness: GET-only retry bound3; permanent error/cancellation/invalid content not retried",
+      "completeness: catalog, recorder and raw prediction bytes covered; recorder before/after read typed errors preserved; fixed prediction bytes unchanged"
+    ],
+    "design_compliance": {
+      "no_unapproved_subset": "PASS; all three source read paths covered",
+      "no_silent_errors": "PASS; typed exhausted transport vs invalid contents and original cause",
+      "business_semantics_unchanged": "PASS; source selection/SHA/size/recorder/PIT and original POST lifecycle unchanged",
+      "no_unapproved_gate": "PASS; no new approval or scientific condition"
     }
   }
 }
