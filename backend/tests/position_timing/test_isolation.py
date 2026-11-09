@@ -1,6 +1,11 @@
 import ast
 from pathlib import Path
 
+NATURAL_READONLY_MODULES = {
+    "adverse_wait_diagnostics": {"DiagnosticSpec", "source_preflight"},
+    "continuous_results": {"PeriodAnalysisSpec", "period_source_preflight"},
+}
+
 
 def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
     # Intraday blueprint §2 explicitly permits LocalSIM -> pure SDK. Daily
@@ -25,6 +30,7 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
         ("period_research.py", sdk + ".period_context"): {"load_period_context"},
         ("period_research.py", sdk + ".price_plan_campaign"): {"inspect"},
         ("timing_campaign.py", sdk + ".period_context"): {"load_period_context"},
+        ("natural_period_preparation.py", sdk): set(NATURAL_READONLY_MODULES),
     }
     relative = path.relative_to(Path("backend/services/simulation_execution/localsim")).as_posix()
     if (relative, module) in period_seams:
@@ -132,3 +138,22 @@ def test_composition_root_has_only_thin_position_timing_router_wiring() -> None:
     assert "position_timing," in source
     assert 'app.include_router(position_timing.router, prefix="/api/v1")' in source
     assert source.count("position_timing") == 2
+
+
+def test_natural_preparation_exception_is_exact_and_readonly():
+    sdk = "backend.services.position_timing.intraday"
+    consumer = Path("backend/services/simulation_execution/localsim/natural_period_preparation.py")
+    modules = set(NATURAL_READONLY_MODULES)
+    assert _approved_localsim_sdk_import(consumer, sdk, modules)
+    for path in (consumer.with_name("timing.py"), consumer.parent/"nested"/consumer.name,
+                 Path("backend/services/advisory/natural_period_preparation.py")):
+        assert not _approved_localsim_sdk_import(path, sdk, modules)
+    for denied in ("*", "analyze", "prepare", "store", "natural_period_results"):
+        assert not _approved_localsim_sdk_import(consumer, sdk, [denied])
+    tree = ast.parse(consumer.read_text(encoding="utf-8-sig"))
+    aliases = {alias.asname or alias.name: alias.name for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == sdk for alias in node.names}
+    assert set(aliases.values()) == modules
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in aliases:
+            assert node.attr in NATURAL_READONLY_MODULES[aliases[node.value.id]]

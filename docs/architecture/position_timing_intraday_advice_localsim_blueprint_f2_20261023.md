@@ -346,5 +346,6 @@ LocalSIM #7174准备完成17日850目标、四户本户真实期初及53只历�
 本窗口只新增四户准备元数据适配、共享价集薄适配、期间结果消费者和直接测试。价格算法、0.5%工程政策、同一CandidateReader、原统计归约器、B0/W15/C2/P2规则及其旧implementation closure不变；不新建账户引擎或研究平台。四户消费者使用本户opening独立计算期间收益和分钟MDD，累计保留1000万元原点及本户高水位/MDD/累计费用；比较主值为本期NAV变化之差，不把不同期初财富归作本期优势。
 
 本轮9项直接测试、31项相关回归通过；WSL完整10962项来源闭合，17日850条BUY和2141条SELL全部2991条可用、UNKNOWN=0。独立raw bin/Decimal逐区间复核和Windows 21份产物SHA回读通过，真实build→inspect→exact retry复用相同manifest身份。精确路径与完整SHA集中在P2 F1文末及`X:/AIstock_temp/position-timing-natural-october-consumer-20261109/source_delivery_receipt_r1.json`；不把这些软件/价集验收替代真实账户经济验收。
+首轮CI发现#7174离线准备入口缺少精确SDK隔离登记；仅在择时所属测试中补文件/只读成员例外并完成5项隔离定向验证，其他消费者、私有/发布成员仍被拒绝。不改LocalSIM、生产runtime分类、价格/规则或已有产物；修订后的最终CI另行绑定本轮源码交付回执。
 
 唯一下一步是LocalSIM owner消费新价集和`consumer_contract.json`，最小对接四户自然期间请求，使用已冻结四户期初仅新跑10月68账户日，交回完整source inspection及artifact exact retry；本窗口再执行正式期间/累计比较。1—9月不重跑，旧B0/C2不作本轮复用，无新增规则、训练、生产数据/服务操作或后端重启。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。

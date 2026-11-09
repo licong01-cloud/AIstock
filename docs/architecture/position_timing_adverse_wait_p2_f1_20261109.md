@@ -24,7 +24,7 @@ LocalSIM #7150交付后，追加结果消费范围为`backend/services/position_
 本次机制诊断及下一轮设计只写`backend/services/position_timing/intraday/adverse_wait_diagnostics.py`、`backend/tests/position_timing/test_intraday_adverse_diagnostics.py`、本设计和日内上位蓝图；operator及不可变证据仅写`X:/AIstock_temp/position-timing-mechanism-october-20261109/`。不修改旧结果消费者、冻结来源、LocalSIM或任何其他业务模块。
 复用core.evaluate、分钟/日级合同、CandidateReader、交易分钟时钟、freeze、原history来源预检；不修改旧core、W15、原统计函数或其冻结implementation closure，不另建Reader、撮合、账本或研究平台。
 
-本次10月输入续接的允许写入范围为 `backend/services/position_timing/intraday/natural_period_context.py`、`natural_period_prices.py`、`natural_period_results.py`（均在同目录）、`backend/tests/position_timing/test_intraday_natural_period.py`、本设计及上位日内蓝图。operator和不可变交付只写 `X:/AIstock_temp/position-timing-natural-october-consumer-20261109/`。不修改任何旧研究implementation closure或LocalSIM文件。
+本次10月输入续接的允许写入范围为 `backend/services/position_timing/intraday/natural_period_context.py`、`natural_period_prices.py`、`natural_period_results.py`（均在同目录）、`backend/tests/position_timing/test_intraday_natural_period.py`、`backend/tests/position_timing/test_isolation.py`、本设计及上位日内蓝图。operator和不可变交付只写 `X:/AIstock_temp/position-timing-natural-october-consumer-20261109/`。不修改任何旧研究implementation closure或LocalSIM文件。
 
 ## Non-goals
 
@@ -110,6 +110,8 @@ LocalSIM #7174已交付四户真实期初、17日850目标、53只历史SELL并�
 
 本轮验收分为软件合同与真实来源/价集两部分；结果消费者的定向fixture验收不等于真实10月收益已验收。后续LocalSIM必须先交四户事实，择时才执行正式收益分析；时间加权暴露UNAVAILABLE、quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。
 
+#7174的离线准备文件 `backend/services/simulation_execution/localsim/natural_period_preparation.py` 属于本合同的已批准SDK消费者，不是线上反向依赖。隔离测试仅为此精确文件登记现有模块别名导入：`adverse_wait_diagnostics`只可访问`DiagnosticSpec/source_preflight`，`continuous_results`只可访问`PeriodAnalysisSpec/period_source_preflight`。使用AST核查实际成员，其他LocalSIM文件、子目录同名文件、其他业务模块、发布/分析/私有成员及通配符均不获得该例外；不扩大runtime分类、不修改LocalSIM源码。
+
 ## Implementation Plan
 
 初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry。本次再以单一交付块补齐Contracts-7机制诊断，并冻结Contracts-8的下一轮自然承接设计；不在本次执行10月账户，不新增细碎阶段或基础设施。
@@ -179,7 +181,7 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-518 | natural_period_context.py::load_context | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/inspect_receipt.json，完整10962项来源闭合 | VERIFIED | none |
 | F-519 | natural_period_prices.py::build/inspect；原price_plan_campaign引擎 | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/independent_readback.json及retry_receipt.json | VERIFIED | none |
 | F-520 | backend/services/position_timing/intraday/natural_period_results.py::source_preflight/analyze | backend/tests/position_timing/test_intraday_natural_period.py，软件合同验收；真实10月账户未运行、不属于本条软件验收 | VERIFIED | none |
-| F-521 | 本文Contracts-8.1及三个natural_period模块 | artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/l0.json及ownership.json；31项相关回归及git scope复核，旧实现closure零改动 | VERIFIED | none |
+| F-521 | 本文Contracts-8.1及三个natural_period模块；backend/tests/position_timing/test_isolation.py | artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/l0.json及ownership.json；31项相关回归和5项隔离定向测试，旧实现closure零改动 | VERIFIED | none |
 
 ## 初次纯函数实施与交接证据
 
@@ -288,6 +290,7 @@ P2有成交父计划5,998/6,419，W15为5,896/6,435，C2为5,115/6,586。P2较C2
 - `consumer_contract.json` 完整SHA `1642a731d690440dbc407e0bc9366c919e6da7d5c14b72c6250dc12f8f9070fa`，提供facts/spec JSON schema、冻结producer字段及inspection/retry合同；明确不是可执行账户请求。
 
 WSL真实build→inspect→exact retry全部通过，总耗时1217.30秒，主要为完整冻结来源内容校验，不是账户回放。9项直接测试与31项最终相关矩阵、Ruff、两项L0和归属检查通过；不登记新BUG，这是新增合同适配。自审修正了相对描述符解析、preflight纳入完整复核及跨日新峰值下的测试回撤oracle，并补充发布前漂移与旧命名空间拒绝、原始资本归一的区块统计测试。最终CI/合入状态由本轮根目录`source_delivery_receipt_r1.json`记录，不冒称独立agent审核。
+首轮CI在570项中569项通过，唯一失败为#7174已批准离线准备入口未登记SDK隔离例外。按8.1精确文件及只读成员补齐本模块隔离测试，5项定向验证及新增作用域L0通过；不删除/跳过失败测试，不扩大生产runtime分类，不修改LocalSIM或旧实现。价格spec/manifest/consumer合同的不可变身份保持不变；最终CI以修订后的精确HEAD为准，不复用首轮失败状态冒称通过。
 
 公共入口 `natural_period_prices.build/inspect` 及 `python -m backend.services.position_timing.intraday.natural_period_results inspect|analyze --spec <owner事实交回后冻结的spec路径> --spec-sha256 <完整SHA> --timing-root <独立分析根>`。分析spec/facts模型分别为 `NaturalAnalysisSpec`、`NaturalFacts`；最小producer字段绑定随 `consumer_contract.json` 交接，该文件不是可执行账户请求。旧B0/C2不复用；由LocalSIM owner最小对接并仅新跑10月四户68账户日，交回完整来源检查和artifact exact retry，再由本窗口做正式期间/累计比较。
 
