@@ -90,14 +90,19 @@ def loss_from_label(label, *, mature):
 
 def fit_parameters(rows):
     require(bool(rows), "no mature loss training rows", "train_label_evidence_insufficient")
+    require(all(0 <= r[3] < 1 for r in rows), "invalid loss training data")
+    parameters, stats = _fit_weighted_ridge(rows)
+    stats["training_loss_mean"] = stats.pop("training_target_mean")
+    return parameters, stats
+
+
+def _ridge_inputs(rows):
+    """Model-neutral train-only design; callers own their target semantics."""
+    require(bool(rows), "no mature training rows", "train_label_evidence_insufficient")
     x = np.asarray([r[2] for r in rows], dtype=np.float64)
     y = np.asarray([r[3] for r in rows], dtype=np.float64)
     require(
-        x.ndim == 2
-        and x.shape[1] == 20
-        and np.isfinite(x).all()
-        and np.isfinite(y).all()
-        and np.all((y >= 0) & (y < 1)),
+        x.ndim == 2 and x.shape[1] == 20 and np.isfinite(x).all() and np.isfinite(y).all(),
         "invalid loss training data",
     )
     mean, scale = x.mean(axis=0), x.std(axis=0, ddof=0)
@@ -112,20 +117,23 @@ def fit_parameters(rows):
     weights = np.asarray([len(rows) / (len(counts) * counts[r[0]]) for r in rows], dtype=np.float64)
     z = (x[:, active] - mean[active]) / scale[active]
     require(np.isfinite(z).all(), "nonfinite train transform", "fit_failed")
+    return z, y, weights, dict(mean=mean.tolist(), scale=scale.tolist(), active=active.tolist())
+
+
+def _fit_weighted_ridge(rows):
+    z, y, weights, scaler = _ridge_inputs(rows)
     model = Ridge(**PARAMS).fit(z, y, sample_weight=weights)
     require(np.isfinite(model.coef_).all() and math.isfinite(float(model.intercept_)), "nonfinite fit", "fit_failed")
     parameters = dict(
-        mean=mean.tolist(),
-        scale=scale.tolist(),
-        active=active.tolist(),
+        **scaler,
         coef=model.coef_.tolist(),
         intercept=float(model.intercept_),
     )
     return parameters, dict(
         fit_rows=len(rows),
-        fit_dates=len(counts),
+        fit_dates=len({r[0] for r in rows}),
         sample_weight_sum=float(weights.sum()),
-        training_loss_mean=float(np.average(y, weights=weights)),
+        training_target_mean=float(np.average(y, weights=weights)),
     )
 
 
