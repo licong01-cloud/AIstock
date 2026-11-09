@@ -107,6 +107,10 @@ def test_tracking_exit_open_limit_down_is_not_a_fill_or_zero_return():
                episode_status='EXITED', entry_price_basis='next_open_executable', exit_price_basis='next_open_executable')
     result = tracking_metrics([row], Market(raw), '2026-10-01', '2026-10-05', dict(buy_cost_bps=0, sell_cost_bps=0))
     assert result['gross']['sample_count'] == 0 and result['pending_exit_count'] == 1
+    invalid = dict(row, effective_entry_date='2026-10-05', effective_exit_date='2026-10-03')
+    result = tracking_metrics([invalid], Market(raw), '2026-10-01', '2026-10-05', dict(buy_cost_bps=0, sell_cost_bps=0))
+    assert result['gross']['sample_count'] == 0 and result['floating_gross']['sample_count'] == 0
+    assert result['missing_mark_count'] == 1
 
 
 def test_cache_singleflight_ttl_force_refresh_and_capacity():

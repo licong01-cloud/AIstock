@@ -14,6 +14,10 @@ def tracking_metrics(rows, market, start, end, cost):
         if not start <= entry <= end:
             continue
         entered += 1
+        exit_date = str(row['effective_exit_date']) if row.get('effective_exit_date') else None
+        if exit_date and exit_date < entry:
+            missing += 1
+            continue
         symbol = row['symbol']
         basis = row.get('entry_price_basis')
         field = 'open' if basis == 'next_open_executable' else 'close'
@@ -21,7 +25,6 @@ def tracking_metrics(rows, market, start, end, cost):
         if not base:
             missing += 1
             continue
-        exit_date = str(row['effective_exit_date']) if row.get('effective_exit_date') else None
         ended = row.get('episode_status', row.get('status')) == 'EXITED' and exit_date and exit_date <= end
         if ended:
             exit_field = 'open' if row.get('exit_price_basis') == 'next_open_executable' else 'close'
