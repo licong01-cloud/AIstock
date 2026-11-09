@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.8；更新日期：2026-11-09；Feature tier：F2。
-> 状态：`P2_DIAGNOSTICS_VERIFIED_CONTINUATION_DESIGNED_NOT_PROMOTED`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、1—10月原13户分析、10月W15三户比较及1—9月三户543账户日全期/月/季分析已完成；LocalSIM #7150交付P2单户181日后，择时已完成四户724日比较、补充全月份/方向机制诊断、独立复算及报告exact retry，均未重算账户。10月四户本户自然承接目前仅设计冻结，未创建新账户。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新结论与后续优先级见§7.5/7.6。
+> 版本：v1.9；更新日期：2026-11-09；Feature tier：F2。
+> 状态：`NATURAL_PERIOD_PRICE_AND_SOFTWARE_VERIFIED_AWAITING_LOCALSIM_FACTS`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、1—10月原13户分析、10月W15三户比较及1—9月三户543账户日全期/月/季分析已完成；LocalSIM #7150交付P2单户181日后，择时已完成四户724日比较、补充全月份/方向机制诊断、独立复算及报告exact retry，均未重算账户。#7174已交10月四户本户真实期初和市场准备，本窗口已完成共享价集build/inspect/exact retry及四户期间消费者软件验收，尚无新10月账户事实。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新结论与后续优先级见§7.5—7.7。
 > 本轮P2实现源码基线：`f02cf9358a463cebd3043bf4813886864360ea51`（由最新origin/main基线c5a9e01b…在独立工作树实施）；既有543日分析源码基线仍为`85c1fb73965d188bca9f607c45ed799d1580fcfa`。历史plan与验收保持各自原commit/implementation身份。
 > 新四户结果消费源码基线：`26d29a1d48bc16541182637b25b6ba75d5630e3e`；原算法、底层B0及历史分析closure保持不变。PR #7158只交付离线分析与进度文档，不激活线上P2。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
@@ -335,6 +335,17 @@ P2−W15净差仅4/9个月为正，8月110,697.13元超过全期，其余月份�
 
 下一轮仍固定B0/W15/C2/P2、原成本/人工响应/排队/TTL和P2的5根/15分钟；覆盖10月08—30日全部17日850目标。各户承接自己9月末的现金、持仓、成本和累计NAV锚点，不资本均衡、不重置累计MDD。原10月共同B0 opening的三户研究不拼接为自然承接；原13户中的B0/C2仅在本户opening和完整合同逐项一致时复用，不按收益决定复用。W15/P2等缺少兼容产物的账户由LocalSIM owner新增10月延续，旧1—9月及原13户不重算。
 
-择时下一轮负责新增历史持仓SELL的共享价格计划覆盖及最小四户期间分析适配；LocalSIM owner负责opening/原生结算、账户延续及来源/重试回执。本次不交付可执行账户request或声称已接通四户10月消费者；已有CLI不能接收新的自然承接事实时明确列出最小合同差异，不临时复制账本或放宽旧接口。新期间candidate沿其冻结身份绑定，来源差异披露，不改active/profile。
+该轮设计明确择时负责新增历史持仓SELL的共享价格计划覆盖及最小四户期间分析适配，LocalSIM owner负责opening/原生结算、账户延续及来源/重试回执。该次设计交付未提供可执行账户request或接通四户10月消费者；后续实际价集和软件交付见§7.7。已有CLI不能接收新事实时明确最小合同差异，不复制账本或放宽旧接口。新期间candidate沿其冻结身份绑定，不改active/profile。
 
 期间比较使用各户NAV变化之差，累计评价保留1月资本原点与本户完整高水位；分别报告10月、1—10月、月季收益/MDD/费用和全部BUY/SELL分母。时间加权暴露及未记录的生命周期仍UNKNOWN/UNAVAILABLE，历史扩展仍为探索性。暂不扫参数或训练模型；只有研究问题确需预测“立即执行与等待的成本差”时，再冻结单一轻量假设，不以经济显著性、日志补齐、未来行情或后端重启作为离线研发准入。
+
+### 7.7 本轮：四户10月输入已交，补最小消费适配
+
+LocalSIM #7174准备完成17日850目标、四户本户真实期初及53只历史SELL并集，市场阻断0，尚未运行账户。正式回执及完整SHA见[P2 F1 Contracts-8.1](position_timing_adverse_wait_p2_f1_20261109.md)。旧B0/C2各多24个非持仓marks，其他经济期初一致；严格复用未认证。为避免额外等价性认证工程，本轮选择既定仅新跑10月分支，后续LocalSIM新跑四户68账户日，1—9月和旧13户产物不改、不重算，不将hash差异直接解释成经济差异。
+
+本窗口只新增四户准备元数据适配、共享价集薄适配、期间结果消费者和直接测试。价格算法、0.5%工程政策、同一CandidateReader、原统计归约器、B0/W15/C2/P2规则及其旧implementation closure不变；不新建账户引擎或研究平台。四户消费者使用本户opening独立计算期间收益和分钟MDD，累计保留1000万元原点及本户高水位/MDD/累计费用；比较主值为本期NAV变化之差，不把不同期初财富归作本期优势。
+
+本轮9项直接测试、31项相关回归通过；WSL完整10962项来源闭合，17日850条BUY和2141条SELL全部2991条可用、UNKNOWN=0。独立raw bin/Decimal逐区间复核和Windows 21份产物SHA回读通过，真实build→inspect→exact retry复用相同manifest身份。精确路径与完整SHA集中在P2 F1文末及`X:/AIstock_temp/position-timing-natural-october-consumer-20261109/source_delivery_receipt_r1.json`；不把这些软件/价集验收替代真实账户经济验收。
+首轮CI发现#7174离线准备入口缺少精确SDK隔离登记；仅在择时所属测试中补文件/只读成员例外并完成5项隔离定向验证，其他消费者、私有/发布成员仍被拒绝。不改LocalSIM、生产runtime分类、价格/规则或已有产物；修订后的最终CI另行绑定本轮源码交付回执。
+
+唯一下一步是LocalSIM owner消费新价集和`consumer_contract.json`，最小对接四户自然期间请求，使用已冻结四户期初仅新跑10月68账户日，交回完整source inspection及artifact exact retry；本窗口再执行正式期间/累计比较。1—9月不重跑，旧B0/C2不作本轮复用，无新增规则、训练、生产数据/服务操作或后端重启。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。
