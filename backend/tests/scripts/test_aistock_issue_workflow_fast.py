@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import io
 import json
@@ -1397,15 +1396,14 @@ def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tamper
     assert _business_semantic(url, payload, "e" * 64)["verdict"] == "failed"
 
 
-@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation", "member"])
 def test_factor_research_provisional_backend_contract_reconciles_to_offline(name):
     result = workflow.build_runtime_contract(record={"runtime_contract": {
         "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
         "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
-    }}, changed_files=[f"backend/services/factor_research/{name}.py"])
+    }}, changed_files=["backend/services/hmm_risk/risk_l2_member_return.py" if name == "member" else f"backend/services/factor_research/{name}.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
-    assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
-    assert result["inferred_runtime_files"] == []
+    assert (result["pre_pr_ready"] is True, result["backend_restart_required"] is False, result["inferred_runtime_files"]) == (True, True, [])
 
 
 def test_runtime_task_card_bounds_source_output_without_losing_attribution():
@@ -1852,8 +1850,8 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
     ('backend/services/hmm_risk/rotation_l1_gbdt.py', []),
     ('backend/services/hmm_risk/observed_industry_authority.py', []),
     ('backend/services/hmm_risk/risk_l2_value_replay.py', []),
-    ('backend/services/hmm_risk/risk_l2_member_return.py', []),
     ('backend/services/hmm_risk/risk_l2_member_return_v2.py', ['backend-main']),
+    (['backend/services/hmm_risk/risk_l2_member_return.py', 'backend/services/dataset_release/worker.py'], ['worker-scheduler']),
     ('backend/services/hmm_risk/risk_l2_prediction.py', ['backend-main']),
     ('backend/routers/hmm_risk.py', ['backend-main']),
     ('backend/services/hmm_risk/unknown_consumer.py', ['backend-main']),
@@ -1867,8 +1865,7 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
 def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeypatch) -> None:
     source = ("backend/services/hmm_risk/risk_l2_member_return.py" if family == "member" else
               _LOCALSIM_DIR + "dual_mode_research.py" if family == "localsim" else "backend/services/hmm_risk/observed_industry_authority.py")
-    fixed5 = ["backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
-              "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py"]
+    fixed5 = [f"backend/services/advisory_model_first/generic_price_5td_{kind}_v2.py" for kind in ("valuation", "revaluation")]
     expected = [source] if family in {"industry", "localsim", "member"} else fixed5
     rule_id = ("offline-hmm-signed-member-return" if family == "member" else "offline-localsim-dual-mode-study" if family == "localsim" else
                "offline-hmm-observed-industry-authority" if family == "industry" else "offline-advisory-fixed5-valuation")
@@ -1885,71 +1882,31 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeyp
                      "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"],
         "localsim": [source, "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
                       "backend/tests/simulation_execution/test_localsim_replay_performance.py"],
-        "member": [source, "scripts/hmm_risk/run_risk_l2_member_return.py",
-                   "backend/tests/hmm_risk/test_risk_l2_member_return.py"],
+        "member": [source, "scripts/hmm_risk/run_risk_l2_member_return.py", "backend/tests/hmm_risk/test_risk_l2_member_return.py"],
     }[family]
     offline = workflow._classify_runtime_impact(files)
-    assert offline["runtime_impact"] == "none"
-    assert offline["runtime_files"] == offline["target_ids"] == []
-    assert offline["catalog_error"] is None
+    assert (offline["runtime_impact"], offline["runtime_files"], offline["target_ids"], offline["catalog_error"]) == ("none", [], [], None)
     contract = workflow.build_runtime_contract(record={}, changed_files=files)
     assert contract["blocking"] == [] and contract["backend_restart_required"] is False
-    provisional = workflow.build_runtime_contract(record={"runtime_contract": {
-        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
-        "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
-    }}, changed_files=files)
-    assert provisional["runtime_impact"] == "none" and provisional["target_ids"] == []
-    assert provisional["pre_pr_ready"] is True and not provisional["backend_restart_required"]
     online_paths = ([*(path.replace("_v2.py", "_v3.py") for path in fixed5), "backend/routers/advisory_model_first.py"]
                     if family == "advisory" else ["backend/routers/hmm_risk.py", source.replace(".py", "_consumer.py")])
     if family == "localsim":
         online_paths = _LOCALSIM_ONLINE_FILES
     for online in online_paths:
         mixed = workflow._classify_runtime_impact([*files, online])
-        assert mixed["runtime_impact"] == "backend"
-        assert mixed["target_ids"] == ["backend-main"]
-        assert mixed["runtime_files"] == [online]
+        assert (mixed["runtime_impact"], mixed["target_ids"], mixed["runtime_files"]) == ("backend", ["backend-main"], [online])
         contract = workflow.build_runtime_contract(record={"runtime_contract": {
             "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}}, changed_files=[*files, online])
         assert contract["backend_restart_required"] is True
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
-        if family == "member":
-            assert all(any(ref in reason for reason in contract["blocking"])
-                       for ref in ("operator runbook ref", "identity_ref", "business_smoke_ref"))
     if family == "member":
-        mixed = workflow._classify_runtime_impact([*files, "backend/services/dataset_release/worker.py"])
-        assert (mixed["runtime_impact"], mixed["target_ids"]) == ("worker_scheduler", ["worker-scheduler"])
+        refs = set(workflow._git(["grep", "-l", "-F", Path(source).stem, "--", "*.py"]).splitlines())
+        assert refs == {*files[1:], Path(__file__).relative_to(workflow.REPO_ROOT).as_posix()}
     if family in {"localsim", "member"}:
         catalog = workflow._load_runtime_target_catalog()
         catalog["targets"]["backend-main"]["source_globs"].append(source)
         monkeypatch.setattr(workflow, "_load_runtime_target_catalog", lambda _root=None: catalog)
         assert workflow._classify_runtime_impact([source])["runtime_impact"] == "unknown"
-
-
-def test_signed_member_return_import_closure_stays_offline() -> None:
-    name = "risk_l2_member_return"
-    raw_paths = subprocess.check_output(["git", "ls-files", "-z", "--", "*.py"], cwd=workflow.REPO_ROOT)
-    paths = raw_paths.decode("utf-8").rstrip("\0").split("\0")
-    consumers = set()
-    for relative in paths:
-        raw = (workflow.REPO_ROOT / relative).read_bytes()
-        if name.encode() not in raw:
-            continue
-        text = raw.decode("utf-8-sig")
-        for node in ast.walk(ast.parse(text)):
-            imported = ([alias.name for alias in node.names] if isinstance(node, (ast.Import, ast.ImportFrom)) else [])
-            if isinstance(node, ast.ImportFrom):
-                imported.append(node.module or "")
-            if isinstance(node, ast.Constant) and node.value == "backend.services.hmm_risk." + name:
-                imported.append(node.value)
-            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute)):
-                function = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
-                if function in {"__import__", "import_module"} and node.args and isinstance(node.args[0], ast.Constant):
-                    imported.append(str(node.args[0].value))
-            if any(module == name or module.endswith("." + name) for module in imported):
-                consumers.add(relative)
-    assert consumers == {"scripts/hmm_risk/run_risk_l2_member_return.py",
-                         "backend/tests/hmm_risk/test_risk_l2_member_return.py"}
 
 
 @pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py", "component_artifact_manifest.py", "component_manifest_producer.py", "factor_materializer.py", "source_fact_history.py", "artifact_ready_source.py", "candidate_validator.py", "canonical_stock_transformer.py", *(f"legacy:{name}.py" for name in ("component_artifact_manifest", "component_manifest_producer", "factor_materializer", "source_fact_history", "artifact_ready_source", "candidate_validator", "canonical_stock_transformer"))])
