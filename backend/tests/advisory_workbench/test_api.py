@@ -80,3 +80,12 @@ def test_comparison_and_history_routes_preserve_bounded_read_contracts():
     assert pinned['list_version_id'] == 'v2' and pinned['limit'] == 50
     assert c.post('/workbench/comparison').status_code == 405
     assert c.post('/workbench/programs/p/history/v2').status_code == 405
+
+
+def test_history_shell_program_mode_skips_full_service(monkeypatch):
+    from backend.routers import advisory_workbench as module
+    def forbidden(*args, **kwargs):
+        pytest.fail('History shell called full financial program summary')
+    monkeypatch.setattr(module, 'BriefService', lambda: SimpleNamespace(program=lambda pid, **kw: dict(program_id=pid, metric_read='NOT_REQUESTED')))
+    response = client(SimpleNamespace(program=forbidden)).get('/workbench/programs/p?mode=brief')
+    assert response.status_code == 200 and response.json()['metric_read'] == 'NOT_REQUESTED'

@@ -1,11 +1,12 @@
 "use client";
 import { useState } from "react";
-import { path, programPath, type DailyItem, type DailyPage, type Summary } from "@/lib/api/advisoryWorkbench";
+import { path, programPath, type DailyItem, type DailyPage } from "@/lib/api/advisoryWorkbench";
 import { QuoteCell, RecommendationValue, TodayChange } from "../LiveQuotes";
 import { Badge, Empty, ErrorNotice, Metric, number, Pager, useRead } from "./shared";
+import type { ProgramSelection } from "@/lib/api/advisoryComparison";
 import styles from "./workbench.module.css";
 
-type Props = { summary: Summary; refresh: number; onStock: (item: DailyItem) => void; onDate: (date: string) => void; versionId?: string };
+type Props = { summary: ProgramSelection; refresh: number; onStock: (item: DailyItem) => void; onDate: (date: string) => void; versionId?: string };
 export function Rows({ items, onStock }: { items: DailyItem[]; onStock: Props["onStock"] }) {
   return <div className={styles.tableWrap}><table><thead><tr><th>排名</th><th>股票</th><th>推荐状态</th><th>连续推荐</th><th>首次生效日</th><th>起始基准价</th><th>当前最新价</th><th>荐股期间累计涨跌</th><th>今日涨跌</th></tr></thead><tbody>{items.map((row, i) => <tr key={`${row.symbol}-${i}`} className={row.change === "NEW" ? styles.newRow : ""}>
     <td>{number(row.rank)}</td><td><button className={styles.stockLink} onClick={() => onStock(row)}>{row.stock_name || row.symbol}</button><small>{row.symbol}</small></td>

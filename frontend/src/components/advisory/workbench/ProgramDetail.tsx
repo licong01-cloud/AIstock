@@ -5,6 +5,7 @@ import { useState } from "react";
 import { path, programPath, type DailyItem, type Decision, type Episode, type Page, type Params, type Readiness, type Summary } from "@/lib/api/advisoryWorkbench";
 import { Badge, bps, day, Empty, ErrorNotice, gain, Metric, number, Pager, percent, readinessReason, text, time, useRead } from "./shared";
 import { QuoteCell, QuoteProvider } from "../LiveQuotes";
+import type { ProgramSelection } from "@/lib/api/advisoryComparison";
 import DailyList from "./DailyList";
 import HistoricalLists from "./HistoricalLists";
 import EpisodeTable from "./EpisodeTable";
@@ -25,7 +26,7 @@ function Adjustments({ summary, refresh }: { summary: Summary; refresh: number }
   </section>;
 }
 
-function Runtime({ summary, refresh }: { summary: Summary; refresh: number }) {
+function Runtime({ summary, refresh }: { summary: ProgramSelection; refresh: number }) {
   const input = summary.selected?.date_context?.selection_as_of_trade_date || summary.selected?.date_context?.decision_as_of_trade_date || summary.runtime.data_date;
   const readiness = useRead<Readiness>(input ? path(programPath(summary.program_id, "/readiness"), { data_date: input }) : null, refresh, summary.program_id);
   return <details className={styles.panel}><summary>运行与数据状态 · {text(summary.runtime.state)} · {text(summary.runtime.settlement, "结算未记录")}</summary><div className={styles.runtime}>
@@ -42,8 +43,9 @@ export default function ProgramDetail({ programId, initialDate, initialVersion }
   const [start, setStart] = useState(""), [end, setEnd] = useState("");
   const [stock, setStock] = useState<DailyItem | Episode | null>(null);
   const filters: Params = { source, binding, start, end };
-  const result = useRead<Summary>(path(programPath(programId), { target_date: target, ...filters }), refresh, programId);
+  const result = useRead<ProgramSelection>(path(programPath(programId), { target_date: target, mode: tab === "历史名单" ? "brief" : "full", ...filters }), refresh, programId);
   const summary = result.data;
+  const fullSummary = summary?.metrics && tab !== "历史名单" ? summary as Summary : null;
   const clearPinned = (date?: string) => {
     const params = new URLSearchParams(window.location.search);
     params.delete("list_version_id");
@@ -58,13 +60,13 @@ export default function ProgramDetail({ programId, initialDate, initialVersion }
     {summary && <QuoteProvider key={`${summary.program_id}:${summary.list_version_id || "no-list"}`} programId={summary.program_id} listVersionId={summary.selected?.list_version_id}>
       {tab !== "历史名单" && <div className={styles.toolbar}><div className={styles.filters}><label>推荐目标日 <input aria-label="推荐目标日" type="date" value={target || summary.target_date} onChange={e => changeDate(e.target.value)} /></label><span>输入截止 {day(summary.selected?.date_context?.selection_as_of_trade_date || summary.selected?.date_context?.decision_as_of_trade_date)}</span>{summary.target_date !== summary.default_target_date && <Badge>历史或指定日期</Badge>}</div><span>最近读取 {time(summary.generated_at)}</span></div>}
       <nav className={styles.tabs} aria-label="荐股详情分类">{tabs.map(name => <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => { if (initialVersion && name !== "历史名单") clearPinned(); setTab(name); setStock(null); }}>{name}</button>)}</nav>
-      {["持续跟踪", "跟踪历史", "效果统计"].includes(tab) && <><div className={styles.metrics}><Metric label="跟踪中" value={number(summary.metrics.active_count)} /><Metric label="已结束有效样本" value={number(summary.metrics.metric_evaluable_count)} /><Metric label="已结束胜率" value={percent(summary.metrics.win_rate)} /><Metric label="平均参考收益" value={bps(summary.metrics.avg_return_bps)} className={gain(summary.metrics.avg_return_bps)} note="费用前参考收益" /></div><div className={styles.toolbar}><div className={styles.filters}><label>来源 <select aria-label="记录来源" value={source} onChange={e => setSource(e.target.value)}>{["ALL", "FORWARD", "REPLAY", "UNKNOWN"].map(s => <option key={s} value={s}>{text(s)}</option>)}</select></label><label>绑定 <select aria-label="绑定范围" value={binding} onChange={e => setBinding(e.target.value)}><option value="">全部绑定</option><option value="CURRENT">当前绑定</option><option value="UNKNOWN">绑定待核验</option>{summary.bindings.map((b, i) => <option key={b.binding_version_id} value={b.binding_version_id}>版本 {b.program_version} · {day(b.effective_from_trade_date)}{i === 0 ? "（最近）" : ""}</option>)}</select></label><label>入选日 <input aria-label="入选开始日期" type="date" value={start} onChange={e => setStart(e.target.value)} /></label><span>至</span><input aria-label="入选结束日期" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} /></div></div></>}
+      {["持续跟踪", "跟踪历史", "效果统计"].includes(tab) && fullSummary && <><div className={styles.metrics}><Metric label="跟踪中" value={number(fullSummary.metrics.active_count)} /><Metric label="已结束有效样本" value={number(fullSummary.metrics.metric_evaluable_count)} /><Metric label="已结束胜率" value={percent(fullSummary.metrics.win_rate)} /><Metric label="平均参考收益" value={bps(fullSummary.metrics.avg_return_bps)} className={gain(fullSummary.metrics.avg_return_bps)} note="费用前参考收益" /></div><div className={styles.toolbar}><div className={styles.filters}><label>来源 <select aria-label="记录来源" value={source} onChange={e => setSource(e.target.value)}>{["ALL", "FORWARD", "REPLAY", "UNKNOWN"].map(s => <option key={s} value={s}>{text(s)}</option>)}</select></label><label>绑定 <select aria-label="绑定范围" value={binding} onChange={e => setBinding(e.target.value)}><option value="">全部绑定</option><option value="CURRENT">当前绑定</option><option value="UNKNOWN">绑定待核验</option>{summary.bindings.map((b, i) => <option key={b.binding_version_id} value={b.binding_version_id}>版本 {b.program_version} · {day(b.effective_from_trade_date)}{i === 0 ? "（最近）" : ""}</option>)}</select></label><label>入选日 <input aria-label="入选开始日期" type="date" value={start} onChange={e => setStart(e.target.value)} /></label><span>至</span><input aria-label="入选结束日期" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} /></div></div></>}
       <div key={`${tab}:${summary.snapshot_id}:${source}:${binding}:${start}:${end}`}>
         {tab === "当日推荐" && <DailyList summary={summary} refresh={refresh} onStock={setStock} onDate={changeDate} />}
-        {(tab === "持续跟踪" || tab === "跟踪历史") && <EpisodeTable summary={summary} filters={filters} refresh={refresh} tracking={tab === "持续跟踪"} onStock={setStock} />}
+        {(tab === "持续跟踪" || tab === "跟踪历史") && fullSummary && <EpisodeTable summary={fullSummary} filters={filters} refresh={refresh} tracking={tab === "持续跟踪"} onStock={setStock} />}
         {tab === "历史名单" && <HistoricalLists summary={summary} refresh={refresh} initialVersion={initialVersion} />}
-        {tab === "调整记录" && <Adjustments summary={summary} refresh={refresh} />}
-        {tab === "效果统计" && <Performance summary={summary} />}
+        {tab === "调整记录" && fullSummary && <Adjustments summary={fullSummary} refresh={refresh} />}
+        {tab === "效果统计" && fullSummary && <Performance summary={fullSummary} />}
         {tab === "模型观察" && <ModelObservation programId={programId} target={summary.target_date} refresh={refresh} />}
       </div>
       <Runtime summary={summary} refresh={refresh} />

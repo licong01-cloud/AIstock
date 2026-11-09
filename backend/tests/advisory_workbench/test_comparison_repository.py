@@ -85,3 +85,41 @@ def test_brief_never_requests_episode_or_price_watermarks_and_whitelists_program
     result = BriefService(repository, lambda: datetime(2026, 11, 9, 16, tzinfo=CN)).overview()
     assert result['items'][0]['latest']['active_count'] == 1
     assert result['items'][0]['latest_in_scope_count'] == 2  # Pending target-open entry is already recommended.
+
+
+def test_history_program_shell_has_no_financial_read_or_placeholder_metrics():
+    from contextlib import contextmanager
+    from datetime import date, datetime
+    from backend.services.advisory_workbench.brief import BriefService
+    from backend.services.advisory_workbench.quotes import CN
+
+    class MetadataRepo:
+        @contextmanager
+        def transaction(self):
+            yield self
+
+        def program(self, pid):
+            return dict(program_id=pid, program_name='program', status='ENABLED', package_ids=[])
+
+        def versions(self, pid):
+            return [dict(program_id=pid, list_version_id='v', binding_version_id='b',
+                         version_status='PUBLISHED', trade_date=date(2026, 11, 9))]
+
+        def bindings(self, pid):
+            return [dict(binding_version_id='b', activation_status='ACTIVE', package_ids=[])]
+
+        def calendar(self, start, end):
+            return [dict(cal_date=date(2026, 11, i), is_trading=date(2026, 11, i).weekday() < 5) for i in range(2, 11)]
+
+        def forward(self, *args):
+            return []
+
+        def package_models(self, ids):
+            return []
+
+        def __getattr__(self, name):
+            raise AssertionError('History shell must not read financial history: ' + name)
+    view = BriefService(MetadataRepo(), lambda: datetime(2026, 11, 9, 16, tzinfo=CN)).program('p')
+    assert view['schema_version'] == 'advisory_program_metadata_v1'
+    assert view['selected']['list_version_id'] == 'v' and 'metrics' not in view
+    assert view['metric_read'] == 'NOT_REQUESTED'

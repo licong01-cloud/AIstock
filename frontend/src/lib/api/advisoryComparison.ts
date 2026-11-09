@@ -2,6 +2,7 @@ import type { Summary, Version } from "./advisoryWorkbench";
 
 export type BriefCard = Omit<Summary, "metrics"> & { metrics?: Summary["metrics"]; versions_count: number; latest_in_scope_count: number | null };
 export type BriefOverview = { generated_at: string; items: BriefCard[]; count: number; status_counts: Record<string, number> };
+export type ProgramSelection = Omit<Summary, "metrics" | "source_counts"> & { metrics?: Summary["metrics"]; source_counts?: Summary["source_counts"] };
 export type Distribution = { sample_count: number; avg_return_bps: number | null; median_return_bps: number | null; win_rate: number | null; avg_win_bps: number | null; avg_loss_bps: number | null; payoff_ratio: number | null; profit_factor: number | null };
 export type FixedStats = { net: Distribution; gross: Distribution; excess: Distribution; excess_interval_bps: [number, number] | null; worst_bps: number | null; tail_10pct_bps: number | null };
 export type PortfolioStats = { status: string; reason: string | null; total_return_bps: number | null; max_drawdown_bps: number | null; cash_fraction: number | null; invested_fraction: number | null; cost_drag_bps: number | null; unknown_from: string | null };

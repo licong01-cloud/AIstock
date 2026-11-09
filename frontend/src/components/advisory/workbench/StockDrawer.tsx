@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { path, programPath, type DailyItem, type Episode, type EpisodeDetail, type Summary } from "@/lib/api/advisoryWorkbench";
+import { path, programPath, type DailyItem, type Episode, type EpisodeDetail } from "@/lib/api/advisoryWorkbench";
 import { QuoteCell, RecommendationValue, TodayChange, EpisodeReturn } from "../LiveQuotes";
 import { Badge, day, ErrorNotice, Metric, number, Pager, text, useRead } from "./shared";
+import type { ProgramSelection } from "@/lib/api/advisoryComparison";
 import styles from "./workbench.module.css";
 
-export default function StockDrawer({ summary, item, onClose }: { summary: Summary; item: DailyItem | Episode; onClose: () => void }) {
+export default function StockDrawer({ summary, item, onClose }: { summary: ProgramSelection; item: DailyItem | Episode; onClose: () => void }) {
   const [page, setPage] = useState(1), [limit, setLimit] = useState(20);
   const close = useRef<HTMLButtonElement>(null);
   const result = useRead<EpisodeDetail>(item.episode_id ? path(programPath(summary.program_id, `/episodes/${encodeURIComponent(item.episode_id)}`), { target_date: summary.target_date, snapshot_id: summary.snapshot_id, limit, offset: (page - 1) * limit }) : null, 0, summary.program_id);

@@ -2,16 +2,17 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { HistoricalVersion, HistoryPage } from "@/lib/api/advisoryComparison";
-import { path, programPath, type DailyItem, type Summary, type DailyPage } from "@/lib/api/advisoryWorkbench";
+import { path, programPath, type DailyItem, type DailyPage } from "@/lib/api/advisoryWorkbench";
 import { QuoteProvider } from "../LiveQuotes";
 import DailyList from "./DailyList";
 import StockDrawer from "./StockDrawer";
 import { Badge, day, Empty, ErrorNotice, Pager, text, time, useRead } from "./shared";
+import type { ProgramSelection } from "@/lib/api/advisoryComparison";
 import styles from "./workbench.module.css";
 
 const statusText: Record<string, string> = { ALL: "全部状态", PUBLISHED: "已发布", REPLAY: "历史回放", SUPERSEDED: "已被替代", DRAFT: "草稿" };
 
-export default function HistoricalLists({ summary, refresh, initialVersion }: { summary: Summary; refresh: number; initialVersion: string }) {
+export default function HistoricalLists({ summary, refresh, initialVersion }: { summary: ProgramSelection; refresh: number; initialVersion: string }) {
   const router = useRouter();
   const [pendingPin, setPendingPin] = useState(initialVersion);
   const [selected, setSelected] = useState<HistoricalVersion | null>(null);
@@ -29,7 +30,7 @@ export default function HistoricalLists({ summary, refresh, initialVersion }: { 
     router.replace(`/paper-v2/advisory?${params}`, { scroll: false });
   };
   if (selected) {
-    const view: Summary = { ...summary, selected, list_version_id: selected.list_version_id, target_date: selected.trade_date,
+    const view: ProgramSelection = { ...summary, selected, list_version_id: selected.list_version_id, target_date: selected.trade_date,
       binding_version_id: selected.binding_version_id, snapshot_id: "" };
     return <QuoteProvider key={selected.list_version_id} programId={summary.program_id} listVersionId={selected.list_version_id}>
       <div className={styles.historyHeading}><button onClick={() => choose(null)}>← 返回历史名单目录</button><div><h2>{selected.trade_date} · 历史推荐名单</h2><p><Badge value={selected.version_status}>{statusText[selected.version_status]}</Badge> {text(selected.source)} · 生成于 {time(selected.created_at)}</p><small>版本 {selected.list_version_id} · 绑定 {selected.binding_version_id}</small></div></div>

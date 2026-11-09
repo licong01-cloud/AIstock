@@ -522,6 +522,7 @@ test("saved list deep link opens its exact version without a date guess", async 
   await expect(main(page).getByText("版本 lstm-history-42 · 绑定 lstm-binding", { exact: true })).toBeVisible();
   await expect(main(page).getByRole("row").filter({ hasText: "已结束荐股期间股票" })).toBeVisible();
   expect(state.seen.some(url => url.includes("/history/lstm-history-42"))).toBe(true);
+  expect(state.seen.some(url => url.includes("/programs/lstm?") && url.includes("mode=brief"))).toBe(true);
   await main(page).getByRole("button", { name: "当日推荐", exact: true }).click();
   await expect(page).not.toHaveURL(/list_version_id/);
 });
@@ -579,7 +580,7 @@ test("real captured comparison and saved history render without mutations", asyn
     }
     if (resource.endsWith("/returns")) return json(route, captured.returns);
     if (resource.endsWith("/readiness")) return json(route, captured.readiness);
-    if (resource === api + `/programs/${captured.program_id}`) return json(route, captured.program);
+    if (resource === api + `/programs/${captured.program_id}`) return json(route, url.searchParams.get("mode") === "brief" ? captured.program_metadata : captured.program);
     return json(route, { ...captured.history_details.IN_SCOPE, items: [], total_count: 0, summary: null });
   });
   await page.setViewportSize({ width: 1700, height: 1100 });

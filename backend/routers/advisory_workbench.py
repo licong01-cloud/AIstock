@@ -126,7 +126,10 @@ def history_detail(program_id: str, version_id: str,
 
 
 @router.get("/programs/{program_id}")
-def program(program_id: str, target_date: date | None = None, filters=Depends(stats_args), service=Depends(get_service)):
+def program(program_id: str, target_date: date | None = None, mode: Literal['full', 'brief'] = 'full',
+            filters=Depends(stats_args), service=Depends(get_service)):
+    if mode == 'brief':
+        return invoke(BriefService().program, program_id, target_date=target_date.isoformat() if target_date else None)
     return invoke(service.program, program_id, target_date=target_date.isoformat() if target_date else None, **filters)
 
 
