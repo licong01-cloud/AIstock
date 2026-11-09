@@ -11,7 +11,7 @@ import re
 
 from filelock import FileLock
 
-from backend.services.position_timing.intraday.contracts import digest
+from backend.services.position_timing.intraday.contracts import digest, payload
 from backend.services.position_timing.intraday.natural_period_context import load_context
 from backend.services.position_timing.intraday.natural_period_prices import inspect as inspect_prices
 from backend.services.position_timing.intraday.replay import FileRef
@@ -51,7 +51,7 @@ def implementation_identity():
 
 def _pins(*values):
     unique = {}
-    for source in adverse._file_refs(values):
+    for source in adverse._file_refs(payload(values)):
         require(Path(source.path).is_absolute(), 'RELATIVE_SOURCE')
         require(source.path not in unique or unique[source.path] == source, 'SOURCE_PIN_CONFLICT')
         unique[source.path] = source
@@ -147,7 +147,24 @@ def freeze(*, source_delivery: FileRef, output_root: Path, producer_commit: str)
             'trade_days': 17, 'native_targets': 850, 'account_replay_started': False}
 
 
-def _request_scope(request_ref):
+def _producer_identity(request, producer_source_seal):
+    current = implementation_identity()
+    if producer_source_seal is None:
+        require(request['source_identity'] == current, 'REQUEST_BINDING')
+        return
+    seal = read(producer_source_seal)
+    runner = 'backend/services/simulation_execution/localsim/natural_period_research.py'
+    files = {row['path']: row for row in seal['files']}
+    require(seal['schema_version'] == 'localsim_windows_to_wsl_source_seal_v1'
+            and seal['producer_source_commit'] == request['producer_source_commit']
+            and seal['validated_against_git_blobs'] is True and seal['normalization'] == 'CRLF_TO_LF_ONLY'
+            and files[runner]['sha256'] == request['source_identity']['natural_runner']
+            and set(request['source_identity']) == set(current)
+            and all(request['source_identity'][key] == value for key, value in current.items() if key != 'natural_runner'),
+            'PRODUCER_CORE_IDENTITY')
+
+
+def _request_scope(request_ref, *, producer_source_seal=None):
     r = read(request_ref)
     require(r['schema_version'] == REQUEST_SCHEMA and r['scope'] == SCOPE
             and r['identity'] == digest({k: v for k, v in r.items() if k not in {'identity', 'release_identity'}})
@@ -160,10 +177,10 @@ def _request_scope(request_ref):
     require(all(r[k] == v for k, v in contract['request_frozen_fields'].items())
             and r['producer'] == 'LOCALSIM' and re.fullmatch('[0-9a-f]{40}', r['producer_source_commit'])
             and r['old_b0_c2_reuse'] is r['automatic_economic_recompute'] is False
-            and r['source_identity'] == implementation_identity()
             and r['base_timing_source_commit'] == r['timing_source_commit'] == base['timing_source_commit']
             and r['p2_control_spec'] == r['control']
             and r['p2_timing_source_commit'] == r['control']['source_commit'], 'REQUEST_BINDING')
+    _producer_identity(r, producer_source_seal)
     return r
 
 
@@ -173,6 +190,13 @@ def _raw_source(request_ref, request, inspected):
         'source_identity': request['source_identity'], 'source_delivery': request['source_delivery'],
         'source_refs': [r.model_dump() for r in inspected['source_refs']], 'new_period_outcomes_read': False,
         'jan_september_account_days_recomputed': 0, 'old_b0_c2_reuse': False}
+
+
+def _required_source_pins(request):
+    return _pins(request['source_delivery'], request['consumer_contract'], request['preflight'],
+        request['preparation_request'], request['price_manifest'], request['price_templates'],
+        request['candidate_manifest'], request['cost_policy'], request['initial_accounts'],
+        request['base_history_plan'])
 
 
 def _projection(request_ref, request, accounts, input_refs):
@@ -232,6 +256,8 @@ def run(request_ref: FileRef, *, performance=None, stop_after_account_days=None)
                 'RUN_SOURCE_BINDING')
         require(all(request[k] == d[k] for k in ('consumer_contract', 'input_preparation_delivery', 'price_manifest')),
                 'RUN_DELIVERY_BINDING')
+        require(all(source in inspected['source_refs'] for source in _required_source_pins(request)),
+                'RAW_SOURCE_CLOSURE')
         publish(root/'raw_source_inspection.json', _raw_source(request_ref, request, inspected))
         openings = c['openings']
         controls = {a['account_id']: a['rule'] for a in openings if a['arm_id'] in {'W15', 'P2'}}
@@ -264,23 +290,70 @@ def run(request_ref: FileRef, *, performance=None, stop_after_account_days=None)
                 'verified_account_days': count, 'recomputed_account_days': result['recomputed'], 'performance': metrics}
 
 
-def _inspect_completed(request_ref, *, allow_prefix=False):
+def _source_pin_supplement(request_ref, request, raw_ref, raw, producer_source_seal):
+    """Restore only delivery metadata omitted by the typed-pin collector.
+
+    The producer's request, raw inspection, journals and facts stay immutable.
+    A sealed historical producer and identical native/facade code are required;
+    this path never admits computation under a different request identity.
+    """
+    delivery = read(request['source_delivery'])
+    original = [FileRef.model_validate(r) for r in raw['source_refs']]
+    restored = _pins(original, request['source_delivery'], delivery)
+    require(all(source in restored for source in _required_source_pins(request)), 'UNREPAIRABLE_SOURCE_CLOSURE')
+    additions = [r for r in restored if r not in original]
+    require(bool(additions), 'SOURCE_SUPPLEMENT_NOT_REQUIRED')
+    return {'schema_version': 'localsim_natural_period_source_pin_supplement_v1',
+        'producer_request': request_ref.model_dump(), 'producer_raw_source_inspection': raw_ref,
+        'producer_source_seal': FileRef.model_validate(producer_source_seal).model_dump(),
+        'producer_source_identity': request['source_identity'], 'reader_source_identity': implementation_identity(),
+        'reason': 'TYPED_DELIVERY_METADATA_REFS_OMITTED_FROM_SERIALIZED_PIN_LIST',
+        'stage': 'COMPLETE_SOURCE_BATCH_REINSPECTED_BEFORE_ACCOUNT_FACT_READ',
+        'source_refs': [r.model_dump() for r in restored], 'restored_delivery_metadata_refs': [r.model_dump() for r in additions],
+        'native_and_facade_source_identity_unchanged': True, 'account_days_recomputed': 0,
+        'new_economic_commits': 0, 'economic_confirmation': False}
+
+
+def supplement_source_pins(request_ref, *, producer_source_seal):
+    """Publish an explicit immutable metadata supplement; never read day NAV."""
+    request = _request_scope(request_ref, producer_source_seal=producer_source_seal)
+    root = Path(request_ref.path).parent
+    with FileLock(root/'study-writer.lock', timeout=0):
+        raw_ref = ref(root/'raw_source_inspection.json')
+        raw = read(raw_ref)
+        require(raw == _raw_source(request_ref, request,
+            {'source_refs': [FileRef.model_validate(r) for r in raw['source_refs']]}), 'RAW_SOURCE_BINDING')
+        body = _source_pin_supplement(request_ref, request, raw_ref, raw, producer_source_seal)
+        _verify([FileRef.model_validate(r) for r in body['source_refs']])
+        path = root/'source_pin_supplements'/(digest(body)+'.json')
+        publish(path, body)
+        return ref(path)
+
+
+def _inspect_completed(request_ref, *, allow_prefix=False, producer_source_seal=None, source_pin_supplement=None):
     """Hash source/artifact bytes and reconcile native facts; never run strategies."""
-    request = _request_scope(request_ref)
+    request = _request_scope(request_ref, producer_source_seal=producer_source_seal)
     root = Path(request_ref.path).parent
     raw = read(ref(root/'raw_source_inspection.json'))
     require(raw['schema_version'] == 'localsim_natural_period_raw_source_inspection_v1'
             and raw['stage'] == 'COMPLETE_SOURCE_BATCH_INSPECTED' and raw['producer_request'] == request_ref.model_dump()
             and raw['source_identity'] == request['source_identity'] and raw['new_period_outcomes_read'] is False,
             'RAW_SOURCE_BINDING')
+    if (root/'result_receipt.json').exists():
+        marker = read(ref(root/'result_receipt.json'))
+        require(marker['producer_request'] == request_ref.model_dump()
+                and marker['raw_source_inspection'] == ref(root/'raw_source_inspection.json'), 'RAW_SOURCE_BINDING')
     input_refs = [FileRef.model_validate(r) for r in raw['source_refs']]
-    require(bool(input_refs) and raw == _raw_source(request_ref, request, {'source_refs': input_refs})
-            and all(source in input_refs for source in _pins(
-                request['source_delivery'], request['consumer_contract'], request['preflight'],
-                request['preparation_request'], request['price_manifest'], request['price_templates'],
-                request['candidate_manifest'], request['cost_policy'], request['initial_accounts'],
-                request['base_history_plan'])), 'RAW_SOURCE_CLOSURE')
-    _verify(input_refs)
+    require(bool(input_refs) and raw == _raw_source(request_ref, request, {'source_refs': input_refs}), 'RAW_SOURCE_CLOSURE')
+    if source_pin_supplement is None:
+        require(all(source in input_refs for source in _required_source_pins(request)), 'RAW_SOURCE_CLOSURE')
+        _verify(input_refs)
+    else:
+        require(producer_source_seal is not None, 'SUPPLEMENT_REQUIRES_PRODUCER_SEAL')
+        supplement = read(source_pin_supplement)
+        require(supplement == _source_pin_supplement(request_ref, request,
+            ref(root/'raw_source_inspection.json'), raw, producer_source_seal), 'SOURCE_SUPPLEMENT_BINDING')
+        _verify([FileRef.model_validate(r) for r in supplement['source_refs']])
     openings = [read(r) for r in request['initial_accounts']]
     accounts = shared._account_refs(root, request, openings, allow_prefix=allow_prefix)
     if allow_prefix and not (root/'result_receipt.json').exists():
@@ -299,20 +372,27 @@ def _inspect_completed(request_ref, *, allow_prefix=False):
             'verified_account_days': count, 'computed_account_days': 0, 'recomputed_account_days': 0}
 
 
-def inspect(request_ref, *, allow_prefix=False):
-    return _inspect_completed(request_ref, allow_prefix=allow_prefix)
+def inspect(request_ref, *, allow_prefix=False, producer_source_seal=None, source_pin_supplement=None):
+    return _inspect_completed(request_ref, allow_prefix=allow_prefix,
+        producer_source_seal=producer_source_seal, source_pin_supplement=source_pin_supplement)
 
 
-def exact_artifact_retry(request_ref):
-    _request_scope(request_ref)
+def exact_artifact_retry(request_ref, *, producer_source_seal=None, source_pin_supplement=None):
+    _request_scope(request_ref, producer_source_seal=producer_source_seal)
     root = Path(request_ref.path).parent
     with FileLock(root/'study-writer.lock', timeout=0):
-        verified = _inspect_completed(request_ref)
+        verified = _inspect_completed(request_ref, producer_source_seal=producer_source_seal,
+            source_pin_supplement=source_pin_supplement)
         body = {'schema_version': 'localsim_natural_period_artifact_retry_v1',
             'status': 'EXACT_ARTIFACT_RETRY_VERIFIED', 'producer_request': request_ref.model_dump(),
             **{k: verified[k] for k in ('facts', 'source_inspection')}, 'verified_account_days': 68,
             'recomputed_account_days': 0, 'new_committed_account_days': 0,
             'jan_september_account_days_recomputed': 0, 'market_inputs_recomputed': False,
             'producer_economic_retry': 'NOT_SUPPLIED'}
+        if source_pin_supplement is not None:
+            body.update(producer_source_seal=FileRef.model_validate(producer_source_seal).model_dump(),
+                source_pin_supplement=FileRef.model_validate(source_pin_supplement).model_dump(),
+                inspection_reader_source_identity=implementation_identity(),
+                producer_metadata_defect='EXPLICIT_IMMUTABLE_DELIVERY_PIN_SUPPLEMENT_NO_ECONOMIC_REPLAY')
         publish(root/'artifact_retry_receipt.json', body)
         return {**body, 'artifact_retry_receipt': ref(root/'artifact_retry_receipt.json')}

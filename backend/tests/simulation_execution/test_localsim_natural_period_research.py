@@ -254,3 +254,84 @@ def test_natural_price_view_reuses_same_generic_validator_without_old13_alias(tm
     c['delivery']['preflight']=preflight_ref.model_dump()
     with pytest.raises(ValueError,match='NATURAL_PRICE_CONTEXT'):
         campaign.inspect_price_templates(source,templates_ref,natural_context=c)
+
+
+def test_typed_delivery_references_survive_source_closure_merge(tmp_path):
+    delivery=FileRef.model_validate(put(tmp_path/'delivery.json',{'fixture':'delivery'}))
+    contract=FileRef.model_validate(put(tmp_path/'contract.json',{'fixture':'contract'}))
+    existing=FileRef.model_validate(put(tmp_path/'existing.json',{'fixture':'existing'}))
+    merged=study._pins([delivery,contract],{'refs':[existing.model_dump(),delivery]})
+    assert set(merged)=={delivery,contract,existing}
+    with pytest.raises(ValueError,match='SOURCE_PIN_CONFLICT'):
+        study._pins([delivery],{'path':delivery.path,'sha256':'0'*64})
+
+
+def test_missing_delivery_pin_fails_before_market_or_account_execution(natural,monkeypatch):
+    request_ref,_,_=natural
+    request=study.read(request_ref)
+    inspected=study._sources(None)[3]
+    inspected['source_refs']=[r for r in inspected['source_refs'] if r.path!=request['source_delivery']['path']]
+
+    def forbidden(*args,**kwargs):
+        pytest.fail('incomplete source closure entered account or market preparation')
+
+    monkeypatch.setattr(study,'CandidateReader',forbidden)
+    monkeypatch.setattr(dual,'execute_account_days',forbidden)
+    with pytest.raises(ValueError,match='RAW_SOURCE_CLOSURE'):
+        study.run(request_ref)
+    root=Path(request_ref.path).parent
+    assert not (root/'raw_source_inspection.json').exists() and not (root/'journals').exists()
+
+
+def test_sealed_producer_metadata_supplement_preserves_native_days_without_replay(natural,tmp_path,monkeypatch):
+    request_ref,_,_=natural
+    request=study.read(request_ref)
+    inspected=study._sources(None)[3]
+    omitted={request[k]['path'] for k in ('source_delivery','consumer_contract')}
+    inspected['source_refs']=[r for r in inspected['source_refs'] if r.path not in omitted]
+    required=study._required_source_pins
+    # Reproduce the old producer's admission defect, then inspect with the fixed
+    # reader. Native quantity, fee, matching and journal routines remain real.
+    monkeypatch.setattr(study,'_required_source_pins',lambda *_:[])
+    result=study.run(request_ref,performance=ResearchPerformanceOptions(optimized=True))
+    assert result['verified_account_days']==68
+    monkeypatch.setattr(study,'_required_source_pins',required)
+    producer=deepcopy(request['source_identity'])
+    reader=deepcopy(producer)
+    reader['natural_runner']='e'*64
+    monkeypatch.setattr(study,'implementation_identity',lambda:reader)
+    seal=put(tmp_path/'producer_seal.json',{'schema_version':'localsim_windows_to_wsl_source_seal_v1',
+        'producer_source_commit':request['producer_source_commit'],'validated_against_git_blobs':True,
+        'normalization':'CRLF_TO_LF_ONLY','files':[{
+            'path':'backend/services/simulation_execution/localsim/natural_period_research.py',
+            'sha256':producer['natural_runner']}]})
+    with pytest.raises(ValueError,match='REQUEST_BINDING'):
+        study.inspect(request_ref)
+    with pytest.raises(ValueError,match='RAW_SOURCE_CLOSURE'):
+        study.inspect(request_ref,producer_source_seal=seal)
+    root=Path(request_ref.path).parent
+    before={p:(p.read_bytes(),p.stat().st_mtime_ns) for p in root.rglob('*.json')}
+
+    def forbidden(*args,**kwargs):
+        pytest.fail('sealed artifact inspection entered economic or market computation')
+
+    monkeypatch.setattr(study,'CandidateReader',forbidden)
+    monkeypatch.setattr(study,'_sources',forbidden)
+    monkeypatch.setattr(dual,'execute_account_days',forbidden)
+    monkeypatch.setattr(dual,'_compute_account_day',forbidden)
+    supplement=study.supplement_source_pins(request_ref,producer_source_seal=seal)
+    metadata=study.read(supplement)
+    assert {r['path'] for r in metadata['restored_delivery_metadata_refs']}==omitted
+    options={'producer_source_seal':seal,'source_pin_supplement':supplement}
+    assert study.inspect(request_ref,**options)['verified_account_days']==68
+    retry=study.exact_artifact_retry(request_ref,**options)
+    assert retry['verified_account_days']==68 and retry['recomputed_account_days']==retry['new_committed_account_days']==0
+    assert study.exact_artifact_retry(request_ref,**options)==retry
+    assert all((p.read_bytes(),p.stat().st_mtime_ns)==value for p,value in before.items())
+    assert study.read(request_ref)==request
+    with pytest.raises(ValueError,match='REQUEST_BINDING'):
+        study.run(request_ref)
+    monkeypatch.setattr(study,'_verify_days',forbidden)
+    reader['shared_account_engine']={'changed_economic_engine':True}
+    with pytest.raises(ValueError,match='PRODUCER_CORE_IDENTITY'):
+        study.inspect(request_ref,**options)
