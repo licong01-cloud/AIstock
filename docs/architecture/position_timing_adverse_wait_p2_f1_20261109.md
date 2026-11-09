@@ -1,6 +1,6 @@
 # P2：不利方向持续移动时提前结束等待
 
-日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：SOFTWARE_AND_INPUTS_VERIFIED_LOCALSIM_PENDING。
+日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：RESULTS_VERIFIED_EXPLORATORY_NOT_PROMOTED。
 
 ## Background
 
@@ -9,8 +9,8 @@
 
 ## Scope
 
-本窗口交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner另行执行新P2账户181日，并交回事实后由择时继续经济分析。
-允许写入以下7个文件；operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
+本设计初次交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner随后在#7150完成新P2账户181日。当前择时只消费交回事实继续经济分析，不重新回放账户。
+纯函数交付允许写入以下7个文件；该次operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
 
 - `backend/services/position_timing/intraday/adverse_wait_control.py`
 - `backend/services/position_timing/intraday/adverse_wait_research.py`
@@ -19,6 +19,8 @@
 - `docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md`
 - `docs/architecture/position_timing_wait_budget_control_f1_20261106.md`
 - `docs/architecture/position_timing_intraday_advice_localsim_blueprint_f2_20261023.md`
+
+LocalSIM #7150交付后，追加结果消费范围为`backend/services/position_timing/intraday/adverse_wait_results.py`、`backend/tests/position_timing/test_intraday_adverse_results.py`及上述两份设计文档；本次operator和不可变分析证据仅在`X:/AIstock_temp/position-timing-p2-analysis-20261109/`。不修改原7个文件中的算法、来源冻结或统计实现，以免改变既有plan的implementation closure。
 复用core.evaluate、分钟/日级合同、CandidateReader、交易分钟时钟、freeze、原history来源预检；不修改旧core、W15、原统计函数或其冻结implementation closure，不另建Reader、撮合、账本或研究平台。
 
 ## Non-goals
@@ -56,9 +58,16 @@ LocalSIM新请求schema为`localsim_adverse_wait_history_request_v1`，绑定pla
 主比较P2−W15，次比较P2−C2、P2−B0，共3项新增比较。沿用同初始资本成本后PnL/收益、全分钟NAV正向MDD、费用和BUY/SELL全部父计划分母；月/季按各自上期期末NAV承接。5交易日循环区块bootstrap、2000次、seed=20261107，报告每日配对净PnL差/共同初始资本的nominal 95%和三比较Bonferroni区间；不把它称为累计收益/MDD区间。
 不挑月份、指数或成交子集做晋升，未成交保留；预算前机会、实际派单、成交分别报告。数据已被用于前轮机制研究，所有新结果属于探索性历史研究。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false；软件通过不晋升规则，不设置MDE、自然日等待或盈利准入。
 
+### 6. P2事实消费与不可变分析
+
+LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_delivery_receipt_r1.json`，完整SHA256为`f2af7d04c9bb4c655cbc926552f67fb794dd1b3dd9a21465a05e8d3fcccc9206`；#7150已完成单P2的181日及inspect/artifact exact retry，旧543日只读复用。此事实不代表经济有效。
+`AdverseAnalysisSpec`仅绑定该交付FileRef；新入口核验plan、candidate/价集/费用/包/selection身份、原三户及新一户的opening/有序days、producer request、来源检查、共享经济兼容证据、release FileRef和artifact retry。全部来源内容SHA通过后才解析P2 NAV；分析结束前再次核验来源，漂移不发布报告。不导入LocalSIM内部实现、不运行账户或重建模板。
+统计复用现有`period_account_rows`、`period_panels`和单户诊断；新模块固定三项P2比较及同规格区块区间，不修改原三户分析器或其closure。全期、月、季报告全部四户和三个比较；各期承接本户上期期末NAV，MDD使用完整分钟观察而非仅日终。BUY/SELL完整父计划分母保留，释放证据、提交/派单/成交区分，缺失暴露/生命周期明确UNAVAILABLE/UNKNOWN。producer经济重算未提供不是失败，不发起重算。
+报告绑定spec、全部来源FileRef及分析实现身份；同输入exact retry返回相同报告FileRef，已有产物不覆盖。独立Decimal复算收益、费用、分钟MDD和月季承接；软件及来源验收与探索性经济结论分开记录。
+
 ## Implementation Plan
 
-一个交付块完成本窗口：冻结本设计→纯函数/plan实现和定向验证→真实冻结来源prepare/inspect/exact retry与LocalSIM交接。账户经济验证由LocalSIM接入后继续，不新增细碎阶段或基础设施。
+初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，本次一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry；不新增细碎阶段或基础设施。
 
 ## Verification Plan
 
@@ -86,22 +95,30 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-507 | 单一新181日账户与旧三户只读对照，owner边界明确 |
 | F-508 | 真实来源及前缀机制验收、inspect和exact retry |
 | F-509 | 研究SDK隔离、无订单/服务/DB/旧资产写入 |
+| F-510 | 单P2及原三户完整来源先验、身份/顺序/内容漂移fail-closed |
+| F-511 | 四户全期/月/季、三个冻结比较与区块区间，无收益回选 |
+| F-512 | 全父计划诊断、机会/派单/成交分离，未知不补造 |
+| F-513 | 不可变分析exact retry与独立统计复算，无账户重放 |
 
 ## Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-501 | 本文Contracts-1/5 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
+| F-501 | 本文Contracts-1/5；backend/services/position_timing/intraday/adverse_wait_control.py | backend/tests/position_timing/test_intraday_adverse_wait.py | VERIFIED | none |
 | F-502 | backend/services/position_timing/intraday/adverse_wait_control.py | backend/tests/position_timing/test_intraday_adverse_wait.py | VERIFIED | none |
 | F-503 | backend/services/position_timing/intraday/adverse_wait_control.py | backend/tests/position_timing/test_intraday_adverse_wait.py | VERIFIED | none |
 | F-504 | backend/services/position_timing/intraday/adverse_wait_control.py | backend/tests/position_timing/test_intraday_adverse_wait.py | VERIFIED | none |
 | F-505 | backend/services/position_timing/intraday/adverse_wait_control.py | backend/tests/position_timing/test_intraday_adverse_wait.py | VERIFIED | none |
 | F-506 | backend/services/position_timing/intraday/adverse_wait_research.py | backend/tests/position_timing/test_intraday_adverse_wait.py；artifact:X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/validation_receipt.json | VERIFIED | none |
-| F-507 | 本文Contracts-3/4 | artifact:docs/architecture/position_timing_adverse_wait_p2_f1_20261109.md | DESIGN_VERIFIED | none |
+| F-507 | 本文Contracts-3/4/6 | artifact:X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_delivery_receipt_r1.json | VERIFIED | none |
 | F-508 | backend/services/position_timing/intraday/adverse_wait_research.py | artifact:X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/validation_receipt.json | VERIFIED | none |
 | F-509 | backend/services/position_timing/intraday/adverse_wait_control.py；test_isolation.py | backend/tests/position_timing/test_isolation.py | VERIFIED | none |
+| F-510 | backend/services/position_timing/intraday/adverse_wait_results.py | backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
+| F-511 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/verify_receipt.json；artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/interval_verification.json | VERIFIED | none |
+| F-512 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/mechanism_analysis.json；backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
+| F-513 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/retry_receipt.json；backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
 
-## 本窗口实施与交接证据
+## 初次纯函数实施与交接证据
 
 实现源码commit `f02cf9358a463cebd3043bf4813886864360ea51`。旧core/W15/history/统计函数没有修改，其原plan与报告closure仍通过。新增19项定向测试、最终相关小矩阵40项通过；Ruff和等价changed-file L0两项扫描均0 findings。L0直接调用与nox相同的两项scanner，输出到X盘；nox没有RTK wrapper，且默认输出路径在F盘。classifier为targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。当前Agent完成正确性及完整性两轮自审，不声称独立review。
 
@@ -113,6 +130,48 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 
 WSL离线验收覆盖预声明8条机会流、1896次前缀评估、8次未过滤未来输入拒绝，24份实际消费市场文件pin复核通过。所有合法前缀在未来尾部价格扰动下的decision/state完全一致。8条工程流的首次释放均为BUDGET；真实小样本未出现提前信号，不换股或调5根窗口。ADVERSE_PREFIX正向及锁定分支由定向测试覆盖，不宣称已有真实提前成交或收益证据。
 
-本窗口没有创建/重跑任何账户；新P2完成0/181日、旧三户重算0/543。LocalSIM接入和经济评价仍待其owner完成，不影响已交付的纯函数、真实来源和只读plan验收；不把F-507 DESIGN_VERIFIED称为消费者已接入。
+截至初次纯函数交付，本窗口没有创建/重跑任何账户；当时新P2完成0/181日、旧三户重算0/543。该历史状态不代表当前进度：LocalSIM #7150已交付181/181日，当前择时执行Contracts-6结果消费；后续经济结论另记，不把当时F-507 DESIGN_VERIFIED称为消费者已接入。
 
-消费命令：`python -m backend.services.position_timing.intraday.adverse_wait_research inspect --spec <上述plan绝对路径> --spec-sha256 89cc858463058cb7e2445285a7373f4ac13096019766058ef160f57e236a3fa9 --timing-root <独立X盘根>`。WSL将X:/改为/mnt/x/，不改JSON内的冻结FileRef。公共函数为`adverse_wait_control.evaluate_adverse_wait`及模型、`adverse_wait_research.inspect_adverse_plan`；后者只读返回完整输入和来源身份，不生成请求/账户。LocalSIM按Contracts-4接入后返回单P2账户181日及兼容/来源/重试回执；随后择时按Contracts-5完成三比较，不等待后端重启。
+原plan消费命令：`python -m backend.services.position_timing.intraday.adverse_wait_research inspect --spec <上述plan绝对路径> --spec-sha256 89cc858463058cb7e2445285a7373f4ac13096019766058ef160f57e236a3fa9 --timing-root <独立X盘根>`。WSL调用路径使用/mnt/x/，不改冻结JSON/FileRef。公共函数为`adverse_wait_control.evaluate_adverse_wait`及模型、`adverse_wait_research.inspect_adverse_plan`；后者只读返回完整输入和来源身份，不生成请求/账户。LocalSIM已按Contracts-4返回单P2账户181日及兼容/来源/重试回执；择时按Contracts-5/6消费，不等待后端重启。
+
+## 2026-11-09：724账户日经济分析与交付
+
+结果消费源码commit为`26d29a1d48bc16541182637b25b6ba75d5630e3e`，与原P2算法及底层B0 commit分别绑定。只新增结果消费入口与直接测试、更新本设计和日内蓝图；未修改任何旧算法、原分析器/closure或LocalSIM代码。来源检查覆盖8,808个完整内容引用，全部通过后首次解析P2 NAV，发布前再次检查；无账户回放、数据库、行情网络或服务操作。
+独立Decimal复算全部724账户日、172,312条已发布分钟NAV观察（冻结终点14:57）、36个月度及12个季度面板的收益/费用/MDD/承接，全部一致；旧三户rows和panels与原报告完全相同。三个区块区间另以独立逐次采样循环和fmean复算，一致至1e-12。报告exact retry为ALREADY_MATERIALIZED、FileRef完全相同，账户重算/新增经济提交为0。
+
+共同期初1000万元、空仓、零追加资金；成本后结果如下。所有回撤均为正向峰谷比例，不是日终抽样回撤。
+
+| 规则 | 全期净PnL（元） | 收益 | 分钟MDD | 费用（元） |
+|---|---:|---:|---:|---:|
+| B0 | -260,607.82 | -2.6061% | 25.9525% | 381,751.27 |
+| W15 | 203,580.48 | 2.0358% | 23.5706% | 372,733.95 |
+| C2 | 323,814.57 | 3.2381% | 23.0800% | 323,281.72 |
+| P2 | 301,679.90 | 3.0168% | 24.0973% | 380,866.31 |
+
+| 比较 | 净增量（元） | 收益差（bps） | MDD降低（百分点） | 校正区块区间（bps/日） |
+|---|---:|---:|---:|---:|
+| P2−W15（主） | 98,099.42 | 98.0994 | -0.5267 | [-0.9906, 2.0875] |
+| P2−C2 | -22,134.67 | -22.1347 | -1.0173 | [-2.3733, 2.1281] |
+| P2−B0 | 562,287.72 | 562.2877 | 1.8552 | [0.3160, 5.8473] |
+
+区间估计对象严格为每日配对净PnL差/共同初始资本，不是全期收益或MDD区间。P2−W15仅4/9个月净差为正；8月贡献110,697.13元，其余8个月合计-12,597.71元。季度净差Q1为20,148.73元、Q2为-30,760.42元、Q3为108,711.11元。P2−C2也是4/9个月为正；P2−B0为7/9个月、3/3季度为正。完整四户月季收益/费用/MDD和三项逐期比较全部保留于报告，不以月份或子集回选政策。
+
+机制证据：P2共6,419父计划（BUY 3,355、SELL 3,064），6,416个有控制状态的修订中791次ADVERSE_PREFIX、5,596次BUDGET、29次未释放。791个预算前首次机会对应791父计划，783个曾模拟派单，684个在15交易分钟前派单、681个在该时限前首次模拟成交；C2对应1214/104/44/42，均按各自完整人口报告，不作数量匹配或因果提升倍数。固定8条工程流全部走预算的历史证据仍保留；全研究观察到791个提前机会来自不同的预冻结人口，不是回选工程样本。
+P2有成交父计划5,998/6,419，W15为5,896/6,435，C2为5,115/6,586。P2较C2费用增加57,584.59元，净差反为-22,134.67元；加回费用差后为35,449.92元，只是账户算术分解，不是纯价格alpha。P2相对W15的同目标数量且双方全成子集，BUY/SELL条件价格改善为12,719.83/35,393.62元（958/957对）；该子集有选择偏差，不能替代完整账户比较。P2派单后的首次成交中位数50秒；派单排队和信号等待分别统计，P2就绪至派单中位数720秒，仅以已派单SUBMIT为分母。盘中时间加权暴露仍UNAVAILABLE；日终现金比例均值P2为8.7927%，不作其替代。完整失效转换原因保留UNKNOWN，不把OPPORTUNITY_WAIT推断为TTL原因。
+
+结论：P2在模拟中确实实现提前执行，但本轮没有证明其优于W15或C2；相对C2收益和MDD点估计均较差，相对W15净差集中且校正区间跨零。不晋升、不替换线上规则；保留C2研究候选、W15简单对照、B0执行基准及冻结P2证据。下一步优先解释既有四户的月份集中、费用与排队交互，不扫5根/15分钟阈值、不立即增加模型。若扩期，必须沿四户各自真实期末承接，不能直接拼接此前从共同B0 opening起跑的10月三户研究；后续历史扩展仍不得冒称未见样本。
+
+### 冻结证据与复现入口
+
+根目录`X:/AIstock_temp/position-timing-p2-analysis-20261109/`，WSL对应`/mnt/x/AIstock_temp/position-timing-p2-analysis-20261109/`。同一文件映射不改写任何既有JSON或FileRef。
+
+- `analysis_spec_wsl.json`：完整SHA `48b9f3ba1f691986eab560bbeaeda4796b43199b2f08a263823dad9a10370273`。
+- 正式报告：`artifacts/intraday_v1/adverse_wait_analyses/f2d1a39d152cfec515975b5d195c79eae7c2589994abce80a2408cf8c30ea956.json`，完整SHA `5a610f5e33bc7dd4975d7d8b54b0fda8da5e53205f26b8efe0d8fab09390887e`。
+- `verify_receipt.json`：完整SHA `f07204839b7e27880af22404e867cf26ce2ce519fd0f129339962582c5a3f4c7`。
+- `interval_verification.json`：完整SHA `545724bac4d9e13c06762cae35322c82a7e32d0c499b43da2d28e467087ae4a3`。
+- `mechanism_analysis.json`：完整SHA `d4b8dd248676b29e46323bb7779a7e9132583f0c3630550fd28a69beb1b18f00`。
+- `retry_receipt.json`：完整SHA `6d47d5f11294ceed8fe0140699287408fee6fc19aa3e535de33e116bc10e63ef`。
+
+正式CLI：`python -m backend.services.position_timing.intraday.adverse_wait_results analyze --spec <analysis_spec_wsl绝对路径> --spec-sha256 48b9f3ba1f691986eab560bbeaeda4796b43199b2f08a263823dad9a10370273 --timing-root <独立结果根>/artifacts`；同入口`inspect`只做来源检查、不读P2 NAV。报告以NumPy 2.2.5在WSL生成，版本写入报告，不修改原统计函数。
+初次报告已原子发布，临时operator封装环境信息时`platform.platform()`拟调用uname子进程，被离线guard拒绝；仅改为不启动子进程的系统信息读取，按唯一已发布报告恢复回执。随后独立复算和exact retry均通过，未重算账户、覆盖报告或改变策略。回执保留首轮operator SHA及恢复原因。
+当前Agent完成正确性、来源/前缀与完整性多轮自审，未声称独立agent审核。10项直接测试、45项相关矩阵、Ruff及两项changed-file L0均通过；classifier保持targeted_ci_required、workflow_gate=passed、unexecuted_test_files=[]。F1共13项与F2共12项验证通过；源码PR #7158的最终CI/合入及root同步以`source_delivery_receipt_r1.json`记录为准，源代码合入、线上激活及经济确认分别报告。
