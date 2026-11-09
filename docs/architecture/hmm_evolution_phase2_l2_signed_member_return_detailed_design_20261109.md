@@ -1,6 +1,6 @@
 # 申万L2固定成员组合有符号收益：目标对齐与匹配对照
 
-> v1.0；2026-11-09；F2；父蓝图§1.32/§7。当前状态：`CONTRACT_APPROVED_SOURCE_IMPLEMENTED_PENDING_DELIVERY`。用户在P0设计交付后明确“批准执行下一步”，批准下述 `L2-SIGNED-MEMBER-D1～D6`及10次新增fit整包，公式与预算不变。已展开源码及直接测试，正式预检/训练须待固定clean交付HEAD；新增正式fit=0，正式推断=0。源码/CI/研究效果分开，不恢复VIX持仓规则，不安排QE账户或生产接入。
+> v1.1；2026-11-09；F2；父蓝图§1.32/§7。当前状态：`RESEARCH_COMPLETE_STOP_NO_INCREMENTAL_ORDERING`。已按批准的L2-SIGNED-MEMBER-D1～D6完成源码、完整三季度文件预检、10/10新增fit、双fresh-process模型/预测封存及评价。两臂各142日×131=18,602行预测完整；L2主量及真实新买队列均未显示正向增量，按原规则停止本精确候选，不安排新QE/生产采用。正式研究源码HEAD为8f0a44dad48497ef5ce2cdaa0ded54831e56d684；完整结果见§11.1，以下合同公式/预算/停止条件原样保留。
 
 ## 1. Background / 唯一问题与历史去重
 
@@ -59,7 +59,7 @@ S=`sum(w_i*R_i)=U-C`，币值单位为收益小数；不减CSI300、不做截面
 
 每vintage先按 `pos(t)+10<=pos(train_end)`裁剪再读取训练标签，模型不得反向用于更早季度。request保留2026-04-01..10-30全部142日×131=18,602键；10月底尚未成熟的10日也必须预测/报告状态，不能缩为可评价区间。整体132个日期具有日历上的10日成熟端点，实际可评价集合再按合法NA逐键报告；Q4仅7个成熟日期不是独立强证据。
 
-训练前一次完整file-only preflight，覆盖三vintage所需历史和预热，构造共同键、身份和所有必要标签；禁止fit边跑边补输入。可复用§1.1已匹配的Q4缓存，不要求重新导出或全量重建。Q2/Q3新增训练载体尚未完成；若当前文件不能闭合，列精确组件/日期/行业owner，停止而非切旧数据或调整窗口。
+训练前一次完整file-only preflight，覆盖三vintage所需历史和预热，构造共同键、身份和所有必要标签；禁止fit边跑边补输入。可复用§1.1已匹配的Q4缓存，不要求重新导出或全量重建。Q2/Q3新增训练载体已完成并通过正式预检，实际样本/排除数见§11.1；若未来复核文件不能闭合，列精确组件/日期/行业owner，停止而非切旧数据或调整窗口。
 
 ## 5. Contracts D3 / L2-SIGNED-MEMBER-D3：公平对照与10-fit上限
 
@@ -110,7 +110,7 @@ Q4 C不重训：严格复用 `F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106
 
 ## 8. Contracts D6 / L2-SIGNED-MEMBER-D6：一个完整工作包
 
-批准后在一个连续包内完成源码、反例测试、至少两轮作者审核修复、最小门禁/CI、固定源码预检、10-fit及零fit对照评价、完整结果/停止建议与父蓝图状态同步；不把CLI、测试、PR各拆研发阶段。按预算失败即停止，不为时长凑实验。P0完成，当前已获精确批准并实施源码；实际训练仍为0/10，交付后执行。
+批准后在一个连续包内完成源码、反例测试、至少两轮作者审核修复、最小门禁/CI、固定源码预检、10-fit及零fit对照评价、完整结果/停止建议与父蓝图状态同步；不把CLI、测试、PR各拆研发阶段。按预算失败即停止，不为时长凑实验。P0、源码交付、正式预检和10/10 fit、封存预测及评价均已完成，结果触发§7.3既定停止条件。本包结束，不追加fit或以另一目录重试。
 
 若到达可讨论QE的线索，仅交明确新版本资产/统计/边界和消费问题；QE负责其接线/实验，荐股和LocalSIM后置。本设计不是它们的消费公式批准。旧生产、preset_A、数据集与active profile不动；本包不为研究技术加载申请重启。
 
@@ -126,11 +126,11 @@ F-011：D1/D3/D5目标、公平比较和资源终态；F-012：D2/D4固定文件
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | backend/services/hmm_risk/risk_l2_member_return.py；risk_l2_loss_severity.py | test: backend/tests/hmm_risk/test_risk_l2_member_return.py；test_risk_l2_loss_severity.py | SOURCE_VERIFIED | 无 |
-| F-012 | backend/services/hmm_risk/risk_l2_member_return.py：load_request/prepare/validate_q4_control | test: backend/tests/hmm_risk/test_risk_l2_member_return.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/prepare_v4/prepared.json | SOURCE_VERIFIED | 无 |
-| F-013 | scripts/hmm_risk/run_risk_l2_member_return.py：prepare/preflight/fit/predict/evaluate | test: backend/tests/hmm_risk/test_risk_l2_member_return.py；§11审核记录 | SOURCE_VERIFIED | 无 |
+| F-011 | backend/services/hmm_risk/risk_l2_member_return.py；risk_l2_loss_severity.py | test: backend/tests/hmm_risk/test_risk_l2_member_return.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261109/evaluation_v1.json | completed | 无 |
+| F-012 | backend/services/hmm_risk/risk_l2_member_return.py：load_request/prepare/validate_q4_control | test: backend/tests/hmm_risk/test_risk_l2_member_return.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261109/preflight_v2.json | completed | 无 |
+| F-013 | scripts/hmm_risk/run_risk_l2_member_return.py：prepare/preflight/fit/predict/evaluate | artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261109/fit_v1/acceptance.json；§11.1 | completed | 无 |
 
-本矩阵验当前源码及直接合同测试，不把源码验收等同于正式研究/经济通过。真实三vintage预检、10-fit、全部预测封存及评价依次运行；后续结果仍未产生，不以fixture代报。授权来自§11用户明确批准，非F2 validator。
+本矩阵的completed表示批准研究包已经完整执行，经济结果触发停止；无实现缺口不等于有经济价值。三vintage预检、10-fit、两process预测和评价依次封存；§11.1记录真实文件结果，非fixture。授权来自§11用户明确批准，F2 validator只检查设计与引用。
 
 ## 10. Risks / Production Gates / Rollout / Rollback
 
@@ -142,12 +142,55 @@ F-011：D1/D3/D5目标、公平比较和资源终态；F-012：D2/D4固定文件
 
 `L2-SIGNED-MEMBER-D1～D6=APPROVED_BY_USER`；2026-11-09用户在P0交付后明确“批准执行下一步”，批准唯一S候选、匹配C及10-fit上限。原P0只授权可行性/设计的历史仍保留。源码交付按AUTO-REVIEW-DELIVERY-001；F2/CI/merge、实际研究和经济采用分别记录。
 
-P0已完成历史去重、Q4 TRAIN代数/共同mask和Q2/Q3旧训练release差异核查。旧C控制训练身份不能改写，Q4可精确复用；未执行新Q2/Q3 prepare、新模型、评价outcome读取或QE/生产动作。设计审修及最终F2结果在本节和PR记录，不另建重复报告。
+P0阶段已完成历史去重、Q4 TRAIN代数/共同mask和Q2/Q3旧训练release差异核查，当时未执行新Q2/Q3 prepare、新模型或评价outcome读取。后续已按批准整包执行，当前以§11.1结果为准；原C模型/训练身份不改写，QE/生产动作保持0。设计审修及最终F2结果在本节和PR记录，不另建重复报告。
 
 第一轮作者审核（非独立第三方）：修正Q2/Q3旧C训练release混杂，改为匹配控制；精确复用Q4避免两次无必要fit；区分raw收益/损失范围及新买复权参考，补充scaler仍行等权。F2初验发现矩阵把“设计提案”混写为未来实现验收，已收敛为文档范围DESIGN_COMPLETE_ONLY、具体可读载体证据和单独待批准/未实现声明，未伪造源码或训练通过。
 
 第二轮作者审核（非独立第三方）：明确未复权价格/除权风险与实际账户回报不同；固定共同mask、C正式clip方向、同分分组、NA日期距离HAC、跨seed去重及阶段终态，禁止事后切换队列/指标/标签。48个精确分数算术用例核对U−C、B和正负/大于1收益；五处父蓝图历史区块/原验收矩阵/旧变更历史自动比对保持。两份F2与diff检查通过；这些是设计算术/文档检查，不是新模型业务测试。DESIGN-COMPLIANCE-001逐项：完整包未被简化或冒报实施；NA/误差/经济失败不掩盖；旧模型/消费/数据及他模块不改；新目标/对照/停止规则均明确作为待批准整包，不作为已生效门禁。最终交付HEAD和CI记录于PR。
 
-本轮源码第一轮作者审核：提取共用Ridge数值核但保留旧loss范围/输出字段，S允许负值和大于1；补齐季度TRAIN隔离、Q4实际scaler/mask一致性、fit前独占attempt和同一prepared预算占用。第二轮作者审核：修正两臂IC均值必须使用共同可定义日期，补齐HAC真实session距离、分数ties、全期/季度误差与组收益、原队列跨seed去重/seed仅诊断、预测物理范围及完整142×131矩阵。24项新直接测试、15项旧loss回归通过，含两fresh-process合成数值核一致性；这些合成测试不计正式研究fit，也不冒充真实模型结果。正式源交付/预检/10-fit继续按本合同执行。
+本轮源码第一轮作者审核：提取共用Ridge数值核但保留旧loss范围/输出字段，S允许负值和大于1；补齐季度TRAIN隔离、Q4实际scaler/mask一致性、fit前独占attempt和同一prepared预算占用。第二轮作者审核：修正两臂IC均值必须使用共同可定义日期，补齐HAC真实session距离、分数ties、全期/季度误差与组收益、原队列跨seed去重/seed仅诊断、预测物理范围及完整142×131矩阵。24项新直接测试、15项旧loss回归通过，含两fresh-process合成数值核一致性；这些合成测试不计正式研究fit，也不冒充真实模型结果。该段保留源码审核时点；后续正式交付/预检/10-fit已完成，见§11.1。
 
-源码最小门禁：Ruff/py_compile、模块归属6/6、validation_module_registry_l0（8项）、L0零finding、fresh-process新service/CLI及hmm_risk/health imports通过。canonical actual changed-files为runtime_impact=backend、target_ids=[backend-main]、catalog_error=null；不降级none，未执行线上激活。独立研究CLI使用交付后clean源码，不要求用户为研究记录重启后端。广域HMM矩阵交CI/Nightly，本地不重跑全量。DESIGN-COMPLIANCE-001逐项：源码覆盖完整批准包而非POC/placeholder；必要缺失/身份/复现失败显式停止，无silent fallback；旧模型/默认消费者/共享数据/其他模块不改；参数/预算/资源停止均来自批准合同，无新增经济门禁。正式研究结果尚未产生，未报告为完成。
+源码交付阶段历史门禁：Ruff/py_compile、模块归属6/6、validation_module_registry_l0（8项）、L0零finding、fresh-process新service/CLI及hmm_risk/health imports通过。canonical actual changed-files为runtime_impact=backend、target_ids=[backend-main]、catalog_error=null；不降级none，未执行线上激活。独立研究CLI使用交付后clean源码，不要求用户为研究记录重启后端。广域HMM矩阵交CI/Nightly，本地不重跑全量。DESIGN-COMPLIANCE-001逐项：源码覆盖完整批准包而非POC/placeholder；必要缺失/身份/复现失败显式停止，无silent fallback；旧模型/默认消费者/共享数据/其他模块不改；参数/预算/资源停止均来自批准合同，无新增经济门禁。该段为源码交付时点；正式研究现已完成，见§11.1。
+
+### 11.1 已执行正式研究及资源终态（2026-11-09）
+
+源码#7170已合入。首次prepare因旧Q4 request指向已清理worktree中的provider文件而在零fit停止；BUG-2206只允许显式同canonical hash定位，保留原request/provider身份，不做fallback。流水线#7175/#7176修正该精确离线reader分类后，修复#7181（e59ad2964b139e43e82c615034b0e2f5d05870de）及close-sync #7182均已合入，BUG关闭。provider canonical SHA仍为494a9b3ff725792592cf668505691e57a000ef10f160015dc3c45c28552565ba；新source_request_v2/request_v2只更新显式locator及对应request身份，缓存/模型/数据集原pins保持。修复的actual runtime_impact=none、target_ids=[]，无需后端重启；原#7170包含共享数值核提取时的backend分类保留为历史，不据此宣称线上激活。
+
+研究固定clean HEAD=8f0a44dad48497ef5ce2cdaa0ded54831e56d684，使用D2同一10月release。三季度TRAIN全部在fit前通过正式file-only构造、校验与读回：
+
+| vintage | 共同训练行 | 共同训练日期 | 合法固定成员端点NA | 原共同mask排除 | 未成熟键 |
+|---|---:|---:|---:|---:|---:|
+| Q2 | 88,929 | 714 | 4,123 | 482 | 1,310 |
+| Q3 | 89,569 | 715 | 3,750 | 346 | 1,310 |
+| Q4 | 89,871 | 716 | 3,609 | 316 | 1,310 |
+
+Q4 mask=a774fd8382d5369e2094ba1fb96be716b7d90f6d30414dc56ae847f6ab387937，原C model=706719ca85bbca99fc1e9e8294974cdbc8fe9dcc794ef708f04180c213347f7b及原训练HEAD保持。正式新增attempt与完成fit均为10，未重训Q4 C；双fresh-process模型及完整预测canonical/字节一致。两臂各142日×131=18,602条，全部available；S预测范围−0.02863133653255744..0.08239480679971016，未裁剪。评价共有17,290个可定义L2目标、2个合法固定成员端点NA、1,310个未成熟键；后10个日期未成熟，不删预测、不认作数据缺失或全局失败。
+
+任务结果目录：F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261109/。只保留本研究必要结果和冻结载体：
+
+| 结果文件 | canonical receipt / 文件身份 |
+|---|---|
+| prepare_v2/prepared.json | 06d3779b02a8fa295827f6d0e396c5f95c99f0ec7b1ed31ba414811b5f6bc82a |
+| preflight_v2.json | f0e9ce098ca17791bd6aa6be4715204139b3aed97cb1bfd163cdf44886ab71e5，PASS |
+| fit_v1/acceptance.json | a20f6b3e5db867ba78775b56c2ad6acb1d6adfd5a06550c44ea03a2b534bf95d，10/10 |
+| predict_v1/acceptance.json及process_1.json/process_2.json | 完整预测canonical=d58daf75098914efcf03a59aa2db5e60352040b5c6f5cfcacb79addd36b2c36a；两文件SHA=c3cc99b28f5ff648d587c884d3a30f2d88d97fe62d096a780876865318d61126，均14,024,993字节 |
+| evaluation_v1.json | canonical=cfe20a7bd96adf8a138549a01c13c0d18c6a28ec69c96e85d230f502767d9d17；文件SHA=feaf987131950f46ce365ef828f4a9658d4e21313b308cdf0c859726ef51c46b，133,523字节 |
+
+L2主对象按相同132个共同可定义日期比较，C列均为“负C，越高越看好”：
+
+| 区间 | 日期数 | S收益Rank IC | 负C收益Rank IC | S−负C |
+|---|---:|---:|---:|---:|
+| 全期 | 132 | −0.0341349 | +0.0681971 | −0.1023320 |
+| Q2 | 60 | −0.0001093 | −0.1140729 | +0.1139636 |
+| Q3 | 65 | −0.0536247 | +0.1853340 | −0.2389586 |
+| Q4已成熟部分 | 7 | −0.1448063 | +0.5428121 | −0.6876185 |
+
+全期S的HAC 95%区间=[−0.1658506,+0.0975808]，paired差区间=[−0.4017086,+0.1970445]，都跨零。原固定方向excess_return_Nd背景IC=+0.0295260，只展示，不据此重选模型。Q4仅7个高度重叠成熟日期，区间和高C点估计不构成独立强证据或自动采用依据。
+
+S全期MSE=0.00548205、MAE=0.05498945；各季度TRAIN日期等权均值常数基线分别0.00491039、0.05196805。S误差分别高11.6419%、5.8140%。S高/低20%组的平均10日S为−1.89191%/−1.06541%，高−低=−0.82650个百分点；负C相应高−低=+0.69023个百分点，差=−1.51673个百分点。它们是重叠目标参考，不是实际组合、净值或成本后收益。
+
+固定新买队列保留原rows全部2,053条，去重为1,269个(day,stock)键，重复事实一致；88个未成熟键保留。124个有源记录的日期中，114日形成共同可定义截面。S收益IC=−0.0241277、负C=+0.0688134，差=−0.0929411（HAC 95% [−0.2143851,+0.0285030]）。Q2 S/负C/差为+0.0389103/+0.0157079/+0.0232024，Q3为−0.0917502/+0.1257811/−0.2175314；无Q4队列，不伪造补样本。三个seed分项差分别−0.1654209/−0.0827465/−0.0045314，均为同一市场历史诊断，不当作独立三次确认；不使用secondary_rows或事后选队列。274项独立算术复核验证共同日期均值、真实session lag HAC、手工average-tie队列相关和日等权误差，全部通过。
+
+**取舍**：按D5预先规则，IC_S<=0且主差<=0，终态STOP_NO_INCREMENTAL_ORDERING，结束此冻结20D/季度/10D/Ridge/S目标候选。原因是当前收益排序和误差未显示改进，不是身份、预测分母、自然停牌/未成熟或显著性门禁未过。区间跨零意味着不能宣称统计证明所有收益模型无效，也不能只挑Q2改善或翻转S分数继续寻找通过。无新QE请求、默认替换、生产采用或追加fit；旧C也不因本次相对较好自动晋升。未来研发若继续，应基于明确的新信息或目标适配依据另立单一问题，不能机械重复同一组合。
+
+收尾作者审核两轮：第一轮按真实request/预检/attempt/模型/预测/评价读回对齐当前摘要、任务、Index/Matrix；第二轮逐项核对D1～D6公式及旧历史未改、来源/研究/经济状态分开、单位和共同日期/未成熟/原队列一致。DESIGN-COMPLIANCE-001四项复核：完整批准研究已执行，无简化/placeholder；NA/区间和负结果完整披露，无fallback；旧模型/数据集/消费者及他模块不变；没有新增门禁或第二候选。数据库/数据集/profile写入、QE任务、生产DDL/DML、依赖安装、runtime activation及服务控制均0；工作树未清理。此为研究终态，非经济通过。
