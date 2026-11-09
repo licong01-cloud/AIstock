@@ -21,6 +21,7 @@
 - `docs/architecture/position_timing_intraday_advice_localsim_blueprint_f2_20261023.md`
 
 LocalSIM #7150交付后，追加结果消费范围为`backend/services/position_timing/intraday/adverse_wait_results.py`、`backend/tests/position_timing/test_intraday_adverse_results.py`及上述两份设计文档；本次operator和不可变分析证据仅在`X:/AIstock_temp/position-timing-p2-analysis-20261109/`。不修改原7个文件中的算法、来源冻结或统计实现，以免改变既有plan的implementation closure。
+本次机制诊断及下一轮设计只写`backend/services/position_timing/intraday/adverse_wait_diagnostics.py`、`backend/tests/position_timing/test_intraday_adverse_diagnostics.py`、本设计和日内上位蓝图；operator及不可变证据仅写`X:/AIstock_temp/position-timing-mechanism-october-20261109/`。不修改旧结果消费者、冻结来源、LocalSIM或任何其他业务模块。
 复用core.evaluate、分钟/日级合同、CandidateReader、交易分钟时钟、freeze、原history来源预检；不修改旧core、W15、原统计函数或其冻结implementation closure，不另建Reader、撮合、账本或研究平台。
 
 ## Non-goals
@@ -65,9 +66,28 @@ LocalSIM交付回执`X:/AIstock_temp/localsim-p2-adverse-wait-20261109/source_de
 统计复用现有`period_account_rows`、`period_panels`和单户诊断；新模块固定三项P2比较及同规格区块区间，不修改原三户分析器或其closure。全期、月、季报告全部四户和三个比较；各期承接本户上期期末NAV，MDD使用完整分钟观察而非仅日终。BUY/SELL完整父计划分母保留，释放证据、提交/派单/成交区分，缺失暴露/生命周期明确UNAVAILABLE/UNKNOWN。producer经济重算未提供不是失败，不发起重算。
 报告绑定spec、全部来源FileRef及分析实现身份；同输入exact retry返回相同报告FileRef，已有产物不覆盖。独立Decimal复算收益、费用、分钟MDD和月季承接；软件及来源验收与探索性经济结论分开记录。
 
+### 7. 四户机制诊断的有界补充（本次实施）
+
+本次只消费已冻结四户报告及其原始事实，不重放账户。新增 `adverse_wait_diagnostics` 的 `inspect/analyze` 接缝，输入仅为原 analysis spec 与报告 FileRef；先复用 Contracts-6 的完整 source preflight，再核验父报告实现/人口/日期身份，最后才读取账户收益及明细。发布前重验全部来源，输出自有不可变结果；exact retry 必须复用同一 FileRef。旧结果消费者及其实现 closure 不变。
+
+固定输出全部四户、全期和所有月份，不按收益筛选日期。对 BUY/SELL 分别报告全部父计划、完整/部分/未成交/不可用、费用覆盖及金额、SUBMIT/派单/失效、已派单样本的等待中位数、已成交父计划的首笔成交延迟；分母和缺失覆盖必须显式。预算前机会及15分钟前派单/成交只在可归属的单修订父计划上比较，不能把机会当成交或把不同人口的计数当因果提升。费用差按方向拆分；双方同日同股同方向同目标数量且完整成交的价格比较仅作有选择偏差的条件诊断。
+
+逐月净差必须与原报告逐分一致，费用加回只作算术恒等式；不建立 BUY/SELL 收益归因或假设“不成交的订单本来可以成交”。盘中时间加权暴露仍由原投影覆盖决定，完整失效转换原因仍为 UNKNOWN，不以日终现金均值、first/last 状态或推断 TTL 填补。本轮诊断不新增假设检验、参数搜索、规则、训练、推理或实时输入。
+
+### 8. 10月自然承接的下一轮冻结设计（仅设计，不运行）
+
+范围固定 B0/W15/C2/P2、60秒人工响应、90秒TTL、既有人工排队/费用/数量与交易限制、14:57终点、P2的5根/15交易分钟及0.5%研究价集。沿用已交付10月原生850目标、17个交易日（2026-10-08至10-30），不重新推理、重训或重选股票。新研究绑定四户各自2026-09-30的真实期末 day/receipt/state、现金、持仓、成本和累计NAV锚点；无充值、不清仓、不资本均衡，不把旧共同B0 opening三户研究拼接为自然承接。
+
+允许复用原13户10月中真正同源且本户期初/研究合同完全一致的 B0/C2 结果，但必须逐项核验来源、opening、规则、数量/费用/排队及有序日期；不依据收益决定复用。W15/P2 未有兼容延续产物时由 LocalSIM owner 新建其独立连续账户。本窗口不构造账本或调用账户runner。价格计划覆盖当日BUY/SELL与四户历史可能持仓SELL的并集；既有模板不足时仅追加新研究身份，不覆盖原模板，缺真实来源保留UNKNOWN。
+
+10月来源使用其冻结candidate/inventory并披露相对9月来源的差异，不切换active/profile。期间PnL以各户真实opening为起点；主要比较仍 P2−W15，次比较 P2−C2/P2−B0，报告NAV变化之差，不能把9月末财富差算成10月优势。累计收益保留1月1000万元原点；累计MDD继承本户全分钟高水位和既有MDD，期间MDD从各户opening另算。不得重置锚点后拼接MDD，或把差异期初的期间收益率之差当资本匹配因果效果。全期/月/季、完整BUY/SELL分母及UNKNOWN边界保持原合同；现有历史已被观察，仍是探索性而非sealed holdout。
+
+本次交付下一轮可复制给LocalSIM owner的设计和精确来源引用，不声称已生成可执行账户request或已通过10月新账户验收；尚未交付的兼容opening/完整历史SELL模板由各owner在下一轮消费预检中核实，不以等待未来行情或经济显著性作为研发门槛。
+接口差异须明示：现有`adverse_wait_results`只消费1—9月四户、`wait_control_results`只消费共同opening三户；原13户期间来源校验也不能直接当四户自然承接消费者。下一轮由LocalSIM owner沿既有`period_continuation`及W15/P2 facade准备本户opening、有序days、来源检查和retry FileRef；择时仅补最小的四户期间消费适配，复用`continuous_results.period_account_rows`和现有期间/累计统计。不能将本节声明性设计或历史spec传给不兼容的旧CLI冒充接入完成。
+
 ## Implementation Plan
 
-初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，本次一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry；不新增细碎阶段或基础设施。
+初次一个交付块完成纯函数/plan实现、定向验证、真实冻结来源prepare/inspect/exact retry与LocalSIM交接。#7150账户交付后，一个结果消费块完成来源预检→全期/月/季分析→独立复算及报告exact retry。本次再以单一交付块补齐Contracts-7机制诊断，并冻结Contracts-8的下一轮自然承接设计；不在本次执行10月账户，不新增细碎阶段或基础设施。
 
 ## Verification Plan
 
@@ -99,6 +119,10 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-511 | 四户全期/月/季、三个冻结比较与区块区间，无收益回选 |
 | F-512 | 全父计划诊断、机会/派单/成交分离，未知不补造 |
 | F-513 | 不可变分析exact retry与独立统计复算，无账户重放 |
+| F-514 | 机制诊断来源/父报告身份先验，发布前重验及不可变重试 |
+| F-515 | 全期/全月份BUY/SELL及机会/派单/成交分母、费用与缺失边界 |
+| F-516 | 逐月净差与原报告一致，条件成交价不冒充账户收益/因果alpha |
+| F-517 | 10月本户自然承接与可复用旧产物的身份条件；仅设计不重放 |
 
 ## Design Acceptance Matrix
 
@@ -117,6 +141,10 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-511 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/verify_receipt.json；artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/interval_verification.json | VERIFIED | none |
 | F-512 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/mechanism_analysis.json；backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
 | F-513 | backend/services/position_timing/intraday/adverse_wait_results.py | artifact:X:/AIstock_temp/position-timing-p2-analysis-20261109/retry_receipt.json；backend/tests/position_timing/test_intraday_adverse_results.py | VERIFIED | none |
+| F-514 | 本文Contracts-7；intraday/adverse_wait_diagnostics.py | 定向测试及真实冻结来源验收待执行 | PENDING | implementation_pending |
+| F-515 | 本文Contracts-7；intraday/adverse_wait_diagnostics.py | 定向测试及全期/月/方向诊断待执行 | PENDING | implementation_pending |
+| F-516 | 本文Contracts-7；intraday/adverse_wait_diagnostics.py | 原报告逐分一致性与独立复算待执行 | PENDING | implementation_pending |
+| F-517 | 本文Contracts-8 | 本次仅设计，下一轮由LocalSIM owner消费验收 | DESIGN_VERIFIED | none |
 
 ## 初次纯函数实施与交接证据
 
