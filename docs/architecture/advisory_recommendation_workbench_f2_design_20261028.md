@@ -132,6 +132,13 @@
 - F-012：视觉一致、响应式、键盘操作、业务中文，无 raw JSON 业务流。
 - F-013：多轮审核、直接后端/浏览器证据、五任务实读及发布边界。
 - F-014：全局左侧导航“荐股”入口、当前页高亮及直接跳转新总览（用户追加授权）。
+- F-015：统一时间、前向来源、当前绑定/历史分段、共同日期与各自样本；费用/基准/UNKNOWN可追溯。
+- F-016：主页完整指标表、净超额柱图、月度热图、参考净值和收益回撤图，懒加载且风格一致。
+- F-017：有限现金、五批次重叠的标准化参考组合；净值/组合回撤与单次过程统计分别命名。
+- F-018：历史名单仅从详情进入，所有保存版本分页、精确版本查看，与当前荐股共用列表。
+- F-019：累计涨跌仅对应本次连续荐股期间，继续不重置、结束冻结、重新入选分段、缺证据未知。
+- F-020：轻量首屏、范围批量读取、有界缓存与并发、历史页不扫描行情，性能预算和规模验证。
+- F-021：后端合同、浏览器视觉/交互、真实只读与修订失效证据；源码与用户重启后的加载分态。
 
 ## 6. 实施方案与允许修改文件
 
@@ -187,8 +194,68 @@
 
 `production_ddl_gate=noop`，`production_dml=not_requested`，`backend_restart_owner=user`。不新增依赖。源码合入、root 同步、前端激活、后端重启、重启后验收和经济效果各自报告。源码交付可完成但运行激活仍等待用户重启；不得伪造在线页面截图。
 
+## 10. 2026-11-09已批准增量：横向比较与详情历史名单
+
+用户批准上一轮完整设计并修订：历史名单只在详情进入，主页不加历史入口；名单表与当前荐股相同；累计涨跌只计算荐股期间；页面统一、直观、美观。新隔离树/精确文件范围和机器证据见`X:/AIstock_temp/ADVISORY/comparison-history-20261109-v1/task.json`，本节是本轮唯一设计载体。旧已交付F-001～014保持原证据。新增叶文件`backend/services/advisory_workbench/comparison_tracking.py`承载按所选截止的过程统计；`backend/tests/advisory_workbench/test_api.py`同步只读路由数量与参数合同断言。其余精确路径均已在收据登记，无其他owner模块变更。
+
+### 10.1 主比较与完整指标
+
+主页先轻量显示启用包的配置、发布状态和最新名单，再加载比较。时间支持20/60/120交易日、本年、全部、自定义，默认60；点击应用才更新。默认前向、当前绑定、共同日期；各自样本、回放和全绑定显式切换，跨绑定按版本标注。所选终日也是评价截止，不能看其后的价格。未满5TD、未发布、缺价及UNKNOWN保留分母和原因；合法不可执行入场为CASH固定槽，不按剩余股票重新分配。
+
+主评价对象是每个目标T当天正式已发布名单的IN_SCOPE固定原槽，不是只有已经进入的episode，更不重跑TopK或模型。若同包同日多个正式版本且没有唯一身份，保留冲突；名单/条目跨包或绑定、重复证券均不静默拼接。共同集要求所选各臂与沪深300都完整成熟；无共同日期显示原因，不暗删包或换窗。各自样本仅描述，不宣称独立优胜。
+
+固定T开盘至T+4收盘，沿既有买0.95/卖5.95bps，滑点默认显式0bps，均为参考假设；沪深300默认000300.SH同窗毛价格收益，明确不含指数交易成本。股价比较复用既有adj_factor/停牌/涨跌停合同；缺来源不补。净超额=策略净收益减指数毛价格收益。Top50→Top10研究、100bps目标和V2独立，不消费或改写其工件。
+
+完整提供5TD均值/中位数/胜率/最差/下尾10%/对指数净超额、描述性相关修正区间；已结束过程毛/净均值/中位数/胜率/平均盈利亏损/盈亏比/利润因子/持有期/退出原因，未结束浮动/缺估值/日期，原日期/成熟/有效/未知/现金/版本覆盖。主表简洁、更多指标展开；默认同窗净超额排序，不创建综合评分或自动激活。样本相关和短窗支持限制明确展示。
+
+口径细化：过程统计沿原进入/退出价格基准的未复权参考价格；固定5TD和参考组合使用既有调整因子。均为当前权威记录的只读重算，截止后行情/进入/退出收益不参与，不声称历史当时已知的数据版本。跨口径明确标注，不改写历史记录。全部历史从所选来源/绑定的首个保存版本读取，不以固定五年截断；版本/条目/行情观察点限额超出时明确拒绝，不能静默截短。
+
+### 10.2 标准化参考组合
+
+这是统一研究展示，不是真实账户或Paper Trading执行。每臂及指数从共同比较起点1单位现金开始；每天开盘新增一批，预算不超过前日NAV20%和可用现金，按当日IN_SCOPE固定原槽等权，使用归一化份额；每批固定第5个市场session收盘退出，收入次日可用，不加杠杆。无名单预算留现金且记缺发布；UNKNOWN入场/持仓/退出价格不当现金，之后不可证明的净值保持null。停牌/一字涨停入场沿原合同为空现金槽；持仓无法退出时不得假售，保留未知。股数以入场adj_factor固定，估值使用同源调整比例；价格/分红口径按同一既有调整来源，不声称历史首次可得性。含费用和日终浮动，给区间收益、组合MDD、现金比例、实际投入和费用拖累；不得累乘重叠批次均值，不得拿单次最差回撤替代组合MDD。
+
+### 10.3 历史名单及累计涨跌修订
+
+详情新增“历史名单”，原“历史记录”改为“跟踪历史”，调整记录只保留决策；主页不增加历史名单按钮。所有保存版本可分页20/50/100、按目标日期/来源/状态筛选；正式前向和REPLAY分开。通过list_version_id读取精确名单，不再仅按日期猜版本；支持同日多版本、全部历史绑定、直达链接和返回恢复页码。
+
+历史明细复用当前DailyList及QuoteProvider/RecommendationValue，保留同样的股票、最新价、今日涨跌、首次推荐、累计涨跌、排名和变化列。最新价明确为当前行情；累计涨跌是本次连续推荐首次生效日开盘→移出生效日开盘，继续推荐不重置、移出冻结、再次入选另起段。未结束只使用有连续名单证明覆盖的估值日；缺日期、重复版本或跨绑定中断保留UNKNOWN，不能将停更之后的涨跌计进推荐期。与5TD含费/调整后的策略评价分开，沿原表注明累计涨跌为未复权价格变化、不含费用、不计入胜率。
+
+追加精确叶文件`frontend/src/components/advisory/LiveQuotes.tsx`，仅让既有批量推荐分段响应同时显示“截至名单目标日的连续推荐天数”，避免历史表为补这一列再扫描全历史或逐股查询；其他行情合同不变。
+
+同一术语补齐到`frontend/src/components/advisory/workbench/StockDrawer.tsx`的累计涨跌标签。概况“最新名单范围”批量核对最新版本的IN_SCOPE，包含待确认进入，不能复用ACTIVE计数；历史目录的保存版ACTIVE计数命名为“当时跟踪数”，完整荐股范围在打开名单后展示。
+
+### 10.4 性能与接口
+
+现有overview仅作兼容；新增brief模式批量读取配置/最新名单/首日/运行摘要，不读episode大payload或全历史行情hash。比较拆成摘要与曲线，后者在图表可见时请求；相同参数复用有界TTL缓存、同请求去重、每个服务进程并发最多2（缓存容量8、TTL90秒），数据修订刷新必须失效，响应携带源身份和生成时刻。统计按请求范围批量读取名单/股价/调整/停牌/限价/指数，不逐股查。缓存不依赖MAX(trade_date)冒充行情内容身份，短TTL与强制刷新重新读取真实源。图表轻量SVG，不新增依赖；降采样只影响绘图，完整统计及极值保留。每条线至多800点，曲线响应目标300KB以内。
+
+历史元数据分页不调用全历史市场watermark，不读取全部名单条目。详情单版只取该版/必要前序，收益由已存在可见股票批量接口加载。浏览器取消过时请求，选择应用后统一刷新，滚动/行情高度变化不重查名单；固定骨架高度和可见性加载避免卡顿。
+
+历史标签及精确名单直达使用`program?mode=brief`读取独立的策略元数据外壳，不在渲染目录前加载旧过程收益或全历史行情指纹。统计标签继续使用原完整统计；元数据响应明确`metric_read=NOT_REQUESTED`且不填充收益字段。
+
+拟验收预算：默认5包近60交易日，brief与历史分页P95≤500ms、比较摘要P95≤1.5s；首屏LCP P75≤2.5s、INP P75≤200ms；10包×5年/10万episode规模验证响应体、工作量随范围有界、页面持续可交互。实际测量须分冷/热、API/浏览器与样本数；未达标直接优化并复核，不将一次读取当P95或靠减少正确性检查伪达标。
+
+### 10.5 实施与验收
+
+顺序P0设计/精确scope→P1纯评价/有限资金组合与批量源→P2详情历史与累计合同→P3同风格图表/表格/时间筛选→P4直接合同、现有DEV只读验证/真实源对账、浏览器视觉和规模/性能→P5当前HEAD三轮自审和授权源码交付。任何DDL/DML仍无授权且本设计不需要；0新金融fit、模型/生产榜单/源资产/服务写入。后端重启继续用户执行。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-015 | backend/services/advisory_workbench/comparison_service.py | backend/tests/advisory_workbench/test_comparison_service.py | verified | none |
+| F-016 | frontend/src/components/advisory/workbench/Comparison.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-017 | backend/services/advisory_workbench/comparison_portfolio.py | backend/tests/advisory_workbench/test_comparison_portfolio.py | verified | none |
+| F-018 | backend/services/advisory_workbench/history.py; frontend/src/components/advisory/workbench/HistoricalLists.tsx | backend/tests/advisory_workbench/test_history.py | verified | none |
+| F-019 | backend/services/advisory_workbench/recommendations.py | backend/tests/advisory_workbench/test_history.py | verified | none |
+| F-020 | backend/services/advisory_workbench/brief.py; backend/services/advisory_workbench/comparison_cache.py | backend/tests/advisory_workbench/test_comparison_repository.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-021 | docs/architecture/advisory_recommendation_workbench_f2_design_20261028.md | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+
 回滚通过正常代码回退恢复旧入口，不删业务数据或配置，不回退数据 owner 的就绪合同。旧管理组件保持可用以支持已有操作，但不作为新工作台失败时的静默跳转。
 
 风险：旧 episode 来源不足→UNKNOWN；daily integrity 尚未迁移/激活→显示不可用；父包资产缺失→卡片阻断；并发写入→409刷新；昂贵统计→小请求、只读超时和明显失败；当前估值用于历史 episode→标明当前估值日期；列表成员超过配置目标→保留实际发布集合，不截断或重新排名。
 
-四项设计符合性：完整交付按14项验收；错误和UNKNOWN可见；不改变推荐/交易语义；不引入额外审批或生产门禁。用户授权继续覆盖设计与代码两次合入，无需重复询问。
+四项设计符合性：完整交付按原F-001～F-014及新增F-015～F-021共21项验收；错误和UNKNOWN可见；不改变推荐/交易语义；不引入额外审批或生产门禁。用户授权继续覆盖设计与代码两次合入，无需重复询问。
+
+设计PR #7169已冻结用户批准的F-015～F-021规格；代码实施按上述21项核对，本地69项后端合同及9类直接浏览器场景通过，类型/静态检查通过。真实数据库只读响应在隔离浏览器复核，包含原名单IN_SCOPE计数、连续荐股分段冻结与精确版本直达。回执及桌面/移动端图片：`docs/operations/evidence/advisory_comparison_history_20261109/receipt.json`，对应代码blob清单与摘要绑定其中。
+
+10次新进程ASGI HTTP请求（共享DB/连接池已热、强制应用缓存未命中）P95：概况74ms、策略元数据51ms、历史分页51ms、比较摘要736ms；这不是线上网络P95。隔离浏览器8次合成响应测量LCP P75 112ms、INP实验代理P75 24ms，非现场INP。10包×5年、10万episode/652500保存条目的合成规模：构建5.56秒、曲线91583字节、每线最多146点；页面交互最大事件16ms。规模证据不冒充大规模生产SQL时延或经济结果。
+
+源码PR的当前HEAD CI与合入状态另行记录；用户后端未重启，运行态激活及现场验收待用户重启后核实。无DDL/DML、无模型/生产名单激活、0新增fit，累计269次实际fit加1次旧index不变。100bps研究目标、费用、UNKNOWN合同不变，经济验收为NOT_EVALUATED。

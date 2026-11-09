@@ -1,0 +1,72 @@
+"""WSL execution envelope; the original model/trading command is immutable."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+import hashlib
+import json
+from pathlib import Path
+import shlex
+
+GIB = 1024**3
+TRAINING_MEMORY_BYTES = 40 * GIB
+PEAK_BYTES = {"gpu": 24 * GIB, "cpu": 10 * GIB, "replay": 6 * GIB}
+GUARD_NAME = "qe_wsl_workload_guard.py"
+COMMAND_NAME = "qe_wsl_workload_command.sh"
+POLICY_NAME = "qe_wsl_workload_policy.json"
+
+
+def memory_slot_limit(compute_kind: str | None, *, backtest_only: bool) -> int:
+    kind = "replay" if backtest_only else ("cpu" if compute_kind == "cpu" else "gpu")
+    return TRAINING_MEMORY_BYTES // PEAK_BYTES[kind]
+
+
+def isolate_payload(payload, *, source, compute_kind: str | None):
+    """Wrap only a not-yet-POSTed payload, never modify an existing worker."""
+    kind = "replay" if source.backtest_only else ("cpu" if compute_kind == "cpu" else "gpu")
+    lexer = shlex.shlex(payload.wsl_command, posix=True, punctuation_chars=";&|()<>")
+    first = [lexer.get_token() for _ in range(3)]
+    if first[0:2] == ["cd", "--"]:
+        workspace = first[2]
+        separator = lexer.get_token()
+    else:
+        workspace = first[1]
+        separator = first[2]
+    if first[0] != "cd" or separator != "&&":
+        raise ValueError("qe_wsl_isolation_requires_canonical_workspace_cd")
+    if not workspace.startswith("/") or ".." in Path(workspace).parts or "\x00" in workspace:
+        raise ValueError("qe_wsl_isolation_invalid_workspace")
+    guard = Path(__file__).with_name(GUARD_NAME)
+    guard_text = guard.read_text(encoding="utf-8")
+    command_sha = hashlib.sha256(payload.wsl_command.encode()).hexdigest()
+    identity = hashlib.sha256(
+        f"{payload.task_id}|{payload.loop_id}|{source.submission_intent_hash}".encode()
+    ).hexdigest()
+    policy = {
+        "schema": "qe_wsl_workload_envelope_v1",
+        "identity": identity,
+        "task_id": payload.task_id,
+        "loop_id": payload.loop_id,
+        "kind": kind,
+        "peak_bytes": PEAK_BYTES[kind],
+        "budget_bytes": TRAINING_MEMORY_BYTES,
+        "swap_bytes": 8 * GIB,
+        "original_command_sha256": command_sha,
+        "guard_sha256": hashlib.sha256(guard_text.encode()).hexdigest(),
+        "original_files_sha256": {
+            name: hashlib.sha256(text.encode()).hexdigest()
+            for name, text in payload.experiment_files.items()
+        },
+        "interpretation": "Runtime isolation only; original formula, factors, model, data and account contract unchanged.",
+    }
+    files = dict(payload.experiment_files)
+    if {GUARD_NAME, COMMAND_NAME, POLICY_NAME} & set(files):
+        raise ValueError("qe_wsl_isolation_reserved_asset_collision")
+    files.update(
+        {GUARD_NAME: guard_text, COMMAND_NAME: payload.wsl_command, POLICY_NAME: json.dumps(policy, sort_keys=True)}
+    )
+    from ..multi_alpha.qe_subprocess_env import qe_subprocess_credential_scrub_command
+
+    guarded = qe_subprocess_credential_scrub_command() + f" && exec /usr/bin/python3 {GUARD_NAME}"
+    command = f"cd -- {shlex.quote(workspace)} && exec /bin/bash --noprofile --norc -c {shlex.quote(guarded)}"
+    return replace(payload, experiment_files=files, wsl_command=command)

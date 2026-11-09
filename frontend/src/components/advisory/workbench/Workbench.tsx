@@ -18,7 +18,7 @@ export default function Workbench() {
     window.addEventListener("focus", update);
     return () => { clearInterval(timer); window.removeEventListener("focus", update); };
   }, [programId]);
-  return <QuoteProvider><div className={styles.shell} data-testid="advisory-workbench">{programId
-    ? <ProgramDetail key={programId} programId={programId} initialDate={search.get("target_date") || ""} />
-    : <Overview refresh={refresh} onRefresh={() => setRefresh(v => v + 1)} />}</div></QuoteProvider>;
+  return <QuoteProvider><div className="pv2-shell-advisory"><div className={styles.shell} data-testid="advisory-workbench">{programId
+    ? <ProgramDetail key={programId} programId={programId} initialDate={search.get("target_date") || ""} initialVersion={search.get("list_version_id") || ""} />
+    : <Overview refresh={refresh} onRefresh={() => setRefresh(v => v + 1)} />}</div></div></QuoteProvider>;
 }

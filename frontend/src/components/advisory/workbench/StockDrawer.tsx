@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { path, programPath, type DailyItem, type Episode, type EpisodeDetail, type Summary } from "@/lib/api/advisoryWorkbench";
+import { path, programPath, type DailyItem, type Episode, type EpisodeDetail } from "@/lib/api/advisoryWorkbench";
 import { QuoteCell, RecommendationValue, TodayChange, EpisodeReturn } from "../LiveQuotes";
 import { Badge, day, ErrorNotice, Metric, number, Pager, text, useRead } from "./shared";
+import type { ProgramSelection } from "@/lib/api/advisoryComparison";
 import styles from "./workbench.module.css";
 
-export default function StockDrawer({ summary, item, onClose }: { summary: Summary; item: DailyItem | Episode; onClose: () => void }) {
+export default function StockDrawer({ summary, item, onClose }: { summary: ProgramSelection; item: DailyItem | Episode; onClose: () => void }) {
   const [page, setPage] = useState(1), [limit, setLimit] = useState(20);
   const close = useRef<HTMLButtonElement>(null);
   const result = useRead<EpisodeDetail>(item.episode_id ? path(programPath(summary.program_id, `/episodes/${encodeURIComponent(item.episode_id)}`), { target_date: summary.target_date, snapshot_id: summary.snapshot_id, limit, offset: (page - 1) * limit }) : null, 0, summary.program_id);
@@ -18,7 +19,7 @@ export default function StockDrawer({ summary, item, onClose }: { summary: Summa
     <header className={styles.panelHeader}><div><h2>{item.stock_name || item.symbol}</h2><small>{item.symbol} · {"membership" in item ? "所选日推荐详情" : "策略过程复盘"}</small></div><button ref={close} aria-label="关闭股票详情" onClick={onClose}>×</button></header>
     {"membership" in item && <div className={styles.changeTags}><Badge value={item.membership} /><Badge value={item.change} /></div>}
     <ErrorNotice error={result.error} stale={!!result.data} />
-    <div className={styles.metrics}><Metric label="当前最新价" value={<QuoteCell symbol={item.symbol} />} /><Metric label="今日涨跌" value={<TodayChange symbol={item.symbol} />} />{"membership" in item && <><Metric label="首次生效日" value={<RecommendationValue symbol={item.symbol} field="start" />} /><Metric label="起始基准价" value={<RecommendationValue symbol={item.symbol} field="base" />} /><Metric label="累计涨跌（实时）" value={<RecommendationValue symbol={item.symbol} field="return" />} note="未复权价格变化，不代表实际成交收益" /></>}</div>
+    <div className={styles.metrics}><Metric label="当前最新价" value={<QuoteCell symbol={item.symbol} />} /><Metric label="今日涨跌" value={<TodayChange symbol={item.symbol} />} />{"membership" in item && <><Metric label="首次生效日" value={<RecommendationValue symbol={item.symbol} field="start" />} /><Metric label="起始基准价" value={<RecommendationValue symbol={item.symbol} field="base" />} /><Metric label="荐股期间累计涨跌" value={<RecommendationValue symbol={item.symbol} field="return" />} note="未复权价格变化，不代表实际成交收益" /></>}</div>
     <details open={!("membership" in item)} className={styles.panel}><summary>策略过程复盘 · 与名单累计涨跌分别计算</summary>
     <div className={styles.metrics}><Metric label="跟踪进度" value={<Badge value={episode?.progress || item.progress} />} /><Metric label="参考进入价" value={episode?.entry_price == null ? "待确认" : `¥${number(episode.entry_price, 2)}`} /><Metric label="参考退出价" value={episode?.exit_price == null ? "待确认" : `¥${number(episode.exit_price, 2)}`} /><Metric label="过程参考收益" value={<EpisodeReturn episode={episode} />} note="原策略口径，费用前，不随实时行情改写" /></div>
     {!item.episode_id && <div className={styles.notice}>已记录推荐身份，尚无可关联的策略跟踪过程；不影响推荐状态和名单价格涨跌。</div>}
