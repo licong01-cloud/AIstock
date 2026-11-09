@@ -787,6 +787,7 @@ def build_config_from_custom_evo_loop(
         prediction_source_task_id=prediction_source_task_id,
         prediction_source_loop_index=prediction_source_loop_index,
         prediction_source_sha256=prediction_source_sha256,
+        prediction_recovery=loop_config.get("prediction_recovery"),
         node_id=loop_config.get("node_id") or task.get("node_id"),
         experiment_name=experiment_name,
         extra_params={
