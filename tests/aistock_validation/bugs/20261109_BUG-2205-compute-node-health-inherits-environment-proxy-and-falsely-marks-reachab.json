@@ -1,0 +1,336 @@
+{
+  "actual": "代理502触发offline误判并使未提交Loop失败，历史探测原因未保留。",
+  "allowed_write_scope": [
+    "backend/services/dispatch_service.py",
+    "backend/tests/test_dispatch_observer_quiet.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
+    "backend/infra/compute_node_client.py",
+    "backend/tests/test_compute_node_client_direct_transport.py",
+    "noxfile.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2205",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-09T05:33:26.724880Z",
+  "description": "QE节点健康及其他ComputeNodeClient请求仅设置proxy=None，仍加载环境代理；已在同一远端health复现旧客户端经代理502、trust_env=False直连200。单次失败会将节点置offline，QE按缓存拒绝未提交Loop。12:20:18状态变化、12:21:10Loop2被拒、12:21:18恢复在线；该次历史探测错误未记录，确切触发仍UNKNOWN。修复统一16类节点请求直连并增加失败类型/状态/延迟日志；不改变offline拒绝规则、实验预算或数据身份。",
+  "design_compliance_review": {
+    "business_contract_preserved": "passed: no task rebinding, prediction/model/data/policy change, retry or new submission",
+    "no_private_gate_change": "passed: existing offline/preflight/runtime restart gates preserved",
+    "no_silent_fallback": "passed: real transport/HTTP errors remain offline with typed error and logged reason",
+    "no_unapproved_subset": "passed: all 16 existing node request types covered; no health gate bypass"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261109-bc39cff091ae",
+      "timestamp": "2026-11-09T05:33:26.724863Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "Codex",
+      "note": "Register exact ComputeNodeClient and its new direct-transport regression; ownership added to existing qe_node_health_scheduler rule before source edits. No service, dataset, database or experiment changes.",
+      "timestamp": "2026-11-09T05:35:49.427028+00:00"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "Codex",
+      "note": "Add only the two exact direct node/observer test paths to existing qe_read_backend nox target; required by classifier test-execution coverage gate, no new CI plan or scheduler.",
+      "timestamp": "2026-11-09T05:41:27.193930+00:00"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-f0-h20-cap2-20261109/recovery/attempt1_evidence.json"
+  ],
+  "expected": "内网节点HTTP不继承环境代理，真实故障保留offline及类型和延迟证据。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
+      "backend/infra/compute_node_client.py",
+      "backend/services/dispatch_service.py",
+      "backend/tests/test_dispatch_observer_quiet.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/test_compute_node_client_direct_transport.py"
+    ],
+    "added_files": [
+      "backend/tests/test_compute_node_client_direct_transport.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261109_BUG-2205-compute-node-health-inherits-environment-proxy-and-falsely-marks-reachab.json",
+      "backend/infra/compute_node_client.py",
+      "backend/services/dispatch_service.py",
+      "backend/tests/test_dispatch_observer_quiet.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/test_compute_node_client_direct_transport.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dispatch_service.py",
+        "backend/tests/test_dispatch_observer_quiet.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "qe.core",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dispatch_service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/test_dispatch_observer_quiet.py",
+          "impact_modules": [
+            "platform.api"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_node_health_scheduler"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/dispatch_service.py",
+        "backend/tests/test_dispatch_observer_quiet.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dispatch_service.py",
+      "backend/tests/test_dispatch_observer_quiet.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/infra/compute_node_client.py",
+      "backend/tests/test_compute_node_client_direct_transport.py",
+      "noxfile.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dispatch_service.py",
+      "backend/tests/test_dispatch_observer_quiet.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/infra/compute_node_client.py",
+      "backend/tests/test_compute_node_client_direct_transport.py",
+      "noxfile.py"
+    ]
+  },
+  "first_seen_at": "2026-11-09T05:33:26.724880Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "Set trust_env=False for all sixteen node HTTP client contexts; retain fail-closed health semantics and single attempts; add typed health-failure evidence and warning logs; register exact transport ownership and regressions.",
+  "fixed_at": null,
+  "github_issue_number": 7159,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7159",
+  "last_seen_at": "2026-11-09T05:33:26.724880Z",
+  "module": "qe.core",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Same remote health: old ComputeNodeClient returns502; explicit trust_env=False returns200",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "platform_api_backend",
+    "qe_read_backend"
+  ],
+  "review_summary": "Two author review passes completed on final source and CI wiring. Correctness: all16 request contexts explicitly direct, original method/path/payload/timeout and failure/cancellation semantics preserved; no retries/new submissions/offline bypass. Completeness: real two-node fresh-process smoke passed;32 direct/observer tests,134 nox-routing tests,16 catalog tests passed; both changed tests selected by existing CI. No independent-review claim. Historical12:20 probe trigger remainsUNKNOWN; source fixes reproduced proxy path, runtime activation pending user restart.",
+  "risk_area": "bug",
+  "root_cause": "ComputeNodeClient inherits HTTP_PROXY/HTTPS_PROXY/ALL_PROXY because httpx proxy=None does not disable trust_env. QEWorkspaceClient already uses trust_env=False; health observer and execution client therefore take different routes.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/dispatch/nodes",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python -B imported changed ComputeNodeClient directly from this isolated worktree; with existing environment proxy configuration unchanged, exact /health GET returned status=ok online=true for remote (391.1ms) and WSL (169.4ms). Receipt: tmp/issue_workflow/BUG-2205/direct_transport_fresh_process.json. No backend, experiment, dataset or DB control.",
+      "Fresh isolated Python imported changed ComputeNodeClient; inherited proxies unchanged; remote and WSL health both200/statusok. Receipt tmp/issue_workflow/BUG-2205/direct_transport_fresh_process.json; no resident process control.",
+      "Fresh Python imported changed ComputeNodeClient with inherited proxy configuration unchanged; remote and WSL /health both200/statusok; no process control; tmp/issue_workflow/BUG-2205/direct_transport_fresh_process.json"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe.core"
+  ],
+  "title": "Compute node health inherits environment proxy and falsely marks reachable LAN node offline",
+  "trigger_condition": {
+    "fingerprint": "bc39cff091ae898ec72144f5",
+    "source_event_id": "FE-20261109-bc39cff091ae"
+  },
+  "validation_evidence": [
+    "Regression first failed on original source when AsyncClient constructed an environment proxy transport.",
+    "rtk pytest backend/tests/test_compute_node_client_direct_transport.py backend/tests/test_dispatch_observer_quiet.py -q ->32 passed",
+    "rtk ruff check four changed Python files -> passed",
+    "git diff --check -> passed",
+    "rtk pytest backend/tests/test_noxfile_validation_env.py -q ->134 passed",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity ->2 sessions passed;16 tests;findings0",
+    "CI classifier ->passed; both changed test files selected by qe_read_backend; no unexecuted test files",
+    "workflow-smoke --bug-id BUG-2205 --changed-file noxfile.py --changed-file tests/aistock_validation/catalog/file_ownership.yaml --module validation ->passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.core",
+        "platform_api",
+        "qe_read"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.core",
+          "platform_api",
+          "qe_read"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
