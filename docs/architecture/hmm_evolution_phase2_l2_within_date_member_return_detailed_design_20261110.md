@@ -1,6 +1,6 @@
 # 申万L2固定成员收益：同日排序目标对齐的唯一后继提案
 
-> v1.1；2026-11-11；owner：HMM；F2；父蓝图§1.33/§7。状态：`SOURCE_IMPLEMENTED_FORMAL_RESEARCH_PENDING`。用户在归因/唯一W设计交付后明确“批准执行下一步”，批准L2-WITHIN-MEMBER-D1～D6及固定6-fit。HMM源码和两轮审修/直接验证已完成，正式新增fit=0，CI/合入状态见同一PR；在clean交付HEAD执行正式研究。S/C已完成合同和结果不变，不启动QE。以下原提案依据及公式保留，当前批准状态以§10为准。
+> v1.2；2026-11-11；owner：HMM；F2；父蓝图§1.33/§7。状态：`RESEARCH_COMPLETE_STOP_NO_INCREMENTAL_ORDERING`。已按批准L2-WITHIN-MEMBER-D1～D6完成源码#7201、完整载体预检、6/6 fit、双process模型/完整142×131预测及评价，固定clean HEAD=19af33c96389a2e4047d13948a4b3b32833483b6。W的132日L2 IC=−0.0746599，弱于原S和负C；原规则停止，结束当前20D/Ridge目标变换路线，不追加fit/候选或QE。原合同公式、S/C资产和所有历史保留；完整结果见§11，不宣称经济采用。
 
 ## 1. Background / 终极目标及有界证据
 
@@ -71,7 +71,7 @@ W若失败，本次20D/同成员/季度/10D/Ridge的目标变换路线结束；�
 
 ## 8. Contracts D6 / L2-WITHIN-MEMBER-D6：Implementation Plan / Verification Plan
 
-11/10设计/P0归因交付已完成，11/11精确合同已批准。按原计划连续实施最小HMM源码/测试、至少两轮作者审修、必要门禁/CI和允许的源码交付；在clean交付HEAD校验三份已有TRAIN、执行6-fit、封存及评价，更新父蓝图。当前源码已实施、正式训练尚未执行，不能以F2或源码通过冒报研究完成。是否对接QE取决于D5，QE账户由QE owner负责；荐股/LocalSIM及生产采用后置。
+11/10设计/P0归因交付已完成，11/11精确合同已批准。已按原计划连续完成最小HMM源码/测试、两轮作者审修、必要门禁/CI和源码交付，在clean交付HEAD校验三份已有TRAIN、执行6-fit、封存及评价，更新父蓝图。当前批准研究包完整完成但效果触发停止，见§11；研究完成不是经济通过。按D5不交新QE，荐股/LocalSIM及生产采用未执行。
 
 直接测试：日期残差及加共同常数排序不变；fit确实采用u/y而非只改推断；复用scaler/active/参数而非二次标准化；季度标签隔离/成熟先行；训练mask与事前E_t区分；原S/loss输出及模型identity保持；完整131/typed NA；6-attempt预算和禁止重试；双process；旧S/C只读；共同日期/HAC/tie/队列及DB/network poison。最小相关测试本地执行，广域矩阵交CI，不扩历史测试债务。
 
@@ -83,11 +83,11 @@ F-011：D1/D2/D5唯一问题、零fit证据、精确目标与停止；F-012：D1
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | backend/services/hmm_risk/risk_l2_member_return.py：within_training/within_fit/within_metrics | test: backend/tests/hmm_risk/test_risk_l2_member_within.py | ready | 无 |
-| F-012 | backend/services/hmm_risk/risk_l2_member_return.py：within_inputs/within_close/within_predict | test: backend/tests/hmm_risk/test_risk_l2_member_within.py；原S直接回归 | ready | 无 |
-| F-013 | scripts/hmm_risk/run_risk_l2_member_within.py：preflight/fit/predict/evaluate | test: backend/tests/hmm_risk/test_risk_l2_member_within.py | ready | 无 |
+| F-011 | backend/services/hmm_risk/risk_l2_member_return.py：within_training/within_fit/within_metrics | test: backend/tests/hmm_risk/test_risk_l2_member_within.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_within_member_return/20261111/evaluation_v1.json | completed | 无 |
+| F-012 | backend/services/hmm_risk/risk_l2_member_return.py：within_inputs/within_close/within_predict | test: backend/tests/hmm_risk/test_risk_l2_member_within.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_within_member_return/20261111/preflight_v1/preflight.json | completed | 无 |
+| F-013 | scripts/hmm_risk/run_risk_l2_member_within.py：preflight/fit/predict/evaluate | artifact: F:/Dev/AIstock_runtime/hmm_l2_within_member_return/20261111/fit_v1/acceptance.json；§11 | completed | 无 |
 
-矩阵当前仅证明源码覆盖批准完整研究流程，并通过直接验证；正式6-fit、模型效果和场景采用尚未执行，不将原S载体或合成测试冒报W模型完成。正式研究结果将在§11接续，不以省略阶段作完成豁免。
+矩阵completed表示批准研究已完整执行，模型效果触发停止，不代表经济通过或场景采用。正式6-fit和真实文件评价见§11，不将原S载体或合成测试冒报W模型效果，不以省略阶段作完成豁免。
 
 ## 9. Risks / Production Gates / Rollout / Rollback
 
@@ -97,7 +97,7 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 
 ## 10. 批准与审核记录
 
-`L2-WITHIN-MEMBER-D1～D6=APPROVED_BY_USER`。2026-11-11用户在#7190设计/归因合入后明确“批准执行下一步”，批准唯一W实施和6-fit。此前“开始按建议执行下一步的任务”仅用于零fitP0的授权历史保留，不据此追认此前执行过W训练；当前正式fit仍为0。不得为了让长任务持续而增加候选。
+`L2-WITHIN-MEMBER-D1～D6=APPROVED_BY_USER`。2026-11-11用户在#7190设计/归因合入后明确“批准执行下一步”，批准唯一W实施和6-fit。此前“开始按建议执行下一步的任务”仅用于零fitP0的授权历史保留，不据此追认此前执行过W训练；批准时正式fit仍为0，后续真实6-fit见§11。不得为了让长任务持续而增加候选。
 
 文档审修和最终F2结果在本节及同一PR记录，不另生成审核报告。DESIGN-COMPLIANCE-001：完整实现已批准W流程，不以源码冒报研究效果；旧负结果/NA/未知原因公开，无fallback；原S/C合同和他模块不变；只实施用户批准的公式/6-fit，不新增经济门禁。
 
@@ -109,6 +109,47 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 
 相关小矩阵52项通过（新W＋原S＋旧loss），随后两个受影响/新增节点通过；模块registry 8项、ownership/module/计划映射及L0无finding。新W直接节点目前13项，广域HMM矩阵交CI/Nightly，不本地重跑全量。Ruff/py_compile、最终两份F2、scope/diff及fresh-process CLI/导入结果写同一PR。此为源码自审，非独立第三方；正式新增研究fit仍为0，原10/10不变，未访问新的tail或写库/服务/数据集。
 
-## 11. 正式研究进度
+## 11. 正式研究结果与停止（2026-11-11）
 
-待源码交付后，在固定clean HEAD执行三份原TRAIN/控制/完整特征的file-only预检；通过后执行本已批准6-fit、双process预测及已消费事实评价。当前尚未开始，不先填模型/效果结论。
+源码#7201 CI全绿并合入，merge/正式执行clean HEAD=19af33c96389a2e4047d13948a4b3b32833483b6；主目录已同步，实际分类runtime_impact=none、runtime_files=[]、target_ids=[]、catalog_error=null，无需重启。使用原S-D2同一10月release及Conda base固定数值环境，完整载体preflight PASS；原request/source/provider locator及缓存额外零fit读回闭合，不重建数据或改变源身份。
+
+Q2/Q3/Q4 TRAIN分别88,929/89,569/89,871行，714/715/716日，原mask及排除数精确不变；全20维active、原S scaler逐项一致。6个独占attempt、实际完成6次fit，未重训S/C；两个fresh process各3季度的模型canonical/字节一致。完整W预测142日×131=18,602条，全部available，各日事前中心集合均131；分数范围−0.0280290577..+0.0444029511，未裁剪。后10日未成熟仍保留预测；评价17,290个可定义标签、2个合法固定成员端点NA、1,310个未成熟键，未补值/缩窗口。
+
+结果根：F:/Dev/AIstock_runtime/hmm_l2_within_member_return/20261111/。仅保存本研究必要结果：
+
+| 结果文件 | canonical receipt / 文件身份 |
+|---|---|
+| preflight_v1/preflight.json | a37785c312342089c542384ee372432afc989214f0c908c430d5639c18ca46da，PASS |
+| fit_v1/acceptance.json | 4fab5f4c2c987eb16c862477378dc255f8626e15dca9143ae777f40a7cdbc6ca，6/6 |
+| predict_v1/process_1.json及process_2.json | canonical=f9b9d881365eecdbcd08769da73483c299ded420aa986bd8ec37802fc86f5a29；同文件SHA=3c6c0d740fe84d152e7dfb1b272dcc39702a0418332c5828a507e8068cef29f4，各5,508,128字节 |
+| predict_v1/acceptance.json | 79d504441aa00feaed9bbe0a4ee6126f8962535076fcd4ff8ed2064d4c1d5c75，双process PASS |
+| evaluation_v1.json | canonical=4666c1379078d95936f55b0e389a193be78c0ef1812b3c8c7a64ac318f57d723；文件SHA=226d891a842b77f4d797d3e5a650f0cb568a9c3f8e8e3e644b5cfd087ebb8d08，198,148字节 |
+| arithmetic_v1.json | 文件SHA=b5900c258884503fe065cd51d4b343bb094db1745f028b488e9c18635a37d2ac，437字节；1,380项零fit算术核验 |
+
+### 11.1 完整L2及固定队列
+
+所有C列均指负C正式分数（越高越看好），共同日S/C结果与原正式评价一致：
+
+| 对象/区间 | 共同日 | W IC | 原S IC | 负C IC | W−负C | W−S |
+|---|---:|---:|---:|---:|---:|---:|
+| 全L2全期 | 132 | −0.0746599 | −0.0341349 | +0.0681971 | −0.1428570 | −0.0405250 |
+| 全L2 Q2 | 60 | −0.0117194 | −0.0001093 | −0.1140729 | +0.1023535 | −0.0116101 |
+| 全L2 Q3 | 65 | −0.1198147 | −0.0536247 | +0.1853340 | −0.3051487 | −0.0661900 |
+| 全L2 Q4成熟部分 | 7 | −0.1948548 | −0.1448063 | +0.5428121 | −0.7376669 | −0.0500484 |
+| 固定新买全期 | 114 | +0.0100383 | −0.0241277 | +0.0688134 | −0.0587751 | +0.0341659 |
+
+全期L2 W的HAC95%=[−0.2130826,+0.0637629]；W−负C=[−0.4549568,+0.1692428]；W−S=[−0.0796888,−0.0013611]。后者为已消费历史上的名义区间，未校正多轮研究选择，不能升格为所有同日收益模型无效的证明；停止来自事前点估计规则，不额外依赖显著性门。Q4只有7个重叠成熟日，不能将其窄区间当独立强确认。
+
+同日中心化MSE W/S/0相对score基线=0.0037077891/0.0037219584/0.0035825998；MAE=0.04368938/0.04377115/0.04307983。W虽略好于S，仍比0基线分别高3.4944%/1.4149%，不能靠误差微改善宣称排序有用。高−低20%组10日S参考W=−1.70554个百分点、原S=−0.82650、负C=+0.69023；W相对S差−0.87903个百分点。不是账户、NAV或成本后收益，未运行新消费公式。
+
+固定新买保留原rows全部2,053条、去重1,269键，88未成熟键保留；124有源日期中114形成共同截面，无Q4队列。W−负C的HAC95%=[−0.2041369,+0.0865866]，W−S=[−0.0192725,+0.0876044]；Q2 W−负C=+0.0712316，Q3=−0.1982370，不能只挑Q2。三seed同一市场上的诊断差42/2024/2026=−0.1330868/−0.0645337/+0.0018965，不当作三份独立确认，也不新增全seed必胜门。
+
+### 11.2 复核及研发取舍
+
+1,380项另一算术路径核对全期/季度/队列日等权和HAC、手工average-tie相关、共同日期及同日误差；115日/15,063行旧Q4 TRAIN标签重叠仅用于独立逐日核算，不替换正式132日评价，也未再次生成标签。冻结系数的加权残差损失梯度最大绝对值Q2/Q3/Q4约1.21e-12/1.30e-12/6.13e-13；只代入原系数验证一阶条件，未求解或增加fit。新评价source identity与原S精确一致，原S/C资产未覆盖，双process和6个attempt核对通过。
+
+**按D5停止**：W全L2 IC<=0、对负C主差<=0，终态STOP_NO_INCREMENTAL_ORDERING。同日目标适配假设已真实执行，但没有带来排序增量，不能再称“只修目标错位即可改善”。不是严格门禁、正常停牌/未成熟、输入覆盖或实现未闭合造成的失败。固定新买W相对S改善不覆盖主对象及对负C不足，不安排新QE、不默认晋升旧C，不接荐股/LocalSIM。
+
+本20D/固定成员/季度/10D/Ridge目标变换路线按批准资源规则结束；不追加fit、翻转W或S、换median/rank/alpha/seed/窗口重试。终极L2收益/风险目标及旧能力保留，未来只有具体新信息、任务变化或独立新证据支持的单一问题才讨论下一路线，不要求事先证明一定有效，也不将本结果外推为所有HMM/非线性不可能。历史回溯分类、非total-return标签及研究选择偏差继续披露。
+
+结果收尾两轮作者审修（非第三方）：首轮对齐执行HEAD、原输入/模型/预测/评价及预算计数，第二轮核对原D1～D6公式未变、中心化误差口径/单位、完整分母/合法NA、有限复核与完整评价的边界、旧终态及父蓝图优先级一致。两份F2与diff通过后交付。DESIGN-COMPLIANCE-001：完整研究无简化；负结果/NA公开无fallback；原合同/他模块不变；按批准停止无新增门禁。数据库访问/写入、数据集/profile修改、生产DDL/DML、依赖安装、runtime activation、服务控制和QE任务均0；工作树/分支未执行清理。
