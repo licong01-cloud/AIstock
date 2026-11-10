@@ -236,7 +236,15 @@
     "source_fields_matched": true,
     "dated_gap_keys_excludable": 282,
     "affected_partitions": 133,
-    "validation_only_replay": "pending_fixed_runtime",
+    "validation_only_replay": "passed_after_user_restart",
+    "revalidation_receipt": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/postrestart-revalidation.json",
+    "revalidation_sha256": "d01ca4b1289c6d1add62e65e62dbbeda4c5d50e26f1025b6c4d216c697e04fb7",
+    "retry_reconciliation_receipt": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/postrestart-retry-reconciliation.json",
+    "retry_reconciliation_sha256": "cd59300ffc69f909d1fa5a1828fca2b3b859e8bb1b1fe57526752094d7977561",
+    "bak_basic_valid_partitions": 292,
+    "dated_policy_valid_partitions": 133,
+    "remaining_bak_basic_alerts": 0,
+    "obsolete_retries_reconciled_in_final_sweep": 89,
     "sql_path": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-repair.sql",
     "sql_sha256": "99a4876e897332967bb123b4383fc44f31e74495af89caeb176792fa21b325d5",
     "status": "applied_and_independently_verified",
@@ -253,7 +261,7 @@
   "review_evidence": [
     "Correctness review: dated pub_date/imp_date boundary; ordinary ST and pre-consolidation remain required; a later actual listing terminates the old lifecycle exclusion; no PIT buy-universe or quote filtering.",
     "Completeness/regression review: shared policy drives physical validator, storage and exact supplements; late lifecycle records wake existing validation-only targets, not new collectors; reuse existing fenced scheduler recovery for old retry/alert reconciliation.",
-    "DESIGN-COMPLIANCE-001: no partial implementation claimed complete, no silent/default-filled source facts, user-approved optional panel applicability only, no new gate or approval framework. Ten production lifecycle facts were separately authorized and inserted/read back; post-restart activation and ledger revalidation remain pending."
+    "DESIGN-COMPLIANCE-001: no partial implementation claimed complete, no silent/default-filled source facts, user-approved optional panel applicability only, no new gate or approval framework. Ten production lifecycle facts were separately authorized and inserted/read back; restart identity verified, 133 dated-policy partitions passed native validation, all 292 existing bak_basic partitions VALID, associated alerts zero and obsolete retries reconciled by locked canonical validation identity. Quote facts, PIT and releases unchanged."
   ],
   "risk_area": "bug",
   "runtime_contract": {
