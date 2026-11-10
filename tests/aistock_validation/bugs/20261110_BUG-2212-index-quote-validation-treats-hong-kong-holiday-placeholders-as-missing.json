@@ -32,23 +32,23 @@
   "expected": "Known Hong Kong indices on verified HKEX closed dates retain source NULLs as legal non-session observations; open-day missing/non-finite quotes and unproven market identity stay explicit; daily and monthly share contract.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json",
+      "backend/services/data_integrity/index_quote_calendar.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/services/data_integrity/index_quote_calendar.py"
+      "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json"
     ],
     "added_files": [
       "backend/services/data_integrity/index_quote_calendar.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json",
+      "backend/services/data_integrity/index_quote_calendar.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_daily_data_integrity.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/services/data_integrity/index_quote_calendar.py"
+      "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -155,8 +155,8 @@
   },
   "first_seen_at": "2026-11-10T16:40:43.494552Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "694a217a2f7e710dce337d48f6c7bba75899c927",
+  "fixed_at": "2026-11-10T17:08:50Z",
   "github_issue_number": 7199,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7199",
   "last_seen_at": "2026-11-10T16:40:43.494552Z",
@@ -164,6 +164,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7200",
   "production_backend_dependency_gate": "noop",
   "production_data_repair": {
     "active_profile_write": false,
@@ -208,6 +209,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -219,7 +221,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2212",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee75bf68c54951f9",
+    "recorded_at": "2026-11-10T17:09:43.971005Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7c6f7f7b753f801ac71364aefb911407a016789b",
+    "source_merge_commit": "694a217a2f7e710dce337d48f6c7bba75899c927",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7200",
+    "validation_evidence": [
+      "validation-receipt: id=e62056801785f72a commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=ef2ad62768464d11 commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py -q -x` result=`passed`"
+    ],
+    "validation_evidence_digest": "51e751229e889ef24296f55480be786a5e901a3ffb1e985556fc020bc72558e4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -228,6 +252,10 @@
     "fingerprint": "25f04e678977848fb1dba612",
     "source_event_id": "FE-20261110-25f04e678977"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e62056801785f72a commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=ef2ad62768464d11 commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py -q -x` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
