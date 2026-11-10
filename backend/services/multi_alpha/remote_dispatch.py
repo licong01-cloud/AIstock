@@ -1186,7 +1186,23 @@ def _remote_wsl_command(
             "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py",
         ]
     )
-    return "bash --noprofile --norc -c " + _shell_quote(command)
+    shell_command = "bash --noprofile --norc -c " + _shell_quote(command)
+    if node is not None and _is_loopback_wsl_node(node):
+        # The WSL resource envelope needs the canonical workspace before its
+        # guard starts. Keep the complete file-only command (including its
+        # credential scrubs and CAS verification) inside the original Bash.
+        workspace_base = str(remote_paths.get("workspace_base") or "").strip()
+        if not workspace_base or not _is_remote_linux_path_allowed(value=workspace_base, node=node):
+            raise MultiAlphaCombineBacktestError(
+                "WSL pred-backtest requires an absolute canonical workspace base",
+                reason_code="remote_workspace_path_invalid",
+                context={"node_id": node.node_id},
+            )
+        task_id = _remote_task_id(backtest_config=backtest_config, workspace=workspace)
+        loop_index = _remote_loop_index(backtest_config=backtest_config)
+        canonical_workspace = f"{workspace_base.rstrip('/')}/{task_id}/Loop{loop_index}"
+        return "cd -- " + _shell_quote(canonical_workspace) + " && exec " + shell_command
+    return shell_command
 
 
 def _remote_conda_activation(

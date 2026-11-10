@@ -106,7 +106,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py -k real_multi_alpha -q",
   "required_verification": [
     "l0",
     "qe_read_backend"
@@ -114,17 +114,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh Python loaded final producer and real WSL isolation; original Bash/CAS/scrub command preserved, replay20GiB, no POST/fit/inference/backtest. tmp/issue_workflow/BUG-2213/fresh-process-evidence.json. Real producer/coordinator transport matrix and existing isolation/credential regressions:77 passed."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -244,5 +252,12 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "root_cause": "?Alpha producer??bash?????WSL guard?canonical cd &&????protocol???isolate_payload????????producer?guard???",
+  "fix_summary": "?WSL producer???????????????????Bash??????CAS???????CPU???????producer/coordinator??????????",
+  "review_evidence": [
+    "Correctness: genuine _remote_wsl_command passes actual coordinator isolation at final transport; immutable command/input hash and20GiB reservation checked.",
+    "Completeness/regression: remoteCPU unchanged; spaces/quote path safe; missing/relative/Windows path fails closed; 77 targeted tests pass; no service or dataset change.",
+    "DESIGN-COMPLIANCE-001: scope checked; no simplified/placeholder or protection bypass; original trading/economic inputs unchanged; runtime activation remains pending user restart."
+  ]
 }
