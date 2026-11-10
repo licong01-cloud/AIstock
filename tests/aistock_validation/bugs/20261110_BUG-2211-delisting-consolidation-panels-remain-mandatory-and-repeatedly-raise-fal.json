@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2211",
-  "closed_at": null,
+  "closed_at": "2026-11-10T05:58:45.225494Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -226,29 +226,29 @@
   "production_backend_dependency_gate": "noop",
   "production_data_repair": {
     "active_profile_write": false,
-    "dev_passed": true,
-    "insert_only_rows": 10,
+    "affected_partitions": 133,
     "authorization_ref": "用户授权执行补入，2026-11-10",
+    "bak_basic_valid_partitions": 292,
+    "dated_gap_keys_excludable": 282,
+    "dated_policy_valid_partitions": 133,
+    "dev_passed": true,
     "existing_rows_unchanged": 60,
+    "insert_only_rows": 10,
+    "obsolete_retries_reconciled_in_final_sweep": 89,
+    "production_inserted_rows": 10,
     "readback_ref": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-readback.json",
     "readback_sha256": "bd9343313a19b06775af4b3b83429c351eac861317eb2f6e0a90fd1f72c0ecce",
-    "production_inserted_rows": 10,
-    "source_fields_matched": true,
-    "dated_gap_keys_excludable": 282,
-    "affected_partitions": 133,
-    "validation_only_replay": "passed_after_user_restart",
-    "revalidation_receipt": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/postrestart-revalidation.json",
-    "revalidation_sha256": "d01ca4b1289c6d1add62e65e62dbbeda4c5d50e26f1025b6c4d216c697e04fb7",
+    "remaining_bak_basic_alerts": 0,
     "retry_reconciliation_receipt": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/postrestart-retry-reconciliation.json",
     "retry_reconciliation_sha256": "cd59300ffc69f909d1fa5a1828fca2b3b859e8bb1b1fe57526752094d7977561",
-    "bak_basic_valid_partitions": 292,
-    "dated_policy_valid_partitions": 133,
-    "remaining_bak_basic_alerts": 0,
-    "obsolete_retries_reconciled_in_final_sweep": 89,
+    "revalidation_receipt": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/postrestart-revalidation.json",
+    "revalidation_sha256": "d01ca4b1289c6d1add62e65e62dbbeda4c5d50e26f1025b6c4d216c697e04fb7",
+    "source_fields_matched": true,
     "sql_path": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-repair.sql",
     "sql_sha256": "99a4876e897332967bb123b4383fc44f31e74495af89caeb176792fa21b325d5",
     "status": "applied_and_independently_verified",
-    "target": "aistock.market.stock_st_events"
+    "target": "aistock.market.stock_st_events",
+    "validation_only_replay": "passed_after_user_restart"
   },
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -283,10 +283,32 @@
       "backend-main",
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2211",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "6e3371233cb74ff6f3eca85b9d43b66a69419689",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-10T05:46:23.338752Z",
+      "mode": "read_only",
+      "observed_identity": "6e3371233cb74ff6f3eca85b9d43b66a69419689",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "89de13f3a4a284f9cd9613fa28bd15610e0c86adc882d8985e48a4b2b6337a59",
+      "receipt_sha256": "39467d0f2d1d61f86310feb162a5a34d3cc7b12cbcac0308a8699568aca77915",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "37e86367d092389aaf5c9e5febbf87ad2fc43200f79451a746872acfdad3fc21",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -318,7 +340,7 @@
     ],
     "validation_evidence_digest": "30c1270c72306c6c1d43163fd18b287c4ff6ca5f8d6bffd06e7cbd4c96947f3c"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -329,7 +351,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=98e3f884f7c75fbb commit=17a8181ef975da7f127581c37436eb136852ef2c kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
-    "validation-receipt: id=5ab37c6cd4f58706 commit=17a8181ef975da7f127581c37436eb136852ef2c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q -x -k 'delisting or consolidation or dated_rows or no_codes or unknown_event or dense_supplement or real_upsert or ordinary_st_event or validator_uses_same_scope'` result=`passed`"
+    "validation-receipt: id=5ab37c6cd4f58706 commit=17a8181ef975da7f127581c37436eb136852ef2c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q -x -k 'delisting or consolidation or dated_rows or no_codes or unknown_event or dense_supplement or real_upsert or ordinary_st_event or validator_uses_same_scope'` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2211 --target backend-main --expected-identity 6e3371233cb74ff6f3eca85b9d43b66a69419689 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
