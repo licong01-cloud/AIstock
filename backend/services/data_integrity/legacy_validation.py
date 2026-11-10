@@ -7,6 +7,7 @@ old receipt to a new revision. Reference snapshots keep their dated boundary.
 from __future__ import annotations
 
 from datetime import date
+import re
 
 from .contracts import CheckCounts, PartitionState, ValidationResult, finite_number
 from .provider import value_identity
@@ -88,6 +89,10 @@ def legacy_completion_result(spec, day, revision, source, job, actual):
     invalid, identities = [], set()
     for position, row in enumerate(facts):
         try:
+            if spec.name in _DATED | _FINANCIAL and 'ts_code' in spec.columns:
+                from backend.services.market_data.instrument_validator import normalize_ts_code
+                if not re.fullmatch(r'\d{6}\.(SH|SZ)', normalize_ts_code(row.get('ts_code'))):
+                    raise ValueError('malformed supported security identity')
             key = tuple(value_identity(row.get(field), spec.columns[field]) for field in spec.primary_keys)
             if (any(value in (None, '') and field not in spec.nullable_identity_columns
                     for field, value in zip(spec.primary_keys, key)) or key in identities):

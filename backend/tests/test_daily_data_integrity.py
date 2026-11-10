@@ -680,7 +680,7 @@ def test_legacy_etf_share_validation_reuses_publication_quality():
     assert legacy_completion_result(ETF_SHARE_SIZE, day, 0, source, job, facts).state == PartitionState.VALID
 
 
-@pytest.mark.parametrize('mutation', ['duplicate', 'wrong_date', 'missing_date', 'blank_identity'])
+@pytest.mark.parametrize('mutation', ['duplicate', 'wrong_date', 'missing_date', 'blank_identity', 'malformed_identity'])
 def test_legacy_physical_identity_defects_remain_explicit(mutation):
     from backend.services.data_integrity.legacy_validation import legacy_completion_result
     from backend.services.tushare_dataset_specs import STOCK_ST
@@ -693,8 +693,10 @@ def test_legacy_physical_identity_defects_remain_explicit(mutation):
         facts[0]['ann_date'] = date(2026, 10, 20)
     elif mutation == 'missing_date':
         facts[0]['ann_date'] = None
-    else:
+    elif mutation == 'blank_identity':
         facts[0]['ts_code'] = ''
+    else:
+        facts[0]['ts_code'] = 'UNKNOWN'
     assert legacy_completion_result(STOCK_ST, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
 
 
