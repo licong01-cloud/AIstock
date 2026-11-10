@@ -33,20 +33,24 @@
   "evidence_uris": [],
   "expected": "Official dated consolidation exclusions are applied consistently to non-execution panel ingestion and integrity; no repeated fetch or false gap alert for out-of-scope keys. Pre-consolidation and ordinary stock gaps remain failures. Existing facts and holdings quotes remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json",
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
     "added_files": [
       "backend/tests/test_delisting_panel_scope.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json",
       "backend/services/data_integrity/stock_scope.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/data_integrity/worker.py",
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/test_daily_data_integrity.py",
-      "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/test_data_sync_targets.py"
+      "backend/tests/test_daily_data_integrity.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/stock_scope.py",
@@ -219,6 +223,15 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
+  "production_data_repair": {
+    "active_profile_write": false,
+    "dev_passed": true,
+    "insert_only_rows": 10,
+    "sql_path": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-repair.sql",
+    "sql_sha256": "99a4876e897332967bb123b4383fc44f31e74495af89caeb176792fa21b325d5",
+    "status": "pending_user_authorization",
+    "target": "aistock.market.stock_st_events"
+  },
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
@@ -227,20 +240,39 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_evidence": [
+    "Correctness review: dated pub_date/imp_date boundary; ordinary ST and pre-consolidation remain required; a later actual listing terminates the old lifecycle exclusion; no PIT buy-universe or quote filtering.",
+    "Completeness/regression review: shared policy drives physical validator, storage and exact supplements; late lifecycle records wake existing validation-only targets, not new collectors; reuse existing fenced scheduler recovery for old retry/alert reconciliation.",
+    "DESIGN-COMPLIANCE-001: no partial implementation claimed complete, no silent/default-filled source facts, user-approved optional panel applicability only, no new gate or approval framework. Production source facts and post-restart activation remain pending separately."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process verify_dev.py loaded persistent BUG-2211 stock_scope/validator/engine; actual dated Tushare lifecycle rows and all19 before-boundary/quote noninterference assertions passed. DEV receipt X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/dev-validation.json; SQL/queue receipt exact-sql-dev-validation.json proves133 validation targets idempotent and already reclassified gaps do not requeue; production_write=false, runtime_action=false.",
+      "Fresh Python process verify_dev.py loaded tracked stock_scope/validator/engine; DEV dated source boundaries and holdings quote noninterference passed; X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/dev-validation.json and exact-sql-dev-validation.json; production_write=false,runtime_action=false.",
+      "Fresh Python process verify_dev.py loaded tracked stock_scope/validator/engine; DEV all282 known gaps across133 dates, dated source boundaries, native-validator ordinary-gap negative controls, holdings quote noninterference passed; X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/dev-validation.json and exact-sql-dev-validation.json; exact10-row SQL insert10/repeat0,133 idempotent validation targets; production_write=false,runtime_action=false."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": [
+    "planned_target_ids": [
       "backend-main",
       "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
