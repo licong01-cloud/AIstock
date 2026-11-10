@@ -47,7 +47,7 @@ def key_result(expected, facts, *, required_fields=(), positive_fields=(), check
                             (counts,), {**(checks or {}), "physical_rows": len(facts)}, gaps)
 
 
-def index_quote_result(expected, facts):
+def index_quote_result(expected, facts, *, session=None, trade_date=None):
     """A published index needs close; close-only currency/return variants have no OHLC.
 
     Keep source NULLs explicit. Any provided quote must still be finite and
@@ -57,6 +57,17 @@ def index_quote_result(expected, facts):
     base = key_result(expected, facts, required_fields=("close",), positive_fields=("close",),
         checks={"required_fields": ["close"], "nullable_fields": ["open", "high", "low", "vol", "amount"],
                 "schema_version": "published_index_quote_fields_v1"})
+    from .index_quote_calendar import closed_placeholder_codes
+    closed = closed_placeholder_codes(expected, facts, session=session, trade_date=trade_date)
+    if closed:
+        before = base.counts[0]
+        counts = CheckCounts(before.unit, before.expected, before.valid, len(closed),
+                             before.missing, before.invalid-len(closed), before.unverified)
+        gaps = tuple({**gap, 'symbols': sorted(set(gap['symbols'])-closed)} for gap in base.gaps
+                     if set(gap['symbols'])-closed)
+        base = ValidationResult(PartitionState.VALID if counts.complete else PartitionState.INCOMPLETE,
+            (counts,), {**base.checks, 'closed_session_legal_na': sorted(closed),
+                       'market_session': session}, gaps)
     legal, invalid, gaps = 0, 0, list(base.gaps)
     for field in ("open", "high", "low", "vol", "amount"):
         bad = []
@@ -425,7 +436,8 @@ class PhysicalValidator:
                     checks["scope"] = "completed_provider_query_returned_facts_only"
             if dataset == "index_daily":
                 quotes = index_quote_result({entry["key"][0] for entry in scan["entries"]},
-                    {str(r["ts_code"]).strip(): r for r in actual})
+                    {str(r["ts_code"]).strip(): r for r in actual},
+                    session=metadata.get('index_market_session'), trade_date=day)
                 checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability",
                               quote_field_contract=quotes.checks)
                 gaps = tuple({"classification": kind, "keys": keys} for kind, keys in

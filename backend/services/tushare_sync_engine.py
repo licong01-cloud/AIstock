@@ -2048,10 +2048,27 @@ class TushareSyncEngine:
                         conn=conn,
                     )
 
+    def _query_index_market_calendar(self, start, end):
+        """Bounded reference query shared by current collection and dated repair."""
+        for attempt in range(3):
+            get_limiter('hk_tradecal', 200).acquire()
+            try:
+                return _query_tushare_dataapi('hk_tradecal', {'start_date': start, 'end_date': end},
+                    'cal_date,is_open,pretrade_date', token=self._tushare_token())
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+
     def _record_index_query_audit(self, spec, start_date, end_date, job_id, codes, rows_by_day):
         """Publish completed requests, not a post-hoc table-count certificate."""
         from .data_integrity.provider import provider_scan
         from .data_integrity.contracts import digest
+        from .data_integrity.index_quote_calendar import capture_index_sessions
+
+        # Capture before opening the audit transaction; no HTTP while holding
+        # DB locks, and no per-index/per-validation calendar network requests.
+        sessions = capture_index_sessions(rows_by_day, self._query_index_market_calendar)
 
         with get_conn() as conn:
             days = self._trading_dates_between(conn, start_date, end_date)
@@ -2069,6 +2086,7 @@ class TushareSyncEngine:
                     quality_status="ok" if facts else "empty_valid",
                     metadata={"mode": spec.query_mode.value, "audit_from_target_table": False,
                               "provider_query_scope_complete": complete,
+                              **({'index_market_session': sessions[day]} if day in sessions else {}),
                               "provider_scan": provider_scan(spec, facts, parameters=parameters)})
 
     def _fetch_code_list(self, conn, spec: DatasetSpec) -> List[str]:
@@ -2274,6 +2292,7 @@ class TushareSyncEngine:
 
         reference_scans = []
         index_rows_by_day = {}
+        from .data_integrity.index_quote_calendar import HK_EQUITY_INDICES
 
         for batch_start in range(0, len(codes), BATCH_SIZE):
             batch = codes[batch_start:batch_start + BATCH_SIZE]
@@ -2314,7 +2333,13 @@ class TushareSyncEngine:
                                         or not isinstance(response_code, str)
                                         or response_code.upper() != code_val.upper()):
                                     raise ValueError("index provider returned an unexpected code or date")
-                                index_facts.append((day, {"ts_code": response_code, "trade_date": day}))
+                                fact = {"ts_code": response_code, "trade_date": day}
+                                if response_code in HK_EQUITY_INDICES:
+                                    # Keep only the field needed to decide whether
+                                    # a calendar query is necessary, not a second
+                                    # full quote/history panel in memory.
+                                    fact['close'] = row.get('close')
+                                index_facts.append((day, fact))
                         # All empty-response guards ask the same question for
                         # this code. Probe once and reuse; nonempty responses
                         # need no local-history query at all.
