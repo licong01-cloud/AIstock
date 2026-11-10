@@ -699,3 +699,149 @@ def test_ordinary_st_event_does_not_wake_or_exempt_panels():
     conn = Connection()
     assert stock_scope.wake_delisting_panel_validations(conn, [{'ts_code': '002731.SZ', 'st_type': '*ST'}]) == 0
     assert not conn.query.calls
+
+
+def _hk_session(day=date(2026, 10, 19), is_open=0):
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    facts = {day: [{'ts_code': 'H11100.CSI', 'close': None}]}
+    return capture_index_sessions(facts, lambda _a, _b:
+        [{'cal_date': day.strftime('%Y%m%d'), 'is_open': is_open}])[day]
+
+
+def test_index_hk_holiday_placeholder_is_legal_without_manufacturing_prices():
+    from backend.services.data_integrity.validation import index_quote_result
+    row = dict(close=None, open=None, high=None, low=None, vol=0, amount=0, pre_close=2125.5917)
+    original = dict(row)
+    result = index_quote_result({'H11100.CSI'}, {'H11100.CSI': row},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert result.state == PartitionState.VALID
+    assert result.counts[0].expected == result.counts[0].legal_na == 1
+    assert result.counts[0].valid == 0 and not result.gaps
+    assert row == original and row['close'] is None
+
+
+@pytest.mark.parametrize('code', ['000300.SH', '930999.CSI', 'UNKNOWN.CSI'])
+def test_index_hk_calendar_does_not_exempt_domestic_mixed_or_unknown_indices(code):
+    from backend.services.data_integrity.validation import index_quote_result
+    result = index_quote_result({code}, {code: dict(close=None, vol=0, amount=0)},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert result.state == PartitionState.INCOMPLETE
+    assert result.counts[0].invalid == 1 and result.counts[0].legal_na == 0
+
+
+@pytest.mark.parametrize('session_kind', ['open', 'absent', 'wrong_date', 'tampered', 'unknown'])
+def test_index_hk_empty_quote_requires_correct_confirmed_closed_session(session_kind):
+    from backend.services.data_integrity.validation import index_quote_result
+    session = _hk_session(is_open=1) if session_kind == 'open' else _hk_session()
+    if session_kind == 'absent':
+        session = None
+    elif session_kind == 'wrong_date':
+        session = _hk_session(day=date(2026, 10, 20))
+    elif session_kind == 'tampered':
+        session['exchange'] = 'SSE'
+    elif session_kind == 'unknown':
+        session = {'status': 'UNAVAILABLE'}
+    result = index_quote_result({'H11100.CSI'}, {'H11100.CSI': dict(close=None, vol=0, amount=0)},
+        session=session, trade_date=date(2026, 10, 19))
+    assert result.state != PartitionState.VALID
+    assert result.counts[0].legal_na == 0
+
+
+@pytest.mark.parametrize('change', [dict(close=0), dict(close=float('nan')),
+    dict(close=-1), dict(open=1), dict(vol=1), dict(amount=1), dict(vol=float('nan'))])
+def test_index_hk_closed_day_does_not_hide_bad_or_nonplaceholder_values(change):
+    from backend.services.data_integrity.validation import index_quote_result
+    row = dict(close=None, open=None, high=None, low=None, vol=0, amount=0)
+    row.update(change)
+    result = index_quote_result({'H11100.CSI'}, {'H11100.CSI': row},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert result.state == PartitionState.INCOMPLETE
+    assert result.counts[0].legal_na == 0
+
+
+def test_index_hk_calendar_never_invents_absent_rows_or_rejects_valid_published_quotes():
+    from backend.services.data_integrity.validation import index_quote_result
+    missing = index_quote_result({'H11100.CSI'}, {}, session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert missing.state != PartitionState.VALID and missing.counts[0].missing == 1
+    present = index_quote_result({'H11100.CSI'}, {'H11100.CSI': dict(close=2125.5)},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert present.state == PartitionState.VALID and present.counts[0].valid == 1
+
+
+def test_index_calendar_capture_is_bounded_and_not_needed_for_normal_quotes():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    calls = []
+    def query(a, b):
+        calls.append((a, b))
+        return [{'cal_date': '20261019', 'is_open': 0}]
+    days = {date(2026, 10, 19): [{'ts_code': 'H11100.CSI', 'close': None},
+                                {'ts_code': '930709.CSI', 'close': None}]}
+    assert capture_index_sessions(days, query)[date(2026, 10, 19)]['is_open'] is False
+    assert calls == [('20261019', '20261019')]
+    assert capture_index_sessions({date(2026, 10, 19): [{'ts_code':'000300.SH','close':None}]},
+        lambda *_: pytest.fail('do not fetch HK calendar for domestic missing quote')) == {}
+    assert capture_index_sessions({date(2026, 10, 20): [{'ts_code':'H11100.CSI','close':2096}]},
+        lambda *_: pytest.fail('positive published quotes need no extra calendar query')) == {}
+
+
+@pytest.mark.parametrize('returned', [[], [{'cal_date': '20261019', 'is_open': None}],
+    [{'cal_date': '20261019', 'is_open': float('nan')}],
+    [{'cal_date': '20261019', 'is_open': 0}, {'cal_date': '20261019', 'is_open': 1}]])
+def test_index_calendar_missing_invalid_or_conflicting_response_is_not_closed(returned):
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    result = capture_index_sessions({date(2026, 10, 19): [{'ts_code':'H11100.CSI','close':None}]},
+        lambda *_: returned)
+    assert result[date(2026, 10, 19)]['status'] == 'UNAVAILABLE'
+
+
+def test_index_calendar_unrelated_malformed_row_does_not_block_confirmed_neighbor():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    result = capture_index_sessions({date(2026, 10, 19): [{'ts_code':'H11100.CSI','close':None}],
+                                    date(2026, 10, 20): [{'ts_code':'H11100.CSI','close':None}]},
+        lambda *_: [{'cal_date':'20261019','is_open':0}, {'cal_date':'bad','is_open':0}])
+    assert result[date(2026, 10, 19)]['status'] == 'CONFIRMED'
+    assert result[date(2026, 10, 20)]['status'] == 'UNAVAILABLE'
+
+
+def test_index_calendar_transport_failure_stays_explicit_without_discarding_quotes():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    def failed(*_):
+        raise RuntimeError('upstream calendar unavailable')
+    result = capture_index_sessions({date(2026, 10, 19): [{'ts_code':'H11100.CSI','close':None}]}, failed)
+    assert result[date(2026, 10, 19)]['status'] == 'UNAVAILABLE'
+    assert result[date(2026, 10, 19)]['reason'] == 'RuntimeError'
+
+
+def test_index_native_provider_scan_receives_dated_session_contract(monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.provider import provider_scan
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    day = date(2026, 10, 19)
+    row = dict(ts_code='H11100.CSI', trade_date=day, close=None, vol=0, amount=0)
+    metadata = dict(integrity_observed_revision=7, provider_query_scope_complete=True,
+        provider_scan=provider_scan(INDEX_DAILY, [row], parameters={'trade_date': str(day)}),
+        index_market_session=_hk_session())
+    source = dict(status='success', quality_status='ok', data_source='tushare', metadata=metadata)
+    monkeypatch.setattr(validation, 'rows', lambda _c, query, *_:
+        [source] if "data_source<>" in str(query) else [row])
+    result = validation.PhysicalValidator().validate(None, Obligation('index_daily','daily_series','16:50'), day, 7)
+    assert result.state == PartitionState.VALID and result.counts[2].legal_na == 1
+    assert result.counts[0].valid == 1 and not result.gaps
+    metadata['index_market_session'] = _hk_session(is_open=1)
+    assert validation.PhysicalValidator().validate(None,
+        Obligation('index_daily','daily_series','16:50'), day, 7).state == PartitionState.INCOMPLETE
+
+
+def test_index_calendar_backfill_queries_are_year_bounded_and_reuse_each_response():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    days = [date(2024, 1, 2), date(2024, 12, 30), date(2025, 1, 2)]
+    facts = {day: [{'ts_code':'H11100.CSI','close':None}] for day in days}
+    calls = []
+    def query(start, end):
+        calls.append((start, end))
+        return [{'cal_date': day.strftime('%Y%m%d'), 'is_open':0} for day in days
+                if start <= day.strftime('%Y%m%d') <= end]
+    sessions = capture_index_sessions(facts, query)
+    assert calls == [('20240102','20241230'), ('20250102','20250102')]
+    assert all(row['status'] == 'CONFIRMED' for row in sessions.values())
