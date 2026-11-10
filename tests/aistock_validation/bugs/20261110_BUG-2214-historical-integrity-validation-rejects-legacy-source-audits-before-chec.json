@@ -26,7 +26,8 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/remaining-partitions-validation-receipt.json"
+    "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/remaining-partitions-validation-receipt.json",
+    "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json"
   ],
   "expected": "Validate historical database facts with reviewed dataset-specific contracts; safely reuse proven legacy completion only where scope and fact freshness match, retain genuinely unknown source coverage; no repeated fetch or fabricated vintage receipt.",
   "file_scope_contract": {
@@ -144,19 +145,39 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
+  "review_evidence": [
+    "RED: test_legacy_partition_requires_real_complete_job_and_physical_validation failed ModuleNotFoundError before implementation; GREEN targeted legacy coverage passed.",
+    "Round1 correctness: exact legacy producer job/dataset/window/batch completion plus current DB identity/date/numeric quality; row count alone or seeded audit cannot produce VALID; source audit and historical capture times are never rewritten.",
+    "Round2 boundaries: reject failed/partial/latest source, changed revisions, capped queries, mismatched job/period identity; require all ETF snapshot parameter sets; current references never stand in for historical snapshots; existing suspension and ETF publication checks reused; unsupported BSE facts not required in supported quality scope.",
+    "Round3 final regression: rtk pytest backend/tests/test_daily_data_integrity.py -q -x ->174 passed,1 intentional skip; L0/Ruff/diff-check passed; genuine exact Oct19 snapshots in existing DEV temp tables ->9 VALID,5 UNVERIFIED with accurate reasons, ~1.1 seconds; negative tests reject missing rows, NaN, failed job and new revision.",
+    "DESIGN-COMPLIANCE-001: implemented legacy compatibility, distinct missing/invalid/unknown, no fake green, no policy/PIT/model changes, no new gate/service/table; five source-scope unknowns remain explicitly unresolved rather than claiming all-day completeness. Historical unproven reasons do not create repeat FETCH targets."
+  ],
+  "production_data_repair": {
+    "status": "not_applied_pending_user_restart_and_native_revalidation",
+    "fact_write": false,
+    "source_receipt_write": false,
+    "profile_write": false,
+    "schema_change": false,
+    "dev_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json",
+    "dev_valid": 9,
+    "dev_unverified": 5
+  },
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh process verify_legacy_existing_dev.py loaded tracked PhysicalValidator ->legacy_validation in isolated task worktree against genuine production read-only exact-day snapshots in existing aistock_dev:5433 temp tables. 9 VALID,5 unproven; failed jobs, changed revision, deleted rows and NaN not green; source receipts unchanged; X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json."
+    ],
+    "inference_basis": "actual_source_call_closure; no worker.py change needed",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
