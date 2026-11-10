@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2213",
-  "closed_at": null,
+  "closed_at": "2026-11-10T19:20:57.489924Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -139,10 +139,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2213/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2213",
+      "business_smoke_semantic": {
+        "contract_id": "qe_batch_execution_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "7156e5e98436784fb45b689681c4f3a78eca1547c0decf44e07b1cc039bde9af",
+      "expected_identity": "d312b9a7d68006b7024016308ac881f3c2ff0607",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-10T19:19:32.218197Z",
+      "mode": "read_only",
+      "observed_identity": "2d933398874b67dae255cd404b4de426364c4ee7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "963773420a87325bf27dac877ffd318f1457243a0500cc1c8d6d04f9a43e6416",
+      "receipt_sha256": "9fe4805b5d3aace8d40e994ab6b7a8d2200d8ec0e26ce25eb2a7e66ee3417621",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a4b3f85db93b5b958d56c435fcdb10904725f81a101b010c58294b7f7d1deb05",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -176,7 +198,7 @@
     ],
     "validation_evidence_digest": "ab5171c2cc644d47d74256728cc27132e56cc31d610d7a9de25cad59dcd28c99"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -190,7 +212,8 @@
     "validation-receipt: id=4b4b61f47c231f99 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py -q` result=`passed 77 tests`",
     "validation-receipt: id=56df0adca16839b8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`",
     "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
-    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2213 --target backend-main --expected-identity 2d933398874b67dae255cd404b4de426364c4ee7 -> passed runtime identity and business smoke; actual WSL B0 worker started with20GiB memory scope"
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2213 --target backend-main --expected-identity 2d933398874b67dae255cd404b4de426364c4ee7 -> passed runtime identity and business smoke; actual WSL B0 worker started with20GiB memory scope",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2213 --target backend-main --expected-identity d312b9a7d68006b7024016308ac881f3c2ff0607 -> passed source ancestry runtime identity and business smoke; actual WSL B0 worker active with20GiB memory scope"
   ],
   "verification_budget": {
     "budget": "standard",
