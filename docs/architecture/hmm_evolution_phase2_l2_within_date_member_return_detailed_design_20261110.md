@@ -1,6 +1,6 @@
 # 申万L2固定成员收益：同日排序目标对齐的唯一后继提案
 
-> v1.0；2026-11-10；owner：HMM；F2；父蓝图§1.33/§7。状态：`DESIGN_COMPLETE_ONLY_PENDING_EXACT_CONTRACT_APPROVAL`。本轮完成零fit归因及文档设计，未实施W源码、未训练、未提交QE。本页的L2-WITHIN-MEMBER-D1～D6是待批准提案，不修改已完成S/C合同或结果；文档合入不等于批准6-fit。
+> v1.1；2026-11-11；owner：HMM；F2；父蓝图§1.33/§7。状态：`SOURCE_IMPLEMENTED_FORMAL_RESEARCH_PENDING`。用户在归因/唯一W设计交付后明确“批准执行下一步”，批准L2-WITHIN-MEMBER-D1～D6及固定6-fit。HMM源码和两轮审修/直接验证已完成，正式新增fit=0，CI/合入状态见同一PR；在clean交付HEAD执行正式研究。S/C已完成合同和结果不变，不启动QE。以下原提案依据及公式保留，当前批准状态以§10为准。
 
 ## 1. Background / 终极目标及有界证据
 
@@ -14,7 +14,9 @@
 
 一个完整有条件研究包：复用三季度已冻结TRAIN与完整预测特征 → 唯一W候选 → 双process共6次fit → 封存142×131预测 → 同S/负C及原固定队列分析 → 明确继续或停止，不拆CLI/测试/PR微阶段。不重建市场输入、标签、旧QE账本或历史证据仓库。
 
-必要实现仅限HMM-owned `risk_l2_member_return.py`的既有载体/验证/评价公开能力、模块内最小W专属实现及其CLI/直接测试；共享日期权重/Ridge参数沿用`risk_l2_loss_severity.py`。不得改旧S/loss schema去接受W、复制reader、恢复退役链，或新增API/UI/DB/调度器/环境变量/通用训练平台。实际写入范围在实施前按ownership确认；本页不冒报源码完成。
+必要实现仅限HMM-owned `risk_l2_member_return.py`的既有载体/验证/评价公开能力、模块内最小W专属实现及其CLI/直接测试；共享日期权重/Ridge参数沿用`risk_l2_loss_severity.py`。不得改旧S/loss schema去接受W、复制reader、恢复退役链，或新增API/UI/DB/调度器/环境变量/通用训练平台。实际写入范围已按ownership确认；当前源码实现/正式研究分别报告。
+
+本次精确写入范围：`backend/services/hmm_risk/risk_l2_member_return.py`（追加独立within_*合同/数值/验证能力，不改变原S函数或schema）、`scripts/hmm_risk/run_risk_l2_member_within.py`、`backend/tests/hmm_risk/test_risk_l2_member_within.py`及本页/父蓝图状态；不修改共享loss核、其他模块、workflow或测试计划。
 
 ## 3. Contracts D1 / L2-WITHIN-MEMBER-D1：目标、输入与时间不变
 
@@ -69,7 +71,7 @@ W若失败，本次20D/同成员/季度/10D/Ridge的目标变换路线结束；�
 
 ## 8. Contracts D6 / L2-WITHIN-MEMBER-D6：Implementation Plan / Verification Plan
 
-本次交付止于完整设计和当前P0归因。精确合同批准后，才连续实施最小HMM源码/测试、至少两轮作者审修、必要门禁/CI和允许的源码交付；在clean交付HEAD校验三份已有TRAIN、执行6-fit、封存及评价，更新父蓝图。该实施/训练尚未执行，不能以F2通过冒报完成。是否对接QE取决于D5，QE账户由QE owner负责；荐股/LocalSIM及生产采用后置。
+11/10设计/P0归因交付已完成，11/11精确合同已批准。按原计划连续实施最小HMM源码/测试、至少两轮作者审修、必要门禁/CI和允许的源码交付；在clean交付HEAD校验三份已有TRAIN、执行6-fit、封存及评价，更新父蓝图。当前源码已实施、正式训练尚未执行，不能以F2或源码通过冒报研究完成。是否对接QE取决于D5，QE账户由QE owner负责；荐股/LocalSIM及生产采用后置。
 
 直接测试：日期残差及加共同常数排序不变；fit确实采用u/y而非只改推断；复用scaler/active/参数而非二次标准化；季度标签隔离/成熟先行；训练mask与事前E_t区分；原S/loss输出及模型identity保持；完整131/typed NA；6-attempt预算和禁止重试；双process；旧S/C只读；共同日期/HAC/tie/队列及DB/network poison。最小相关测试本地执行，广域矩阵交CI，不扩历史测试债务。
 
@@ -81,22 +83,32 @@ F-011：D1/D2/D5唯一问题、零fit证据、精确目标与停止；F-012：D1
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本页§1/§3/§4/§7；原S设计§11.2 | artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261110/cause_v1.json | DESIGN_COMPLETE_ONLY | 无 |
-| F-012 | 本页§3/§5/§6 | artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261109/prepare_v2/prepared.json；fit_v1/acceptance.json | DESIGN_COMPLETE_ONLY | 无 |
-| F-013 | 本页§8/§9 | artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261110/cause_v1.json；原S设计§11.2 | DESIGN_COMPLETE_ONLY | 无 |
+| F-011 | backend/services/hmm_risk/risk_l2_member_return.py：within_training/within_fit/within_metrics | test: backend/tests/hmm_risk/test_risk_l2_member_within.py | ready | 无 |
+| F-012 | backend/services/hmm_risk/risk_l2_member_return.py：within_inputs/within_close/within_predict | test: backend/tests/hmm_risk/test_risk_l2_member_within.py；原S直接回归 | ready | 无 |
+| F-013 | scripts/hmm_risk/run_risk_l2_member_within.py：preflight/fit/predict/evaluate | test: backend/tests/hmm_risk/test_risk_l2_member_within.py | ready | 无 |
 
-矩阵仅验收本次归因/设计文档，设计无未定义缺口；W源码、6-fit、模型效果和场景采用均未开始，精确合同尚待批准。这不是简化实现豁免，也不以原S载体冒报W模型完成。
+矩阵当前仅证明源码覆盖批准完整研究流程，并通过直接验证；正式6-fit、模型效果和场景采用尚未执行，不将原S载体或合成测试冒报W模型完成。正式研究结果将在§11接续，不以省略阶段作完成豁免。
 
 ## 9. Risks / Production Gates / Rollout / Rollback
 
 无新增信息，center也可能完全无效；TRAIN IC是拟合内乐观结果，不能以其为预测证据。协方差是关联，不是因果归因；季度系数变化未证明机制漂移。反复使用相同历史有研究选择偏差；Q4仅7成熟日。未复权价格/真实股票复权队列口径不一尚未量化为根因，本提案不偷改该口径。
 
-production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；database_access=false；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false；QE_tasks=0；cleanup未授权。Rollout仅版本化文档提案，原资产和消费不动，无生产回滚动作；未来实际源码分类按changed-files，不预设共享依赖runtime=none。
+production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；database_access=false；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false；QE_tasks=0；cleanup未授权。Rollout仅版本化HMM研究源码/文件，原资产和消费不动，无生产回滚动作；实际源码分类按changed-files，不预设共享依赖runtime=none。
 
 ## 10. 批准与审核记录
 
-`L2-WITHIN-MEMBER-D1～D6=PROPOSED_NOT_APPROVED`。本轮用户“开始按建议执行下一步的任务”用于执行零fitP0及提出有据方案，不自动扩展为W训练批准。用户可以批准本唯一包，或选择停止当前20D/Ridge目标演进；不得为了让长任务持续而增加候选。
+`L2-WITHIN-MEMBER-D1～D6=APPROVED_BY_USER`。2026-11-11用户在#7190设计/归因合入后明确“批准执行下一步”，批准唯一W实施和6-fit。此前“开始按建议执行下一步的任务”仅用于零fitP0的授权历史保留，不据此追认此前执行过W训练；当前正式fit仍为0。不得为了让长任务持续而增加候选。
 
-文档审修和最终F2结果在本节及同一PR记录，不另生成审核报告。DESIGN-COMPLIANCE-001：本轮完整交付归因/提案，不以文档冒报W实现；旧负结果/NA/未知原因公开，无fallback；原S/C合同和他模块不变；所有新公式/6-fit均标待批准，不私增已生效门禁。
+文档审修和最终F2结果在本节及同一PR记录，不另生成审核报告。DESIGN-COMPLIANCE-001：完整实现已批准W流程，不以源码冒报研究效果；旧负结果/NA/未知原因公开，无fallback；原S/C合同和他模块不变；只实施用户批准的公式/6-fit，不新增经济门禁。
 
 两轮作者审修（非独立第三方）：第一轮核对真实receipt/数学分解，修正“预测方差大部分来自日期间”的泛化措辞（Q4为47.88%，不能称全季度多数），明确W为relative score及旧中心化路线已执行。第二轮核对TRAIN共同mask与推断事前E_t、原scaler/alpha下损失变化、未来标签隔离、控制复用/6-fit边界、迁移及停止规则；F2初验将未来尚未实施状态误写为设计gap，已把矩阵严格限定为本次完整设计，实施pending在正文单列，未豁免实现。三份F2及diff检查通过；原S全部正文/精确合同/正式结果、父蓝图原S历史/Index/Matrix/旧变更历史逐块比对保持。最终HEAD及CI见同一PR；本轮只修改三份HMM文档。
+
+### 10.1 2026-11-11源码审核与直接验证
+
+实施基线710a9315a8c96e20ce2bf7c01275e257e80007a0。仅追加独立within_*合同、数值/验证/评价，并新增专属CLI/直接测试；原S源码正文逐块保持，不扩旧schema。第一轮作者审核修正新合同初始化，核对真实TRAIN残差/固定scaler和加权正常方程、日期-only残差列、季度/旧S身份拒绝、失败attempt及同preflight换output不能重试。第二轮补齐W/S共同日期双方均值、高低组paired HAC、TRAIN/推断中心集合数量、非有限提前拒绝及显式错误pin不得忽略；双fresh-process合成W参数/receipt一致。
+
+相关小矩阵52项通过（新W＋原S＋旧loss），随后两个受影响/新增节点通过；模块registry 8项、ownership/module/计划映射及L0无finding。新W直接节点目前13项，广域HMM矩阵交CI/Nightly，不本地重跑全量。Ruff/py_compile、最终两份F2、scope/diff及fresh-process CLI/导入结果写同一PR。此为源码自审，非独立第三方；正式新增研究fit仍为0，原10/10不变，未访问新的tail或写库/服务/数据集。
+
+## 11. 正式研究进度
+
+待源码交付后，在固定clean HEAD执行三份原TRAIN/控制/完整特征的file-only预检；通过后执行本已批准6-fit、双process预测及已消费事实评价。当前尚未开始，不先填模型/效果结论。

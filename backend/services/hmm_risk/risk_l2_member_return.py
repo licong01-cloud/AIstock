@@ -971,3 +971,481 @@ def evaluate(prepared, acceptance, prediction, prediction_acceptance):
     return receipt(
         {k: v for k, v in result.items() if k != "receipt_sha256"} | dict(evaluation_source_identity=facts.identity())
     )
+
+
+# Independent approved W contract. Legacy S/C schemas and functions above stay strict.
+WITHIN_VERSION = "hmm_l2_within_date_member_return_ridge_v1"
+WITHIN_PINS = dict(
+    prepared="06d3779b02a8fa295827f6d0e396c5f95c99f0ec7b1ed31ba414811b5f6bc82a",
+    controls="a20f6b3e5db867ba78775b56c2ad6acb1d6adfd5a06550c44ea03a2b534bf95d",
+    predictions="d58daf75098914efcf03a59aa2db5e60352040b5c6f5cfcacb79addd36b2c36a",
+)
+WITHIN_CONTRACT = dict(
+    CONTRACT,
+    version=WITHIN_VERSION,
+    target="within_date_S_residual_on_original_common_TRAIN_mask",
+    prediction="relative_member_return_score; center_on_ex_ante_feature_available_L2",
+    scaler="reuse_matching_frozen_S_raw_TRAIN_mean_population_std_active",
+    planned_fits=6,
+    frozen_controls=WITHIN_PINS,
+)
+
+
+def within_inputs(prepared_path, controls_path, predictions_path):
+    """Full file-only preflight; fit children receive only one quarter wrapper."""
+    prepared, packets, _, features = load_prepared(prepared_path, WITHIN_PINS["prepared"])
+    controls = core.inputs._asset(str(controls_path), WITHIN_PINS["controls"])
+    baseline = core.inputs._asset(str(predictions_path), WITHIN_PINS["predictions"])
+    require(
+        controls["schema_version"] == VERSION + "_fit_acceptance"
+        and controls["contract"] == CONTRACT
+        and controls["completed_fits"] == 10
+        and controls["status"] == "COMPLETED"
+        and baseline["schema_version"] == VERSION + "_predictions"
+        and baseline["fit_acceptance_sha256"] == controls["receipt_sha256"]
+        and baseline["features_sha256"] == features["receipt_sha256"],
+        "W frozen control identity differs",
+    )
+    for vintage in VINTAGES:
+        q = vintage["id"]
+        for arm in ("S", "C"):
+            model = controls["models"][q][arm]
+            validate_model(model)
+            require(model["vintage"] == vintage and model["arm"] == arm, "W control quarter swapped")
+        within_training(packets[q], controls["models"][q]["S"])
+    return prepared, packets, controls, baseline, features
+
+
+def within_training(packet, reference):
+    rows = validate_packet(packet)
+    validate_model(reference)
+    require(
+        reference["arm"] == "S"
+        and reference["vintage"] == packet["vintage"]
+        and reference["packet_sha256"] == packet["receipt_sha256"]
+        and reference["mask_sha256"] == packet["mask_sha256"],
+        "W reference TRAIN identity differs",
+    )
+    z, y, weights, scaler = loss._ridge_inputs([r[:4] for r in rows])
+    require(all(reference["parameters"][k] == scaler[k] for k in scaler), "W frozen scaler differs")
+    # The recomputation above verifies the frozen scaler; it does not choose another one.
+    residual_x, residual_y = z.copy(), y.copy()
+    days = np.asarray([r[0] for r in rows])
+    for day in sorted(set(days)):
+        ids = np.flatnonzero(days == day)
+        residual_x[ids] -= z[ids].mean(axis=0)
+        residual_y[ids] -= y[ids].mean()
+    require(np.isfinite(residual_x).all() and np.isfinite(residual_y).all(), "W nonfinite TRAIN residual")
+    return residual_x, residual_y, weights, scaler
+
+
+def within_fit(packet, reference, output, attempt_root, head, numeric):
+    from sklearn.linear_model import Ridge
+
+    validate_numeric(numeric)
+    x, y, weights, scaler = within_training(packet, reference)
+    write_once(
+        Path(attempt_root) / (packet["vintage"]["id"] + ".W.json"),
+        receipt(dict(packet_sha256=packet["receipt_sha256"], arm="W", fit_kernel_attempts=1)),
+    )
+    fitted = Ridge(**loss.PARAMS).fit(x, y, sample_weight=weights)
+    parameters = dict(**scaler, coef=fitted.coef_.tolist(), intercept=float(fitted.intercept_))
+    result = receipt(
+        dict(
+            schema_version=WITHIN_VERSION + "_model",
+            contract=WITHIN_CONTRACT,
+            arm="W",
+            vintage=packet["vintage"],
+            parameters=parameters,
+            model_sha256=canonical_sha256(parameters),
+            reference_S_sha256=reference["model_sha256"],
+            packet_sha256=packet["receipt_sha256"],
+            mask_sha256=packet["mask_sha256"],
+            catalog=packet["catalog"],
+            release_binding=packet["release_binding"],
+            source_commit=head,
+            numeric_environment=numeric,
+            fit_rows=len(y),
+            fit_dates=len({r[0] for r in packet["rows"]}),
+            sample_weight_sum=float(weights.sum()),
+            training_residual_mean=float(np.average(y, weights=weights)),
+            train_center_count_range=[
+                min(Counter(r[0] for r in packet["rows"]).values()),
+                max(Counter(r[0] for r in packet["rows"]).values()),
+            ],
+            fits=1,
+            evaluation_outcomes_read=False,
+        )
+    )
+    within_validate_model(result)
+    write_once(Path(output) / "model.json", result)
+    return result
+
+
+def within_validate_model(model):
+    core.verify_receipt(model)
+    require(
+        model["schema_version"] == WITHIN_VERSION + "_model"
+        and model["contract"] == WITHIN_CONTRACT
+        and model["arm"] == "W"
+        and model["vintage"] in VINTAGES
+        and model["fits"] == 1
+        and model["evaluation_outcomes_read"] is False
+        and model["model_sha256"] == canonical_sha256(model["parameters"])
+        and model["release_binding"]["manifest_sha256"] == PINS["manifest"]
+        and model["catalog"] == sorted(set(model["catalog"]))
+        and len(model["catalog"]) == 131
+        and re.fullmatch(r"[0-9a-f]{40}", model["source_commit"]) is not None,
+        "W model contract differs",
+    )
+    loss.parameter_arrays(model["parameters"])
+    validate_numeric(model["numeric_environment"])
+
+
+def within_close(groups, wrappers, head, features_pin):
+    require(
+        len(groups) == 2 and canonical_json_bytes(groups[0]) == canonical_json_bytes(groups[1]), "W fresh fits differ"
+    )
+    require(set(groups[0]) == set(wrappers) == {v["id"] for v in VINTAGES}, "W missing quarter")
+    for q, model in groups[0].items():
+        within_validate_model(model)
+        wrapper = wrappers[q]
+        core.verify_receipt(wrapper)
+        reference = wrapper["reference_S"]
+        validate_model(reference)
+        require(
+            wrapper["schema_version"] == WITHIN_VERSION + "_train_reference"
+            and wrapper["contract"] == WITHIN_CONTRACT
+            and wrapper["source_commit"] == head
+            and model["source_commit"] == head
+            and reference["vintage"] == model["vintage"]
+            and model["vintage"]["id"] == q
+            and model["packet_sha256"] == wrapper["packet_sha256"]
+            and model["reference_S_sha256"] == reference["model_sha256"]
+            and model["mask_sha256"] == reference["mask_sha256"]
+            and model["fit_rows"] == reference["fit_rows"]
+            and model["fit_dates"] == reference["fit_dates"]
+            and all(model["parameters"][k] == reference["parameters"][k] for k in ("mean", "scale", "active")),
+            "W fit identity differs",
+        )
+    return receipt(
+        dict(
+            schema_version=WITHIN_VERSION + "_fit_acceptance",
+            contract=WITHIN_CONTRACT,
+            source_commit=head,
+            status="COMPLETED",
+            completed_fits=6,
+            models=groups[0],
+            features_sha256=features_pin,
+            fresh_processes=2,
+            automatic_promotion=False,
+        )
+    )
+
+
+def within_validate_acceptance(acceptance):
+    core.verify_receipt(acceptance)
+    require(
+        acceptance["schema_version"] == WITHIN_VERSION + "_fit_acceptance"
+        and acceptance["contract"] == WITHIN_CONTRACT
+        and acceptance["status"] == "COMPLETED"
+        and acceptance["completed_fits"] == 6
+        and acceptance["fresh_processes"] == 2
+        and set(acceptance["models"]) == {v["id"] for v in VINTAGES},
+        "W fit acceptance differs",
+    )
+    for q, model in acceptance["models"].items():
+        within_validate_model(model)
+        require(
+            model["source_commit"] == acceptance["source_commit"] and model["vintage"]["id"] == q, "W model swapped"
+        )
+
+
+def within_predict(acceptance, features):
+    within_validate_acceptance(acceptance)
+    validate_prediction_features(features)
+    require(acceptance["features_sha256"] == features["receipt_sha256"], "W feature binding differs")
+    rows, centers = [], {}
+    for vintage in VINTAGES:
+        model = acceptance["models"][vintage["id"]]
+        require(model["vintage"] == vintage and model["catalog"] == features["catalog"], "W forecast identity differs")
+        mean, scale, active, coef, intercept = loss.parameter_arrays(model["parameters"])
+        for day in schedule(features["calendar"], vintage)["predict"]:
+            items = features["rows"][day]
+            eligible = [c for c in features["catalog"] if items[c]["features"] is not None]
+            values = {}
+            if len(eligible) >= 2:
+                x = np.asarray([items[c]["features"] for c in eligible], dtype=float)
+                z = (x[:, active] - mean[active]) / scale[active]
+                require(np.isfinite(z).all(), "W nonfinite forecast")
+                scores = (z - z.mean(axis=0)) @ coef + intercept
+                require(np.isfinite(z).all() and np.isfinite(scores).all(), "W nonfinite forecast")
+                values = dict(zip(eligible, scores.tolist()))
+            centers[day] = dict(codes=eligible, canonical_sha256=canonical_sha256(eligible))
+            for code in features["catalog"]:
+                value = values.get(code)
+                reason = items[code]["reason_code"]
+                if items[code]["features"] is not None and len(eligible) < 2:
+                    reason = "insufficient_cross_section"
+                rows.append(
+                    dict(
+                        trade_date=day,
+                        as_of_date=features["as_of"][day],
+                        sector_code=code,
+                        vintage_id=vintage["id"],
+                        model_sha256=model["model_sha256"],
+                        relative_member_return_score=value,
+                        availability="available" if value is not None else "unavailable",
+                        reason_code=reason,
+                    )
+                )
+    return receipt(
+        dict(
+            schema_version=WITHIN_VERSION + "_predictions",
+            contract=WITHIN_CONTRACT,
+            fit_acceptance_sha256=acceptance["receipt_sha256"],
+            features_sha256=features["receipt_sha256"],
+            release_binding=features["release_binding"],
+            predictions=rows,
+            centering_sets=centers,
+            fits=0,
+            evaluation_outcomes_read=False,
+            policy_applied=False,
+        )
+    )
+
+
+def within_summary(daily, calendar):
+    def part(days):
+        paired = [d for d in days if daily[d]["delta"] is not None]
+        ws = [d for d in days if daily[d]["versus_S"] is not None]
+        return {
+            **{k: hac({d: daily[d][k] for d in paired}, calendar) for k in ("W", "C", "delta", "momentum")},
+            "S": hac({d: daily[d]["S"] for d in ws}, calendar),
+            "W_on_WS": hac({d: daily[d]["W"] for d in ws}, calendar),
+            "versus_S": hac({d: daily[d]["versus_S"] for d in ws}, calendar),
+            "coverage": dict(
+                requested_dates=len(days),
+                paired_WC=len(paired),
+                paired_WS=len(ws),
+                undefined_dates=[d for d in days if daily[d]["delta"] is None],
+            ),
+        }
+
+    return dict(
+        full=part(daily),
+        quarters={
+            v["id"]: part([d for d in daily if v["effective_start"] <= d <= v["effective_end"]]) for v in VINTAGES
+        },
+    )
+
+
+def within_daily(scores, outcomes, momentum=None):
+    values = {arm: rank_ic(xs, outcomes) for arm, xs in scores.items()}
+    return dict(
+        **values,
+        n=len(outcomes),
+        momentum=rank_ic(momentum, outcomes) if momentum is not None else None,
+        delta=values["W"] - values["C"] if values["W"] is not None and values["C"] is not None else None,
+        versus_S=values["W"] - values["S"] if values["W"] is not None and values["S"] is not None else None,
+    )
+
+
+def within_metrics(prediction, baseline, labels, features, cohort):
+    """One common row universe; separate main WC and diagnostic WS date pairs."""
+    expected = [(d, c) for d in features["prediction_dates"] for c in features["catalog"]]
+    maps = {}
+    for arm, rows, field in (
+        ("W", prediction["predictions"], "relative_member_return_score"),
+        ("S", baseline["predictions"]["S"], "expected_member_return"),
+        ("C", baseline["predictions"]["C"], "expected_member_loss"),
+    ):
+        require([(r["trade_date"], r["sector_code"]) for r in rows] == expected, "W evaluation grid differs")
+        require(all(r[field] is None or math.isfinite(r[field]) for r in rows), "W invalid evaluation score")
+        maps[arm] = {
+            (r["trade_date"], r["sector_code"]): (-r[field] if arm == "C" else r[field])
+            if r[field] is not None
+            else None
+            for r in rows
+        }
+    require(set(labels) == set(features["prediction_dates"]), "W label dates differ")
+    daily, errors, groups, counts = {}, {}, {}, Counter()
+    for day in features["prediction_dates"]:
+        require(set(labels[day]) == set(features["catalog"]), "W label denominator differs")
+        scores, ys, downs, ups, momentum = {a: [] for a in maps}, [], [], [], []
+        for code in features["catalog"]:
+            label = labels[day][code]
+            counts[label["status"]] += 1
+            if label["status"] != "AVAILABLE":
+                require(
+                    (label["status"], label["reason"])
+                    in {
+                        ("UNAVAILABLE", "NO_ASOF_MEMBER"),
+                        ("UNAVAILABLE", "FIXED_COHORT_ENDPOINT_NA"),
+                        ("OUTCOME_NOT_MATURE", "OUTCOME_NOT_MATURE"),
+                    }
+                    and all(label[k] is None for k in ("B", "C", "upside")),
+                    "W unknown target absence",
+                )
+                counts[label["reason"] + "_reason"] += 1
+                continue
+            if any(maps[a][day, code] is None for a in maps):
+                counts["PREDICTION_UNAVAILABLE"] += 1
+                continue
+            y, down = signed_label(label)
+            ys.append(y)
+            downs.append(down)
+            ups.append(label["upside"])
+            momentum.append(features["rows"][day][code]["features"][ALL_CORE_FEATURES.index("excess_return_Nd")])
+            for arm in maps:
+                scores[arm].append(maps[arm][day, code])
+        daily[day] = within_daily(scores, ys, momentum)
+        if ys:
+            centered_y = np.asarray(ys) - np.mean(ys)
+            errors[day] = {}
+            for arm in ("W", "S"):
+                residual = np.asarray(scores[arm]) - np.mean(scores[arm]) - centered_y
+                errors[day][arm + "_mse"] = float(np.mean(residual**2))
+                errors[day][arm + "_mae"] = float(np.mean(np.abs(residual)))
+            errors[day].update(zero_mse=float(np.mean(centered_y**2)), zero_mae=float(np.mean(np.abs(centered_y))))
+            groups[day] = {
+                a: {
+                    side: {
+                        name: extreme_mean(xs, values, high=side == "high")
+                        for name, values in (("signed_return", ys), ("downside", downs), ("upside", ups))
+                    }
+                    for side in ("high", "low")
+                }
+                for a, xs in scores.items()
+            }
+    unique = {}
+    for row in cohort["rows"]:
+        key, fact = (row["date"], row["stock"]), (row["code"], row["stock_return"], row["reason"])
+        require(key not in unique or unique[key] == fact, "W cross-seed fact conflict")
+        unique[key] = fact
+
+    def transfer(selected):
+        result, na = {}, Counter()
+        for day in sorted({d for d, _ in selected}):
+            require(day in features["prediction_dates"], "W cohort date outside request")
+            scores, ys = {a: [] for a in maps}, []
+            for (d, _), (code, outcome, reason) in selected.items():
+                if d != day:
+                    continue
+                if outcome is None:
+                    require(isinstance(reason, str) and reason, "W untyped cohort absence")
+                    na[reason] += 1
+                    continue
+                require(code in features["catalog"] and math.isfinite(outcome), "W unknown cohort identity")
+                if any(maps[a][day, code] is None for a in maps):
+                    na["PREDICTION_UNAVAILABLE"] += 1
+                    continue
+                ys.append(outcome)
+                for arm in maps:
+                    scores[arm].append(maps[arm][day, code])
+            result[day] = within_daily(scores, ys)
+        return result, dict(na)
+
+    transfer_days, transfer_na = transfer(unique)
+    seeds = {}
+    for seed in sorted({r["seed"] for r in cohort["rows"]}):
+        selected = {(r["date"], r["stock"]): unique[r["date"], r["stock"]] for r in cohort["rows"] if r["seed"] == seed}
+        ds, na = transfer(selected)
+        seeds[str(seed)] = dict(stats=within_summary(ds, features["calendar"]), na=na, independent_sample=False)
+
+    def auxiliary(days):
+        ds = [d for d in days if d in errors]
+        spreads = {
+            a: {d: groups[d][a]["high"]["signed_return"] - groups[d][a]["low"]["signed_return"] for d in ds}
+            for a in maps
+        }
+        return dict(
+            dates=len(ds),
+            centered_errors={
+                k: math.fsum(errors[d][k] for d in ds) / len(ds) if ds else None
+                for k in ("W_mse", "S_mse", "zero_mse", "W_mae", "S_mae", "zero_mae")
+            },
+            groups={
+                a: {
+                    side: {
+                        name: math.fsum(groups[d][a][side][name] for d in ds) / len(ds) if ds else None
+                        for name in ("signed_return", "downside", "upside")
+                    }
+                    for side in ("high", "low")
+                }
+                for a in maps
+            },
+            overlapping_reference_not_nav=True,
+            spread={
+                **{a: hac(values, features["calendar"]) for a, values in spreads.items()},
+                **{
+                    key: hac({d: spreads["W"][d] - spreads[a][d] for d in ds}, features["calendar"])
+                    for key, a in (("delta", "C"), ("versus_S", "S"))
+                },
+            },
+        )
+
+    l2, cohort_stats = within_summary(daily, features["calendar"]), within_summary(transfer_days, features["calendar"])
+    status = decision(
+        {"S": l2["full"]["W"], "delta": l2["full"]["delta"]},
+        {"S": cohort_stats["full"]["W"], "delta": cohort_stats["full"]["delta"]},
+    )
+    return receipt(
+        dict(
+            schema_version=WITHIN_VERSION + "_evaluation",
+            contract=WITHIN_CONTRACT,
+            status=status,
+            prediction_sha256=prediction["receipt_sha256"],
+            baseline_prediction_sha256=baseline["receipt_sha256"],
+            l2=l2,
+            cohort=cohort_stats,
+            daily_l2=daily,
+            daily_cohort=transfer_days,
+            daily_errors=errors,
+            groups=groups,
+            auxiliary=dict(
+                full=auxiliary(daily),
+                quarters={
+                    v["id"]: auxiliary([d for d in daily if v["effective_start"] <= d <= v["effective_end"]])
+                    for v in VINTAGES
+                },
+            ),
+            seed_diagnostics=seeds,
+            evaluation_counts=dict(counts),
+            cohort_na=transfer_na,
+            cohort_source_rows=len(cohort["rows"]),
+            cohort_unique_keys=len(unique),
+            fits=0,
+            historical_as_known=False,
+            untouched_holdout=False,
+            economic_value_confirmed=False,
+            qe_submitted=False,
+        )
+    )
+
+
+def within_evaluate(prepared, controls, baseline, features, acceptance, prediction, sealed):
+    core.verify_receipt(sealed)
+    require(
+        sealed["schema_version"] == WITHIN_VERSION + "_prediction_acceptance"
+        and sealed["status"] == "PASS"
+        and sealed["fresh_processes"] == 2
+        and sealed["prediction_sha256"] == prediction["receipt_sha256"]
+        and sealed["fit_acceptance_sha256"] == acceptance["receipt_sha256"],
+        "W evaluation requires sealed dual-process predictions",
+    )
+    require(within_predict(acceptance, features) == prediction, "W sealed forecast differs")
+    core.verify_receipt(controls, WITHIN_PINS["controls"])
+    core.verify_receipt(baseline, WITHIN_PINS["predictions"])
+    request, original, _, cached_features, _, _ = load_request(prepared["request_path"], prepared["request_sha256"])
+    cohort = member.pinned_json(request["cohort_path"], PINS["cohort_file"])
+    core.verify_receipt(cohort, PINS["cohort"])
+    facts = member.FrozenMemberSource(
+        cached_features, request, provider_absence_manifest=Path(original["source"]["provider_absence_manifest"])
+    )
+    labels = facts.targets(features["prediction_dates"], CONTRACT["prediction_end"])
+    result = within_metrics(prediction, baseline, labels, features, cohort)
+    facts.unchanged()
+    return receipt(
+        {k: v for k, v in result.items() if k != "receipt_sha256"} | dict(evaluation_source_identity=facts.identity())
+    )
