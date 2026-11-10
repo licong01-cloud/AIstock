@@ -236,6 +236,12 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
             "source_created_at": run.get("created_at"),
             "source_updated_at": run.get("updated_at"),
         }
+        ordinary_retry = (
+            bool(run.get("retry_of_run_id"))
+            and run.get("recovery_kind") is None
+            and run.get("recovery_scope_json") in (None, {})
+            and run.get("recovery_scope_hash") is None
+        )
         run_header = {
             "run_id": run_id,
             "roster_hash": run.get("roster_hash"),
@@ -249,7 +255,14 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
             "logical_status": logical_status,
             "reason_json": reason,
             "archive_schema_version": "v2" if archive_schema_version == MULTI_ALPHA_COMBINE_SCHEMA_VERSION_V2 else "v1",
-            "retry_of_run_id": run.get("retry_of_run_id"),
+            # In archive v2 this tuple describes child-targeted recovery only.
+            # Keep ordinary retry lineage in the source metadata below rather
+            # than fabricating a recovery kind/scope or weakening the CHECK.
+            "retry_of_run_id": (
+                None
+                if ordinary_retry and archive_schema_version == MULTI_ALPHA_COMBINE_SCHEMA_VERSION_V2
+                else run.get("retry_of_run_id")
+            ),
             "recovery_kind": run.get("recovery_kind"),
             "recovery_scope_json": (
                 _ensure_mapping(run.get("recovery_scope_json"))
@@ -280,6 +293,11 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
                 "recovery_attempt_count": len(recovery_attempts),
             },
         }
+        if ordinary_retry:
+            run_source["metadata"]["retry_lineage"] = {
+                "kind": "ordinary_retry",
+                "retry_of_run_id": run["retry_of_run_id"],
+            }
         loo_rows = [_build_loo_row(row, run_id=run_id) for row in _ensure_list(source.get("loo"))]
         stats = {
             "run_id": run_id,
