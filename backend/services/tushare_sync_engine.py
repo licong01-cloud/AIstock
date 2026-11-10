@@ -729,8 +729,9 @@ class TushareSyncEngine:
         return complete_stk_limit_daily_references(rows, daily_rows, trade_date)
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, reference_fill_only_codes=()) -> int:
-        from .data_integrity.stock_scope import filter_dataset_rows
+        from .data_integrity.stock_scope import filter_dataset_rows, filter_delisting_panel_rows
         rows = filter_dataset_rows(spec, rows)
+        rows = filter_delisting_panel_rows(conn, spec, rows)
         if reference_fill_only_codes:
             if spec.name != "stk_limit":
                 raise ValueError("reference-only supplement is restricted to stk_limit")
@@ -750,7 +751,11 @@ class TushareSyncEngine:
         if spec.name == "daily_basic":
             from .tushare_supplemental_inputs import normalize_rows
             rows = normalize_rows(spec, rows)
-        return self._upsert_plain_batch(conn, spec, rows)
+        inserted = self._upsert_plain_batch(conn, spec, rows)
+        if spec.name == "stock_st_events":
+            from .data_integrity.stock_scope import wake_delisting_panel_validations
+            wake_delisting_panel_validations(conn, rows)
+        return inserted
 
     def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, fill_only_reference=False) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
@@ -1504,6 +1509,9 @@ class TushareSyncEngine:
         """One dated SH/SZ traded scope; never PIT buy eligibility or row-count guesses."""
         from .data_integrity.validation import PhysicalValidator, rows
         expected = PhysicalValidator()._traded(conn, day, spec.target_table)
+        from .data_integrity.stock_scope import DELISTING_PANEL_POLICY, delisting_panel_exclusions
+        excluded = delisting_panel_exclusions(conn, spec.name, day, expected)
+        expected = set(expected) - excluded.keys()
         fields = DENSE_CYQ_FIELDS if spec.name == "cyq_perf" else ()
         observed = rows(conn, f"SELECT ts_code{',' if fields else ''}{','.join(fields)} "
                         f"FROM {spec.target_table} WHERE trade_date=%s", (day,))
@@ -1514,7 +1522,9 @@ class TushareSyncEngine:
         invalid = {code for code in expected & facts.keys()
                    if any(not _is_finite_number(facts[code].get(field)) for field in fields)}
         return {"expected_rows": len(expected), "valid_rows": len(expected)-len(missing)-len(invalid),
-                "missing_symbols": sorted(missing), "invalid_symbols": sorted(invalid)}
+                "missing_symbols": sorted(missing), "invalid_symbols": sorted(invalid),
+                "applicability_policy": DELISTING_PANEL_POLICY,
+                "excluded_delisting_symbols": sorted(excluded)}
 
     def _complete_dense_panel(self, conn, spec, day):
         """Only missing keys use exact provider calls; empty and HTTP failure stay distinct."""
@@ -1596,12 +1606,13 @@ class TushareSyncEngine:
                 if inserted > 0:
                     audit_quality = self._audit_quality_for_rows(spec, inserted)
                 if dense_panel is not None:
-                    complete = (dense_panel["expected_rows"] > 0 and not dense_panel["missing_symbols"]
+                    complete = ((dense_panel["expected_rows"] > 0 or dense_panel.get("excluded_delisting_symbols"))
+                                and not dense_panel["missing_symbols"]
                                 and not dense_panel["invalid_symbols"])
                     audit_quality = {"quality_status": "ok" if complete else "low_coverage",
                         "expected_rows": dense_panel["expected_rows"],
                         "coverage_ratio": dense_panel["valid_rows"]/dense_panel["expected_rows"]
-                            if dense_panel["expected_rows"] else 0.0}
+                            if dense_panel["expected_rows"] else 1.0 if complete else 0.0}
                     if not complete:
                         audit_quality["failure_category"] = "independent_dated_stock_panel_incomplete"
                 audit_metadata = {

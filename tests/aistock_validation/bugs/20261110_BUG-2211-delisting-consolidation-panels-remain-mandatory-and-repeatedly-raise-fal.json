@@ -1,0 +1,397 @@
+{
+  "actual": "User explicitly excludes bak_basic and cyq_perf collection after the dated official delisting-consolidation effective boundary. Current traded-stock denominator still requires these rows, repeatedly retries whole dates and marks global daily integrity PARTIAL. Production ledger: 292 audited dates, 133 INCOMPLETE, 282 missing stock-dates/19 securities; latest 002731.SZ gaps 2026-10-23..11-09. Some older consolidation events are absent locally but retrievable from Tushare st by ts_code. Preserve pre-boundary facts, unknown/unproven absences and ordinary ST data; do not hide holdings daily/minute quotes, change PIT, alter frozen releases, or fabricate provider absence. One shared applicability contract must drive storage, targeted supplements, validation, stale retry recovery and precise alert reconciliation. Production raw event backfill remains separately authorized after DEV.",
+  "allowed_write_scope": [
+    "backend/services/data_integrity/stock_scope.py",
+    "backend/services/data_integrity/validation.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/services/data_integrity/worker.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/test_data_sync_targets.py",
+    "backend/tests/test_delisting_panel_scope.py",
+    "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2211",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-10T04:49:20.168377Z",
+  "description": "User explicitly excludes bak_basic and cyq_perf collection after the dated official delisting-consolidation effective boundary. Current traded-stock denominator still requires these rows, repeatedly retries whole dates and marks global daily integrity PARTIAL. Production ledger: 292 audited dates, 133 INCOMPLETE, 282 missing stock-dates/19 securities; latest 002731.SZ gaps 2026-10-23..11-09. Some older consolidation events are absent locally but retrievable from Tushare st by ts_code. Preserve pre-boundary facts, unknown/unproven absences and ordinary ST data; do not hide holdings daily/minute quotes, change PIT, alter frozen releases, or fabricate provider absence. One shared applicability contract must drive storage, targeted supplements, validation, stale retry recovery and precise alert reconciliation. Production raw event backfill remains separately authorized after DEV.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261110-c643cdfb96fe",
+      "timestamp": "2026-11-10T04:49:20.168377Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Official dated consolidation exclusions are applied consistently to non-execution panel ingestion and integrity; no repeated fetch or false gap alert for out-of-scope keys. Pre-consolidation and ordinary stock gaps remain failures. Existing facts and holdings quotes remain unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json",
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
+    "added_files": [
+      "backend/tests/test_delisting_panel_scope.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json",
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/data_integrity/stock_scope.py",
+        "backend/services/data_integrity/validation.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/data_integrity/worker.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/test_delisting_panel_scope.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "platform.db",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/data_integrity/stock_scope.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/validation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/data_integrity/worker.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_data_sync_targets.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/test_delisting_panel_scope.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/data_integrity/stock_scope.py",
+        "backend/services/data_integrity/validation.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/data_integrity/worker.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/test_delisting_panel_scope.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/data_integrity/worker.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/test_data_sync_targets.py",
+      "backend/tests/test_delisting_panel_scope.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_integrity/stock_scope.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/data_integrity/worker.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/test_data_sync_targets.py",
+      "backend/tests/test_delisting_panel_scope.py"
+    ]
+  },
+  "first_seen_at": "2026-11-10T04:49:20.168377Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7195,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7195",
+  "last_seen_at": "2026-11-10T04:49:20.168377Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_data_repair": {
+    "active_profile_write": false,
+    "dev_passed": true,
+    "insert_only_rows": 10,
+    "sql_path": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-repair.sql",
+    "sql_sha256": "99a4876e897332967bb123b4383fc44f31e74495af89caeb176792fa21b325d5",
+    "status": "pending_user_authorization",
+    "target": "aistock.market.stock_st_events"
+  },
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "review_evidence": [
+    "Correctness review: dated pub_date/imp_date boundary; ordinary ST and pre-consolidation remain required; a later actual listing terminates the old lifecycle exclusion; no PIT buy-universe or quote filtering.",
+    "Completeness/regression review: shared policy drives physical validator, storage and exact supplements; late lifecycle records wake existing validation-only targets, not new collectors; reuse existing fenced scheduler recovery for old retry/alert reconciliation.",
+    "DESIGN-COMPLIANCE-001: no partial implementation claimed complete, no silent/default-filled source facts, user-approved optional panel applicability only, no new gate or approval framework. Production source facts and post-restart activation remain pending separately."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process verify_dev.py loaded persistent BUG-2211 stock_scope/validator/engine; actual dated Tushare lifecycle rows and all19 before-boundary/quote noninterference assertions passed. DEV receipt X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/dev-validation.json; SQL/queue receipt exact-sql-dev-validation.json proves133 validation targets idempotent and already reclassified gaps do not requeue; production_write=false, runtime_action=false.",
+      "Fresh Python process verify_dev.py loaded tracked stock_scope/validator/engine; DEV dated source boundaries and holdings quote noninterference passed; X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/dev-validation.json and exact-sql-dev-validation.json; production_write=false,runtime_action=false.",
+      "Fresh Python process verify_dev.py loaded tracked stock_scope/validator/engine; DEV all282 known gaps across133 dates, dated source boundaries, native-validator ordinary-gap negative controls, holdings quote noninterference passed; X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/dev-validation.json and exact-sql-dev-validation.json; exact10-row SQL insert10/repeat0,133 idempotent validation targets; production_write=false,runtime_action=false."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Delisting consolidation panels remain mandatory and repeatedly raise false completeness alerts",
+  "trigger_condition": {
+    "fingerprint": "c643cdfb96fe7169b839ec7c",
+    "source_event_id": "FE-20261110-c643cdfb96fe"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

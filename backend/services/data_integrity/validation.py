@@ -265,6 +265,17 @@ class PhysicalValidator:
                     self._raw_scheduler(conn, source_aliases=False)._go_provider_codes(day, day), day)
             else:
                 expected = self._traded(conn, day, table if dataset != "adj_factor" else "market.kline_daily_raw")
+            panel_checks = {}
+            if dataset in {"bak_basic", "cyq_perf"}:
+                from .stock_scope import DELISTING_PANEL_POLICY, delisting_panel_exclusions
+                excluded = delisting_panel_exclusions(conn, dataset, day, expected)
+                expected = set(expected) - excluded.keys()
+                panel_checks = {"applicability_policy": DELISTING_PANEL_POLICY,
+                    "excluded_delisting_symbols": sorted(excluded),
+                    "excluded_delisting_count": len(excluded)}
+                if not expected and excluded:
+                    return ValidationResult(PartitionState.NOT_APPLICABLE, (), panel_checks,
+                        reason="all_traded_keys_in_delisting_consolidation")
             if not expected:
                 return unverified("independent_stock_scope_empty")
             observed = rows(conn, sql.SQL("SELECT * FROM {}.{} WHERE trade_date=%s").format(
@@ -284,7 +295,7 @@ class PhysicalValidator:
                 return key_result(expected, facts,
                     required_fields=("his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate")
                         if dataset == "cyq_perf" else (),
-                    checks={"coverage_basis": "independent_dated_traded_stock_keys",
+                    checks={**panel_checks, "coverage_basis": "independent_dated_traded_stock_keys",
                             "historical_provider_scan_required": False,
                             "required_fields": ["his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate"]
                                 if dataset == "cyq_perf" else []})

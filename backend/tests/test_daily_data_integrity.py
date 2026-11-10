@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 import pytest
+from backend.services.data_integrity import stock_scope
 
 from backend.services.data_integrity.contracts import (
     CheckCounts, PartitionState, ValidationResult, aggregate_day, effective_partition,
@@ -370,6 +371,7 @@ def test_dense_historical_facts_use_traded_keys_not_sparse_scan_receipts(monkeyp
     monkeypatch.setattr(validation, "rows", lambda _c, q, _p=(): [partition]
         if "dataset_date_refresh_audit" in str(q) else facts)
     monkeypatch.setattr(validator, "_traded", lambda *_a: {"000001.SZ"})
+    monkeypatch.setattr("backend.services.data_integrity.stock_scope.delisting_panel_exclusions", lambda *_a: {})
     monkeypatch.setattr(validator, "_scan_contract", lambda *_a: pytest.fail("dense facts must not require a source scan"))
     result = validator.validate(None, Obligation(dataset, "daily_series", "21:00"), date(2025, 8, 22), 0)
     expected = (PartitionState.UNVERIFIED if mutation == "dependency" else PartitionState.INCOMPLETE
@@ -548,3 +550,152 @@ def test_legacy_provider_scan_bse_keys_do_not_become_required_stock_facts():
     assert verify_scan(DAILY_BASIC, scan, []) == ([['2026-10-28', '000001.SZ']], [])
     index = provider_scan(INDEX_DAILY, facts, parameters={})
     assert len(index['entries']) == 2  # never apply an equity scope to index catalogues
+
+
+class Cursor:
+    def __init__(self, records):
+        self.records = records
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def execute(self, statement, parameters):
+        self.calls.append((statement, parameters))
+
+    def fetchall(self):
+        return self.records
+
+
+class Connection:
+    def __init__(self, records=()):
+        self.query = Cursor(records)
+
+    def cursor(self):
+        return self.query
+
+
+@pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf", "market.bak_basic"])
+def test_dated_consolidation_exclusion_is_one_bounded_shared_query(dataset):
+    day = date(2026, 10, 23)
+    conn = Connection([("002731.SZ", day)])
+    excluded = stock_scope.delisting_panel_exclusions(conn, dataset, day, {"002731.SZ", "000001.SZ"})
+    assert excluded == {"002731.SZ": day}
+    assert len(conn.query.calls) == 1
+    statement, parameters = conn.query.calls[0]
+    assert "market.stock_st_events" in statement and "ANY(" in statement
+    assert "pub_date" in statement and "imp_date" in statement
+    assert "stock_basic" in statement and "list_date" in statement
+    assert "stock_universe_pit" not in statement
+    assert parameters[0] == ["000001.SZ", "002731.SZ"]
+    assert parameters[1] == "退市整理期"
+    assert parameters[2:] == (day, day, day)
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "market.kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts"])
+def test_consolidation_scope_never_hides_holdings_quotes_or_other_facts(dataset):
+    conn = Connection([("002731.SZ", date(2026, 10, 23))])
+    assert stock_scope.delisting_panel_exclusions(conn, dataset, date(2026, 10, 29), {"002731.SZ"}) == {}
+    assert not conn.query.calls
+
+
+def test_no_codes_means_no_extra_query():
+    conn = Connection()
+    assert stock_scope.delisting_panel_exclusions(conn, "bak_basic", date(2026, 10, 23), set()) == {}
+    assert not conn.query.calls
+
+
+def test_only_dated_rows_are_filtered_and_existing_rows_are_not_deleted(monkeypatch):
+    from backend.services.tushare_dataset_specs import BAK_BASIC
+
+    rows = [{"ts_code": "002731.SZ", "trade_date": "20261022"},
+            {"ts_code": "002731.SZ", "trade_date": "20261023"},
+            {"ts_code": "000001.SZ", "trade_date": "20261023"}]
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda _c, _ds, d, _codes:
+                        {"002731.SZ": date(2026, 10, 23)} if d >= date(2026, 10, 23) else {})
+    original = [dict(row) for row in rows]
+    assert stock_scope.filter_delisting_panel_rows(None, BAK_BASIC, rows) == [rows[0], rows[2]]
+    assert rows == original
+
+
+def test_unknown_event_remains_required_instead_of_using_current_delisted_name():
+    conn = Connection()
+    assert stock_scope.delisting_panel_exclusions(conn, "bak_basic", date(2026, 1, 1), {"000004.SZ"}) == {}
+    assert "delist_date -" not in conn.query.calls[0][0]
+
+
+@pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf"])
+@pytest.mark.parametrize("ordinary_missing", [False, True])
+def test_validator_uses_same_scope_and_keeps_real_ordinary_gaps(monkeypatch, dataset, ordinary_missing):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation, RULE_VERSION, SCOPE_VERSION
+    from backend.services.data_integrity.contracts import PartitionState
+
+    raw = {"data_revision": 1, "validated_revision": 1, "validation_id": "raw-valid",
+           "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION, "validation_status": "VALID"}
+    fact = dict(ts_code="000001.SZ", his_low=1, his_high=2, cost_15pct=1, cost_50pct=1,
+                cost_85pct=2, weight_avg=1, winner_rate=0)
+    validator = validation.PhysicalValidator()
+    monkeypatch.setattr(validator, "_traded", lambda *_: {"000001.SZ", "002731.SZ"})
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda *_: {"002731.SZ": date(2026, 10, 23)})
+    monkeypatch.setattr(validation, "rows", lambda _c, statement, *_: [raw]
+                        if "dataset_date_refresh_audit" in str(statement) else [] if ordinary_missing else [fact])
+    result = validator.validate(None, Obligation(dataset, "daily_series", "21:00"), date(2026, 10, 29), 1)
+    assert result.state == (PartitionState.INCOMPLETE if ordinary_missing else PartitionState.VALID)
+    assert result.counts[0].expected == 1
+    assert result.checks["excluded_delisting_symbols"] == ["002731.SZ"]
+    assert result.checks["applicability_policy"] == stock_scope.DELISTING_PANEL_POLICY
+    assert all("002731.SZ" not in gap.get("symbols", []) for gap in result.gaps)
+
+
+def test_dense_supplement_does_not_request_excluded_security(monkeypatch):
+    from backend.services import tushare_sync_engine as module
+    from backend.services.tushare_dataset_specs import BAK_BASIC
+
+    engine = module.TushareSyncEngine()
+    monkeypatch.setattr("backend.services.data_integrity.validation.PhysicalValidator._traded",
+                        lambda *_: {"000001.SZ", "002731.SZ"})
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda *_: {"002731.SZ": date(2026, 10, 23)})
+    monkeypatch.setattr("backend.services.data_integrity.validation.rows", lambda *_: [{"ts_code": "000001.SZ"}])
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: pytest.fail("excluded key must not be fetched"))
+    receipt, written = engine._complete_dense_panel(None, BAK_BASIC, date(2026, 10, 29))
+    assert written == 0 and receipt["missing_symbols"] == [] and receipt["expected_rows"] == 1
+    assert receipt["excluded_delisting_symbols"] == ["002731.SZ"]
+
+
+def test_real_upsert_filters_only_panels_before_writing(monkeypatch):
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+    from backend.services.tushare_dataset_specs import BAK_BASIC
+
+    engine = TushareSyncEngine()
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda *_: {"002731.SZ": date(2026, 10, 23)})
+    written = []
+    monkeypatch.setattr(engine, "_upsert_plain_batch", lambda _c, _s, rows: written.extend(rows) or len(rows))
+    rows = [{"ts_code": "002731.SZ", "trade_date": "20261029"},
+            {"ts_code": "000001.SZ", "trade_date": "20261029"}]
+    assert engine._upsert_batch(None, BAK_BASIC, rows) == 1
+    assert written == [rows[1]]
+
+
+def test_late_lifecycle_event_wakes_only_affected_old_validation_targets(monkeypatch):
+    from backend.services.data_integrity import repository
+
+    day = date(2026, 10, 29)
+    conn = Connection([('bak_basic', day)])
+    queued = []
+    monkeypatch.setattr(repository, 'schema_installed', lambda _: True)
+    monkeypatch.setattr(repository, 'enqueue_validation', lambda _c, ds, d, **kw: queued.append((ds, d, kw)))
+    assert stock_scope.wake_delisting_panel_validations(conn, [{'ts_code': '002731.SZ', 'st_type': '退市整理期'}]) == 1
+    assert queued == [('bak_basic', day, {'source_completed': True})]
+    statement, _ = conn.query.calls[0]
+    assert "p.validation_status='INCOMPLETE'" in statement
+    assert "excluded_delisting_symbols" in statement and "'{validation,gaps}'" in statement
+
+
+def test_ordinary_st_event_does_not_wake_or_exempt_panels():
+    conn = Connection()
+    assert stock_scope.wake_delisting_panel_validations(conn, [{'ts_code': '002731.SZ', 'st_type': '*ST'}]) == 0
+    assert not conn.query.calls
