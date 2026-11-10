@@ -578,6 +578,210 @@ class Connection:
         return self.query
 
 
+def _legacy_completion(day, dataset="stock_st", api="stock_st", mode="by_date", count=1):
+    source = {"dataset": dataset, "trade_date": day, "data_source": "tushare", "status": "success",
+        "quality_status": "ok" if count else "empty_valid", "row_count": count,
+        "job_id": "job-legacy", "refreshed_at": datetime(2026, 10, 19, 12, tzinfo=timezone.utc),
+        "metadata": {"mode": mode, "tushare_api": api}}
+    job = {"job_id": "job-legacy", "status": "success", "summary": {"dataset": dataset,
+        "start_date": str(day), "end_date": str(day), "stats": {"dataset": dataset,
+            "job_id": "job-legacy", "total_batches": 1, "success_batches": 1, "failed_batches": 0,
+            "error": None}}}
+    return source, job
+
+
+def test_legacy_partition_requires_real_complete_job_and_physical_validation():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    facts = [{"ts_code": "000001.SZ", "ann_date": day}]
+    result = legacy_completion_result(STOCK_ST, day, 0, source, job, facts)
+    assert result.state == PartitionState.VALID
+    assert result.checks['coverage_basis'] == 'completed_legacy_job_current_database_partition'
+    assert result.checks['historical_vintage_proven'] is False
+    assert 'provider_scan' not in source['metadata']
+    missing = legacy_completion_result(STOCK_ST, day, 0, source, job, [])
+    assert missing.state == PartitionState.INCOMPLETE and missing.counts[0].missing == 1
+    bad = legacy_completion_result(STOCK_ST, day, 0, source, job, [{"ts_code": None, "ann_date": day}])
+    assert bad.state == PartitionState.INCOMPLETE and bad.counts[-1].invalid == 1
+
+
+@pytest.mark.parametrize('mutation', ['failed_job', 'incomplete_batches', 'wrong_dataset', 'wrong_day',
+    'wrong_job_id', 'missing_job', 'seed', 'partial_query', 'query_error', 'new_revision', 'bound_other_revision'])
+def test_legacy_completion_never_relaxes_unknown_or_changed_scope(mutation):
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    revision = 0
+    if mutation == 'failed_job':
+        job['status'] = 'failed'
+    elif mutation == 'incomplete_batches':
+        job['summary']['stats']['success_batches'] = 0
+    elif mutation == 'wrong_dataset':
+        job['summary']['dataset'] = 'dividend'
+    elif mutation == 'wrong_day':
+        job['summary']['end_date'] = '2026-10-18'
+    elif mutation == 'wrong_job_id':
+        job['summary']['stats']['job_id'] = 'different-job'
+    elif mutation == 'missing_job':
+        job = None
+    elif mutation == 'seed':
+        source['metadata']['mode'] = 'physical_audit_seed'
+    elif mutation == 'partial_query':
+        source['metadata']['pagination_complete'] = False
+    elif mutation == 'query_error':
+        job['summary']['stats']['error'] = 'query failed'
+    elif mutation == 'new_revision':
+        revision = 1
+    elif mutation == 'bound_other_revision':
+        source['metadata']['integrity_observed_revision'] = 1
+    result = legacy_completion_result(STOCK_ST, day, revision, source, job,
+        [{"ts_code": '000001.SZ', "ann_date": day}])
+    assert result.state == PartitionState.UNVERIFIED
+
+
+def test_legacy_zero_events_require_complete_period_scope_not_row_count_alone():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import TUSHARE_EXPRESS_RAW
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'tushare_express_raw', 'express_vip', 'by_period', 0)
+    result = legacy_completion_result(TUSHARE_EXPRESS_RAW, day, 0, source, job, [])
+    assert result.state == PartitionState.UNVERIFIED
+    source['metadata'].update(periods=['20260930'], date_column='ann_date', sparse_event_dataset=True)
+    job['summary']['stats']['periods'] = ['20260930']
+    result = legacy_completion_result(TUSHARE_EXPRESS_RAW, day, 0, source, job, [])
+    assert result.state == PartitionState.VALID
+    assert result.checks['query_periods'] == ['20260930']
+    job['summary']['stats']['periods'] = ['20260630']
+    assert legacy_completion_result(TUSHARE_EXPRESS_RAW, day, 0, source, job, []).state == PartitionState.UNVERIFIED
+
+
+def test_legacy_reference_current_table_cannot_stand_in_for_historical_snapshot():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_BASIC
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'stock_basic', 'stock_basic', 'single_call')
+    result = legacy_completion_result(STOCK_BASIC, day, 0, source, job,
+        [{"ts_code": '000001.SZ', 'list_date': date(1991, 4, 3)}])
+    assert result.state == PartitionState.UNVERIFIED
+    assert result.reason == 'historical_reference_scope_unproven'
+
+
+def test_legacy_etf_share_validation_reuses_publication_quality():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import ETF_SHARE_SIZE
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'etf_share_size', 'etf_share_size')
+    facts = [{'ts_code': '510300.SH', 'trade_date': day, 'total_share': 10, 'total_size': None}]
+    assert legacy_completion_result(ETF_SHARE_SIZE, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
+    facts[0]['total_size'] = 20
+    assert legacy_completion_result(ETF_SHARE_SIZE, day, 0, source, job, facts).state == PartitionState.VALID
+
+
+@pytest.mark.parametrize('mutation', ['duplicate', 'wrong_date', 'missing_date', 'blank_identity', 'malformed_identity'])
+def test_legacy_physical_identity_defects_remain_explicit(mutation):
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    facts = [{'ts_code': '000001.SZ', 'ann_date': day}]
+    if mutation == 'duplicate':
+        facts.append(dict(facts[0]))
+    elif mutation == 'wrong_date':
+        facts[0]['ann_date'] = date(2026, 10, 20)
+    elif mutation == 'missing_date':
+        facts[0]['ann_date'] = None
+    elif mutation == 'blank_identity':
+        facts[0]['ts_code'] = ''
+    else:
+        facts[0]['ts_code'] = 'UNKNOWN'
+    assert legacy_completion_result(STOCK_ST, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
+
+
+def test_legacy_supported_scope_retains_old_raw_count_without_requiring_bse():
+    from copy import deepcopy
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, count=2)
+    facts = [{'ts_code': '000001.SZ', 'ann_date': day}, {'ts_code': '920296.BJ', 'ann_date': day}]
+    original = deepcopy((source, job, facts))
+    result = legacy_completion_result(STOCK_ST, day, 0, source, job, facts)
+    assert result.state == PartitionState.VALID
+    assert result.checks['physical_rows'] == 1 and result.counts[0].expected == 2
+    assert (source, job, facts) == original
+
+
+def test_dated_legacy_etf_snapshot_requires_all_official_param_sets():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import ETF_BASIC_SNAPSHOTS
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'etf_basic_snapshots', 'etf_basic', 'single_call')
+    facts = [{'snapshot_date': day, 'ts_code': '510300.SH'}]
+    assert legacy_completion_result(ETF_BASIC_SNAPSHOTS, day, 0, source, job, facts).state == PartitionState.UNVERIFIED
+    job['summary']['stats'].update(total_batches=3, success_batches=3)
+    assert legacy_completion_result(ETF_BASIC_SNAPSHOTS, day, 0, source, job, facts).state == PartitionState.VALID
+    facts[0]['snapshot_date'] = date(2026, 10, 20)
+    assert legacy_completion_result(ETF_BASIC_SNAPSHOTS, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
+
+
+@pytest.mark.parametrize('variant', ['new_revision', 'old_bound_revision', 'latest_failure', 'partial_quality', 'good'])
+def test_legacy_native_scan_fallback_is_bounded_and_preserves_new_contracts(monkeypatch, variant):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    if variant == 'old_bound_revision':
+        source['metadata']['integrity_observed_revision'] = 1
+    if variant == 'latest_failure':
+        source['status'] = 'failed'
+    if variant == 'partial_quality':
+        source['quality_status'] = 'low_coverage'
+    queries = []
+    def read(_conn, query, params=()):
+        queries.append((query, params))
+        if 'dataset_date_refresh_audit' in str(query):
+            return [source]
+        if 'ingestion_jobs' in str(query):
+            return [job]
+        return [{'ts_code': '000001.SZ', 'ann_date': day}]
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('stock_st', 'event', '17:00'), day, 1 if variant == 'new_revision' else 0)
+    expected = {'new_revision': PartitionState.UNVERIFIED, 'old_bound_revision': PartitionState.UNVERIFIED,
+        'latest_failure': PartitionState.WAIT_UPSTREAM, 'partial_quality': PartitionState.INCOMPLETE,
+        'good': PartitionState.VALID}
+    assert result.state == expected[variant]
+    assert len(queries) == (3 if variant == 'good' else 1)
+
+
+def test_legacy_source_only_validation_cannot_trigger_fetches_or_false_green_without_scope():
+    from backend.services.data_integrity.legacy_validation import validate_legacy_partition
+    from backend.services.data_integrity.catalog import Obligation
+    result = validate_legacy_partition(None, Obligation('anns_metadata', 'event', '23:59'),
+        date(2026, 10, 19), 0, [], read=lambda *_: [
+            {'ts_code': '000001.SZ', 'ann_date': date(2026, 10, 19), 'title': 'real title'}])
+    assert result.state == PartitionState.UNVERIFIED
+    assert result.checks['physical_rows'] == 1
+    assert result.reason == 'historical_source_query_unproven'
+
+
+def test_legacy_unproven_history_does_not_create_repeat_fetch_target(monkeypatch):
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    job['status'] = 'failed'
+    result = legacy_completion_result(STOCK_ST, day, 0, source, job,
+        [{'ts_code': '000001.SZ', 'ann_date': day}])
+    worker = DailyIntegrityWorker(repository=object())
+    worker._repair_target(Obligation('stock_st', 'event', '17:00'), day, result, revision=0)
+
+
 @pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf", "market.bak_basic"])
 def test_dated_consolidation_exclusion_is_one_bounded_shared_query(dataset):
     day = date(2026, 10, 23)

@@ -370,16 +370,21 @@ class PhysicalValidator:
         return self._scan_contract(conn, obligation, day, revision)
 
     def _scan_contract(self, conn, obligation, day, revision):
-        """Only a completed formal provider scan bound to R can certify sparsity.
+        """Use a bound source scan, or a proven pre-tracking producer completion.
 
-        A row-count seed, old provider success or three empty retries is NOT a
-        full-source scan. Unknown formal scopes remain explicit UNVERIFIED.
+        A row-count seed or bare old success is NOT a completed query. The
+        legacy path checks its exact finished job and current physical facts,
+        without rewriting source receipts or inventing historical key scans.
         """
         dataset = obligation.dataset
         observed = rows(conn, """SELECT * FROM market.dataset_date_refresh_audit
             WHERE dataset=%s AND trade_date=%s AND data_source<>'canonical_db' ORDER BY refreshed_at DESC""", (dataset, day))
         current = [r for r in observed if (r.get("metadata") or {}).get("integrity_observed_revision") == revision]
         if not current:
+            from .legacy_validation import validate_legacy_partition
+            legacy = validate_legacy_partition(conn, obligation, day, revision, observed, read=rows)
+            if legacy is not None:
+                return legacy
             return unverified("complete_source_scan_not_bound_to_revision")
         source = current[0]
         metadata = source.get("metadata") or {}
