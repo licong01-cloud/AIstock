@@ -29,15 +29,15 @@
   "expected": "普通重试保留准确前序可合法进入现有v2存档，定向恢复元组与验收不放宽",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261110_BUG-2215-alpha-qe-archive-v2.json",
       "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
-      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2215-alpha-qe-archive-v2.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261110_BUG-2215-alpha-qe-archive-v2.json",
       "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
-      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2215-alpha-qe-archive-v2.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -133,7 +133,8 @@
     "fresh_process_evidence": [
       "Fresh Python loaded tracked handler and built the real succeeded PKG_LGB v2 archive bundle: exact ordinary retry lineage retained, recovery tuple empty, identity hash intact; no write/fit/inference/replay. tmp/issue_workflow/BUG-2215/fresh-process.json; 28 direct archive tests passed including existing DEV CHECK validation.",
       "tmp/issue_workflow/BUG-2215/fresh-process.json: real succeeded source v2 bundle PASS; zero economic calls/writes",
-      "tmp/issue_workflow/BUG-2215/fresh-process.json -> passed real-source v2 ordinary retry with zero writes/economic calls"
+      "tmp/issue_workflow/BUG-2215/fresh-process.json -> passed real-source v2 ordinary retry with zero writes/economic calls",
+      "tmp/issue_workflow/BUG-2215/fresh-process.json -> passed real-source v2 bundle; zero writes/fit/inference/replay"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
