@@ -71,6 +71,33 @@ def test_common_dates_original_published_holds_and_lazy_curve_share_identity():
     assert curve['series'][0]['nav'][0][1] == 1
 
 
+@pytest.mark.parametrize('period,start,published', [('5', '2026-10-08', 2), ('10', '2026-10-01', 3)])
+def test_short_periods_count_market_sessions_and_keep_unmatured_targets(period, start, published):
+    class WeekdayRepo(Repo):
+        def calendar(self, *_):
+            return [dict(r, is_trading=r['cal_date'].weekday() < 5) for r in build_market(24)['calendar']]
+
+    class WeekdayReader:
+        def load(self, **kw):
+            raw = build_market(24)
+            raw['calendar'] = kw['calendar']
+            raw['prices'] = [r for r in raw['prices'] if r['trade_date'] <= kw['cutoff']]
+            raw['benchmark'] = [r for r in raw['benchmark'] if r['trade_date'] <= kw['cutoff']]
+            return raw
+
+    repo = WeekdayRepo()
+    repo.versions = [version(day=day, pid=pid) for day in ('2026-10-01', '2026-10-08', '2026-10-14') for pid in ('p', 'q')]
+    svc = ComparisonService(repo, WeekdayReader(), ComparisonCache(),
+        lambda: datetime(2026, 10, 14, 16, tzinfo=CN))
+    summary = svc.get(period=period)
+    assert summary['range'] == dict(start=start, end='2026-10-14', period=period)
+    for row in summary['items']:
+        assert row['coverage']['published_count'] == published
+        assert row['coverage']['mature_count'] == published - 1
+        assert row['coverage']['status_counts']['IMMATURE'] == 1
+    assert svc.get(period=period, series=True)['source_version'] == summary['source_version']
+
+
 def test_empty_common_never_ranks_different_periods_and_own_is_explicit():
     repo = Repo()
     repo.versions[1]['trade_date'] = '2026-10-02'

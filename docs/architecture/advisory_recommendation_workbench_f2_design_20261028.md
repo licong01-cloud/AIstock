@@ -139,6 +139,7 @@
 - F-019：累计涨跌仅对应本次连续荐股期间，继续不重置、结束冻结、重新入选分段、缺证据未知。
 - F-020：轻量首屏、范围批量读取、有界缓存与并发、历史页不扫描行情，性能预算和规模验证。
 - F-021：后端合同、浏览器视觉/交互、真实只读与修订失效证据；源码与用户重启后的加载分态。
+- F-022：近5、10交易日比较快捷按钮，摘要和曲线接受同一周期；按交易日裁剪目标日，固定5TD成熟、费用和UNKNOWN语义不变。
 
 ## 6. 实施方案与允许修改文件
 
@@ -259,3 +260,17 @@
 10次新进程ASGI HTTP请求（共享DB/连接池已热、强制应用缓存未命中）P95：概况74ms、策略元数据51ms、历史分页51ms、比较摘要736ms；这不是线上网络P95。隔离浏览器8次合成响应测量LCP P75 112ms、INP实验代理P75 24ms，非现场INP。10包×5年、10万episode/652500保存条目的合成规模：构建5.56秒、曲线91583字节、每线最多146点；页面交互最大事件16ms。规模证据不冒充大规模生产SQL时延或经济结果。
 
 源码PR的当前HEAD CI与合入状态另行记录；用户后端未重启，运行态激活及现场验收待用户重启后核实。无DDL/DML、无模型/生产名单激活、0新增fit，累计269次实际fit加1次旧index不变。100bps研究目标、费用、UNKNOWN合同不变，经济验收为NOT_EVALUATED。
+
+## 11. 2026-11-10短周期功能卡（F0 Feature Card）
+
+用户要求补充近5日、近10日比较按钮。本轮范围仅为既有比较过滤器、摘要/曲线的周期参数白名单及直接合同测试；复用正式交易日历裁剪，点击应用才提交，图表按相同参数读取。比较周期指目标日范围，固定持有期仍为5TD，最近尚未成熟的目标日仍为IMMATURE，不向区间外借未来价格。
+
+本轮同时只读核对退役状态：默认ENABLED比较不纳入ARCHIVED任务；用户显式选择ALL/ARCHIVED时保留历史比较能力。资产阻断与退役分别呈现，不以未发布推断退役，不修改生产任务或策略包生命周期。当前多Alpha父包任务仍为ENABLED，包为SELECTION_ENABLED。
+
+允许文件：`frontend/src/components/advisory/workbench/ComparisonFilters.tsx`、`backend/routers/advisory_workbench.py`、`backend/tests/advisory_workbench/test_api.py`、`backend/tests/advisory_workbench/test_comparison_service.py`、`frontend/tests/paper-v2/advisory-workbench.spec.ts`及本设计。验证覆盖5/10周期按钮应用、摘要与曲线参数一致、非交易日跳过和短窗未成熟；现有CI承担模块回归。生产门禁：DDL/DML、fit、模型/名单/生命周期写入均noop；源码交付与用户重启后生效分态。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-022 | frontend/src/components/advisory/workbench/ComparisonFilters.tsx; backend/routers/advisory_workbench.py | backend/tests/advisory_workbench/test_api.py; backend/tests/advisory_workbench/test_comparison_service.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+
+F-022本地验证：6项后端直接合同、2项快捷周期浏览器用例通过；Ruff/ESLint/TypeScript通过。当前Agent按正确性、完整性/回归与范围三轮核对，源码交付仍需最终HEAD的既有CI；用户后端重启与5/10周期在线加载另报。当前查询默认5个包均未退役，7个ARCHIVED任务仅在显式历史状态下参与。

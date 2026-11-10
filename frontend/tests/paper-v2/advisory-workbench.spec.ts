@@ -481,6 +481,26 @@ test("comparison applies date selection explicitly, expands all metrics and load
   }
 });
 
+for (const days of [5, 10]) {
+  test(`comparison ${days} trading-day shortcut applies once and keeps chart period identical`, async ({ page }) => {
+    const params = (request: string) => new URL(request.split(" ")[1], "http://fixture").searchParams;
+    const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
+    const comparison = main(page).getByRole("region", { name: "策略包收益横向对比" });
+    await expect(comparison.getByRole("button", { name: "应用对比", exact: true })).toBeEnabled();
+    const before = state.seen.filter(url => url.includes("/comparison?")).length;
+    await comparison.getByRole("button", { name: `近${days}交易日`, exact: true }).click();
+    expect(state.seen.filter(url => url.includes("/comparison?")).length).toBe(before);
+    await comparison.getByRole("button", { name: "应用对比", exact: true }).click();
+    await expect.poll(() => state.seen.some(url => url.includes("/comparison?") && params(url).get("period") === String(days))).toBe(true);
+    await expect(comparison.getByRole("button", { name: "应用对比", exact: true })).toBeEnabled();
+    await comparison.getByRole("button", { name: "查看横向对比图表", exact: true }).click();
+    await expect(comparison.getByRole("img", { name: /参考组合与沪深300净值曲线/ })).toBeVisible();
+    const curve = state.seen.find(url => url.includes("/comparison/series?"));
+    expect(params(curve!).get("period")).toBe(String(days));
+    expect(state.seen.some(url => params(url).get("force_refresh") === "true")).toBe(false);
+  });
+}
+
 test("historical lists live only in detail, paginate saved versions and pin cumulative returns to the selected list", async ({ page }) => {
   const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
   await expect(main(page).getByRole("heading", { name: "荐股总览" })).toBeVisible();
