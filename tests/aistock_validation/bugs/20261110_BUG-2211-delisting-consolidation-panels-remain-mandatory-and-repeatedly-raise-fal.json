@@ -34,21 +34,21 @@
   "expected": "Official dated consolidation exclusions are applied consistently to non-execution panel ingestion and integrity; no repeated fetch or false gap alert for out-of-scope keys. Pre-consolidation and ordinary stock gaps remain failures. Existing facts and holdings quotes remain unchanged.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json",
       "backend/services/data_integrity/stock_scope.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json"
     ],
     "added_files": [
       "backend/tests/test_delisting_panel_scope.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json",
       "backend/services/data_integrity/stock_scope.py",
       "backend/services/data_integrity/validation.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2211-delisting-consolidation-panels-remain-mandatory-and-repeatedly-raise-fal.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -213,8 +213,8 @@
   },
   "first_seen_at": "2026-11-10T04:49:20.168377Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6e3371233cb74ff6f3eca85b9d43b66a69419689",
+  "fixed_at": "2026-11-10T05:28:21Z",
   "github_issue_number": 7195,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7195",
   "last_seen_at": "2026-11-10T04:49:20.168377Z",
@@ -222,6 +222,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7197",
   "production_backend_dependency_gate": "noop",
   "production_data_repair": {
     "active_profile_write": false,
@@ -266,6 +267,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -277,7 +279,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2211",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "384edda26c0b36bf",
+    "recorded_at": "2026-11-10T05:29:19.271584Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "17a8181ef975da7f127581c37436eb136852ef2c",
+    "source_merge_commit": "6e3371233cb74ff6f3eca85b9d43b66a69419689",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7197",
+    "validation_evidence": [
+      "validation-receipt: id=98e3f884f7c75fbb commit=17a8181ef975da7f127581c37436eb136852ef2c kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=5ab37c6cd4f58706 commit=17a8181ef975da7f127581c37436eb136852ef2c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q -x -k 'delisting or consolidation or dated_rows or no_codes or unknown_event or dense_supplement or real_upsert or ordinary_st_event or validator_uses_same_scope'` result=`passed`"
+    ],
+    "validation_evidence_digest": "30c1270c72306c6c1d43163fd18b287c4ff6ca5f8d6bffd06e7cbd4c96947f3c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -286,6 +310,10 @@
     "fingerprint": "c643cdfb96fe7169b839ec7c",
     "source_event_id": "FE-20261110-c643cdfb96fe"
   },
+  "validation_evidence": [
+    "validation-receipt: id=98e3f884f7c75fbb commit=17a8181ef975da7f127581c37436eb136852ef2c kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=5ab37c6cd4f58706 commit=17a8181ef975da7f127581c37436eb136852ef2c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q -x -k 'delisting or consolidation or dated_rows or no_codes or unknown_event or dense_supplement or real_upsert or ordinary_st_event or validator_uses_same_scope'` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
