@@ -89,3 +89,15 @@ def test_history_shell_program_mode_skips_full_service(monkeypatch):
     monkeypatch.setattr(module, 'BriefService', lambda: SimpleNamespace(program=lambda pid, **kw: dict(program_id=pid, metric_read='NOT_REQUESTED')))
     response = client(SimpleNamespace(program=forbidden)).get('/workbench/programs/p?mode=brief')
     assert response.status_code == 200 and response.json()['metric_read'] == 'NOT_REQUESTED'
+
+
+@pytest.mark.parametrize('period', ['5', '10'])
+@pytest.mark.parametrize('suffix', ['', '/series'])
+def test_short_periods_are_accepted_by_summary_and_series(period, suffix):
+    from backend.routers.advisory_workbench import get_comparison
+    c = client(SimpleNamespace())
+    c.app.dependency_overrides[get_comparison] = lambda: SimpleNamespace(get=lambda **kw: kw)
+    response = c.get('/workbench/comparison' + suffix + '?period=' + period)
+    assert response.status_code == 200
+    assert response.json()['period'] == period
+    assert response.json()['buy_bps'] == .95 and response.json()['sell_bps'] == 5.95

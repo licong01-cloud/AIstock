@@ -39,7 +39,7 @@ def get_history():
 
 def comparison_args(status: Literal['ENABLED', 'PAUSED', 'DRAFT', 'ARCHIVED', 'ALL'] = 'ENABLED',
                     program_ids: str = Query('', max_length=3400),
-                    period: Literal['20', '60', '120', 'YTD', 'ALL', 'CUSTOM'] = '60',
+                    period: Literal['5', '10', '20', '60', '120', 'YTD', 'ALL', 'CUSTOM'] = '60',
                     start: date | None = None, end: date | None = None,
                     source: Literal['FORWARD', 'REPLAY', 'ALL', 'UNKNOWN'] = 'FORWARD',
                     binding: Literal['CURRENT', 'ALL'] = 'CURRENT',
