@@ -28,12 +28,18 @@
   ],
   "expected": "真实多Alpha纯回测命令可通过WSL隔离并保留原执行命令及预算",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2213-alpha-wsl.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/multi_alpha/remote_dispatch.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2213-alpha-wsl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/multi_alpha/remote_dispatch.py",
@@ -93,8 +99,9 @@
   },
   "first_seen_at": "2026-11-10T18:06:45.539332Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d312b9a7d68006b7024016308ac881f3c2ff0607",
+  "fix_summary": "?WSL producer???????????????????Bash??????CAS???????CPU???????producer/coordinator??????????",
+  "fixed_at": "2026-11-10T18:20:51Z",
   "github_issue_number": 7204,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7204",
   "last_seen_at": "2026-11-10T18:06:45.539332Z",
@@ -102,6 +109,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7205",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -111,32 +119,64 @@
     "l0",
     "qe_read_backend"
   ],
+  "review_evidence": [
+    "Correctness: genuine _remote_wsl_command passes actual coordinator isolation at final transport; immutable command/input hash and20GiB reservation checked.",
+    "Completeness/regression: remoteCPU unchanged; spaces/quote path safe; missing/relative/Windows path fails closed; 77 targeted tests pass; no service or dataset change.",
+    "DESIGN-COMPLIANCE-001: scope checked; no simplified/placeholder or protection bypass; original trading/economic inputs unchanged; runtime activation remains pending user restart."
+  ],
   "risk_area": "bug",
+  "root_cause": "?Alpha producer??bash?????WSL guard?canonical cd &&????protocol???isolate_payload????????producer?guard???",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python loaded final producer and real WSL isolation; original Bash/CAS/scrub command preserved, replay20GiB, no POST/fit/inference/backtest. tmp/issue_workflow/BUG-2213/fresh-process-evidence.json. Real producer/coordinator transport matrix and existing isolation/credential regressions:77 passed."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2213",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f982c9ed03338a97",
+    "recorded_at": "2026-11-10T18:21:30.070668Z",
+    "runtime_contract_digest": "7156e5e98436784fb45b689681c4f3a78eca1547c0decf44e07b1cc039bde9af",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "18d95670627e177d708415e8d2f113e668ea23c9",
+    "source_merge_commit": "d312b9a7d68006b7024016308ac881f3c2ff0607",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7205",
+    "validation_evidence": [
+      "validation-receipt: id=8804bbd326072c14 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+      "validation-receipt: id=4b4b61f47c231f99 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py -q` result=`passed 77 tests`",
+      "validation-receipt: id=56df0adca16839b8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`",
+      "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "ab5171c2cc644d47d74256728cc27132e56cc31d610d7a9de25cad59dcd28c99"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -145,6 +185,12 @@
     "fingerprint": "e3c4e1f161351e6b98aa549c",
     "source_event_id": "FE-20261110-e3c4e1f16135"
   },
+  "validation_evidence": [
+    "validation-receipt: id=8804bbd326072c14 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=4b4b61f47c231f99 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py -q` result=`passed 77 tests`",
+    "validation-receipt: id=56df0adca16839b8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`",
+    "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -252,12 +298,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "root_cause": "?Alpha producer??bash?????WSL guard?canonical cd &&????protocol???isolate_payload????????producer?guard???",
-  "fix_summary": "?WSL producer???????????????????Bash??????CAS???????CPU???????producer/coordinator??????????",
-  "review_evidence": [
-    "Correctness: genuine _remote_wsl_command passes actual coordinator isolation at final transport; immutable command/input hash and20GiB reservation checked.",
-    "Completeness/regression: remoteCPU unchanged; spaces/quote path safe; missing/relative/Windows path fails closed; 77 targeted tests pass; no service or dataset change.",
-    "DESIGN-COMPLIANCE-001: scope checked; no simplified/placeholder or protection bypass; original trading/economic inputs unchanged; runtime activation remains pending user restart."
-  ]
+  }
 }
