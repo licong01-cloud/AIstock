@@ -228,9 +228,18 @@
     "active_profile_write": false,
     "dev_passed": true,
     "insert_only_rows": 10,
+    "authorization_ref": "用户授权执行补入，2026-11-10",
+    "existing_rows_unchanged": 60,
+    "readback_ref": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-readback.json",
+    "readback_sha256": "bd9343313a19b06775af4b3b83429c351eac861317eb2f6e0a90fd1f72c0ecce",
+    "production_inserted_rows": 10,
+    "source_fields_matched": true,
+    "dated_gap_keys_excludable": 282,
+    "affected_partitions": 133,
+    "validation_only_replay": "pending_fixed_runtime",
     "sql_path": "X:/AIstock_temp/DATA_PREPARATION/delisting-panel-applicability-20261110/production-repair.sql",
     "sql_sha256": "99a4876e897332967bb123b4383fc44f31e74495af89caeb176792fa21b325d5",
-    "status": "pending_user_authorization",
+    "status": "applied_and_independently_verified",
     "target": "aistock.market.stock_st_events"
   },
   "production_ddl_gate": "noop",
@@ -244,7 +253,7 @@
   "review_evidence": [
     "Correctness review: dated pub_date/imp_date boundary; ordinary ST and pre-consolidation remain required; a later actual listing terminates the old lifecycle exclusion; no PIT buy-universe or quote filtering.",
     "Completeness/regression review: shared policy drives physical validator, storage and exact supplements; late lifecycle records wake existing validation-only targets, not new collectors; reuse existing fenced scheduler recovery for old retry/alert reconciliation.",
-    "DESIGN-COMPLIANCE-001: no partial implementation claimed complete, no silent/default-filled source facts, user-approved optional panel applicability only, no new gate or approval framework. Production source facts and post-restart activation remain pending separately."
+    "DESIGN-COMPLIANCE-001: no partial implementation claimed complete, no silent/default-filled source facts, user-approved optional panel applicability only, no new gate or approval framework. Ten production lifecycle facts were separately authorized and inserted/read back; post-restart activation and ledger revalidation remain pending."
   ],
   "risk_area": "bug",
   "runtime_contract": {
