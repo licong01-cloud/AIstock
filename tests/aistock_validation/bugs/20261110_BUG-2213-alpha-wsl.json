@@ -1,0 +1,248 @@
+{
+  "actual": "B0/F0/PKG_LSTM三个恢复run在远端POST前被qe_wsl_isolation_requires_canonical_workspace_cd拒绝，远端CPU路径独立运行",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "tests/aistock_validation/bugs/20261110_BUG-2213-alpha-wsl.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2213",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-10T18:06:45.539332Z",
+  "description": "B0/F0/PKG_LSTM三个恢复run在远端POST前被qe_wsl_isolation_requires_canonical_workspace_cd拒绝，远端CPU路径独立运行",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261110-e3c4e1f16135",
+      "timestamp": "2026-11-10T18:06:45.539315Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-ensemble-materialization-repair-20261111/state.json"
+  ],
+  "expected": "真实多Alpha纯回测命令可通过WSL隔离并保留原执行命令及预算",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/remote_dispatch.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ]
+  },
+  "first_seen_at": "2026-11-10T18:06:45.539332Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7204,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7204",
+  "last_seen_at": "2026-11-10T18:06:45.539332Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "多Alpha纯回测命令不符合WSL隔离入口导致派发前失败",
+  "trigger_condition": {
+    "fingerprint": "e3c4e1f161351e6b98aa549c",
+    "source_event_id": "FE-20261110-e3c4e1f16135"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
