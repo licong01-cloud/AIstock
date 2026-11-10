@@ -96,8 +96,8 @@
   },
   "first_seen_at": "2026-11-10T19:33:35.574064Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d63417e4096fde6161479693c1a16dd195e648e1",
+  "fixed_at": "2026-11-10T19:53:45Z",
   "github_issue_number": 7214,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7214",
   "last_seen_at": "2026-11-10T19:33:35.574064Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7215",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -145,6 +146,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -156,7 +158,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2215",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "33d8b5d72348bbad",
+    "recorded_at": "2026-11-10T19:54:33.727293Z",
+    "runtime_contract_digest": "1d278225c4b1e5e063f0132259b08d92de5ce8392eb0fc89b7abbe0e81b603b8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ceca14dde62283bc93b2b37b3e7b54383ca09601",
+    "source_merge_commit": "d63417e4096fde6161479693c1a16dd195e648e1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7215",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed, blocking=0",
+      "rtk pytest backend/tests/qe_archive/test_multi_alpha_archive_handler.py backend/tests/qe_archive/test_multi_alpha_recovery_archive.py -q -> 28 passed including DEV constraint proof",
+      "rtk ruff check changed handler and test -> passed",
+      "rtk git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "38fa7fe89e47e2a2258bfd7f72deb3d2827947b4ca3de4c6dab8a2a67a2132a2"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -165,6 +191,12 @@
     "fingerprint": "b403f06eaa60d0abc8fb4e90",
     "source_event_id": "FE-20261110-b403f06eaa60"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed, blocking=0",
+    "rtk pytest backend/tests/qe_archive/test_multi_alpha_archive_handler.py backend/tests/qe_archive/test_multi_alpha_recovery_archive.py -q -> 28 passed including DEV constraint proof",
+    "rtk ruff check changed handler and test -> passed",
+    "rtk git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
