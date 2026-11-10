@@ -165,6 +165,11 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "fresh_process_evidence": [
       "Fresh process verify_legacy_existing_dev.py loaded tracked PhysicalValidator ->legacy_validation in isolated task worktree against genuine production read-only exact-day snapshots in existing aistock_dev:5433 temp tables. 9 VALID,5 unproven; failed jobs, changed revision, deleted rows and NaN not green; source receipts unchanged; X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json."
     ],
