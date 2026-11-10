@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.9；更新日期：2026-11-09；Feature tier：F2。
-> 状态：`NATURAL_PERIOD_PRICE_AND_SOFTWARE_VERIFIED_AWAITING_LOCALSIM_FACTS`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、1—10月原13户分析、10月W15三户比较及1—9月三户543账户日全期/月/季分析已完成；LocalSIM #7150交付P2单户181日后，择时已完成四户724日比较、补充全月份/方向机制诊断、独立复算及报告exact retry，均未重算账户。#7174已交10月四户本户真实期初和市场准备，本窗口已完成共享价集build/inspect/exact retry及四户期间消费者软件验收，尚无新10月账户事实。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新结论与后续优先级见§7.5—7.7。
+> 版本：v1.10；更新日期：2026-11-11；Feature tier：F2。
+> 状态：`NATURAL_PERIOD_RESULTS_VERIFIED_EXPLORATORY_NO_PROMOTION`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日；本窗口已完成期间/累计统计、独立复算及报告exact retry，账户重算0。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新结论与优先级见§7.5—7.8及[P2 F1](position_timing_adverse_wait_p2_f1_20261109.md)。
 > 本轮P2实现源码基线：`f02cf9358a463cebd3043bf4813886864360ea51`（由最新origin/main基线c5a9e01b…在独立工作树实施）；既有543日分析源码基线仍为`85c1fb73965d188bca9f607c45ed799d1580fcfa`。历史plan与验收保持各自原commit/implementation身份。
 > 新四户结果消费源码基线：`26d29a1d48bc16541182637b25b6ba75d5630e3e`；原算法、底层B0及历史分析closure保持不变。PR #7158只交付离线分析与进度文档，不激活线上P2。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
@@ -268,7 +268,7 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 | F-011 | 本文§2.3/§5 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 | F-012 | 本文§6.1/§6.2/§6.4 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 
-## 7. 截至2026-10-24实施增量与下一步
+## 7. 实施增量与演进记录（截至2026-11-11）
 
 本模块已实现纯核心B0/C1/C2、严格分钟/日级输入、独立不可变状态、五个API、可导入组件及现有页面挂载、prepare/run/inspect/exact retry决策回放。实际证据见[实施验收记录](../analysis/position_timing_intraday_phase1_implementation_20261023.md)。功能回放仅使用标注的合成fixture，不代表R8历史研究或实盘采样，不给出收益优劣结论。
 
@@ -339,7 +339,7 @@ P2−W15净差仅4/9个月为正，8月110,697.13元超过全期，其余月份�
 
 期间比较使用各户NAV变化之差，累计评价保留1月资本原点与本户完整高水位；分别报告10月、1—10月、月季收益/MDD/费用和全部BUY/SELL分母。时间加权暴露及未记录的生命周期仍UNKNOWN/UNAVAILABLE，历史扩展仍为探索性。暂不扫参数或训练模型；只有研究问题确需预测“立即执行与等待的成本差”时，再冻结单一轻量假设，不以经济显著性、日志补齐、未来行情或后端重启作为离线研发准入。
 
-### 7.7 本轮：四户10月输入已交，补最小消费适配
+### 7.7 2026-11-09历史记录：四户价集与消费软件交付
 
 LocalSIM #7174准备完成17日850目标、四户本户真实期初及53只历史SELL并集，市场阻断0，尚未运行账户。正式回执及完整SHA见[P2 F1 Contracts-8.1](position_timing_adverse_wait_p2_f1_20261109.md)。旧B0/C2各多24个非持仓marks，其他经济期初一致；严格复用未认证。为避免额外等价性认证工程，本轮选择既定仅新跑10月分支，后续LocalSIM新跑四户68账户日，1—9月和旧13户产物不改、不重算，不将hash差异直接解释成经济差异。
 
@@ -348,4 +348,14 @@ LocalSIM #7174准备完成17日850目标、四户本户真实期初及53只历�
 本轮9项直接测试、31项相关回归通过；WSL完整10962项来源闭合，17日850条BUY和2141条SELL全部2991条可用、UNKNOWN=0。独立raw bin/Decimal逐区间复核和Windows 21份产物SHA回读通过，真实build→inspect→exact retry复用相同manifest身份。精确路径与完整SHA集中在P2 F1文末及`X:/AIstock_temp/position-timing-natural-october-consumer-20261109/source_delivery_receipt_r1.json`；不把这些软件/价集验收替代真实账户经济验收。
 首轮CI发现#7174离线准备入口缺少精确SDK隔离登记；仅在择时所属测试中补文件/只读成员例外并完成5项隔离定向验证，其他消费者、私有/发布成员仍被拒绝。不改LocalSIM、生产runtime分类、价格/规则或已有产物；修订后的最终CI另行绑定本轮源码交付回执。
 
-唯一下一步是LocalSIM owner消费新价集和`consumer_contract.json`，最小对接四户自然期间请求，使用已冻结四户期初仅新跑10月68账户日，交回完整source inspection及artifact exact retry；本窗口再执行正式期间/累计比较。1—9月不重跑，旧B0/C2不作本轮复用，无新增规则、训练、生产数据/服务操作或后端重启。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。
+当时计划的下一步是LocalSIM owner消费新价集和`consumer_contract.json`，最小对接四户自然期间请求，使用已冻结四户期初仅新跑10月68账户日，交回完整source inspection及artifact exact retry；本窗口再执行正式期间/累计比较。1—9月不重跑，旧B0/C2不作本轮复用，无新增规则、训练、生产数据/服务操作或后端重启。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。 该后续条件现已由#7192和本轮结果消费满足，当前优先级见§7.8。
+
+### 7.8 2026-11-11：自然承接四户事实已到，消费期间及累计结果
+
+LocalSIM #7192已完成2026-10-08—10-30全部17日/850目标、四户68账户日，各户承接本户9月末真实现金/持仓/成本和累计NAV锚点，零充值。显式补全来源元数据，不覆盖旧经济产物；没有复用旧十月B0/C2或重跑1—9月。正式交付回执、完整SHA与比较表统一见[P2 F1末节](position_timing_adverse_wait_p2_f1_20261109.md)，不把§7.7软件交付时的0/68状态继续当作当前进度。
+
+正式统计及独立复算显示四户10月均亏损，P2相对W15/C2/B0本期净差分别为-47,719.02/-53,621.15/-26,420.73元。1—10月累计收益B0/W15/C2/P2为-9.8733%/-5.0184%/-3.7571%/-4.5146%；C2收益及MDD点估计仍最好，但本轮三项P2比较的校正区块区间均跨零，不能宣称样本外胜出、确定P2有害或确定某规则最优。期间比较以各户NAV变化之差/原始1000万元为主，不将不同期初资本的期间收益率差当成新增优势。
+
+本窗口已通过11,144项完整来源预检，正式报告已生成，68日/16,184个分钟NAV观察点的独立数值核验一致；报告exact retry通过、复用同一不可变身份，账户重算/新增经济提交0，源码及最终合入状态以P2 F1和独立结果根交付回执为准。1—9月月/季面板只读保留，10月同时为Q4-to-date而非完整Q4；累计MDD承接历史锚点，不平均月回撤。时间加权暴露UNAVAILABLE，日终现金不作替代；quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。
+
+后续优先利用已有C2/W15事实解释成交覆盖、等待/排队、费用与自然持仓路径差异，保留B0基准及P2冻结证据。暂不扫阈值、不增加模型或执行政策、不晋升线上P2；缺少精准归因时保留UNKNOWN，必要的最小只读投影交回LocalSIM owner，不新增平台或让全部投影/未来行情成为研发门槛。本轮复用既有正式消费者，无业务代码、数据库、数据集或服务改动，不需要后端重启。

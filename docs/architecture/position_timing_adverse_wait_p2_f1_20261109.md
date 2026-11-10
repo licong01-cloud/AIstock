@@ -1,15 +1,15 @@
 # P2：不利方向持续移动时提前结束等待
 
-日期：2026-11-09。Owner：position_timing。Feature tier：F1。状态：NATURAL_PERIOD_PRICE_AND_SOFTWARE_VERIFIED_AWAITING_LOCALSIM_FACTS。
+日期：2026-11-11。Owner：position_timing。Feature tier：F1。状态：NATURAL_PERIOD_RESULTS_VERIFIED_EXPLORATORY_NO_PROMOTION。
 
 ## Background
 
 终极目标是改善明确BUY/SELL计划的成本后结果和回撤。既有181日三户研究中，C2相对B0净增584,422.39元、MDD降低2.8724个百分点；相对W15净增120,234.09元，但区块校正区间跨零且8月贡献超过全期。保留三者，不以收益回选月份或阈值。
-初次P2只研究一个假设：价格已经连续朝本次交易的不利方向移动时，继续等固定15交易分钟可能增加机会成本。BUY的不利方向是上涨，SELL是下跌。该假设不承诺盈利，也不预测当日最高最低点。前轮权威结果与完整SHA见[同等待预算设计](position_timing_wait_budget_control_f1_20261106.md)末尾。本次只补充冻结事实诊断与下一轮设计，不新增策略假设。
+初次P2只研究一个假设：价格已经连续朝本次交易的不利方向移动时，继续等固定15交易分钟可能增加机会成本。BUY的不利方向是上涨，SELL是下跌。该假设不承诺盈利，也不预测当日最高最低点。前轮权威结果与完整SHA见[同等待预算设计](position_timing_wait_budget_control_f1_20261106.md)末尾。本轮按Contracts-8.1消费已冻结四户10月事实，不新增策略假设。
 
 ## Scope
 
-本设计初次交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner随后在#7150完成新P2账户181日，择时已完成四户结果与机制诊断。本轮续接#7174准备输入，补共享价集及四户期间结果消费软件，不运行账户；新10月经济分析等待owner交回实际事实，而非等待未来行情。
+本设计初次交付研究专用纯函数、可恢复状态、冻结研究plan/只读inspect、定向测试和真实来源验收；LocalSIM owner随后在#7150完成新P2账户181日，择时已完成四户结果与机制诊断。#7174准备输入及#7187/#7191择时价集、软件与精确SDK登记已完成；#7192已交回四户10月68账户日。本轮只运行既有结果消费者、独立数值核验及不可变报告重试，不运行账户、不等待未来行情；当前验收状态见文末2026-11-11记录。
 纯函数交付允许写入以下7个文件；该次operator和不可变验收产物仅在`X:/AIstock_temp/position-timing-p2-adverse-wait-20261109/`：
 
 - `backend/services/position_timing/intraday/adverse_wait_control.py`
@@ -99,6 +99,8 @@ Contracts-8初次仅交付可复制给LocalSIM owner的设计和精确来源引�
 
 #### 8.1 本次输入交付后的最小续接
 
+下列准备/软件交付状态记录于2026-11-09，并非当前账户进度；#7192现已交回68/68账户日，当前结果消费及验收见文末2026-11-11记录。本节冻结的接口、人口和统计合同不因此改写。
+
 LocalSIM #7174已交付四户真实期初、17日850目标、53只历史SELL并集，市场阻断0，但尚未运行账户。回执 `X:/AIstock_temp/localsim-october-input-preparation-20261109/source_delivery_receipt_r1.json` 的完整SHA为 `268a60a027ac582afa3bf5a0b50d508a20e2fb79862501cf7ad5a8e94192d662`。旧B0/C2各多24个非持仓marks，其他经济期初字段一致；严格复用未认证。本轮选择既定“不兼容则仅新跑10月”的分支，后续LocalSIM新跑四户共68账户日，旧产物只作来源，不裁剪marks、不改账户命名空间来冒充可复用，不重跑1—9月。差异本身不被解释成经济效果不同。
 
 本窗口只交付以下接缝：
@@ -157,7 +159,7 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-518 | 四户准备提交、真实期初/累计锚点及完整来源只读适配 |
 | F-519 | 新身份共享价集覆盖当日BUY/SELL及历史SELL，UNKNOWN和不可变重试 |
 | F-520 | 四户期间消费者先验来源及身份，独立期间/累计归约与三比较 |
-| F-521 | 软件/真实价集与未来账户经济验收分离，旧研究及跨模块零写入 |
+| F-521 | 软件/真实价集、账户回放与经济有效性分离，旧研究及跨模块零写入 |
 
 ## Design Acceptance Matrix
 
@@ -182,7 +184,7 @@ database_read=false；database_write=false；dataset_mutation=false；market_net
 | F-517 | 本文Contracts-8 | artifact:X:/AIstock_temp/localsim-october-continuation-20261106/prepared/465cb1fd201b93e9fda412ec85e8c5219752198c84a6d6a4bf708f23c0c5f706/preflight.json；设计逐项审核，本次非账户验收 | DESIGN_VERIFIED | none |
 | F-518 | natural_period_context.py::load_context | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/inspect_receipt.json，完整10962项来源闭合 | VERIFIED | none |
 | F-519 | natural_period_prices.py::build/inspect；原price_plan_campaign引擎 | test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/independent_readback.json及retry_receipt.json | VERIFIED | none |
-| F-520 | backend/services/position_timing/intraday/natural_period_results.py::source_preflight/analyze | backend/tests/position_timing/test_intraday_natural_period.py，软件合同验收；真实10月账户未运行、不属于本条软件验收 | VERIFIED | none |
+| F-520 | backend/services/position_timing/intraday/natural_period_results.py::source_preflight/analyze | backend/tests/position_timing/test_intraday_natural_period.py；artifact:X:/AIstock_temp/position-timing-natural-october-analysis-20261111/independent_readback.json及retry_receipt.json，实际68日统计验收通过，经济有效性仍未确认 | VERIFIED | none |
 | F-521 | 本文Contracts-8.1及三个natural_period模块；backend/tests/position_timing/test_isolation.py | artifact:X:/AIstock_temp/position-timing-natural-october-consumer-20261109/l0.json及ownership.json；既有31项相关回归；test_natural_preparation_exception_is_exact_and_readonly/test_natural_replay_exception_is_exact_and_readonly覆盖精确SDK登记及拒绝边界，旧实现closure零改动 | VERIFIED | none |
 
 ## 初次纯函数实施与交接证据
@@ -297,3 +299,62 @@ WSL真实build→inspect→exact retry全部通过，总耗时1217.30秒，主�
 公共入口 `natural_period_prices.build/inspect` 及 `python -m backend.services.position_timing.intraday.natural_period_results inspect|analyze --spec <owner事实交回后冻结的spec路径> --spec-sha256 <完整SHA> --timing-root <独立分析根>`。分析spec/facts模型分别为 `NaturalAnalysisSpec`、`NaturalFacts`；最小producer字段绑定随 `consumer_contract.json` 交接，该文件不是可执行账户请求。旧B0/C2不复用；由LocalSIM owner最小对接并仅新跑10月四户68账户日，交回完整来源检查和artifact exact retry，再由本窗口做正式期间/累计比较。
 
 本轮新10月账户运行0、收益读取0；database/network/runtime/service_process_control均false，仅在WSL运行离线验证脚本。旧1—9月、原13户、288案例及价格模板未改，无需后端重启。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false；本轮软件和价集通过不等于四户LocalSIM接入/账户验收、线上激活或经济有效。
+
+## 2026-11-11：四户10月自然承接结果消费
+
+本节是上述2026-11-09准备/软件交付之后的实际进度。LocalSIM #7192（merge `c8f270b90ea847359ef7673f0a4039aa8a3c0683`）已完成68/68账户日；正式交付回执 `X:/AIstock_temp/localsim-natural-october-replay-20261110/source_delivery_receipt_r1.json` 完整SHA `465e32e8ae5cbcd8606d181e3d2da8e06a344bbd222b18eac2eb1194ebb9f4a5`。来源元数据采用显式只读补充清单修复，旧经济产物没有覆盖。择时只消费其事实，不重跑1—9月或10月、不复用旧十月B0/C2、不修改规则、成本、数量或日期。
+
+11,144项完整来源预检已通过，确认四户/17日且outcomes_read=false；正式报告已生成，68日/16,184个分钟NAV观察点的独立数值复核及报告exact retry通过。本节结果统计已验收，不等于策略经济有效或可晋升线上。
+
+### 对象与口径
+
+期间为2026-10-08—10-30，17交易日、850个共同原生目标。各户承接本户9月末现金、持仓、成本和高水位，无充值。期间PnL为终值NAV减本户opening；累计收益以1月原始1000万元为原点。1—10月合计198交易日/792账户日，其中本轮新增读取68日，旧724日仅只读承接。全部分钟NAV的观察范围保留原14:57终点，不扩展为15:00或Tick全行情。
+
+| 规则 | 10月净PnL（元） | 本户10月收益 | 10月分钟MDD | 1—10月累计收益 | 累计分钟MDD | 10月费用（元） |
+|---|---:|---:|---:|---:|---:|---:|
+| B0 | -726,722.78 | -7.4617% | 8.4998% | -9.8733% | 25.9525% | 35,181.16 |
+| W15 | -705,424.49 | -6.9135% | 8.0671% | -5.0184% | 23.5706% | 35,916.09 |
+| C2 | -699,522.36 | -6.7758% | 7.9559% | -3.7571% | 23.0800% | 32,875.20 |
+| P2 | -753,143.51 | -7.3109% | 8.2447% | -4.5146% | 24.0973% | 36,176.34 |
+
+期间和累计MDD分别按本户opening、历史高水位及既有MDD归约；累计MDD并非月MDD相加或平均。10月没有刷新各户历史最大回撤，故累计MDD与9月值相同。10月月面板与`2026-Q4_TO_DATE`为同一期间，不能称完整Q4；1—9月月/季面板继续引用原父报告，不改历史账户命名空间或改写旧报告。
+
+### 固定三比较与不确定性
+
+| 比较 | 10月净增量（元） | 原始资本归一增量（bps） | 1—10月累计差（bps） | 10月MDD降低（百分点） | 校正区块区间（bps/日） |
+|---|---:|---:|---:|---:|---:|
+| P2−W15（主） | -47,719.02 | -47.7190 | +50.3804 | -0.1775 | [-6.6362, +0.8072] |
+| P2−C2 | -53,621.15 | -53.6212 | -75.7558 | -0.2888 | [-7.5879, +2.3936] |
+| P2−B0 | -26,420.73 | -26.4207 | +535.8670 | +0.2551 | [-9.0428, +4.9300] |
+
+区间仍采用冻结的5交易日循环区块、2000次、seed=20261107和三比较校正，估计对象仅为17日的每日配对净PnL差/原始1000万元，不是累计收益或MDD区间，也不是新增1—10月区间。三项校正区间均跨零；点估计较差不等于已经统计确证P2有害。P2相对W15/C2/B0分别仅6/17、5/17、8/17日净差为正，不回选日期。
+
+尤其不能用期间收益率差替代主比较：P2的-7.3109%好于B0的-7.4617%，但P2本期实际多亏26,420.73元，因为其opening较高；累计P2优于B0的535,866.99元主要已在1—9月形成，不能记成10月新增优势。
+
+### 机制边界与下一步
+
+- 完整父计划分母BUY/SELL分别为B0 299/290、W15 295/287、C2 295/292、P2 295/287；全成/部分/未成/不可用分别保存在正式报告。C2有成交507/587，P2和W15均560/582，B0 576/589；不同父计划人口不作数量匹配。
+- P2相对C2多付3,301.14元费用，净差却为-53,621.15元；加回费用后的账户差仍为-50,320.01元，不能把落后仅解释为费用。P2/W15成交状态计数相同也不代表股票、数量、持仓或成交价相同，不能据此识别纯时点效应。
+- 日终现金比例均值B0/W15/C2/P2为8.9683%/9.1759%/9.6558%/9.0580%。四户盘中时间加权暴露均为UNAVAILABLE（0/17日），不能用日终均值替代。派单至首笔成交投影17/17日可用，中位数均50秒，分母分别为576/560/507/560个已成交父计划；就绪至派单中位数分别960/960/840/780秒，以已派单SUBMIT为分母，不混作预算/信号等待。更早呈现或派单不等于更高收益。
+
+方向保持精简：暂停P2的阈值搜索、模型化及线上晋升，保留其冻结证据；C2继续作为研究候选，W15作为简单对照，B0作为执行基准。下一步优先利用已有事实解释C2与W15的成交覆盖、等待/排队、费用及自然持仓路径差异，而非继续叠加规则或直接推广条件成交价子集；该诊断不新增显著性比较，不回选政策。真实归因缺口保留UNKNOWN/UNAVAILABLE；必要的LocalSIM只读投影交由其owner，不把补全所有投影或未来行情设为研究门槛。
+
+上述结果属于固定选股包下完整执行政策的历史账户比较，不是对长期持有的择时alpha检验；不宣称样本外有效，不替换线上规则。quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。
+
+### 本轮证据位置
+
+分析源代码基线 `c7929bf2d15e0a3e8e20debe9580f5fce407577a`，沿用现有`natural_period_results`，没有业务代码修改。独立工作树 `F:/Dev/AIstock_worktrees/position-timing-natural-october-analysis-20261111`；冻结报告及验证材料写入独立根 `X:/AIstock_temp/position-timing-natural-october-analysis-20261111/`，WSL对应`/mnt/x/…`，不复制大型数据。
+
+- 输入spec：`X:/AIstock_temp/localsim-natural-october-replay-20261110/natural_analysis_spec.json`，完整SHA `9b623ffcf15a8635c9741b0f6b0c98187b90b4e1cc145c91685ae80121db2a66`。
+- `inspect_receipt.json`：本窗口完整来源预检结果，11,144项来源、四户/17日，未读新收益。
+- 正式报告：`artifacts/intraday_v1/natural_period_analyses/ca336dc5d6ef611f43a1999bca11d61618724b3f9759b1d797a02e4d3deea88c.json`，完整SHA `1bb7279cf0f028dde52bdc79ad80b065a3f50faa67cc461d50534a47cef62e4f`，Windows回读一致。
+- `independent_readback.json`完整SHA `570ca19c92c824778061c46fa38a7dde0e6d31bae120b5fdbd722b2715da9a72`；68日、16,184个分钟NAV观察点的期间/累计收益、费用、MDD、高水位及完整父计划/成交/排队/日终现金分母一致，三项区块区间另用逐次采样与线性分位插值复算至1e-12。
+- `run_receipt.json`绑定正式报告，`independent_readback.json`绑定独立Decimal/区块统计复算，`retry_receipt.json`绑定报告exact retry；完整文件SHA及本轮源码/CI/合入状态以同根`source_delivery_receipt_r1.json`为准。
+
+正式analyze为MATERIALIZED、耗时811.553秒；完全同输入重试为ALREADY_MATERIALIZED、耗时808.260秒，报告路径/完整SHA相同。主要耗时为完整来源内容校验；重试仍重新校验/归约统计，但不重跑账户，账户重算与新增经济提交均为0。spec中的source_delivery绑定#7174准备回执，不是#7192结果交付回执；后者通过facts/request/inspection/retry身份对齐，二者不可互换，不改写冻结spec。
+
+复现使用现有CLI：`python -m backend.services.position_timing.intraday.natural_period_results analyze --spec /mnt/x/AIstock_temp/localsim-natural-october-replay-20261110/natural_analysis_spec.json --spec-sha256 9b623ffcf15a8635c9741b0f6b0c98187b90b4e1cc145c91685ae80121db2a66 --timing-root /mnt/x/AIstock_temp/position-timing-natural-october-analysis-20261111/artifacts`；同入口`inspect`只做来源校验。WSL执行前从本轮封印源码工作树加载，不依赖Windows的Git worktree元数据。
+
+本窗口首次新收益解析是完整来源预检及68个day内容检查之后的独立初算，UTC为`2026-11-10T18:02:22.805774+00:00`。正式消费者的首次新day解析阶段仍为`AFTER_COMPLETE_NATURAL_SOURCE_PREFLIGHT_BEFORE_DAY_HEADER_VALIDATION`；源码先在Windows封印，再于WSL验证26份源码身份。源码/软件、来源检查、账户回放、统计读回和经济有效性分别报告；本窗口数据库/行情网络/服务/账户操作均未执行，无需重启。
+
+独立复核针对文件身份和所交付投影的统计归约，不冒称独立重演逐笔账本或撮合；原始账户/经济inspect仍委托LocalSIM，`account_day_journals_independently_reverified=false`保持。`producer_economic_retry=NOT_SUPPLIED`符合合同，不误判为失败或发起经济重算。
