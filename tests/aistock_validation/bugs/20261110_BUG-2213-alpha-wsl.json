@@ -140,7 +140,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2213/post-restart-verify.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -189,7 +189,8 @@
     "validation-receipt: id=8804bbd326072c14 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
     "validation-receipt: id=4b4b61f47c231f99 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py -q` result=`passed 77 tests`",
     "validation-receipt: id=56df0adca16839b8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`",
-    "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2213 --target backend-main --expected-identity 2d933398874b67dae255cd404b4de426364c4ee7 -> passed runtime identity and business smoke; actual WSL B0 worker started with20GiB memory scope"
   ],
   "verification_budget": {
     "budget": "standard",
