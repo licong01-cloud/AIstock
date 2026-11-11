@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2214",
-  "closed_at": null,
+  "closed_at": "2026-11-11T02:35:42.217350Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -31,15 +31,22 @@
   ],
   "expected": "Validate historical database facts with reviewed dataset-specific contracts; safely reuse proven legacy completion only where scope and fact freshness match, retain genuinely unknown source coverage; no repeated fetch or fabricated vintage receipt.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/legacy_validation.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2214-historical-integrity-validation-rejects-legacy-source-audits-before-chec.json"
+    ],
     "added_files": [
       "backend/services/data_integrity/legacy_validation.py"
     ],
     "changed_files": [
+      "backend/services/data_integrity/legacy_validation.py",
       "backend/services/data_integrity/validation.py",
-      "backend/services/data_integrity/worker.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2214-historical-integrity-validation-rejects-legacy-source-audits-before-chec.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/validation.py",
@@ -126,8 +133,8 @@
   },
   "first_seen_at": "2026-11-10T18:30:48.165038Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fc2e11288d023cb3f0cf83dab09e276091eeba9f",
+  "fixed_at": "2026-11-10T18:59:34Z",
   "github_issue_number": 7207,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7207",
   "last_seen_at": "2026-11-10T18:30:48.165038Z",
@@ -135,7 +142,41 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7210",
   "production_backend_dependency_gate": "noop",
+  "production_data_repair": {
+    "all_sync_complete": false,
+    "announcement_now_valid": true,
+    "background_already_validated_original_nine": true,
+    "calendar_state_matches_detail": true,
+    "dated_alert_count": 0,
+    "dev_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json",
+    "dev_unverified": 5,
+    "dev_valid": 9,
+    "fact_date": "2026-10-19",
+    "fact_write": false,
+    "native_revalidation_executed_for_remaining_four": true,
+    "post_restart_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-post-restart-receipt.json",
+    "production_consumer_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-production-consumer-readback.json",
+    "production_unverified_partition_count": 4,
+    "production_valid_partition_count": 21,
+    "production_validation_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-production-validation.json",
+    "profile_write": false,
+    "provider_fetch_by_this_aftercare": false,
+    "recovered_retry_targets_reconciled": 10,
+    "remaining_datasets": [
+      "etf_basic_snapshots",
+      "stock_basic",
+      "sw_index_classify",
+      "sw_index_member"
+    ],
+    "remaining_reason": "historical_reference_scope_unproven",
+    "runtime_action": false,
+    "runtime_merge_commit": "d63417e4096fde6161479693c1a16dd195e648e1",
+    "schema_change": false,
+    "source_receipt_write": false,
+    "status": "runtime_loaded_native_validation_and_consumer_readback_verified"
+  },
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
@@ -144,7 +185,6 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
-  "risk_area": "bug",
   "review_evidence": [
     "RED: test_legacy_partition_requires_real_complete_job_and_physical_validation failed ModuleNotFoundError before implementation; GREEN targeted legacy coverage passed.",
     "Round1 correctness: exact legacy producer job/dataset/window/batch completion plus current DB identity/date/numeric quality; row count alone or seeded audit cannot produce VALID; source audit and historical capture times are never rewritten.",
@@ -153,32 +193,47 @@
     "Round4 negative identity review: malformed dated stock identities rejected without imposing stock-specific formatting on reference/fund catalogues; focused legacy matrix37 passed, repeated exact DEV snapshot9 VALID/5 unproven in1.14s; L0/Ruff passed. Earlier full matrix remains174 passed,1 skipped; source additions are covered by final37 targeted cases.",
     "DESIGN-COMPLIANCE-001: implemented legacy compatibility, distinct missing/invalid/unknown, no fake green, no policy/PIT/model changes, no new gate/service/table; five source-scope unknowns remain explicitly unresolved rather than claiming all-day completeness. Historical unproven reasons do not create repeat FETCH targets."
   ],
-  "production_data_repair": {
-    "status": "not_applied_pending_user_restart_and_native_revalidation",
-    "fact_write": false,
-    "source_receipt_write": false,
-    "profile_write": false,
-    "schema_change": false,
-    "dev_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json",
-    "dev_valid": 9,
-    "dev_unverified": 5
-  },
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "business_smoke_contract_id": "local_data_freshness",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "fresh_process_evidence": [
       "Fresh process verify_legacy_existing_dev.py loaded tracked PhysicalValidator ->legacy_validation in isolated task worktree against genuine production read-only exact-day snapshots in existing aistock_dev:5433 temp tables. 9 VALID,5 unproven; failed jobs, changed revision, deleted rows and NaN not green; source receipts unchanged; X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-dev-validation.json."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_source_call_closure; no worker.py change needed",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\index-hk-calendar-20261111\\BUG-2214-post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2214",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "fc2e11288d023cb3f0cf83dab09e276091eeba9f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-11T02:33:21.458488Z",
+      "mode": "read_only",
+      "observed_identity": "d63417e4096fde6161479693c1a16dd195e648e1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "67b93c234cc7971c2d714ed299b5ade655695a96968e2d71b3daf7bc2107a450",
+      "receipt_sha256": "e831758bdc433a8be82d0fcdd4dff00306ca0f5500547e489127d729fbded601",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f7d7417697e3a17398c8dfb5e7f1e4a2ae992bd89eac4305c3090859fb3e2b39",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -188,7 +243,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2214",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "22205e4e58719322",
+    "recorded_at": "2026-11-10T19:00:12.593247Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "625c1a41d65e0559058680627677abbf7add4488",
+    "source_merge_commit": "fc2e11288d023cb3f0cf83dab09e276091eeba9f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7210",
+    "validation_evidence": [
+      "validation-receipt: id=cbdaeca2eaceea25 commit=625c1a41d65e0559058680627677abbf7add4488 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q -x -k legacy` result=`37 passed; earlier full matrix174 passed,1 intentional skip; final exact DEV snapshot9 valid5 unproven source unchanged1.14s`",
+      "validation-receipt: id=562e0e98a0548be6 commit=625c1a41d65e0559058680627677abbf7add4488 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "7de7e3a2e5c0596c79bf2b76ff6f6fd898fd42d01c7c24e4349a8ac2185361e5"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -197,6 +274,11 @@
     "fingerprint": "4047feea585a80987ac053a6",
     "source_event_id": "FE-20261110-4047feea585a"
   },
+  "validation_evidence": [
+    "validation-receipt: id=cbdaeca2eaceea25 commit=625c1a41d65e0559058680627677abbf7add4488 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q -x -k legacy` result=`37 passed; earlier full matrix174 passed,1 intentional skip; final exact DEV snapshot9 valid5 unproven source unchanged1.14s`",
+    "validation-receipt: id=562e0e98a0548be6 commit=625c1a41d65e0559058680627677abbf7add4488 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2214 --target backend-main --expected-identity fc2e11288d023cb3f0cf83dab09e276091eeba9f ->passed; native VALIDATE_ONLY and API/calendar agree21 VALID4 explicitly UNVERIFIED; original9 green plus announcement green;10 exact recovered retry targets reconciled; no quote/source/profile/fetch/service writes; X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-production-consumer-readback.json"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
