@@ -28,31 +28,24 @@
     "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2214-production-consumer-readback.json",
     "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2216-dev-reference-result.json"
   ],
-  "repair_readback": {
-    "code_status": "dated_snapshot_validation_implemented",
-    "dev_result": "ETF 1887/1887 VALID; deleting one real snapshot row yields INCOMPLETE missing=1; existing DEV temporary tables only",
-    "review_rounds": [
-      "Correctness: actual Shanghai capture day, exact native job identity and dates, full init query batches, physical date/identity/numerics; RED to GREEN",
-      "Completeness: newer partial or failed native attempt cannot be hidden by old success; changed revisions use native scan; current bound source regression passed",
-      "Final review: current mutable masters are not historical snapshots; source omissions retained UNKNOWN; aggregate row limit not incorrectly applied across parameter groups"
-    ],
-    "residual": "stock_basic, sw_index_classify, sw_index_member lack exact 2026-10-19 master snapshot identity sets; current structural quality alone cannot certify their historical full coverage. Existing industry effective facts remain intact and are not index-membership-to-classification backfill.",
-    "production_fact_write": false,
-    "source_receipt_rewritten": false,
-    "provider_calls": 0,
-    "dataset_action": false,
-    "design_compliance": "No partial delivery claimed complete; no fake source scan or success; no PIT/model or capture-time change; no new gate/schema/framework"
-  },
   "expected": "Validate dated ETF snapshots with retained exact producer completion; validate listing and SW reference facts by approved effective/version authority and independent consuming keys. Distinguish as-of fact usability from historical vintage, retain unprovable fields/coverage, no new snapshot archive, fake receipt, current-to-history backfill, source/PIT/model mutation or duplicate fetching.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/reference_validation.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261111_BUG-2216-historical-reference-inputs-lack-dated-snapshot-and-as-of-fact-validatio.json"
+    ],
     "added_files": [
       "backend/services/data_integrity/reference_validation.py"
     ],
     "changed_files": [
+      "backend/services/data_integrity/reference_validation.py",
       "backend/services/data_integrity/validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261111_BUG-2216-historical-reference-inputs-lack-dated-snapshot-and-as-of-fact-validatio.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/validation.py",
@@ -124,8 +117,8 @@
   },
   "first_seen_at": "2026-11-11T05:25:23.032813Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a790ddc916c1884e410d80c9a16ac5ca0dce6ab2",
+  "fixed_at": "2026-11-11T05:45:28Z",
   "github_issue_number": 7217,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7217",
   "last_seen_at": "2026-11-11T05:25:23.032813Z",
@@ -133,9 +126,25 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7218",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "repair_readback": {
+    "code_status": "dated_snapshot_validation_implemented",
+    "dataset_action": false,
+    "design_compliance": "No partial delivery claimed complete; no fake source scan or success; no PIT/model or capture-time change; no new gate/schema/framework",
+    "dev_result": "ETF 1887/1887 VALID; deleting one real snapshot row yields INCOMPLETE missing=1; existing DEV temporary tables only",
+    "production_fact_write": false,
+    "provider_calls": 0,
+    "residual": "stock_basic, sw_index_classify, sw_index_member lack exact 2026-10-19 master snapshot identity sets; current structural quality alone cannot certify their historical full coverage. Existing industry effective facts remain intact and are not index-membership-to-classification backfill.",
+    "review_rounds": [
+      "Correctness: actual Shanghai capture day, exact native job identity and dates, full init query batches, physical date/identity/numerics; RED to GREEN",
+      "Completeness: newer partial or failed native attempt cannot be hidden by old success; changed revisions use native scan; current bound source regression passed",
+      "Final review: current mutable masters are not historical snapshots; source omissions retained UNKNOWN; aggregate row limit not incorrectly applied across parameter groups"
+    ],
+    "source_receipt_rewritten": false
+  },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -146,19 +155,21 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "business_smoke_contract_id": "local_data_freshness",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "C:/Users/lc999/miniconda3/envs/AIstock/python.exe X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/BUG-2216-dev-reference.py loaded tracked PhysicalValidator and reference_validation in a fresh process; production read-only and existing aistock_dev temporary-table verification: ETF1887/1887 VALID; one-row deletion INCOMPLETE; three unretained masters explicitly UNVERIFIED, no fact/source/provider writes."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_source_call_closure PhysicalValidator._scan_contract -> validate_reference_partition",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -168,7 +179,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2216",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8a4b57621380d7a7",
+    "recorded_at": "2026-11-11T05:46:19.091894Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "73d598f70f3a279b1b8f4157fa3e0c79f27334a4",
+    "source_merge_commit": "a790ddc916c1884e410d80c9a16ac5ca0dce6ab2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7218",
+    "validation_evidence": [
+      "PR7218 CI verdict SUCCESS; 204 passed1 skipped; exact DEV snapshot1887 VALID with missing-row negative; three mutable historical master scopes explicitly unproven; no production fact/source/profile writes or service control"
+    ],
+    "validation_evidence_digest": "d273cc5aba7b510057d44c692e4fff6884779f854ca7581448f79dd14494a9fa"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -177,6 +209,9 @@
     "fingerprint": "50877eb579305e68507a86d5",
     "source_event_id": "FE-20261111-50877eb57930"
   },
+  "validation_evidence": [
+    "PR7218 CI verdict SUCCESS; 204 passed1 skipped; exact DEV snapshot1887 VALID with missing-row negative; three mutable historical master scopes explicitly unproven; no production fact/source/profile writes or service control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
