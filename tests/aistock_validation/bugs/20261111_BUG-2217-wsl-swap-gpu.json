@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2217",
-  "closed_at": null,
+  "closed_at": "2026-11-11T16:43:34.620863Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -200,10 +200,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2217/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2217",
+      "business_smoke_semantic": {
+        "contract_id": "qe_batch_execution_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "0ab7dcfe725a28b4d109b2145c034dd20973585e06cd1fcbaa2346ab0c434661",
+      "expected_identity": "486f7d24234435587dd32fd8c52f883308b27c4f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-11T16:35:22.675566Z",
+      "mode": "read_only",
+      "observed_identity": "486f7d24234435587dd32fd8c52f883308b27c4f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ecaf603758d01cb05f6324668163ec3a678366adbfab33e03c73831c05eaeca4",
+      "receipt_sha256": "62406c9f79e44d739a09891d9871a5937d4619c2757c9423907ca6ece44b9bfd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "05bcb25c50203afa67abfd9ce575ad6ba1715174506af2ef4ed1e208135521f8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -235,7 +257,7 @@
     ],
     "validation_evidence_digest": "6e3fcf4b244e66dcd31ae31792a257782f56106ecf45c05d69f2c9375c3917ae"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -246,7 +268,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=a9698bd31525cd5e commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_wsl_workload_guard.py backend/services/quantevolver/qe_wsl_workload_isolation.py backend/services/quantevolver/qe_wsl_resource_isolation.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py docs/operations/qe_wsl_resource_isolation_runbook.md tests/aistock_validation/bugs/20261111_BUG-2217-wsl-swap-gpu.json` result=`passed: 7 files, 0 findings`",
-    "validation-receipt: id=2088405dfd0e8515 commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q --tb=short` result=`passed: 79 tests; final installer token correction focused test passed`"
+    "validation-receipt: id=2088405dfd0e8515 commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q --tb=short` result=`passed: 79 tests; final installer token correction focused test passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2217 --target backend-main -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
