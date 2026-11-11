@@ -8,12 +8,13 @@ import json
 from pathlib import Path
 import re
 import shlex
+from .qe_wsl_workload_guard import (
+    GIB as GIB, MEMORY_BYTES, SWAP_BYTES, JOB_SWAP_BYTES, MAX_JOBS, MAX_GPU_JOBS, PEAK_BYTES, SCHEMA,
+)
 
-GIB = 1024**3
-TRAINING_MEMORY_BYTES = 40 * GIB
+TRAINING_MEMORY_BYTES = MEMORY_BYTES
 # Conservative whole-job reservations, not measured peaks. A full-market
 # 565-day replay exceeded the old6GiB cap while the API remained isolated.
-PEAK_BYTES = {"gpu": 32 * GIB, "cpu": 20 * GIB, "replay": 20 * GIB}
 GUARD_NAME = "qe_wsl_workload_guard.py"
 COMMAND_NAME = "qe_wsl_workload_command.sh"
 POLICY_NAME = "qe_wsl_workload_policy.json"
@@ -23,7 +24,8 @@ def memory_slot_limit(
     compute_kind: str | None, *, backtest_only: bool, prediction_replay: bool = False,
 ) -> int:
     kind = "replay" if backtest_only and prediction_replay else ("cpu" if compute_kind == "cpu" else "gpu")
-    return TRAINING_MEMORY_BYTES // PEAK_BYTES[kind]
+    limit = MAX_GPU_JOBS if kind == "gpu" else MAX_JOBS
+    return min(limit, (TRAINING_MEMORY_BYTES + SWAP_BYTES) // PEAK_BYTES[kind])
 
 
 def isolate_payload(payload, *, source, compute_kind: str | None):
@@ -54,14 +56,16 @@ def isolate_payload(payload, *, source, compute_kind: str | None):
         f"{payload.task_id}|{payload.loop_id}|{source.submission_intent_hash}".encode()
     ).hexdigest()
     policy = {
-        "schema": "qe_wsl_workload_envelope_v1",
+        "schema": SCHEMA,
         "identity": identity,
         "task_id": payload.task_id,
         "loop_id": payload.loop_id,
         "kind": kind,
         "peak_bytes": PEAK_BYTES[kind],
-        "budget_bytes": TRAINING_MEMORY_BYTES,
-        "swap_bytes": 8 * GIB,
+        "budget_bytes": TRAINING_MEMORY_BYTES + SWAP_BYTES,
+        "resident_budget_bytes": TRAINING_MEMORY_BYTES,
+        "swap_bytes": SWAP_BYTES,
+        "job_swap_bytes": JOB_SWAP_BYTES,
         "original_command_sha256": command_sha,
         "guard_sha256": hashlib.sha256(guard_text.encode()).hexdigest(),
         "original_files_sha256": {
