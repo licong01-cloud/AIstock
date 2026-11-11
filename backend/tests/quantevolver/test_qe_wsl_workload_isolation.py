@@ -19,7 +19,9 @@ def test_envelope_preserves_entire_scientific_command_and_frozen_inputs(cd):
     policy = json.loads(out.experiment_files["qe_wsl_workload_policy.json"])
     assert out.experiment_files["qe_wsl_workload_command.sh"] == command
     assert policy["original_command_sha256"] == hashlib.sha256(command.encode()).hexdigest()
-    assert policy["peak_bytes"] == 32 * GIB and policy["budget_bytes"] == 40 * GIB
+    assert policy["peak_bytes"] == 32 * GIB and policy["budget_bytes"] == 88 * GIB
+    assert policy["resident_budget_bytes"] == 56 * GIB and policy["swap_bytes"] == 32 * GIB
+    assert policy["job_swap_bytes"] == 16 * GIB and policy["schema"] == "qe_wsl_workload_envelope_v2"
     assert out.config == p.config and out.experiment_files["factors/f.py"] == "original"
     assert p.experiment_files == {"factors/f.py": "original", "conf.yaml": "original"}
     assert out.wsl_command.startswith("cd -- '/mnt/f/job with spaces' && exec /bin/bash --noprofile --norc -c ")
@@ -75,11 +77,11 @@ def test_unsupported_or_ambiguous_workspace_fails_before_post(command):
 
 
 def test_unknown_model_uses_conservative_peak_and_replay_is_separate():
-    assert memory_slot_limit(None, backtest_only=False) == 1
-    assert memory_slot_limit("gpu", backtest_only=False) == 1
-    assert memory_slot_limit("cpu", backtest_only=False) == 2
-    assert memory_slot_limit(None, backtest_only=True) == 1
-    assert memory_slot_limit(None, backtest_only=True, prediction_replay=True) == 2
+    assert memory_slot_limit(None, backtest_only=False) == 2
+    assert memory_slot_limit("gpu", backtest_only=False) == 2
+    assert memory_slot_limit("cpu", backtest_only=False) == 4
+    assert memory_slot_limit(None, backtest_only=True) == 2
+    assert memory_slot_limit(None, backtest_only=True, prediction_replay=True) == 4
     p = QEWorkspaceSubmissionPayload(
         "qe_example", 1, {}, {"qe_wsl_workload_policy.json": "existing"}, "cd -- /tmp/job && exec x"
     )
