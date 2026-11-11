@@ -1049,3 +1049,164 @@ def test_index_calendar_backfill_queries_are_year_bounded_and_reuse_each_respons
     sessions = capture_index_sessions(facts, query)
     assert calls == [('20240102','20241230'), ('20250102','20250102')]
     assert all(row['status'] == 'CONFIRMED' for row in sessions.values())
+
+
+def _reference_job(dataset='etf_basic_snapshots', count=2):
+    from datetime import datetime, timezone
+    return dict(job_id='snapshot-job', status='success',
+        created_at=datetime(2026, 10, 19, 12, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 10, 19, 12, 1, tzinfo=timezone.utc),
+        summary=dict(dataset=dataset, start_date='2026-10-19', end_date='2026-10-19',
+            stats=dict(dataset=dataset, job_id='snapshot-job', mode='init', inserted_rows=count,
+                       total_batches=3, success_batches=3, failed_batches=0)))
+
+
+def test_reference_exact_dated_snapshot_uses_retained_complete_job_without_fabricating_scan():
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    day = date(2026, 10, 19)
+    actual = [dict(snapshot_date=day, ts_code='510300.SH'), dict(snapshot_date=day, ts_code='159915.SZ')]
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], day, 0, [_reference_job()], actual)
+    assert result.state == PartitionState.VALID
+    assert result.checks['historical_vintage_proven'] is False
+    assert result.checks['source_receipt_rewritten'] is False
+    assert result.checks['provider_scan_reconstructed'] is False
+    assert result.checks['legacy_job_id'] == 'snapshot-job'
+
+
+@pytest.mark.parametrize('change', ['wrong_capture_day', 'wrong_end', 'partial', 'error', 'wrong_id',
+    'missing_finish', 'unknown_count', 'zero_count', 'wrong_start'])
+def test_reference_snapshot_does_not_accept_wrong_or_incomplete_job(change):
+    from datetime import timedelta
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    job = _reference_job(count=1)
+    if change == 'wrong_capture_day':
+        job['created_at'] += timedelta(days=1)
+        job['finished_at'] += timedelta(days=1)
+    elif change == 'wrong_end':
+        job['summary']['end_date'] = '2026-10-20'
+    elif change == 'partial':
+        job['summary']['stats']['failed_batches'] = 1
+    elif change == 'error':
+        job['summary']['stats']['error'] = 'fetch failed'
+    elif change == 'wrong_id':
+        job['summary']['stats']['job_id'] = 'another-job'
+    elif change == 'missing_finish':
+        job['finished_at'] = None
+    elif change == 'wrong_start':
+        job['summary']['start_date'] = '2026-10-18'
+    else:
+        job['summary']['stats']['inserted_rows'] = None if change == 'unknown_count' else 0
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], date(2026, 10, 19), 0,
+        [job], [dict(snapshot_date=date(2026, 10, 19), ts_code='510300.SH')])
+    assert result.state != PartitionState.VALID
+
+
+@pytest.mark.parametrize('change', ['missing', 'extra', 'duplicate', 'wrong_date', 'nan', 'new_revision'])
+def test_reference_snapshot_detects_physical_drift_and_never_rebinds_old_job(change):
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    day = date(2026, 10, 19)
+    actual = [dict(snapshot_date=day, ts_code='510300.SH', mgt_fee=0.5)]
+    if change == 'missing':
+        actual = []
+    elif change in {'extra', 'duplicate'}:
+        actual.append(dict(actual[0], ts_code='159915.SZ' if change == 'extra' else '510300.SH'))
+    elif change == 'wrong_date':
+        actual[0]['snapshot_date'] = date(2026, 10, 20)
+    elif change == 'nan':
+        actual[0]['mgt_fee'] = float('nan')
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], day,
+        1 if change == 'new_revision' else 0, [_reference_job(count=1)], actual)
+    assert result.state != PartitionState.VALID
+
+
+@pytest.mark.parametrize('dataset', ['stock_basic', 'sw_index_classify', 'sw_index_member'])
+def test_reference_mutable_master_is_not_certified_as_an_old_snapshot(dataset):
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    result = reference_result(DATASET_REGISTRY[dataset], date(2026, 10, 19), 0,
+        [_reference_job(dataset)], [])
+    assert result.state == PartitionState.UNVERIFIED
+    assert result.reason == 'historical_reference_snapshot_not_retained'
+    assert result.checks['historical_vintage_proven'] is False
+
+
+def test_reference_native_validator_routes_missing_audit_to_dated_snapshot_contract(monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    calls = []
+    day = date(2026, 10, 19)
+    def read(_conn, query, parameters=()):
+        calls.append((str(query), parameters))
+        if 'dataset_date_refresh_audit' in str(query):
+            return []
+        if 'ingestion_jobs' in str(query):
+            return [_reference_job(count=1)]
+        return [dict(snapshot_date=day, ts_code='510300.SH')]
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('etf_basic_snapshots', 'reference', '20:05'), day, 0)
+    assert result.state == PartitionState.VALID
+    assert len(calls) == 3
+
+
+def test_reference_failed_new_source_cannot_be_overridden_by_old_job(monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    source = dict(status='failed', quality_status='error', data_source='tushare', metadata={})
+    def read(_conn, query, parameters=()):
+        assert 'dataset_date_refresh_audit' in str(query), 'must not fetch old success after a source failure'
+        return [source]
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('etf_basic_snapshots', 'reference', '20:05'), date(2026, 10, 19), 0)
+    assert result.state == PartitionState.WAIT_UPSTREAM
+
+
+@pytest.mark.parametrize('status', ['failed', 'running', 'success'])
+def test_reference_later_incomplete_attempt_cannot_be_hidden_by_older_success(status):
+    from copy import deepcopy
+    from datetime import timedelta
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    earlier = _reference_job(count=1)
+    later = deepcopy(earlier)
+    later['status'] = status
+    later['created_at'] += timedelta(hours=1)
+    later['finished_at'] += timedelta(hours=1)
+    later['summary']['stats']['success_batches'] = 2
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], date(2026, 10, 19), 0,
+        [earlier, later], [dict(snapshot_date=date(2026, 10, 19), ts_code='510300.SH')])
+    assert result.state == PartitionState.UNVERIFIED
+
+
+def test_reference_job_must_be_full_capture_not_zero_delta_success():
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    job = _reference_job(count=1)
+    job['summary']['stats']['mode'] = 'incremental'
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], date(2026, 10, 19), 0,
+        [job], [dict(snapshot_date=date(2026, 10, 19), ts_code='510300.SH')])
+    assert result.state == PartitionState.UNVERIFIED
+
+
+@pytest.mark.parametrize('dataset', ['stock_basic', 'sw_index_classify', 'sw_index_member', 'etf_basic_snapshots'])
+def test_reference_current_bound_scan_keeps_existing_native_contract(dataset, monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.provider import provider_scan
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    day = date(2026, 10, 19)
+    spec = DATASET_REGISTRY[dataset]
+    fact = dict(ts_code='000001.SZ', l2_code='801192.SI', in_date=day,
+                snapshot_date=day, index_code='801192.SI')
+    source = dict(status='success', quality_status='ok', data_source='tushare', metadata=dict(
+        integrity_observed_revision=2, provider_scan=provider_scan(spec, [fact], parameters={})))
+    def read(_conn, query, parameters=()):
+        assert 'ingestion_jobs' not in str(query), 'bound source never queries legacy jobs'
+        return [source] if 'dataset_date_refresh_audit' in str(query) else [fact]
+    monkeypatch.setattr(validation, 'rows', read)
+    assert validation.PhysicalValidator().validate(None,
+        Obligation(dataset, 'reference', '20:05'), day, 2).state == PartitionState.VALID

@@ -381,6 +381,10 @@ class PhysicalValidator:
             WHERE dataset=%s AND trade_date=%s AND data_source<>'canonical_db' ORDER BY refreshed_at DESC""", (dataset, day))
         current = [r for r in observed if (r.get("metadata") or {}).get("integrity_observed_revision") == revision]
         if not current:
+            from .reference_validation import validate_reference_partition
+            reference = validate_reference_partition(conn, obligation, day, revision, observed, read=rows)
+            if reference is not None:
+                return reference
             from .legacy_validation import validate_legacy_partition
             legacy = validate_legacy_partition(conn, obligation, day, revision, observed, read=rows)
             if legacy is not None:
