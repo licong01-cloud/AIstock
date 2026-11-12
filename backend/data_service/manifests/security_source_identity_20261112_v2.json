@@ -1,0 +1,51 @@
+{
+  "schema_version": "aistock_security_source_identity_v1",
+  "manifest_version": "aistock_security_source_identity_20261112_v2",
+  "default_resolution": "canonical_same_code",
+  "rows": [
+    {
+      "security_identity_id": "szse_000022_001872",
+      "canonical_ts_code": "001872.SZ",
+      "source_dataset": "market.margin_detail",
+      "source_ts_code": "000022.SZ",
+      "effective_start": "1993-05-05",
+      "effective_end": "2018-12-25",
+      "authority_ref": "https://static.cninfo.com.cn/finalpage/2018-12-26/1205690369.PDF",
+      "authority_hash": "bf406b1759dd7fda45cc46927e36316840b0b1152bb40677a7b52e11568d4350",
+      "row_hash": "6192ddaff205f73c60b6f9efbcee8d8b88d43f898a18052234c8732d34193983"
+    },
+    {
+      "security_identity_id": "szse_000043_001914",
+      "canonical_ts_code": "001914.SZ",
+      "source_dataset": "market.margin_detail",
+      "source_ts_code": "000043.SZ",
+      "effective_start": "1994-09-28",
+      "effective_end": "2019-12-15",
+      "authority_ref": "https://static.cninfo.com.cn/finalpage/2019-12-16/1207164397.PDF",
+      "authority_hash": "46160431c51df23c30b3be802eb140492255128fb166d103ed735a62f303ab05",
+      "row_hash": "911e8e91c37dc856277b7384ee816a38a09d8b84925595efdbb1fdf070e46d94"
+    },
+    {
+      "security_identity_id": "szse_300114_302132",
+      "canonical_ts_code": "302132.SZ",
+      "source_dataset": "market.margin_detail",
+      "source_ts_code": "300114.SZ",
+      "effective_start": "2010-08-27",
+      "effective_end": "2025-02-16",
+      "authority_ref": "https://disc.static.szse.cn/disc/disk03/finalpage/2025-02-15/cedb693a-f5ee-4463-9682-ea33d406b569.PDF",
+      "authority_hash": "dd68049c48df826848f361fd9e7b23dd20b6805144a2e5bc36e54db638611488",
+      "row_hash": "4a23cbb8068f46ba9d10644e31442f82cf0dc2fa7db6898c813dc648311f6a42"
+    },
+    {
+      "security_identity_id": "szse_300114_302132",
+      "canonical_ts_code": "302132.SZ",
+      "source_dataset": "market.moneyflow_ts",
+      "source_ts_code": "300114.SZ",
+      "effective_start": "2010-08-27",
+      "effective_end": "2025-02-16",
+      "authority_ref": "https://disc.static.szse.cn/disc/disk03/finalpage/2025-01-23/446cadc3-e9af-4adb-912c-9f25d17a4607.PDF",
+      "authority_hash": "808b825b3831707c1246826d03ce80cd1565ffdd57c2f3f61d2d1f38a7482d18",
+      "row_hash": "12df0874a894ed58542e0d9c054526549c9d53cd8888b9278230e2de34c982e2"
+    }
+  ]
+}
