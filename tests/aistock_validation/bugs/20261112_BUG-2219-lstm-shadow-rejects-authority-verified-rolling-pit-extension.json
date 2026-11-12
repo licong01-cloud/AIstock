@@ -49,14 +49,6 @@
   "evidence_uris": [
     "X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/runtime-readiness-20261113.json SHA256=742e8c44d01db87d8930c84265a43d85388553970c4ec03505cb9f0c3ed73719"
   ],
-  "execution_restrictions": [
-    "no_training",
-    "no_database_writes",
-    "no_service_control",
-    "no_cleanup",
-    "no_model_activation",
-    "no_confirmation_protocol_changes"
-  ],
   "expected": "Accept only same-policy same-generation forward coverage extension with exact authority-verified immutable predecessor; retain rejection for unknown proof, changed policy/generation/package/source prefix, invalid dates and all other identity drift. Never rewrite frozen bindings.",
   "file_scope_contract": {
     "actual_changed_files": [
@@ -299,5 +291,15 @@
     "pytest": "C:/Users/lc999/miniconda3/python.exe",
     "nox_l0": "C:/Users/lc999/miniconda3/envs/AIstock-CI/python.exe",
     "nox_rtk_fallback": "Nox has no RTK wrapper; ran the existing prebuilt interpreter directly"
-  }
+  },
+  "safety_boundaries": [
+    "no_training",
+    "no_database_writes",
+    "no_service_control",
+    "no_cleanup",
+    "no_model_activation",
+    "no_confirmation_protocol_changes"
+  ],
+  "execution_restrictions": [],
+  "workflow_metadata_note": "Non-source safety boundaries remain in non_goals/safety_boundaries. execution_restrictions is reserved for source-action prohibitions; current user authorized source repair and existing automatic source delivery. No runtime/DB/training/cleanup authorization is added."
 }
