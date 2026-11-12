@@ -1,6 +1,6 @@
 # 申万L2融资余额信息增量：唯一候选设计
 
-> v1.2；2026-11-12；owner：HMM；F2。状态：`APPROVED_IMPLEMENTATION_IN_PROGRESS`。用户已明确批准L2-MARGIN-INFORMATION-D1～D6：本页21维候选、固定双session融资滞后、同mask控制、最多12 fits及J资源筛选均冻结。来源consumer已随#7227合入，来源/PIT预检不重做；完整21维TRAIN预检和正式研究尚未执行，当前fit=0。原S/W停止与预算不变，不恢复旧目标变换路线。批准记录/范围见§10.2。
+> v1.3；2026-11-12；owner：HMM；F2。状态：`STOP_NO_INCREMENTAL_VALUE_REFERENCE`。已按L2-MARGIN-INFORMATION-D1～D6完整完成：来源#7227、研究源码#7228已合入，最终clean HEAD=3899adf305be588e56438cfebee7f08b1f12e644；完整共同TRAIN预检PASS、12/12 fits、双process模型及142×131预测/事前分组封存、价值评价完成。132成熟日J=−0.2023829bp，HAC区间跨零、复权仍负，未达原>0资源筛选，停止本精确组合，不追加fit或新QE。旧C/S/W、资产及数据保持。批准见§10.2，结果/pins/边界见§11；此前执行前快照不覆盖此终态。
 
 ## 1. Background / 终极目标与本轮取舍
 
@@ -104,7 +104,7 @@ margin_balance_ratio[g,t] = sum(md_rzye[i,u], i in O[t,g])
 
 先完成D2共享身份与HMM源适配、全部三季度文件preflight，再从clean交付HEAD记录唯一attempt清单；沿原S-D3已批准Conda base固定数值环境/单线程，不安装依赖。全部模型和两process完整预测封存后才读原已消费evaluation事实。候选输出expected_member_loss_with_margin，保留raw及沿原C的非负投影，不伪装概率或套1-p。旧模型/源码身份、S/W终态、QE资产原字节不变。
 
-若新mask缺合法融资观测，候选仅对应行业日NA，不升级为整轮行业全通过AND门；未知身份/必需来源错误先解决，不能以缩小股票范围绕过。训练/数值/封存source问题与经济效果不足分别报告。当前fit=0，没有正式新model/prediction或完整21维TRAIN预检；仅§4.1来源身份/PIT预检通过。
+若新mask缺合法融资观测，候选仅对应行业日NA，不升级为整轮行业全通过AND门；未知身份/必需来源错误先解决，不能以缩小股票范围绕过。训练/数值/封存source问题与经济效果不足分别报告。实际已按此顺序完成完整21维TRAIN预检、12/12 fits和封存；经济主量未改善，终态及精确回执见§11，不将来源通过与模型价值混写。
 
 ## 7. Contracts D5 / L2-MARGIN-INFORMATION-D5：唯一价值筛选与停止
 
@@ -129,7 +129,7 @@ J_t = incremental_avoided_loss_t - incremental_missed_upside_t
 
 ## 8. Contracts D6 / L2-MARGIN-INFORMATION-D6：Implementation Plan / Verification Plan
 
-当前已完成P0及§4.1来源consumer交付，新模型合同现获批准。按一个连续包完成21维feature与matched-mask实现、CLI/必要测试、两轮作者审核、最小门禁/CI、完整固定HEAD TRAIN preflight、封存训练/评价与父蓝图同步。已完成的共享包和来源reader不重做，不把来源资格冒称模型研究/经济成果，也不把HMM业务构造再交数据owner或QE。源码可先交付，正式研究必须等待完整预检通过；源码验收与研究/经济结果分开。
+以下保留批准时执行计划；完整完成与停止的真实读回见§11。按一个连续包完成21维feature与matched-mask实现、CLI/必要测试、两轮作者审核、最小门禁/CI、完整固定HEAD TRAIN preflight、封存训练/评价与父蓝图同步。已完成的共享包和来源reader不重做，不把来源资格冒称模型研究/经济成果，也不把HMM业务构造再交数据owner或QE。源码可先交付，正式研究必须等待完整预检通过；源码验收与研究/经济结果分开。
 
 “新于HMM20D”不等于新于QE基础Alpha：共享static文件已含md_*、cp_*及估值字段，现有QE因子可能已使用这些信息，本轮没有核验其完整冻结表达式或证明对AF独立。后续HMM内同mask控制只能回答对旧C20的增量；提出QE接续前必须读取对应冻结AF定义/实际预测，检查是否仍有场景增量，不重跑旧QE、不将字段来源不同自动称为新alpha。
 
@@ -147,11 +147,11 @@ F-011：P0单一新增信息、价值和停止；F-012：P0输入/因果/预算�
 | F-012 | 本页§4～§6；backend/services/hmm_risk/security_identity.py；backend/services/hmm_risk/rotation_l1_input_bundle.py | artifact: F:/Dev/AIstock_runtime/hmm_l2_new_information/20261112/sector_scope_v1.json；本页D2精确缺口 | DESIGN_COMPLETE_ONLY | 无 |
 | F-013 | 本页§2/§8，P0/实施/研究/经济状态分开 | artifact: F:/Dev/AIstock_runtime/hmm_l2_new_information/20261112/qualification_v1.json；父蓝图及本页owner/非目标 | DESIGN_COMPLETE_ONLY | 无 |
 | F-014 | backend/services/hmm_risk/margin_information_input.py；backend/services/hmm_risk/security_identity.py；本页§4.1 | backend/tests/hmm_risk/test_margin_information_input.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_new_information/20261112/margin_source_preflight_v2.json | SOURCE_CONSUMER_VERIFIED | 无 |
-| F-015 | backend/services/hmm_risk/risk_l2_margin_information.py：aggregate_ratio、margin_frame、financing_features、design、prepare、load_packet | backend/tests/hmm_risk/test_risk_l2_margin_information.py：H5/来源边界、元单位、t-2、共同scaler/日期权重；38项直接矩阵 | SOURCE_IMPLEMENTED_VERIFIED | 无 |
-| F-016 | scripts/hmm_risk/run_risk_l2_margin_information.py；risk_l2_margin_information.py：fit_packet、close_fits、predict、validate_acceptance | backend/tests/hmm_risk/test_risk_l2_margin_information.py：request预算、失败计attempt/禁换目录、目标/权重匹配、封存前禁评价 | SOURCE_IMPLEMENTED_VERIFIED | 无 |
-| F-017 | backend/services/hmm_risk/risk_l2_margin_information.py：risk_weights、freeze_groups、paired_value、evaluate；本页§10.2 | backend/tests/hmm_risk/test_risk_l2_margin_information.py：2..131分母ties、J机会成本代数、未来/合法NA、事前分组；两轮作者审核 | SOURCE_IMPLEMENTED_VERIFIED | 无 |
+| F-015 | backend/services/hmm_risk/risk_l2_margin_information.py：aggregate_ratio、margin_frame、financing_features、design、prepare、load_packet；本页§11.1 | backend/tests/hmm_risk/test_risk_l2_margin_information.py：38项直接矩阵；artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/prepare_v2/preflight.json | FORMAL_INPUT_VERIFIED | 无 |
+| F-016 | scripts/hmm_risk/run_risk_l2_margin_information.py；risk_l2_margin_information.py：fit_packet、close_fits、predict、validate_acceptance；本页§11.1 | artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/run_v1/acceptance.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/run_v1/prediction_acceptance.json；12/12 fits/双process | FORMAL_RESEARCH_SEALED_VERIFIED | 无 |
+| F-017 | backend/services/hmm_risk/risk_l2_margin_information.py：risk_weights、freeze_groups、paired_value、evaluate；本页§11.2～§11.3 | artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/evaluation_v1.json；281项读回及7项矩阵HAC复算 | RESEARCH_COMPLETE_STOP_NO_INCREMENTAL_VALUE | 无 |
 
-矩阵F-011～013保留P0完整性、F-014保留#7227来源交付，F-015～017验本轮已批准模型的源码实现与直接合同，不把合成测试冒充真实数据或经济通过。源码交付后仍须clean固定HEAD完整业务预检PASS才能运行正式fit；实际fit=0，研究/经济结果未产生，不宣称可供QE采用。未来未知hash不在批准范围。
+矩阵F-011～013保留P0完整性、F-014保留#7227来源交付，F-015～017现由§11真实预检、12/12 fits、封存和评价读回闭合。研究流程完成不等于经济通过；本轮J未改善，按批准规则停止，不宣称可供新QE采用。未来未知hash不在批准范围。
 
 ## 9. Risks / Production Gates / Rollout / Rollback
 
@@ -198,3 +198,66 @@ DESIGN-COMPLIANCE-001逐项复核：仅将本轮授权的来源consumer标记完
 首次完整预检与PR #7228 CI共同检出尚未交付reader的原地代码改写错误：旧代码转换后可能在同一循环再次按新代码解析，受集合遍历顺序影响。修复为原始来源代码只读定位、独立结果数组和固定遍历顺序；同一回归同时覆盖切换日前旧代码、切换日后新代码、原生零及错误侧拒绝。两轮作者复核确认不改变authority、数据或模型合同，未消耗fit；首次预检失败不作为正式输入通过证据，须以新clean HEAD重新执行完整预检。
 
 DESIGN-COMPLIANCE-001：实现本页完整source研究流程，不以简化/占位冒充已完成研究；未知身份/非有限值显式失败，自然缺失/未成熟不补零、不缩分母；原目标/窗口/参数/旧模型/数据和其他模块不变；不增资源、覆盖率合取或审批门。生产/服务/数据集操作0。
+
+## 11. 正式研究结果与终态（2026-11-12）
+
+### 11.1 实际执行、身份与覆盖
+
+源码PR #7228已合入，merge=`133cf8bbcad987f1f616b8d1234d3e65788567db`；正式clean source HEAD=`3899adf305be588e56438cfebee7f08b1f12e644`，生产源码文件与merge一致。新HEAD CI run 43151572200全绿。原始request及§4数据/package身份不变；首次预检和CI发现的reader重复转换已按§10.3修复，失败时fit=0。最终prepare_v2才是训练输入依据，没有覆盖失败回执或重置fit预算。
+
+完整866个decision日2023-04-03..2026-10-30、原成员/前置市值/停牌、t-2融资及共同TRAIN验证通过。三季度匹配样本如下；缺观察按原合同排除该训练行，不解释为余额零或可融资资格缺陷：
+
+| 季度 | 原C TRAIN行 | 同mask行 | 融资不可用行 | TRAIN日期 | 控制复用 |
+|---|---:|---:|---:|---:|---|
+| 2026Q2 | 88,929 | 88,212 | 717 | 714 | 不满足精确复用；正式拟合 |
+| 2026Q3 | 89,569 | 88,851 | 718 | 715 | 不满足精确复用；正式拟合 |
+| 2026Q4 | 89,871 | 89,152 | 719 | 716 | 不满足精确复用；正式拟合 |
+
+全部融资不可用为801117.SI的866日，以及801011.SI的2025-11-19/20/21三日无已观察融资成员；它们是观测集合语义，不要求数据owner补造。模型严格使用同一训练行、前20维scaler和日期权重，三季度×M/C20×双process=**12/12 fits**，未失败重试或新增fit。
+
+双process模型与预测逐字节一致，封存事前分组后才读取评价事实。预测窗口2026-04-01..2026-10-30共142日×131=18,602唯一键；C20全部可用，M有18,460行可用、142行NO_OBSERVED_MARGIN_MEMBER（801117.SI）。每日共同集合130，固定价值分母仍131，不按TopK裁剪；末端10日未成熟保留1,310行NA，132日成熟，成熟标签中2行FIXED_COHORT_ENDPOINT_NA保留，未反向重选分组。
+
+回执位于`F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/`；下表SHA默认canonical receipt，明确file的为完整文件字节SHA：
+
+| 资产 | SHA256 |
+|---|---|
+| request_v1.json（file） | 79916a9466a4007f94ce56bc43f6223154317143cd0468fbd691e9b2c64fe051 |
+| prepare_v2/preflight.json | b00f4cbbbede8f650f8ad223aca9e3909c4c2b5203ec23753879e89bc06c4728 |
+| run_v1/acceptance.json | 64506a0bedb123e7b53304c6da8ef88ac4939a2199463be3342432371f50d766 |
+| run_v1/prediction_acceptance.json | 0386d13084b4cd93fab6b80d8db35fcd5a8a59a15e2ef2fd77538a125dbc711b |
+| run_v1/predictions_1.json及predictions_2.json（file；各5,061,290 bytes） | e87381bf528a3c9cc7b4e7d5b2a3a30c6775fc7fd6638c13063d1422272f925e |
+| run_v1/predictions_1.json（canonical） | c05153c2314c726cf9ef410d0dda4a7de90093a4cc11fd3e4a7b1f4aae54d431 |
+| evaluation_v1.json | 063ef5d1d906f7494c65e88293ef1e25cc9f212d672fc6a5f374956c3e87b9c4 |
+| evaluation_v1.json（file；51,665 bytes） | 98e97c22e64d5c63cbdad664f2f384a057f65c6b15cb301de3dea13d88f9160f |
+
+各季度模型参数canonical SHA（完整envelope由acceptance锁定）：
+
+| 季度 | M | C20 |
+|---|---|---|
+| Q2 | 18eb61041c8d0d7f65423007797849c8bcdf287a362623b2777a9fec28f46e02 | a04012b1b46f2ca37862c6a8a9c43b3fb7f70b35e82c8afec9e966edd6948237 |
+| Q3 | 7051435b0f50230520d0e3a23c0e370efec3154948748a03ae086a8488f943a2 | e66b0acaf049c3f2f31ba859119f23845804476f6f9e442478b724c0dd47aa08 |
+| Q4 | 4323448307c75211a53e0ed4e56112076129312ed8f2ea52f88d436b8d571043 | b1c645bf0dabbdf6e39e7e5c9aa0d61a0058de328a08e3484ff7b91162c532cf |
+
+### 11.2 价值、机会成本与完整诊断
+
+**主筛选J=−0.2023829bp，未达到原J>0。** 下列bp均指日期等权的重叠10日、gross固定预算参考，不是日收益、累计净值或成本后收益；HAC使用真实session距离及lag9。
+
+| 主量/分解 | 132成熟日均值（bp） | 双侧95% HAC区间（bp） |
+|---|---:|---|
+| J：增量避损−增量错过上涨 | −0.2023829 | [−1.2636535, +0.8588877] |
+| 增量避损 | −0.1755141 | [−0.8694036, +0.5183755] |
+| 增量错过上涨 | +0.0268688 | [−0.5263022, +0.5800398] |
+
+Q2/Q3/Q4的J分别+0.0717045/−0.2780119/−1.8494342bp，成熟日60/65/7；Q4样本极短、10D重叠，不能将其较窄描述区间当作独立确认，也不能挑Q2翻转全期结论。复权价格、同一冻结分组敏感性J=−0.1920306bp，区间[−1.2552520,+0.8711907]bp，未救回价值主量。
+
+M/C20损失Rank IC=0.2752633355/0.2756170438，差−0.0003537083，区间[−0.0037099065,+0.0030024900]；原C在同一共同集合背景IC=0.2755061812。M的MSE/MAE=0.0018312580/0.0293727999，C20=0.0018272418/0.0293470231，均未改善。完整预测M与C20的描述性Pearson相关0.9987981，说明本次分数改变量很小，**不据此断言融资余额没有信息或识别失败根因**。M融资标准化系数Q2/Q3/Q4为−0.0004844/+0.0005078/+0.0003269，未据符号调模型或反转特征。
+
+固定原新买队列2,053行、去重1,269股票日：88个未成熟、4个M不可用；99个有截面排序的日期M/C20损失IC=0.0748560/0.0724752，差+0.0023808，区间[−0.0070498,+0.0118115]。seed42/2024/2026差分别+0.0102439/+0.0046331/−0.0038200，三者均跨零且非独立，不挑局部改善推翻主J。该队列仍是固定10日参考，不是实际订单、持仓、成交收益或账户消费结果。
+
+### 11.3 停止、审核及后续边界
+
+终态`STOP_NO_INCREMENTAL_VALUE_REFERENCE`。本轮不是数据阻断、结构合取或高显著性门导致的停止：J均值本身为负，未达预注册的零门槛；同时其区间跨零，不能宣称统计上证明所有融资信息无价值。停止的是这一融资余额比率/固定lag2/成员C目标/原20维/季度/Ridge组合；不自动尝试融资净流、借券、其他lag/窗口/阈值/算法或第二候选，不安排新的QE实验，不晋升至荐股/LocalSIM，不用正损失IC回写旧C经济终态。
+
+两轮当前作者结果/文档审核，非独立第三方。第一轮逐项核验request/源码/输入身份、三季度共同mask、12次attempt、双process模型与预测、完整grid及事前预算；另一路只读算术验证281项grid/唯一性/原生NA/J分解/均值预算，并用矩阵Bartlett核独立复算7项HAC标准误，与原回执一致，未新增fit或重建历史资产。第二轮核对父蓝图与本设计当前状态、历史快照、单位、区间、Q4与未成熟边界、无场景晋升及停止条件；修正D4残留的未执行状态，封存验收使用既有VERIFIED状态词而非新增validator词表。最终两份F2均PASS、warnings=0，diff检查通过；不放宽模型门或工作流。独立数值路径不冒称第三方作者审核。
+
+DESIGN-COMPLIANCE-001逐项：完整合同流程和131目录未简化；NA、source修复及效果不足不隐瞒、不默认补零或改筛选门；旧20维/C/S/W/VIX、数据集/profile和其他业务消费者未变；未私增阈值、AND/资源门或审批。数据准备owner无待补项；production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop，database_access/dataset_write/active_profile_write/runtime_activation/service_control均false，QE任务0。无需后端重启；研究工作树/本地分支未清理，cleanup未授权。后继方向只在有具体新机制/信息或独立证据时另给出一个可停止问题，不以继续整理历史证据填充任务。
