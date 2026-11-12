@@ -1,6 +1,6 @@
 # 申万L2融资余额信息增量：唯一候选设计
 
-> v1.1；2026-11-12；owner：HMM；F2。状态：`SOURCE_CONSUMER_PREFLIGHT_PASS_MODEL_CONTRACT_NOT_APPROVED`。用户已授权P0及本轮共享融资身份的消费者适配/零fit业务预检；**未批准21维模型D1～D6、模型实现或训练**。共享authority已显式绑定，来源身份/PIT投影预检通过；不等于完整21维TRAIN预检。原S/W停止与预算不变，本页不是恢复20D/Ridge目标变换路线。
+> v1.2；2026-11-12；owner：HMM；F2。状态：`APPROVED_IMPLEMENTATION_IN_PROGRESS`。用户已明确批准L2-MARGIN-INFORMATION-D1～D6：本页21维候选、固定双session融资滞后、同mask控制、最多12 fits及J资源筛选均冻结。来源consumer已随#7227合入，来源/PIT预检不重做；完整21维TRAIN预检和正式研究尚未执行，当前fit=0。原S/W停止与预算不变，不恢复旧目标变换路线。批准记录/范围见§10.2。
 
 ## 1. Background / 终极目标与本轮取舍
 
@@ -28,11 +28,11 @@
 
 一个连续的条件式研究包：原生文件与共享身份→复用原20D/成员标签→新增单一余额比率→同mask匹配控制及M→完整131预测封存→预注册共同预算参考/旧队列分析→继续或停止。不拆CLI/测试/PR微阶段，不新建研究平台、API/UI、DB、调度器或环境变量激活。
 
-21维模型实施后仅允许HMM-owned新增margin研究模块、专属CLI/直接测试、必要的HMM security reader源作用域及本页/父蓝图状态；模型精确changed-files须实施前固定。本轮已授权的来源消费者范围仅为`backend/services/hmm_risk/security_identity.py`、`backend/services/hmm_risk/margin_information_input.py`、`backend/tests/hmm_risk/test_margin_information_input.py`及本页/父蓝图；没有借此实现或批准特征/训练/价值公式。不改全局ALL_CORE_FEATURES=20、旧C/S/W schema/模型/预测、QE/Selection/Advisory/LocalSIM、数据生产程序或任何candidate。基础数据owner已交通用身份authority；后续HMM业务验证仍由本窗口负责。
+本轮批准的精确write scope为`backend/services/hmm_risk/risk_l2_margin_information.py`、`scripts/hmm_risk/run_risk_l2_margin_information.py`、`backend/tests/hmm_risk/test_risk_l2_margin_information.py`及本页/父蓝图，共5文件。只读复用#7227来源consumer及旧C/S训练/数值/文件内核，不改它们或全局ALL_CORE_FEATURES=20，不变更旧schema/模型/预测、QE/Selection/Advisory/LocalSIM、数据生产程序或任何candidate。基础数据owner责任已闭合，完整融资业务构造由本窗口完成。
 
 ## 3. Contracts D1 / L2-MARGIN-INFORMATION-D1：唯一问题及目标
 
-建议identity=`hmm_risk_l2_margin_balance_member_loss_ridge_v1`。目标严格复用原成员损失设计D1的`C=sum(w_i*max(0,-R_i))`，固定as-of PIT成员、真实市值权重及10日decision-close原生价格，合法端点NA不重新归一。旧C、原生/复权差异及已消费历史均保留，不把本页包装为收益目标或新holdout。
+冻结identity=`hmm_risk_l2_margin_balance_member_loss_ridge_v1`。目标严格复用原成员损失设计D1的`C=sum(w_i*max(0,-R_i))`，固定as-of PIT成员、真实市值权重及10日decision-close原生价格，合法端点NA不重新归一。旧C、原生/复权差异及已消费历史均保留，不把本页包装为收益目标或新holdout。
 
 唯一新增信息源md_rzye，不新增net-flow/偿还额特征：资格核查另见10条负偿还值，其中包含基金及证券更名日期记录，调整语义未确认；本问题不消费这些字段，不清空/修正、不要求为了未选字段补数据。融资余额原生零可保留，缺行不等于零。
 
@@ -70,6 +70,8 @@ P0时的`BLOCKED_SHARED_MARGIN_ALIAS_SCOPE`已解除，不回写为当时已通�
 
 ### 4.1 已完成的消费者与来源/PIT预检（不是21维训练预检）
 
+本小节保留#7227 source阶段快照；当时模型未批准，最新模型批准以§10.2为准。输入原件及回执不改写。
+
 本轮只实现显式包绑定、market.margin_detail源支持和反向来源代码解析；拒绝旧/新代码出现在其有效期错误一侧、逆向身份歧义、未知/私有schema、跨release包、文件哈希漂移、间接/相对路径及缺包，不查询数据库。复用现有文件校验器及行业/PIT投影，不复制共享authority实现或改旧模型。
 
 Windows独立process已完成：4,973个真实键×8字段=39,784项与共享源回执精确一致、错配0；目标302132.SZ完整事实为2022-10-24起旧代码560行、新代码415行，不补造更早观察。重新读取876日3,292,495行融资余额，全部有限非负，153个来源原生零；866日的453个旧源观察现已正式解析。保留131行业目录，866日均130行业有融资观察，801117.SI无观察保留typed原因；不能把基金/PIT窗口外记录算作数据缺口，也不制造观察。
@@ -98,7 +100,7 @@ margin_balance_ratio[g,t] = sum(md_rzye[i,u], i in O[t,g])
 
 ## 6. Contracts D4 / L2-MARGIN-INFORMATION-D4：预算、封存与实施边界
 
-推荐固定总上限**12 fits**：唯一M及同J匹配C20×Q2/Q3/Q4×双fresh-process；控制重拟合用于隔离新覆盖mask/训练人口变化，不是第二可择优候选。旧C只作历史背景，不以不同训练人口冒充匹配控制；若preflight证明已冻结C的完整数学载体/参数/scaler/J完全相同，精确复用并在首个fit前冻结减少后的attempt清单，不把省下预算用于其他模型。主候选始终仅M；正式尝试失败也计数并停止，不重试/换alpha/窗口/字段/seed。
+已批准固定总上限**12 fits**：唯一M及同J匹配C20×Q2/Q3/Q4×双fresh-process；控制重拟合用于隔离新覆盖mask/训练人口变化，不是第二可择优候选。旧C只作历史背景，不以不同训练人口冒充匹配控制；若preflight证明已冻结C的完整数学载体/参数/scaler/J完全相同，精确复用并在首个fit前冻结减少后的attempt清单，不把省下预算用于其他模型。主候选始终仅M；正式尝试失败也计数并停止，不重试/换alpha/窗口/字段/seed。
 
 先完成D2共享身份与HMM源适配、全部三季度文件preflight，再从clean交付HEAD记录唯一attempt清单；沿原S-D3已批准Conda base固定数值环境/单线程，不安装依赖。全部模型和两process完整预测封存后才读原已消费evaluation事实。候选输出expected_member_loss_with_margin，保留raw及沿原C的非负投影，不伪装概率或套1-p。旧模型/源码身份、S/W终态、QE资产原字节不变。
 
@@ -127,7 +129,7 @@ J_t = incremental_avoided_loss_t - incremental_missed_upside_t
 
 ## 8. Contracts D6 / L2-MARGIN-INFORMATION-D6：Implementation Plan / Verification Plan
 
-当前已完成P0、单一提案，以及用户后续单独授权的§4.1来源consumer/零fit预检。模型合同批准后，才一次完成21维feature与matched-mask实现、CLI/必要测试、两轮作者审核、最小门禁/CI、完整固定HEAD TRAIN preflight、封存训练/评价与父蓝图同步。已完成的共享包和来源reader不重做，不把来源资格冒称模型研究/经济成果，也不把HMM业务构造再交数据owner或QE。
+当前已完成P0及§4.1来源consumer交付，新模型合同现获批准。按一个连续包完成21维feature与matched-mask实现、CLI/必要测试、两轮作者审核、最小门禁/CI、完整固定HEAD TRAIN preflight、封存训练/评价与父蓝图同步。已完成的共享包和来源reader不重做，不把来源资格冒称模型研究/经济成果，也不把HMM业务构造再交数据owner或QE。源码可先交付，正式研究必须等待完整预检通过；源码验收与研究/经济结果分开。
 
 “新于HMM20D”不等于新于QE基础Alpha：共享static文件已含md_*、cp_*及估值字段，现有QE因子可能已使用这些信息，本轮没有核验其完整冻结表达式或证明对AF独立。后续HMM内同mask控制只能回答对旧C20的增量；提出QE接续前必须读取对应冻结AF定义/实际预测，检查是否仍有场景增量，不重跑旧QE、不将字段来源不同自动称为新alpha。
 
@@ -135,7 +137,7 @@ J_t = incremental_avoided_loss_t - incremental_missed_upside_t
 
 ### Design Acceptance Index
 
-F-011：D1/D3/D5单一新增信息、价值问题和停止；F-012：D2/D3/D4共享身份/文件/因果与预算；F-013：D6完整单包与owner边界；F-014：本轮独立授权的共享融资来源consumer与零fit来源/PIT预检。
+F-011：P0单一新增信息、价值和停止；F-012：P0输入/因果/预算；F-013：P0单包与owner；F-014：已交付来源consumer；F-015：D1～D3融资特征、原成员、共同TRAIN与数值内核；F-016：D4固定预算、季度隔离/双process封存CLI；F-017：D5～D6事前同预算J、自然NA、完整评价与源码边界。
 
 ### Design Acceptance Matrix
 
@@ -145,8 +147,11 @@ F-011：D1/D3/D5单一新增信息、价值问题和停止；F-012：D2/D3/D4共
 | F-012 | 本页§4～§6；backend/services/hmm_risk/security_identity.py；backend/services/hmm_risk/rotation_l1_input_bundle.py | artifact: F:/Dev/AIstock_runtime/hmm_l2_new_information/20261112/sector_scope_v1.json；本页D2精确缺口 | DESIGN_COMPLETE_ONLY | 无 |
 | F-013 | 本页§2/§8，P0/实施/研究/经济状态分开 | artifact: F:/Dev/AIstock_runtime/hmm_l2_new_information/20261112/qualification_v1.json；父蓝图及本页owner/非目标 | DESIGN_COMPLETE_ONLY | 无 |
 | F-014 | backend/services/hmm_risk/margin_information_input.py；backend/services/hmm_risk/security_identity.py；本页§4.1 | backend/tests/hmm_risk/test_margin_information_input.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_new_information/20261112/margin_source_preflight_v2.json | SOURCE_CONSUMER_VERIFIED | 无 |
+| F-015 | backend/services/hmm_risk/risk_l2_margin_information.py：aggregate_ratio、margin_frame、financing_features、design、prepare、load_packet | backend/tests/hmm_risk/test_risk_l2_margin_information.py：H5/来源边界、元单位、t-2、共同scaler/日期权重；38项直接矩阵 | SOURCE_IMPLEMENTED_VERIFIED | 无 |
+| F-016 | scripts/hmm_risk/run_risk_l2_margin_information.py；risk_l2_margin_information.py：fit_packet、close_fits、predict、validate_acceptance | backend/tests/hmm_risk/test_risk_l2_margin_information.py：request预算、失败计attempt/禁换目录、目标/权重匹配、封存前禁评价 | SOURCE_IMPLEMENTED_VERIFIED | 无 |
+| F-017 | backend/services/hmm_risk/risk_l2_margin_information.py：risk_weights、freeze_groups、paired_value、evaluate；本页§10.2 | backend/tests/hmm_risk/test_risk_l2_margin_information.py：2..131分母ties、J机会成本代数、未来/合法NA、事前分组；两轮作者审核 | SOURCE_IMPLEMENTED_VERIFIED | 无 |
 
-矩阵F-011～013只验P0/提案完整性，F-014仅验已获授权的来源consumer及来源/PIT预检；gap为“无”不表示完整21维TRAIN、模型研究或经济通过。共享margin别名已正式闭合，但新模型数值合同仍待批准，特征/训练未授权/未执行。未来未知hash不在本页冻结范围。
+矩阵F-011～013保留P0完整性、F-014保留#7227来源交付，F-015～017验本轮已批准模型的源码实现与直接合同，不把合成测试冒充真实数据或经济通过。源码交付后仍须clean固定HEAD完整业务预检PASS才能运行正式fit；实际fit=0，研究/经济结果未产生，不宣称可供QE采用。未来未知hash不在批准范围。
 
 ## 9. Risks / Production Gates / Rollout / Rollback
 
@@ -157,6 +162,8 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 本轮canonical工作流按5个实际changed-files只读推断为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，未降级为none。此为未来线上源码加载分类；本轮来源适配由Windows/WSL fresh-process直接加载，不激活backend，不将源码或后续合入等同运行态生效，也不要求为该离线预检重启。
 
 ## 10. 批准与作者审核
+
+本节至§10.1保留source consumer交付时的批准边界和作者审核历史；当时的“模型未批准”已由最新§10.2取代，不覆盖当前批准状态。
 
 `L2-MARGIN-INFORMATION-D1～D6=PROPOSED_NOT_APPROVED`。2026-11-12原指令授权P0选题/设计；共享包交付后的“开始执行本窗口的任务”另授权显式来源绑定、消费者适配及业务预检，不解释为批准新21维/lag2/预算/J规则或训练。来源预检完成后，用户“开始执行下一步”要求接续本批源码/文档交付，按AUTO-REVIEW-DELIVERY-001及已启用的交付授权，在当前HEAD审核、验证及CI通过后推进提交、PR和合入；原设计/模型批准状态不因此改变。没有cleanup、生产或服务授权，实际源码交付结果以本轮PR为准。
 
@@ -175,3 +182,17 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 定向新来源与既有security矩阵30 passed；Ruff、py_compile、L0与changed-files ownership通过（5/5映射、无歧义）。完整hmm_risk_pr_slice/广域HMM计划交PR CI/Nightly，不因间接import重跑全模块；CI仅以本轮PR精确HEAD的正式结果判定，源码交付/合入以该PR记录为准，不以本页验证摘要预先宣称全绿。Windows完整来源/PIT预检及WSL fresh-process来源绑定通过，模型fit/数据写入/DB/active/profile/服务控制均0。
 
 DESIGN-COMPLIANCE-001逐项复核：仅将本轮授权的来源consumer标记完成，不冒充完整21维模型实现；未知/冲突/漂移显式失败，无跨源alias、默认余额、数据库或旧目录回落；原20维、模型/算法、成员分类及其他业务不变；没有新资源/覆盖率/审批门，不以某行业无融资观察阻断整轮。源码交付、runtime分类和研究训练分别处理；本轮fresh-process已加载，不要求为零fit预检重启backend。
+
+### 10.2 L2-MARGIN-INFORMATION-D1～D6正式批准（2026-11-12）
+
+在本窗明确提出“新增单一融资余额特征、固定双交易日滞后、匹配控制及最多12 fits；批准后连续完成模型实现、完整训练预检和价值评估”后，用户答复“批准执行”。据此D1～D6全部批准，不变更本页任何数值/公式/窗口/停止条件，source/package pins保持§4，SOURCE consumer以#7227为基线。
+
+源码和文档按既有自动审核交付授权执行两轮作者审核、最小门禁、精确PR HEAD CI、提交合入。正式研究仅从clean交付HEAD开始，原C/S TRAIN载体只读复用，完整融资/共同mask预检PASS后冻结最多12次attempt清单；失败停止且记录已消耗尝试，不通过换request/output目录重置预算。双process完整模型和142×131预测及事前分组封存后才读取已消费evaluation事实。批准不包括生产写入、数据集/profile修改、依赖安装、服务控制、cleanup或由HMM启动QE。
+
+### 10.3 本轮模型源码审修（研究执行前快照）
+
+两轮当前作者审修，非独立第三方。第一轮核对H5/source-specific身份、t-2、原成员/前置市值与单次CNY换算，原生零/缺行、共同TRAIN/scaler/日期权重和旧20维不变；修正测试对既有FormalStateError的预期，不放宽生产错误。第二轮核对request/quarter/attempt、失败禁重试、事前分组随预测封存、整数剩余名额处理ties（不以浮点残差多选下一组）、未成熟NA及成熟合法NA的零差权重仅代数抵消；调整价只作同一分组诊断，不反向改主量。
+
+38项直接回归（21项新研究＋17项来源绑定）通过；Ruff、py_compile及显式3源码/测试路径L0通过。完整hmm_risk_pr_slice交精确PR HEAD CI，广域交Nightly；不重跑旧全矩阵。正式完整预检/训练/封存/评价待执行，fit=0；本节不以源码或合成测试冒充研究通过，实际研究结果后续原位同步。
+
+DESIGN-COMPLIANCE-001：实现本页完整source研究流程，不以简化/占位冒充已完成研究；未知身份/非有限值显式失败，自然缺失/未成熟不补零、不缩分母；原目标/窗口/参数/旧模型/数据和其他模块不变；不增资源、覆盖率合取或审批门。生产/服务/数据集操作0。
