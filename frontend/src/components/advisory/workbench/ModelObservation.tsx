@@ -11,6 +11,26 @@ const changes: Record<string, { label: string; color: string }> = {
 };
 const targetText = (value?: string) => value === "POINT_ESTIMATE_AT_OR_ABOVE_TARGET" ? "当前点估计达到参考目标" : value === "POINT_ESTIMATE_BELOW_TARGET" ? "当前点估计未达参考目标" : "尚无完整配对评价";
 
+function ResearchAssessment({ data }: { data: Shadow }) {
+  if (data.replay_context || !["SHADOW_ONLY", "PAUSED"].includes(data.status)) return null;
+  const assessment = data.research_assessment;
+  const matched = assessment?.schema === "lstm_top10_research_assessment_v1"
+    && assessment.status === "ACTIVE_DEVELOPMENT_STOPPED" && !!data.release?.sha256
+    && assessment.matched_release_sha256 === data.release.sha256
+    && assessment.model_sha256 === data.release.model_sha256;
+  const stress = matched ? assessment.stress : null, source = matched ? assessment.source : null;
+  if (!assessment || !stress || !source) return <div className={styles.notice} data-testid="reranking-research-unknown">
+    {assessment ? "辅助模型研究证据身份未能确认，研究状态未知。" : "辅助模型研究状态尚未加载。"}不能据观察结果认定已达到100bps目标或已可用于生产排序。
+  </div>;
+  return <div className={styles.notice} data-testid="reranking-research-assessment">
+    <strong>已停止该冻结模型的主动研发；仅作辅助观察。</strong>
+    <p>既有压力历史 {stress.start_date}～{stress.end_date}：相对原生Top10的5TD净增量 {number(stress.mean_delta_bps, 2)}bps，描述性95%时间块区间 [{stress.ci95_bps.map(value => number(value, 2)).join("，")}]bps，未达100bps目标。</p>
+    <p>原日期 {number(stress.original_days)}，成熟 {number(stress.mature_days)}，完整配对 {number(stress.complete_pair_days)}；成熟不完整 {number(stress.incomplete_mature_days)}，截止未成熟 {number(stress.immature_days)}。辅助/原生未知槽 {number(stress.specialist_unknown_slots)} / {number(stress.native_unknown_slots)}（含截止未成熟槽）。</p>
+    <p>这是已消费的NON_VINTAGE压力历史，历史首次可得性与独立经济确认未成立。下方自然观察收益另列；原生推荐与既有正式V2协议保持。</p>
+    <details><summary>查看研究来源</summary><p>本模型训练截止 {assessment.training_cutoff}。<a href={source.source_pr} target="_blank" rel="noreferrer">查看原研究交付</a></p><p style={{ overflowWrap: "anywhere" }}>模型 SHA256：{assessment.model_sha256}<br />原结果 SHA256：{source.report_sha256}</p></details>
+  </div>;
+}
+
 export default function ModelObservation({ programId, target, refresh }: { programId: string; target: string; refresh: number }) {
   const { data, error, loading } = useRead<Shadow>(`/advisory/programs/${encodeURIComponent(programId)}/reranking-shadow?target_trade_date=${target}`, refresh, programId);
   const [view, setView] = useState("model");
@@ -31,6 +51,7 @@ export default function ModelObservation({ programId, target, refresh }: { progr
     <p className={styles.explanation}>本轮实用价值参考目标：每个5交易日批次净增量100bps（1个百分点）。以下已扣既定费用，不是账户收益或真实成交；达到点估计目标不等于统计确认或自动上线。{historical ? "历史回放停用实时行情，不用当前价替代历史5TD结果。" : "当前最新价单独展示，不参与固定5TD结果。"}</p>
     {loading && !data && <Empty>正在读取持久化观察结果…</Empty>}
     {data && <>
+      <ResearchAssessment data={data} />
       {!!missed.length && <div className={styles.notice} data-testid="reranking-capture-gaps">已发现确认候选窗口内的影子漏捕获：{missed.map(row => row.publication.decision_date).join("、")}。无法补作开盘前预测，可能影响正式研究可评价性，请核对固定研究日期；原生推荐继续运行。</div>}
       {summary ? <div data-testid="reranking-business-summary"><div className={styles.metrics}><Metric label="已成熟 / 已捕获交易日" value={`${number(data.complete_days)} / ${number(data.captured_days)}`} /><Metric label="原生Top10批次均值" value={bps(summary.native_mean_net_bps)} /><Metric label="辅助Top10批次均值" value={bps(summary.specialist_mean_net_bps)} /><Metric label="配对平均差值" value={bps(summary.mean_delta_bps)} note="不等于独立经济确认" /></div><p className={styles.explanation}>仅同一组完整配对批次 {number(summary.complete_pairs)} / 捕获 {number(summary.captured_days)}；未知评价批次 {number(summary.unknown_days)}，未评价批次 {number(summary.unevaluated_days)}。{targetText(summary.target_status)}；缺失批次保留，不用于正式确认。</p></div>
         : data.status === "SHADOW_ONLY" && <><div className={styles.metrics}><Metric label="已捕获交易日" value={number(data.captured_days)} /><Metric label="已成熟评价日" value={number(data.complete_days)} /><Metric label="配对平均差值" value={bps(data.mean_delta_bps)} note="不等于独立经济确认" /></div><div className={styles.notice}>业务收益视图尚未加载，保留原观察结果。</div></>}

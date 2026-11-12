@@ -101,13 +101,15 @@ def test_summary_uses_the_same_complete_pairs_and_discloses_unknown_denominators
 def test_status_projection_never_executes_inference_source_or_writes(tmp_path, monkeypatch):
     prediction, evaluation = example()
     service = app.LstmSpoShadowService(root=tmp_path)
-    monkeypatch.setattr(service, "_release", lambda: dict(sha256="release"))
+    release = deepcopy(app.RELEASE)
+    release["sha256"] = app.spo.sha(release)
+    monkeypatch.setattr(service, "_release", lambda: release)
     monkeypatch.setenv("AISTOCK_ADVISORY_LSTM_SPO_SHADOW_ENABLED", "true")
     monkeypatch.setattr(service, "_source", lambda: pytest.fail("status cannot read a market source"))
     monkeypatch.setattr(app.spo, "fit", lambda *_: pytest.fail("status cannot fit"))
     day = service.root / "days/2026-10-30"
     prediction.pop("sha256")
-    prediction.update(release_sha256="release", publication=dict(target_date="2026-11-02"),
+    prediction.update(release_sha256=release["sha256"], publication=dict(target_date="2026-11-02"),
                       observed_at="2026-10-31T06:00:00+00:00", source_receipt={})
     packet = app.publish(day / "prediction.json", prediction)
     evaluation.update(prediction_sha256=packet["sha256"], observed_at="2026-11-06T08:00:00+00:00")
@@ -118,5 +120,45 @@ def test_status_projection_never_executes_inference_source_or_writes(tmp_path, m
     assert result["selected"]["business_review"]["changes"]["ENTERED"] == 4
     assert result["business_contract"]["target_increment_bps"] == 100
     assert not result["production_ranking_replaced"]
+    assessment = result["research_assessment"]
+    assert assessment["status"] == "ACTIVE_DEVELOPMENT_STOPPED"
+    assert assessment["matched_release_sha256"] == result["release"]["sha256"]
+    # A positive current observation cannot overwrite the published stress decision.
+    assert assessment["stress"]["mean_delta_bps"] < 0 < result["business_summary"]["mean_delta_bps"]
     assert before == {str(p): p.read_bytes() for p in service.root.rglob("*.json")}
     assert service.status(program_id="other")["status"] == "NOT_APPLICABLE"
+
+
+@pytest.mark.parametrize("field", list(business.RESEARCH_IDENTITY) + ["sha256", "missing"])
+def test_research_evidence_does_not_transfer_to_another_or_incomplete_release(field):
+    release = deepcopy(app.RELEASE)
+    if field == "missing":
+        release.pop("model_sha256")
+    elif field == "target":
+        release["target"]["manifest_sha256"] = "another manifest"
+    elif field != "sha256":
+        release[field] = "another identity"
+    release["sha256"] = app.spo.sha(release)
+    if field == "sha256":
+        release["sha256"] = "0" * 64
+    before = deepcopy(release)
+    result = business.research_assessment(release)
+    assert result["status"] == "UNKNOWN"
+    assert result["stress"] is result["source"] is result["matched_release_sha256"] is None
+    assert result["target_increment_bps"] == 100 and not result["independent_economic_confirmation"]
+    assert release == before
+
+
+def test_research_evidence_keeps_original_population_unknowns_and_independent_snapshots():
+    release = deepcopy(app.RELEASE)
+    release["sha256"] = app.spo.sha(release)
+    assessment = business.research_assessment(release)
+    stress = assessment["stress"]
+    assert stress["original_days"] == stress["mature_days"] + stress["immature_days"] == 118
+    assert stress["mature_days"] == stress["complete_pair_days"] + stress["incomplete_mature_days"] == 113
+    assert stress["complete_pair_days"] == 106
+    assert (stress["specialist_unknown_slots"], stress["native_unknown_slots"]) == (53, 54)
+    assert not stress["historical_pit_proven"] and not stress["independent_economic_sample"]
+    stress["ci95_bps"][0] = 0
+    assert business.research_assessment(release)["stress"]["ci95_bps"][0] < -245
+    assert business.research_assessment(None)["stress"] is None

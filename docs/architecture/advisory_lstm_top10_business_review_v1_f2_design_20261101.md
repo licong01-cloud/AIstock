@@ -55,6 +55,8 @@ V2的protocol、budget、supersession、health/preflight和单次终态放在独
 | F-605 | 原API追加与现有观察页的两臂收益/目标/换股/当前行情和错误态 |
 | F-606 | 新进程真实预检/0标签/源hash、合成成熟路径及后端直接测试 |
 | F-607 | 浏览器行为验证、多轮审核、全设计合入及运行激活独立报告 |
+| F-608 | 按精确冻结模型身份展示已有压力终态、原分母/区间及可追溯来源，身份不足保持UNKNOWN |
+| F-609 | 压力结论与每日描述性收益、100bps目标、正式V2及生产状态分开；旧接口与历史回放不误套结论 |
 
 ## Design Acceptance Matrix
 
@@ -67,8 +69,26 @@ V2的protocol、budget、supersession、health/preflight和单次终态放在独
 | F-605 | frontend/src/components/advisory/workbench/ModelObservation.tsx；API类型；status | frontend/tests/paper-v2/advisory-workbench.spec.ts | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
 | F-606 | 本文Verification Plan | artifact: X:/AIstock_temp/ADVISORY/lstm-business-review-20261101/validation_receipt.json | VERIFIED_IMPLEMENTATION_REAL_PREFLIGHT_AND_DIRECT_CONTRACTS | none |
 | F-607 | 本文Rollout；结果报告 | frontend/tests/paper-v2/advisory-workbench.spec.ts | VERIFIED_SOURCE_BROWSER_USER_OWNED_ACTIVATION | approved_by_user：既有用户指令“后端重启我来执行”；源码/新进程/浏览器验收已完成，运行进程加载由用户重启后另验 |
+| F-608 | backend/services/advisory_model_first/lstm_top10_business_review_v1.py；lstm_spo_shadow_v1.py | backend/tests/advisory_model_first/test_lstm_top10_business_review.py；artifact: X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/source_audit.json | VERIFIED_SOURCE_AND_FRESH_PROCESS | none |
+| F-609 | frontend/src/components/advisory/workbench/ModelObservation.tsx；API类型 | frontend/tests/paper-v2/advisory-workbench.spec.ts；artifact: X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/validation_receipt.json | VERIFIED_SOURCE_BROWSER_USER_OWNED_ACTIVATION | approved_by_user：用户明确“后端重启由我执行”；源码/新进程/浏览器验证完成，运行加载待用户重启后核验 |
+
+## 2026-11-09增量：已有研究结论进入业务观察
+
+用户授权盘点业务缺口并选择最高价值方向直接实施。当前原生发布/工作台/双Top10与V2均已有实现；54字段模型轮换、关系、h64、ID1272已结束，暂无可据以立项的新训练候选。选择一个可立即影响辅助名单解读的缺口：正在观察的固定P19 fold3模型，已有[跨期压力终态](../analysis/advisory_lstm_frozen_specialist_stress_20261102.md)，当前GET只显示自然观察收益，缺少该模型的停止主动研发结论。此交付不制造新Alpha、训练或新准入门。
+
+P0在新任务根`X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/task.json`冻结计划、8个精确写路径与源身份；P1在原纯投影叶中保存原压力结果的最小只读投影，status追加`research_assessment`；P2现有观察页先展示研究用途与压力证据，再展示原每日收益；P3直接合同、相关浏览器小矩阵、独立新进程核对原report物理hash/全部投影值及零副作用；P4按现有授权交付源码，用户重启后的运行验收另报。
+
+证据只适用于固定model SHA `8c915844002eab8b2dde0f8bc91f176ee7768b16ba5089520f106167bdf48813`、payload、原package/manifest/run/source/program/binding、fold3、训练截止2025-07-31及原估值策略。匹配身份使用本次冻结的字面常量，不能从未来可变release反向继承。任一身份缺失/不符返回UNKNOWN、null经济数值和可见原因，不将此压力结论套给ID1272、其它包或回放折模型。原`_release`的错误合同保持。
+
+投影原2026-03-11～08-28的118原D、113成熟D、106完整配对D；专属−原生−136.02374797220642bps，原描述性95%时间块区间，成熟不完整7D/截止未成熟5D和双臂UNKNOWN槽53/54均保留。来源包含原report SHA、evaluated stage SHA、producer与报告路径；运行读取无需访问X盘研究目录或新市场源。旧已消费NON_VINTAGE压力、非独立经济样本/非真实成交限制保持。固定T开盘至T+4收盘、买0.95/卖5.95bps及100bps目标不变。
+
+UI显示“已停止该冻结模型的主动研发；仅作辅助观察”，不把暂停训练说成停用生产或停止P20。压力历史、当前所选批次及自然观察汇总分别标注；缺新字段明确状态未加载，UNKNOWN明确身份未能匹配；历史工程回放不应用当前模型压力结论。无需新增页面、调度、研究注册平台或外部审批。原榜单、模型/release、V2文件、数据库与服务不写，累计269实际fit＋1旧index、本轮预算0。
+
+已实现上述增量。27项直接后端合同、9项相关浏览器场景及TypeScript/ESLint/Ruff通过；新进程仅从原report核对统计与来源，投影期间禁止文件打开，PASS。浏览器首轮因测试临时目录物理大小写差异在加载前失败，保留该记录并以一致物理TEMP重跑通过，未修改业务代码或测试断言。L0无阻断，P2复杂度提示为原固定50行1:1连接，新增研究投影只有固定13项身份比较和固定大小复制；RAW_JSON_UI提示来自测试transport的JSON序列化，产品仅展示字段及折叠来源。当前Agent三轮自审检查来源/身份、分母/UNKNOWN与业务/范围，属于自审而非外部独立审核。
 
 ## Risks / Production Gates / Rollout / Rollback
+
+2026-11-12接续：修复现有观察组件可选`assessment`的显式类型收窄，保留旧后端/身份不匹配的UNKNOWN提示；非增量TypeScript检查与相关浏览器合同另行绑定本次交付HEAD。正式确认使用现行V2，归档V1不改；本次V2按F-603/F-604核验6份原预测与两日不可恢复漏捕获，依既有合同发布`NOT_EVALUABLE_CAPTURE_GAP`并验证终态复用。回执`X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/confirmation-viability-20261112.json`绑定原协议、终态stage及20项未变工件，评价文件读取0；这是批准的收益盲可评价性终态，不是新增统计检验、没有Alpha的证明或停止P20。原压力展示、自然观察与V2终态分报；无需修改确认脚本、放宽源码/时钟校验、重新冻结或替换缺日。
 
 短期样本、市场非平稳、旧训练NON_VINTAGE、未来日历不齐和严格全人口仍可能使正式研究无法评价；不放宽缺失换取好看结论。150D只保证资源边界，不保证检测100bps的未来功效。单批预测/finance各固定50行，排名校验最多排序50元素、金融连接为50键1:1，新增汇总只遍历已有捕获D；不引入业务数据库查询或新调度。日历operator仅显式执行既有只读日历查询。
 
