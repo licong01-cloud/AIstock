@@ -4,7 +4,7 @@
     "backend/data_service/security_source_identity.py",
     "backend/tests/data_service/test_security_source_identity.py",
     "backend/data_service/manifests/security_source_identity_20261112_v2.json",
-    "scripts/audit_margin_detail_source_identity.py",
+    "backend/data_service/margin_detail_source_identity.py",
     "tests/aistock_validation/bugs/20261112_BUG-2218-shared-margin-detail-source-identity-omits-historical-security-alias.json"
   ],
   "assigned_agent": null,
@@ -60,7 +60,7 @@
   "file_scope_contract": {
     "added_files": [
       "backend/data_service/manifests/security_source_identity_20261112_v2.json",
-      "scripts/audit_margin_detail_source_identity.py"
+      "backend/data_service/margin_detail_source_identity.py"
     ],
     "changed_files": [
       "backend/data_service/security_source_identity.py",
@@ -72,7 +72,7 @@
         "backend/data_service/security_source_identity.py",
         "backend/tests/data_service/test_security_source_identity.py",
         "backend/data_service/manifests/security_source_identity_20261112_v2.json",
-        "scripts/audit_margin_detail_source_identity.py"
+        "backend/data_service/margin_detail_source_identity.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -117,7 +117,7 @@
           "rule_id": "local_data_pipeline"
         },
         {
-          "file": "scripts/audit_margin_detail_source_identity.py",
+          "file": "backend/data_service/margin_detail_source_identity.py",
           "impact_modules": [],
           "primary_module": "scripts",
           "risk_level": "medium",
@@ -133,7 +133,7 @@
         "backend/data_service/security_source_identity.py",
         "backend/tests/data_service/test_security_source_identity.py",
         "backend/data_service/manifests/security_source_identity_20261112_v2.json",
-        "scripts/audit_margin_detail_source_identity.py"
+        "backend/data_service/margin_detail_source_identity.py"
       ],
       "unmatched_files": []
     },
@@ -141,14 +141,14 @@
       "backend/data_service/security_source_identity.py",
       "backend/tests/data_service/test_security_source_identity.py",
       "backend/data_service/manifests/security_source_identity_20261112_v2.json",
-      "scripts/audit_margin_detail_source_identity.py"
+      "backend/data_service/margin_detail_source_identity.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/data_service/security_source_identity.py",
       "backend/tests/data_service/test_security_source_identity.py",
       "backend/data_service/manifests/security_source_identity_20261112_v2.json",
-      "scripts/audit_margin_detail_source_identity.py"
+      "backend/data_service/margin_detail_source_identity.py"
     ]
   },
   "first_seen_at": "2026-11-12T01:53:01.856396Z",
@@ -183,7 +183,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh process scripts/audit_margin_detail_source_identity.py loaded tracked shared resolver and v2 authority; read-only production aistock:5432, frozen H5 hashes unchanged;4973/4973 observed keys match8fields;4598 instrument/3812equity identity inventory;3official source hashes verified. Package manifestc65825014e2137770473877a0add20669300b09d7ab239cd77a44554a0564de0. No source/fact/profile writes, export, service, experiment or HMM consumer action."
+      "Fresh process shared identity audit loaded tracked resolver and v2 authority; read-only production aistock:5432, frozen H5 hashes unchanged;4973/4973 observed keys match8fields;4598 instrument/3812equity identity inventory;3official source hashes verified. Producer now owned by backend.data_service.margin_detail_source_identity. Package manifestc65825014e2137770473877a0add20669300b09d7ab239cd77a44554a0564de0. No source/fact/profile writes, export, service, experiment or HMM consumer action."
     ],
     "inference_basis": "actual shared data-service resolver call closure; standalone immutable file usable by fresh consumers without backend activation; cached backend default requires user-owned restart separately",
     "persistence_basis": "git_tracked_source",

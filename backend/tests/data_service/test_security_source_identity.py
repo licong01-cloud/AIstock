@@ -212,7 +212,7 @@ def test_versioned_margin_authority_does_not_mutate_old_moneyflow_authority():
 
 
 def test_margin_audit_reports_wrong_boundary_and_value_drift_without_repair():
-    from scripts.audit_margin_detail_source_identity import compare_alias_rows
+    from backend.data_service.margin_detail_source_identity import compare_alias_rows
     identity = load_default_security_source_identity_manifest()
     frozen = pd.DataFrame(dict(ts_code=['300114.SZ', '302132.SZ'],
         trade_date=[date(2025, 2, 14), date(2025, 2, 17)], md_rzye=[123.0, 234.0]))
@@ -244,7 +244,7 @@ def test_all_margin_aliases_are_explicit_and_do_not_leak_to_other_sources(canoni
 
 def test_margin_audit_preserves_source_nulls_and_exact_float32_representation():
     import numpy as np
-    from scripts.audit_margin_detail_source_identity import compare_alias_rows
+    from backend.data_service.margin_detail_source_identity import compare_alias_rows
     identity = load_default_security_source_identity_manifest()
     source = pd.DataFrame(dict(ts_code=['300114.SZ'],trade_date=[date(2025,2,14)],
         md_rzye=[138819776.12],md_rqyl=[None]))
@@ -259,7 +259,7 @@ def test_margin_audit_preserves_source_nulls_and_exact_float32_representation():
 
 
 def test_margin_audit_does_not_silently_fill_missing_source_or_frozen_records():
-    from scripts.audit_margin_detail_source_identity import compare_alias_rows
+    from backend.data_service.margin_detail_source_identity import compare_alias_rows
     identity = load_default_security_source_identity_manifest()
     frame = pd.DataFrame(dict(ts_code=['300114.SZ'],trade_date=[date(2025,2,14)],md_rzye=[1.0]))
     assert compare_alias_rows(identity,'302132.SZ',frame,frame.iloc[:0],['md_rzye'])[0]['classification'] == 'SOURCE_UNVERIFIED'
@@ -270,7 +270,7 @@ def test_margin_audit_does_not_silently_fill_missing_source_or_frozen_records():
 
 
 def test_margin_package_cannot_overwrite_existing_immutable_output(tmp_path,monkeypatch):
-    from scripts.audit_margin_detail_source_identity import main
+    from backend.data_service.margin_detail_source_identity import main
     monkeypatch.setattr('sys.argv',['audit','--candidate-root','unused',
         '--identity-manifest','unused','--expected-manifest','unused','--output-root',str(tmp_path)])
     with pytest.raises(ValueError,match='immutable output already exists'):
@@ -278,7 +278,7 @@ def test_margin_package_cannot_overwrite_existing_immutable_output(tmp_path,monk
 
 
 def test_margin_package_cannot_write_inside_frozen_candidate(tmp_path,monkeypatch):
-    from scripts.audit_margin_detail_source_identity import main
+    from backend.data_service.margin_detail_source_identity import main
     monkeypatch.setattr('sys.argv',['audit','--candidate-root',str(tmp_path),
         '--identity-manifest','unused','--expected-manifest','unused','--output-root',str(tmp_path/'new-sidecar')])
     with pytest.raises(ValueError,match='outside the frozen candidate'):
