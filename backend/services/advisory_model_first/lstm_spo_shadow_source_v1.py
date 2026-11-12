@@ -288,10 +288,36 @@ BENCHMARK = "000300.SH"
 BENCHMARK_SCOPE = "advisory_lstm_benchmark_close_20td_v1"
 
 
-def verify_native_liveness(connection, repo, bindings):
-    """Keep active package, exact binding and PIT guards without rereading old facts."""
+def _verify_native_pit_liveness(original, current_binding, resolver):
+    """Allow a proven rolling extension without rewriting the published identity."""
     import json
+    import re
     from dataclasses import asdict
+
+    current = json.loads(json.dumps(asdict(current_binding), default=str))
+    if original == current:
+        return
+    rolling = {"state_source_digest", "coverage_end"}
+    if (not isinstance(original, dict) or original.keys() != current.keys()
+            or current.get("authority_status") != "ACTIVE_CANONICAL"
+            or any(original[key] != current[key] for key in current.keys() - rolling)):
+        raise InputReadinessError("原生策略包或PIT身份已变化")
+    try:
+        start = date.fromisoformat(original["coverage_start"])
+        end = date.fromisoformat(original["coverage_end"])
+        if (type(original["activation_generation"]) is int
+                and re.fullmatch(r"[a-f0-9]{64}", original["state_source_digest"])
+                and start == current_binding.coverage_start <= end < current_binding.coverage_end
+                and resolver.verifies_rolling_predecessor(current=current_binding,
+                    source_digest=original["state_source_digest"], coverage_start=start, coverage_end=end) is True):
+            return
+    except Exception as exc:
+        raise InputReadinessError("PIT历史前缀无法核验") from exc
+    raise InputReadinessError("原生策略包或PIT身份已变化")
+
+
+def verify_native_liveness(connection, repo, bindings):
+    """Keep active package, exact binding and verified PIT history guards."""
     from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver, CanonicalPitContractError
 
     program, binding = repo.get_program(PROGRAM), repo.get_active_binding_version(PROGRAM)
@@ -301,14 +327,16 @@ def verify_native_liveness(connection, repo, bindings):
     @contextmanager
     def pinned():
         yield connection
+    resolver = CanonicalPitAuthorityResolver(pinned)
     try:
-        pit = json.loads(json.dumps(asdict(CanonicalPitAuthorityResolver(pinned).resolve_live_binding()), default=str))
+        pit = resolver.resolve_live_binding()
     except CanonicalPitContractError as exc:
         raise InputReadinessError("当前PIT身份不可用") from exc
     for package_id, original in bindings.items():
         check_binding(original)
-        if package_id != original["binding_id"] or original["global_pit"] != pit:
+        if package_id != original["binding_id"]:
             raise InputReadinessError("原生策略包或PIT身份已变化")
+        _verify_native_pit_liveness(original["global_pit"], pit, resolver)
         with connection.cursor() as cursor:
             cursor.execute("SELECT manifest_sha256,package_status FROM strategy_pkg.package WHERE package_id=%s", (package_id,))
             row = cursor.fetchone()
