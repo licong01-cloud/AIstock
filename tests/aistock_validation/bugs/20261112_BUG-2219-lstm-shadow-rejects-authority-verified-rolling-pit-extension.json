@@ -1,0 +1,305 @@
+{
+  "actual": "Three exact original Top50 runs are rejected although authority_verifies_rolling_predecessor is true; latest differs only in coverage_end.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+    "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py",
+    "tests/aistock_validation/bugs/20261112_BUG-2219-lstm-shadow-rejects-authority-verified-rolling-pit-extension.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2219",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-12T18:35:23.120187Z",
+  "current_agent_reviews": [
+    {
+      "round": "R1",
+      "scope": "Exact identity fast path and only authority-certified strict forward extension; active same-policy/generation checks retained; proof failures preserve explicit waiting and exception cause",
+      "verdict": "PASS"
+    },
+    {
+      "round": "R2",
+      "scope": "29 direct counterexamples and 94 related tests; real three-publication source parity/recheck, original Top50 and binding immutability; independent missing-data guard still blocks",
+      "verdict": "PASS"
+    },
+    {
+      "round": "R3",
+      "scope": "Final source SHA be2089a1a4bc963cf495c952b34efebec5f20ee9eefd46ca669519ca41d9a9c7; three-file scope; no V2/model/fee/target/ranking changes; source delivery and runtime acceptance separate; current Agent self-review, not independent external review",
+      "verdict": "PASS"
+    }
+  ],
+  "description": "Three exact original Top50 runs are rejected although authority_verifies_rolling_predecessor is true; latest differs only in coverage_end.",
+  "design_compliance": {
+    "business_semantics": "Original Top50, frozen bindings, model, fixed5TD, fees,100bps,UNKNOWN and input partition checks unchanged",
+    "no_new_approval_gates": "Reuses existing canonical authority predecessor proof; no new service, scheduler or approval step",
+    "no_partial_as_complete": "Source fix addresses PIT compatibility only; independent adj_factor blocker explicitly remains",
+    "no_silent_errors": "Unknown proof, resolver failure and all other drift remain ADVISORY_INPUT_NOT_READY; exceptions retain causes"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261112-817f8110aff7",
+      "timestamp": "2026-11-12T18:35:23.120174Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/runtime-readiness-20261113.json SHA256=742e8c44d01db87d8930c84265a43d85388553970c4ec03505cb9f0c3ed73719"
+  ],
+  "expected": "Accept only same-policy same-generation forward coverage extension with exact authority-verified immutable predecessor; retain rejection for unknown proof, changed policy/generation/package/source prefix, invalid dates and all other identity drift. Never rewrite frozen bindings.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261112_BUG-2219-lstm-shadow-rejects-authority-verified-rolling-pit-extension.json",
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+    ],
+    "added_files": [
+      "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261112_BUG-2219-lstm-shadow-rejects-authority-verified-rolling-pit-extension.json",
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+        "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+      ],
+      "impacted_modules": [
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+        "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py"
+    ]
+  },
+  "first_seen_at": "2026-11-12T18:35:23.120187Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7230,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7230",
+  "last_seen_at": "2026-11-12T18:35:23.120187Z",
+  "module": "advisory",
+  "non_goals": [
+    "No training, model activation or new confirmation protocol",
+    "No production ranking changes, DB writes, provider calls, dependency installation, service control or cleanup",
+    "Independent Nov10 adj_factor source gap remains blocked; no threshold or input-scope change"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py -q",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "resolution": "Accept only strict forward coverage extension with all non-rolling identity fields unchanged and an exact boolean true predecessor proof from the shared canonical authority. Preserve published bindings, original score parity and all current feature/partition rechecks.",
+  "risk_area": "bug",
+  "root_cause": "Full-dictionary equality rejects authority-certified append-only PIT coverage extension even when original package, policy, activation generation and membership prefix remain unchanged.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_ed918504a02f4b15892f0dba65da139b/reranking-shadow",
+    "fresh_process_evidence": [
+      "Fresh process loaded tracked source SHA256 be2089a1a4bc963cf495c952b34efebec5f20ee9eefd46ca669519ca41d9a9c7; original Nov10/11/12 Top50 and post-compute identity 3/3 PASS; missing adj_factor guard remains BLOCKED;22 frozen artifacts unchanged;0 fits/inference/DB/service operations; receipt X:/AIstock_temp/ADVISORY/BUG-2219/fresh-process.json SHA256 5b3301fde7f87360b59d623ad9aa1fef567efb5d18100eccf1751ef9fb669494"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "runtime_fresh_process_receipt": {
+    "path": "X:\\AIstock_temp\\ADVISORY\\BUG-2219\\fresh-process.json",
+    "sha256": "5b3301fde7f87360b59d623ad9aa1fef567efb5d18100eccf1751ef9fb669494",
+    "source_sha256": "be2089a1a4bc963cf495c952b34efebec5f20ee9eefd46ca669519ca41d9a9c7"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "LSTM shadow rejects authority-verified rolling PIT extension",
+  "tool_fallback": "RTK pytest related-matrix attempt returned exit1/No tests collected; direct python -m pytest ran the same three files successfully, 94 passed. No product change or test weakening.",
+  "trigger_condition": {
+    "fingerprint": "817f8110aff7af15946f48ba",
+    "source_event_id": "FE-20261112-817f8110aff7"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py -q --basetemp=X:/AIstock_temp/ADVISORY/BUG-2219/pytest-related -> 94 passed",
+    "rtk ruff check backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py -> passed",
+    "python -m nox -s l0 -- backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py backend/tests/advisory_model_first/test_lstm_spo_pit_roll.py tests/aistock_validation/bugs/20261112_BUG-2219-lstm-shadow-rejects-authority-verified-rolling-pit-extension.json -> passed",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  },
+  "local_validation_interpreters": {
+    "pytest": "C:/Users/lc999/miniconda3/python.exe",
+    "nox_l0": "C:/Users/lc999/miniconda3/envs/AIstock-CI/python.exe",
+    "nox_rtk_fallback": "Nox has no RTK wrapper; ran the existing prebuilt interpreter directly"
+  },
+  "safety_boundaries": [
+    "no_training",
+    "no_database_writes",
+    "no_service_control",
+    "no_cleanup",
+    "no_model_activation",
+    "no_confirmation_protocol_changes"
+  ],
+  "execution_restrictions": [],
+  "workflow_metadata_note": "Non-source safety boundaries remain in non_goals/safety_boundaries. execution_restrictions is reserved for source-action prohibitions; current user authorized source repair and existing automatic source delivery. No runtime/DB/training/cleanup authorization is added."
+}
