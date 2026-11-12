@@ -1,5 +1,9 @@
 # Advisory研究接续：输入审查终态与单信号交付计划
 
+2026-11-12正式确认可评价性：现行协议是事前冻结的V2，V1按原设计归档；V1在新增业务展示后的main中源码闭包不符是预期保护，不是应修改旧hash修复的故障。本次使用现行V2核验6份原预测，确认D=2026-11-10、11-11存在不可恢复漏捕获，按原收益盲提前停止合同固化`NOT_EVALUABLE_CAPTURE_GAP`，终态stage SHA为`abd917adf7b9c9fe1f53dcae4973be1f709d701ce5da96caf2260d58086772af`，新进程内再次调用复用原终态。0评价文件读取、0金融fit、20个冻结协议/模型/原预测/MISS/日历工件hash不变；不补作预测、补零、换日或扩成第151日，不另建确认。原生荐股和P20观察保持，此终态不证明没有Alpha，也不构成经济确认。两日原生名单均在前日晚间发布；捕获前曾等待`adj_factor`分区验证/修订，11月10日另有原生包/PIT身份等待，随后越过目标日开盘截止。保留真实数据阻断，不将放宽输入校验当作修复。回执为`X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/confirmation-viability-20261112.json`。
+
+2026-11-12工程交付接续：原压力终态展示PR #7164的后端CI已通过，前端因可选`assessment`未显式收窄而报TS18048。本次在原8文件范围、原F2设计与同一PR中补齐显式保护并接入最新main，重新执行非增量TypeScript和相关合同/浏览器验证；实际CI、合入及用户重启后加载状态以原任务根的最新回执为准，不复用旧HEAD的通过声明。累计仍269实际fit＋1旧index、追加训练预算0，没有新模型或经济增量。
+
 2026-11-09业务接续：已核对最新main、ID1272实际终态和运行中只读API；本轮选择将**正在观察的精确P19 fold3模型已有压力终态接入原Top10观察页**。范围、验收与执行结果在[原业务F2增量F-608/F-609](../architecture/advisory_lstm_top10_business_review_v1_f2_design_20261101.md)，任务/证据为`X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/task.json`。这项业务展示不产生新Alpha，不恢复负面候选、训练或暂停方向；累计269实际fit＋1旧index、新预算0。源码、用户重启后的运行加载与经济结论分别记录。
 
 2026-11-08研究执行终态：用户授权后，[ID1272唯一F1的P2/P3](../architecture/advisory_lstm_overnight_increment_v1_f1_design_20261108.md)已完成3次真实拟合、原两窗固定评价、独立算术审核及新进程0fit复用。终态`STOP_EXACT_OVERNIGHT_INCREMENT_CANDIDATE`/`CLOSED_NEGATIVE_EXACT_CANDIDATE`，累计269实际fit＋1旧index、追加预算0；没有可上线新模型，不恢复旧负面分支或自动排下一候选。全部原人口、26NA、Top50→Top10/5TD/费用/100bps、原生/V2及暂停方向保持，详细均值/区间/分母以F1§12为唯一结果正文。权威任务为`X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/task.json`，同根保存完整阶段、模型、独立审核和最终交付；下方0fit/未授权/未实现段落均为各阶段历史，不再作为当前队列。

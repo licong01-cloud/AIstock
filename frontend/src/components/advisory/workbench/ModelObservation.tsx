@@ -19,7 +19,7 @@ function ResearchAssessment({ data }: { data: Shadow }) {
     && assessment.matched_release_sha256 === data.release.sha256
     && assessment.model_sha256 === data.release.model_sha256;
   const stress = matched ? assessment.stress : null, source = matched ? assessment.source : null;
-  if (!stress || !source) return <div className={styles.notice} data-testid="reranking-research-unknown">
+  if (!assessment || !stress || !source) return <div className={styles.notice} data-testid="reranking-research-unknown">
     {assessment ? "辅助模型研究证据身份未能确认，研究状态未知。" : "辅助模型研究状态尚未加载。"}不能据观察结果认定已达到100bps目标或已可用于生产排序。
   </div>;
   return <div className={styles.notice} data-testid="reranking-research-assessment">
