@@ -1,0 +1,387 @@
+{
+  "actual": "两GPU需64GiB预留而总预算40GiB，硬编码永远只允许1个；swap256GiB未计入准入",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_wsl_workload_guard.py",
+    "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+    "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+    "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+    "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+    "tests/aistock_validation/bugs/20261111_BUG-2217-wsl-swap-gpu.json",
+    "docs/operations/qe_wsl_resource_isolation_runbook.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2217",
+  "closed_at": "2026-11-11T16:43:34.620863Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-11T06:55:34.989706Z",
+  "description": "WSL训练总预算40GiB、每GPU预留32GiB，忽略已配置256GiB swap，使GPU2及回放4上限实际退化。改用56GiB RAM与32GiB有界swap、保留物理余量和压力准入，原科学命令及冻结作业不变。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261111-96c9921935b3",
+      "timestamp": "2026-11-11T06:55:34.989693Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-package-continuation-20h-20261111/progress_v7.json"
+  ],
+  "expected": "GPU2及纯预测回放4并行在有界swap和系统余量条件下可准入；压力高时阻止新增但不杀现有任务",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261111_BUG-2217-wsl-swap-gpu.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261111_BUG-2217-wsl-swap-gpu.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_wsl_workload_guard.py",
+        "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+        "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+        "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+        "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_wsl_workload_guard.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_wsl_workload_guard.py",
+        "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+        "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+        "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+        "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+    ]
+  },
+  "first_seen_at": "2026-11-11T06:55:34.989706Z",
+  "fix_branch": null,
+  "fix_commit": "486f7d24234435587dd32fd8c52f883308b27c4f",
+  "fix_summary": "Versioned v2 RAM56GiB/swap32GiB, job swap16GiB, GPU2/all4 cap, bounded swap capacity plus physical4GiB reserve and PSI admission. Original science, PID identity and API2GiB/1GiB isolation preserved. Exact SHA/drain guarded training-only unit upgrade; no service control.",
+  "fixed_at": "2026-11-11T08:12:06Z",
+  "github_issue_number": 7220,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7220",
+  "last_seen_at": "2026-11-11T06:55:34.989706Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7221",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "root_cause": "RAM-only whole-job reservation floor40/32 forces GPU1 and replay2; parent8GiB swap and no swap credit make available256GiB swap ineffective. Deployment plan also exposed stale peak24/10/6 inconsistent with actual32/20/20.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "tmp/issue_workflow/BUG-2217/fresh-process-evidence.json: new Python rendered v2 envelope preserving original command/input; fresh Linux process loaded exact final guard source, read real WSL capacity and allowed hypothetical second GPU. Kernel remains legacy40GiB/8GiB; no process control or new economic calls. Real two-fit overlap pending next authorized batch.",
+      "tmp/issue_workflow/BUG-2217/fresh-process-evidence.json"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2217/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2217",
+      "business_smoke_semantic": {
+        "contract_id": "qe_batch_execution_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "0ab7dcfe725a28b4d109b2145c034dd20973585e06cd1fcbaa2346ab0c434661",
+      "expected_identity": "486f7d24234435587dd32fd8c52f883308b27c4f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-11T16:35:22.675566Z",
+      "mode": "read_only",
+      "observed_identity": "486f7d24234435587dd32fd8c52f883308b27c4f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ecaf603758d01cb05f6324668163ec3a678366adbfab33e03c73831c05eaeca4",
+      "receipt_sha256": "62406c9f79e44d739a09891d9871a5937d4619c2757c9423907ca6ece44b9bfd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "05bcb25c50203afa67abfd9ce575ad6ba1715174506af2ef4ed1e208135521f8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2217",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e73a4fe8ab5bc16f",
+    "recorded_at": "2026-11-11T08:13:03.092182Z",
+    "runtime_contract_digest": "0ab7dcfe725a28b4d109b2145c034dd20973585e06cd1fcbaa2346ab0c434661",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6",
+    "source_merge_commit": "486f7d24234435587dd32fd8c52f883308b27c4f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7221",
+    "validation_evidence": [
+      "validation-receipt: id=a9698bd31525cd5e commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_wsl_workload_guard.py backend/services/quantevolver/qe_wsl_workload_isolation.py backend/services/quantevolver/qe_wsl_resource_isolation.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py docs/operations/qe_wsl_resource_isolation_runbook.md tests/aistock_validation/bugs/20261111_BUG-2217-wsl-swap-gpu.json` result=`passed: 7 files, 0 findings`",
+      "validation-receipt: id=2088405dfd0e8515 commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q --tb=short` result=`passed: 79 tests; final installer token correction focused test passed`"
+    ],
+    "validation_evidence_digest": "6e3fcf4b244e66dcd31ae31792a257782f56106ecf45c05d69f2c9375c3917ae"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "WSL固定内存预留忽略swap导致GPU两并行与回放四并行实际串行",
+  "trigger_condition": {
+    "fingerprint": "96c9921935b34ca7344d64b6",
+    "source_event_id": "FE-20261111-96c9921935b3"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=a9698bd31525cd5e commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_wsl_workload_guard.py backend/services/quantevolver/qe_wsl_workload_isolation.py backend/services/quantevolver/qe_wsl_resource_isolation.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py docs/operations/qe_wsl_resource_isolation_runbook.md tests/aistock_validation/bugs/20261111_BUG-2217-wsl-swap-gpu.json` result=`passed: 7 files, 0 findings`",
+    "validation-receipt: id=2088405dfd0e8515 commit=695f5a3fb6ad6ca387fa7ef406c72e8af7cef5f6 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q --tb=short` result=`passed: 79 tests; final installer token correction focused test passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2217 --target backend-main -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_notes": [
+    "79 targeted tests passed; Ruff and git diff --check passed. Exact scientific command and frozen input untouched; remote CPU transport unchanged.",
+    "Correctness review: independent physical reserve, bounded swap not global256GiB; in-flight reservations and finite pressure; actual generated guard shared profile.",
+    "Completeness review: resource plan32/20/20 matches envelopes; existing API isolation upgrade needs no WSL9000 restart; current frozen workers cannot be overwritten; source/activation/real-overlap separate."
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

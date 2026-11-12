@@ -1396,15 +1396,14 @@ def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tamper
     assert _business_semantic(url, payload, "e" * 64)["verdict"] == "failed"
 
 
-@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation", "member"])
 def test_factor_research_provisional_backend_contract_reconciles_to_offline(name):
     result = workflow.build_runtime_contract(record={"runtime_contract": {
         "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
         "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
-    }}, changed_files=[f"backend/services/factor_research/{name}.py"])
+    }}, changed_files=["backend/services/hmm_risk/risk_l2_member_return.py" if name == "member" else f"backend/services/factor_research/{name}.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
-    assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
-    assert result["inferred_runtime_files"] == []
+    assert (result["pre_pr_ready"] is True, result["backend_restart_required"] is False, result["inferred_runtime_files"]) == (True, True, [])
 
 
 def test_runtime_task_card_bounds_source_output_without_losing_attribution():
@@ -1851,6 +1850,8 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
     ('backend/services/hmm_risk/rotation_l1_gbdt.py', []),
     ('backend/services/hmm_risk/observed_industry_authority.py', []),
     ('backend/services/hmm_risk/risk_l2_value_replay.py', []),
+    ('backend/services/hmm_risk/risk_l2_member_return_v2.py', ['backend-main']),
+    (['backend/services/hmm_risk/risk_l2_member_return.py', 'backend/services/dataset_release/worker.py'], ['worker-scheduler']),
     ('backend/services/hmm_risk/risk_l2_prediction.py', ['backend-main']),
     ('backend/routers/hmm_risk.py', ['backend-main']),
     ('backend/services/hmm_risk/unknown_consumer.py', ['backend-main']),
@@ -1860,13 +1861,13 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
 ]
 
 
-@pytest.mark.parametrize("family", ["value", "industry", "advisory", "localsim"])
+@pytest.mark.parametrize("family", ["value", "industry", "advisory", "localsim", "member"])
 def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeypatch) -> None:
-    source = _LOCALSIM_DIR + "dual_mode_research.py" if family == "localsim" else "backend/services/hmm_risk/observed_industry_authority.py"
-    fixed5 = ["backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
-              "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py"]
-    expected = [source] if family in {"industry", "localsim"} else fixed5
-    rule_id = ("offline-localsim-dual-mode-study" if family == "localsim" else
+    source = ("backend/services/hmm_risk/risk_l2_member_return.py" if family == "member" else
+              _LOCALSIM_DIR + "dual_mode_research.py" if family == "localsim" else "backend/services/hmm_risk/observed_industry_authority.py")
+    fixed5 = [f"backend/services/advisory_model_first/generic_price_5td_{kind}_v2.py" for kind in ("valuation", "revaluation")]
+    expected = [source] if family in {"industry", "localsim", "member"} else fixed5
+    rule_id = ("offline-hmm-signed-member-return" if family == "member" else "offline-localsim-dual-mode-study" if family == "localsim" else
                "offline-hmm-observed-industry-authority" if family == "industry" else "offline-advisory-fixed5-valuation")
     rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
                 if rule["rule_id"] == rule_id)
@@ -1880,12 +1881,11 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeyp
                      "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md",
                      "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"],
         "localsim": [source, "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
-                     "backend/tests/simulation_execution/test_localsim_replay_performance.py"],
+                      "backend/tests/simulation_execution/test_localsim_replay_performance.py"],
+        "member": [source, "scripts/hmm_risk/run_risk_l2_member_return.py", "backend/tests/hmm_risk/test_risk_l2_member_return.py"],
     }[family]
     offline = workflow._classify_runtime_impact(files)
-    assert offline["runtime_impact"] == "none"
-    assert offline["runtime_files"] == offline["target_ids"] == []
-    assert offline["catalog_error"] is None
+    assert (offline["runtime_impact"], offline["runtime_files"], offline["target_ids"], offline["catalog_error"]) == ("none", [], [], None)
     contract = workflow.build_runtime_contract(record={}, changed_files=files)
     assert contract["blocking"] == [] and contract["backend_restart_required"] is False
     online_paths = ([*(path.replace("_v2.py", "_v3.py") for path in fixed5), "backend/routers/advisory_model_first.py"]
@@ -1894,14 +1894,15 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeyp
         online_paths = _LOCALSIM_ONLINE_FILES
     for online in online_paths:
         mixed = workflow._classify_runtime_impact([*files, online])
-        assert mixed["runtime_impact"] == "backend"
-        assert mixed["target_ids"] == ["backend-main"]
-        assert mixed["runtime_files"] == [online]
+        assert (mixed["runtime_impact"], mixed["target_ids"], mixed["runtime_files"]) == ("backend", ["backend-main"], [online])
         contract = workflow.build_runtime_contract(record={"runtime_contract": {
             "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}}, changed_files=[*files, online])
         assert contract["backend_restart_required"] is True
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
-    if family == "localsim":
+    if family == "member":
+        refs = set(workflow._git(["grep", "-l", "-F", Path(source).stem, "--", "*.py"]).splitlines())
+        assert refs == {*files[1:], Path(__file__).relative_to(workflow.REPO_ROOT).as_posix()}
+    if family in {"localsim", "member"}:
         catalog = workflow._load_runtime_target_catalog()
         catalog["targets"]["backend-main"]["source_globs"].append(source)
         monkeypatch.setattr(workflow, "_load_runtime_target_catalog", lambda _root=None: catalog)

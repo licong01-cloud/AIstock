@@ -11,6 +11,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
+from backend.services.quantevolver.saved_prediction_recovery_contract import SavedPredictionRecovery, validate_recovery_mode
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
@@ -1538,6 +1539,7 @@ class CustomEvoLoopConfig(BaseModel):
     prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
     prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
     prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
+    prediction_recovery: Optional[SavedPredictionRecovery] = Field(None, description="Explicit saved-prediction recovery from an interrupted source; no fit or inference")
     node_id: Optional[str] = Field(None, description="CPU model: remote; GPU model: WSL; explicit placement must match model device; frozen prediction replay may use either node")
 
     @model_validator(mode="after")
@@ -1555,6 +1557,7 @@ class CustomEvoLoopConfig(BaseModel):
         self.prediction_source_task_id = replay["prediction_source_task_id"]
         self.prediction_source_loop_index = replay["prediction_source_loop_index"]
         self.prediction_source_sha256 = replay["prediction_source_sha256"]
+        validate_recovery_mode(self.model_dump())
         return self
 
 class CustomEvolutionCreateRequest(BaseModel):

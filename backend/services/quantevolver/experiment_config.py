@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
 
 from backend.core.qe_prediction_replay_contract import normalize_prediction_replay_contract
+from .saved_prediction_recovery_contract import SavedPredictionRecovery, validate_recovery_mode
 from .frozen_inference_contract import FrozenInferenceSpec, validate_mode as validate_frozen_inference_mode
 
 from .long_trend_evaluation_contract import (
@@ -462,6 +463,7 @@ class ExperimentConfig(BaseModel):
     prediction_source_task_id: str | None = None
     prediction_source_loop_index: int | None = None
     prediction_source_sha256: str | None = None
+    prediction_recovery: SavedPredictionRecovery | None = None
 
     # ── Metadata (not passed to compose) ──────────────────────────────────────
     node_id: str | None = None
@@ -504,6 +506,7 @@ class ExperimentConfig(BaseModel):
         self.prediction_source_task_id = replay["prediction_source_task_id"]
         self.prediction_source_loop_index = replay["prediction_source_loop_index"]
         self.prediction_source_sha256 = replay["prediction_source_sha256"]
+        validate_recovery_mode(self.model_dump())
         if self.universe_selection is not None:
             self.universe_selection = UniverseSelection.from_value(self.universe_selection).as_dict()
             if self.stock_pool:

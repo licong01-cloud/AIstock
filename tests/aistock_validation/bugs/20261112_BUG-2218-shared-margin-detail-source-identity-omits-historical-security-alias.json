@@ -1,0 +1,322 @@
+{
+  "actual": "market.margin_detail is unsupported by shared resolver; old-code financing records cannot resolve to the canonical security through the general authority.",
+  "allowed_write_scope": [
+    "backend/data_service/security_source_identity.py",
+    "backend/tests/data_service/test_security_source_identity.py",
+    "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+    "backend/data_service/margin_detail_source_identity.py",
+    "tests/aistock_validation/bugs/20261112_BUG-2218-shared-margin-detail-source-identity-omits-historical-security-alias.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2218",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-12T01:53:01.856396Z",
+  "description": "market.margin_detail is unsupported by shared resolver; old-code financing records cannot resolve to the canonical security through the general authority.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261112-690855b85ddf",
+      "timestamp": "2026-11-12T01:53:01.856396Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_shared_inputs/security_source_identity/20261112-margin-detail-v2/manifest.json",
+    "X:/AIstock_shared_inputs/security_source_identity/20261112-margin-detail-v2/margin_source_identity_readback.json"
+  ],
+  "repair_readback": {
+    "package_manifest_sha256": "c65825014e2137770473877a0add20669300b09d7ab239cd77a44554a0564de0",
+    "authority_file_sha256": "e6b984ccaadec5bddc8ada28c4a57d2331f1cc5739b958629b946ef547a2c84e",
+    "authority_canonical_sha256": "1e32432b6c85273ff982474b288d03a5e82012db03a9e20eabdb606395cf20e1",
+    "predecessor_manifest_identity": "772112c58f959748787b939e33ec874fb0766ca921d88eddbd49c131c3b3c43d",
+    "margin_detail_sha256": "56c3dc0d9440970ed64ae15cfe350cb477ccac4e3dbc680c10f129c44c7b8e34",
+    "matched_observed_keys": 4973,
+    "margin_alias_count": 3,
+    "unregistered_legacy_equity_source_codes": [],
+    "inventory_instrument_count": 4598,
+    "inventory_equity_instrument_count": 3812,
+    "scope": "2018-08-01..2026-10-30 existing frozen financing facts and all equity source identities; not eligibility, provider-absence or HMM business validation",
+    "target_readback": "302132.SZ: 560 existing300114.SZ rows2022-10-24..2025-02-14 and415 existing302132.SZ rows2025-02-17..2026-10-30; all8fields match current source at formal float32 representation",
+    "other_aliases": "001872.SZ<-000022.SZ through2018-12-25;001914.SZ<-000043.SZ through2019-12-15; official implementation announcements and raw PDF hashes verified",
+    "reviews": [
+      "RED->GREEN: margin source whitelist and explicit source-specific rows; change-date boundaries; unchanged original moneyflow row and authority",
+      "Completeness/regression: all3 historical equity aliases; financing missing/NULL/zero/float32 differentiation; no alias inferred for unrelated securities",
+      "Safety/performance: linear per-key comparison; source read-only; old candidate components pinned and unchanged; output cannot overwrite existing package or write inside frozen candidate"
+    ],
+    "design_compliance": "Full scoped identity delivery, no fake records or success, unchanged business/units/old identities, no new schema/framework/approval gate",
+    "database_write": false,
+    "dataset_export": false,
+    "active_profile_write": false,
+    "runtime_action": false,
+    "successor_required": false,
+    "consumer_binding": "HMM owner explicitly binds standalone shared authority; old candidate embedded authority and old tasks remain unchanged"
+  },
+  "expected": "Shared dataset-specific historical identity resolves margin rows without synthetic records or private mappings; original release bytes and existing authorities remain unchanged.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+      "backend/data_service/margin_detail_source_identity.py"
+    ],
+    "changed_files": [
+      "backend/data_service/security_source_identity.py",
+      "backend/tests/data_service/test_security_source_identity.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/data_service/security_source_identity.py",
+        "backend/tests/data_service/test_security_source_identity.py",
+        "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+        "backend/data_service/margin_detail_source_identity.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "local_data",
+        "qe.core",
+        "hmm",
+        "paper_v2",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/data_service/security_source_identity.py",
+          "impact_modules": [
+            "local_data",
+            "qe.core",
+            "hmm"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_moneyflow_source_identity"
+        },
+        {
+          "file": "backend/tests/data_service/test_security_source_identity.py",
+          "impact_modules": [
+            "local_data",
+            "qe.core",
+            "hmm"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_moneyflow_source_identity"
+        },
+        {
+          "file": "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/data_service/margin_detail_source_identity.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/data_service/security_source_identity.py",
+        "backend/tests/data_service/test_security_source_identity.py",
+        "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+        "backend/data_service/margin_detail_source_identity.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/data_service/security_source_identity.py",
+      "backend/tests/data_service/test_security_source_identity.py",
+      "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+      "backend/data_service/margin_detail_source_identity.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/data_service/security_source_identity.py",
+      "backend/tests/data_service/test_security_source_identity.py",
+      "backend/data_service/manifests/security_source_identity_20261112_v2.json",
+      "backend/data_service/margin_detail_source_identity.py"
+    ]
+  },
+  "first_seen_at": "2026-11-12T01:53:01.856396Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7224,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7224",
+  "last_seen_at": "2026-11-12T01:53:01.856396Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh process shared identity audit loaded tracked resolver and v2 authority; read-only production aistock:5432, frozen H5 hashes unchanged;4973/4973 observed keys match8fields;4598 instrument/3812equity identity inventory;3official source hashes verified. Producer now owned by backend.data_service.margin_detail_source_identity. Package manifestc65825014e2137770473877a0add20669300b09d7ab239cd77a44554a0564de0. No source/fact/profile writes, export, service, experiment or HMM consumer action."
+    ],
+    "inference_basis": "actual shared data-service resolver call closure; standalone immutable file usable by fresh consumers without backend activation; cached backend default requires user-owned restart separately",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Shared margin-detail source identity omits historical security alias",
+  "trigger_condition": {
+    "fingerprint": "690855b85ddf1c0a99c63bf5",
+    "source_event_id": "FE-20261112-690855b85ddf"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

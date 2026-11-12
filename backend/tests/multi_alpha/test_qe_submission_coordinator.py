@@ -31,6 +31,98 @@ from backend.services.multi_alpha.durable_execution_adapter import (
     DurableSubmissionIntent,
     QEWorkspacePredBacktestAdapter,
 )
+from backend.services.quantevolver.qe_wsl_workload_isolation import isolate_payload as real_isolate_payload
+
+
+@pytest.fixture(autouse=True)
+def protocol_tests_do_not_materialize_linux_runtime(monkeypatch):
+    """These tests use dummy shell strings; real envelopes have their own matrix."""
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_wsl_workload_isolation.isolate_payload",
+        lambda payload, **_: payload,
+    )
+
+
+@pytest.mark.parametrize("node_id,api_url", [
+    ("wsl2-5080", "http://127.0.0.1:9000"),
+    ("rdagent-node1", "http://192.0.2.1:9000"),
+])
+def test_real_multi_alpha_pred_backtest_command_reaches_isolated_transport(
+    monkeypatch, tmp_path, node_id, api_url,
+):
+    import hashlib
+    import json
+    import shlex
+    from backend.services.multi_alpha.remote_dispatch import ComputeNodeInfo, _remote_wsl_command
+
+    # Undo the protocol-only fixture here: this is the real producer/guard seam.
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_wsl_workload_isolation.isolate_payload",
+        real_isolate_payload,
+    )
+    workspace_base = "/mnt/f/QE runs/author's assets" if node_id.startswith("wsl") else "/home/qe/workspaces"
+    paths = {
+        "workspace_base": workspace_base,
+        "artifact_path": "/artifacts/factors",
+        "prediction_artifact_path": "/artifacts/predictions",
+        "qlib_data_path": "/datasets/frozen/components/daily_bin_candidate",
+        "factor_cache_dir": "/datasets/frozen/components/factor_h5_static_candidate_v2",
+    }
+    command = _remote_wsl_command(
+        workspace=tmp_path,
+        node=ComputeNodeInfo(node_id=node_id, api_base_url=api_url),
+        remote_paths=paths,
+        backtest_config={
+            "remote_task_id": "macb_exact", "remote_loop_index": 3,
+            "wsl_conda_env": "frozen-env", "wsl_conda_sh": "/home/qe/conda.sh",
+        },
+    )
+    payload = QEWorkspaceSubmissionPayload("macb_exact", 3, {}, {"conf.yaml": "frozen"}, command)
+    seen = []
+
+    class CapturedTransport(Exception):
+        pass
+
+    class Client:
+        async def submit_loop(self, *args, **kwargs):
+            seen.append(args)
+            raise CapturedTransport
+
+    with pytest.raises(CapturedTransport):
+        asyncio.run(QEWorkspaceSubmissionCoordinator(reservation_repository=Mock())._post_with_reconciliation(
+            client=Client(), source=_source(node_id=node_id, backtest_only=True), payload=payload,
+            spec=None, acquired=None, reservation={}, token=None,
+        ))
+    assert len(seen) == 1
+    assert "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl" in command
+    assert "reason_code=qe_subprocess_bash_required" in command
+    if node_id.startswith("wsl"):
+        assert shlex.split(command)[:4] == ["cd", "--", workspace_base + "/macb_exact/Loop3", "&&"]
+        files = seen[0][3]
+        assert files["qe_wsl_workload_command.sh"] == command
+        policy = json.loads(files["qe_wsl_workload_policy.json"])
+        assert policy["kind"] == "replay" and policy["peak_bytes"] == 20 * 1024**3
+        assert policy["original_command_sha256"] == hashlib.sha256(command.encode()).hexdigest()
+        assert policy["original_files_sha256"] == {"conf.yaml": hashlib.sha256(b"frozen").hexdigest()}
+    else:
+        assert command.startswith("bash --noprofile --norc -c ")
+        assert seen[0][3] == {"conf.yaml": "frozen"} and seen[0][4] == command
+
+
+@pytest.mark.parametrize("workspace_base", ["", "relative/path", "C:\\jobs"])
+def test_real_multi_alpha_wsl_command_requires_explicit_linux_workspace(tmp_path, workspace_base):
+    from backend.services.multi_alpha.combine_backtest import MultiAlphaCombineBacktestError
+    from backend.services.multi_alpha.remote_dispatch import ComputeNodeInfo, _remote_wsl_command
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as error:
+        _remote_wsl_command(
+            workspace=tmp_path,
+            node=ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            remote_paths={"workspace_base": workspace_base, "artifact_path": "/a", "prediction_artifact_path": "/b",
+                          "qlib_data_path": "/data", "factor_cache_dir": "/factors"},
+            backtest_config={"wsl_conda_env": "frozen-env", "wsl_conda_sh": "/home/qe/conda.sh"},
+        )
+    assert error.value.reason_code == "remote_workspace_path_invalid"
 
 
 @pytest.mark.parametrize("released,remote_status,pid", [(True, "not_reserved", None),

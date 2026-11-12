@@ -179,7 +179,19 @@ def _parent(handoff):
     }
 
 
-def _endpoint(parent, endpoint, profile, last_day):
+def _checkpoint_account_matches(day, checkpoint, exported_schema=None):
+    """Allow only explicit history export schema aliases; retain every field."""
+    if exported_schema is None:
+        return all(day.get(k) == v for k, v in checkpoint.items())
+    return (
+        exported_schema in {"localsim_wait_budget_day_v1", "localsim_adverse_wait_day_v1"}
+        and day.get("schema_version") == exported_schema
+        and checkpoint.get("schema_version") == "localsim_timing_portfolio_day_account_v1"
+        and all(k in day and day[k] == v for k, v in checkpoint.items() if k != "schema_version")
+    )
+
+
+def _endpoint(parent, endpoint, profile, last_day, *, exported_schema=None):
     aid = endpoint["account_id"]
     day = _read(endpoint["day"])
     account = next(a for a in parent["results"]["accounts"] if a["account_id"] == aid)
@@ -211,7 +223,10 @@ def _endpoint(parent, endpoint, profile, last_day):
         and record["status"] == "OFFLINE_RESEARCH_DAY_COMPLETE",
         "PARENT_JOURNAL_CONFLICT",
     )
-    _require(all(day.get(k) == v for k, v in record["checkpoint"]["account"].items()), "PARENT_CHECKPOINT_CONFLICT")
+    _require(
+        _checkpoint_account_matches(day, record["checkpoint"]["account"], exported_schema),
+        "PARENT_CHECKPOINT_CONFLICT",
+    )
     _require(
         all(LocalSimExecutionStateV1.model_validate(s).is_terminal for s in record["states"].values()),
         "PARENT_HAS_ACTIVE_ORDER",

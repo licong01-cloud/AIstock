@@ -183,6 +183,119 @@ def test_blank_node_probe_cannot_report_false_readiness(monkeypatch):
     preflight.assert_not_awaited()
 
 
+async def read_asset_with_transport(handler, operation):
+    async with workspace.QEWorkspaceClient("http://node/api/v1/qe_workspace", node_id="node") as client:
+        await client.client.aclose()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client.client = http
+            if operation == "catalog":
+                return await client.list_workspace_files("qe_source", "Loop1")
+            if operation == "bytes":
+                return await client.download_workspace_file_bytes("qe_source", "Loop1", "pred.pkl")
+            return await client.get_workspace_file("qe_source", "Loop1", "qe_current_recorder.json")
+
+
+@pytest.mark.parametrize("operation", ["catalog", "bytes", "recorder"])
+@pytest.mark.parametrize("failure", [*TRANSIENTS, 429, 502, 503, 504])
+def test_source_asset_transient_retry_preserves_exact_payload_and_never_posts(monkeypatch, operation, failure):
+    requests = []
+    payload = {"catalog_completeness": "complete", "files": []} if operation == "catalog" else {"recorder_id": "frozen"}
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) < 3:
+            if isinstance(failure, int):
+                return httpx.Response(failure, json={"detail": "temporary"})
+            raise failure("temporary", request=request)
+        return httpx.Response(200, content=b"\x00frozen\xff") if operation == "bytes" else httpx.Response(200, json=payload)
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(workspace.asyncio, "sleep", sleep)
+    assert asyncio.run(read_asset_with_transport(handler, operation)) == (b"\x00frozen\xff" if operation == "bytes" else payload)
+    assert len(requests) == 3
+    assert len({str(r.url) for r in requests}) == 1
+    assert all(r.method == "GET" for r in requests)
+    assert sleep.await_args_list == [call(1), call(2)]
+
+
+@pytest.mark.parametrize("operation", ["catalog", "bytes", "recorder"])
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout, httpx.RemoteProtocolError, 503])
+def test_source_asset_exhaustion_is_typed_and_retains_real_cause(monkeypatch, operation, failure):
+    requests = []
+    original = failure("persistent") if not isinstance(failure, int) else None
+
+    def handler(request):
+        requests.append(request)
+        if original is not None:
+            raise original
+        return httpx.Response(failure, json={"detail": "unavailable"})
+
+    monkeypatch.setattr(workspace.asyncio, "sleep", AsyncMock())
+    with pytest.raises(workspace.QEWorkspaceAssetReadUnavailable) as error:
+        asyncio.run(read_asset_with_transport(handler, operation))
+    assert error.value.reason_code == "qe_workspace_asset_read_unavailable"
+    assert error.value.task_id == "qe_source"
+    assert error.value.loop_id == "Loop1"
+    if original is not None:
+        assert error.value.__cause__ is original
+    assert len(requests) == 3
+    assert all(r.method == "GET" for r in requests)
+
+
+@pytest.mark.parametrize("operation", ["catalog", "bytes", "recorder"])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 500])
+def test_source_asset_permanent_status_is_never_retried(monkeypatch, operation, status):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(status, json={"detail": "permanent"})
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(workspace.asyncio, "sleep", sleep)
+    with pytest.raises(RuntimeError) as error:
+        asyncio.run(read_asset_with_transport(handler, operation))
+    assert not isinstance(error.value, workspace.QEWorkspaceAssetReadUnavailable)
+    assert len(requests) == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["catalog", "recorder"])
+def test_source_asset_invalid_json_is_not_retried(monkeypatch, operation):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, text="not-json", headers={"content-type": "application/json"})
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(workspace.asyncio, "sleep", sleep)
+    with pytest.raises(ValueError):
+        asyncio.run(read_asset_with_transport(handler, operation))
+    assert len(requests) == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure", [asyncio.CancelledError, httpx.UnsupportedProtocol])
+def test_source_asset_cancellation_or_bad_protocol_is_not_retried(monkeypatch, failure):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        raise failure("stop")
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(workspace.asyncio, "sleep", sleep)
+    # The existing file client wraps HTTP errors, retaining their cause.
+    expected = RuntimeError if failure is httpx.UnsupportedProtocol else failure
+    with pytest.raises(expected) as error:
+        asyncio.run(read_asset_with_transport(handler, "bytes"))
+    if failure is httpx.UnsupportedProtocol:
+        assert isinstance(error.value.__cause__, failure)
+    assert len(requests) == 1
+    sleep.assert_not_awaited()
+
+
 @pytest.mark.parametrize("defect", [None, "fields", "status", "node", "policy", "attempts", "boolean", "submission", "extra"])
 def test_post_restart_semantic_contract_rejects_http_only_or_wrong_metadata(defect):
     from scripts.aistock_issue_workflow import _business_smoke_semantic_contract
