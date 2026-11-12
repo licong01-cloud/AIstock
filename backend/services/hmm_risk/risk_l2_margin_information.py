@@ -134,7 +134,8 @@ def margin_frame(binding, source_dates):
         )
     require(frame.index.names == ["datetime", "instrument"] and frame.index.is_unique, "financing index differs")
     days = frame.index.get_level_values("datetime")
-    codes = frame.index.get_level_values("instrument").to_numpy(copy=True)
+    source_codes = frame.index.get_level_values("instrument").to_numpy(copy=True)
+    codes = source_codes.copy()
     require(not days.hasnans and days.equals(days.normalize()), "invalid financing date")
     require(set(days.strftime("%Y-%m-%d")) <= set(source_dates), "financing fact outside source calendar")
     known = {
@@ -143,8 +144,9 @@ def margin_frame(binding, source_dates):
         if r.source_dataset == MARGIN_SOURCE
         for s in (r.source_ts_code, r.canonical_ts_code)
     }
-    for symbol in known:
-        positions = np.flatnonzero(codes == symbol)
+    for symbol in sorted(known):
+        # Locate native rows only: a converted code must never be resolved twice.
+        positions = np.flatnonzero(source_codes == symbol)
         if len(positions):
             codes[positions] = [binding.canonical_code(symbol, days[i].date()) for i in positions]
     frame.index = pd.MultiIndex.from_arrays([days, codes], names=frame.index.names)

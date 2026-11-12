@@ -108,15 +108,24 @@ def test_native_h5_reader_preserves_zeros_and_checks_effective_source(tmp_path, 
         values[0] = -1.0
     if bad == "wrong-side":
         codes[0] = "302132.SZ"
+    keys = [(source_day, c) for c in codes]
+    source_dates = ["2025-02-14"]
+    if bad is None:
+        keys.append((pd.Timestamp("2025-02-17"), "302132.SZ"))
+        values.append(30.0)
+        source_dates.append("2025-02-17")
     pd.DataFrame(
         {"md_rzye": values},
-        index=pd.MultiIndex.from_tuples([(source_day, c) for c in codes], names=["datetime", "instrument"]),
+        index=pd.MultiIndex.from_tuples(keys, names=["datetime", "instrument"]),
     ).to_hdf(path, key="data", format="table", data_columns=True)
     calls = []
 
     def canonical(code, day):
         calls.append((code, day))
-        h.require(code == "300114.SZ" and day == date(2025, 2, 14), "wrong effective source")
+        h.require(
+            (code, day) in {("300114.SZ", date(2025, 2, 14)), ("302132.SZ", date(2025, 2, 17))},
+            "wrong effective source",
+        )
         return "302132.SZ"
 
     binding = SimpleNamespace(
@@ -135,9 +144,10 @@ def test_native_h5_reader_preserves_zeros_and_checks_effective_source(tmp_path, 
         with pytest.raises(FormalStateError):
             h.margin_frame(binding, ["2025-02-14"])
     else:
-        result = h.margin_frame(binding, ["2025-02-14"])
+        result = h.margin_frame(binding, source_dates)
         assert result.loc[(source_day, "302132.SZ"), "md_rzye"] == 0
-        assert calls == [("300114.SZ", date(2025, 2, 14))]
+        assert result.loc[(pd.Timestamp("2025-02-17"), "302132.SZ"), "md_rzye"] == 30
+        assert calls == [("300114.SZ", date(2025, 2, 14)), ("302132.SZ", date(2025, 2, 17))]
 
 
 def test_matched_20d_scalers_weights_and_single_new_dimension_are_exact():
