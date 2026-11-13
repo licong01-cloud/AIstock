@@ -3,6 +3,7 @@
 from copy import deepcopy
 from datetime import timedelta
 from decimal import Decimal
+import hashlib
 import json
 from pathlib import Path
 
@@ -343,3 +344,59 @@ def test_v1_plan_or_rehashed_funding_drift_is_never_an_implicit_upgrade(capacity
     changed["funding_boundary_sha256"] = digest(changed["funding_boundary"])
     with pytest.raises(ValueError, match="EXECUTION_IDENTITY"):
         study.plan_scope(changed)
+
+
+def test_large_source_membership_normalizes_batch_once(tmp_path, monkeypatch):
+    refs = [FileRef(path=str(tmp_path/(str(i)+".json")), sha256=f"{i:064x}") for i in range(12000)]
+    original = study.pins
+    calls = []
+    def counting(*args):
+        calls.append(1)
+        return original(*args)
+    monkeypatch.setattr(study, "pins", counting)
+    assert study.contains_pins(refs, [payload(r) for r in reversed(refs)])
+    assert len(calls) == 1
+    assert not study.contains_pins([FileRef(path=str(tmp_path/"absent"), sha256="e"*64)], refs)
+
+
+def test_sealed_producer_readonly_retry_preserves_artifacts_and_never_allows_run(capacity_study, tmp_path, monkeypatch):
+    request_ref, _, _ = capacity_study
+    study.run(request_ref)
+    original_retry = study.exact_artifact_retry(request_ref)
+    root = Path(request_ref.path).parent
+    frozen = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*.json")}
+    request = study.read(request_ref)
+    relative = "backend/services/simulation_execution/localsim/dispatch_capacity_research.py"
+    producer_root = tmp_path/"sealed-producer"
+    source = producer_root/relative
+    source.parent.mkdir(parents=True)
+    raw = Path(study.__file__).read_bytes()
+    source.write_bytes(raw)
+    normalized = raw.replace(b"\r\n", b"\n")
+    blob = b"blob "+str(len(normalized)).encode()+b"\0"+normalized
+    seal = {"schema_version": "localsim_windows_to_wsl_source_seal_v1", "producer_source_commit": "8"*40,
+        "validated_against_git_blobs": True, "worktree_windows": str(producer_root), "worktree_wsl": str(producer_root),
+        "files": [{"path": relative, "sha256": hashlib.sha256(normalized).hexdigest(),
+            "windows_raw_sha256": hashlib.sha256(raw).hexdigest(),
+            "git_blob": hashlib.sha1(blob, usedforsecurity=False).hexdigest()}]}
+    seal_path = tmp_path/"producer-seal.json"
+    publish(seal_path, seal)
+    current = deepcopy(request["source_identity"])
+    current["capacity_and_immutable_helpers"]["dispatch_capacity_research.py"] = "f"*64
+    monkeypatch.setattr(study, "implementation_identity", lambda: current)
+    def forbidden(*args, **kwargs):
+        pytest.fail("sealed read-only retry reached economics or market preparation")
+    monkeypatch.setattr(study, "sources", forbidden)
+    monkeypatch.setattr(study, "CandidateReader", forbidden)
+    monkeypatch.setattr(dual, "execute_account_days", forbidden)
+    with pytest.raises(ValueError, match="REQUEST_IDENTITY"):
+        study.run(request_ref)
+    seal_ref = FileRef.model_validate(ref(seal_path))
+    readback = study.exact_artifact_retry(request_ref, producer_source_seal=seal_ref)
+    assert all(readback[k] == v for k, v in original_retry.items())
+    assert readback["producer_source_seal"] == payload(seal_ref)
+    assert readback["inspection_reader_source_identity"] == current
+    assert frozen == {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*.json")}
+    current["native_engine"]["dual_mode"]["human_portfolio.py"] = "e"*64
+    with pytest.raises(ValueError, match="READONLY_NATIVE_IDENTITY_DRIFT"):
+        study.inspect(request_ref, producer_source_seal=seal_ref)

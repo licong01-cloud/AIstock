@@ -9,6 +9,7 @@ from contextlib import ExitStack
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 
@@ -48,6 +49,48 @@ def implementation_identity():
     files = (Path(__file__), Path(lanes.__file__), Path(natural.__file__), Path(shared.__file__), Path(period.__file__))
     return {"native_engine": dual.implementation_identity(), "capacity_and_immutable_helpers": {
         p.name: hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest() for p in files}}
+
+
+def contains_pins(required, available):
+    """Normalize the full batch once, rather than once per required pin."""
+    index = {p.path: p for p in pins(available)}
+    return all(index.get(p.path) == p for p in required)
+
+
+def producer_identity(request, producer_source_seal=None):
+    current = implementation_identity()
+    if producer_source_seal is None:
+        require(request["source_identity"] == current, "REQUEST_IDENTITY")
+        return
+    # This compatibility seam is used only by read-only artifact inspection.
+    # A source upgrade never authorizes economic replay of an old request.
+    seal = read(producer_source_seal)
+    require(seal["schema_version"] == "localsim_windows_to_wsl_source_seal_v1"
+        and seal["producer_source_commit"] == request["producer_source_commit"]
+        and seal["validated_against_git_blobs"] is True, "PRODUCER_SEAL")
+    name = "dispatch_capacity_research.py"
+    old_hash = request["source_identity"]["capacity_and_immutable_helpers"][name]
+    compatible = deepcopy(current)
+    compatible["capacity_and_immutable_helpers"][name] = old_hash
+    require(compatible == request["source_identity"], "READONLY_NATIVE_IDENTITY_DRIFT")
+    relative = "backend/services/simulation_execution/localsim/"+name
+    rows = [r for r in seal["files"] if r["path"] == relative]
+    require(len(rows) == 1 and rows[0]["sha256"] == old_hash, "PRODUCER_RUNNER_SEAL")
+    source_root = Path(seal["worktree_windows"] if os.name == "nt" else seal["worktree_wsl"])
+    require(source_root.is_absolute(), "PRODUCER_SOURCE_ROOT")
+    raw = (source_root/relative).read_bytes()
+    normalized = raw.replace(b"\r\n", b"\n")
+    blob = b"blob "+str(len(normalized)).encode()+b"\0"+normalized
+    require(hashlib.sha256(normalized).hexdigest() == old_hash
+        and hashlib.sha256(raw).hexdigest() == rows[0]["windows_raw_sha256"]
+        and hashlib.sha1(blob, usedforsecurity=False).hexdigest() == rows[0]["git_blob"], "PRODUCER_SOURCE_BYTES")
+
+
+def reader_evidence(producer_source_seal):
+    return {} if producer_source_seal is None else {
+        "producer_source_seal": payload(producer_source_seal),
+        "inspection_reader_source_identity": implementation_identity(),
+        "compatibility_mode": "SEALED_PRODUCER_READ_ONLY_NO_ECONOMIC_REPLAY"}
 
 
 def validate_model(plan, name, value):
@@ -157,14 +200,14 @@ def prepare(*, source_delivery, output_root, producer_commit, legacy_serial_regr
         "initial_opening": ref(opening_path), "preparation": ref(root/"preparation.json"), "account_replay_started": False}
 
 
-def request_scope(request_ref):
+def request_scope(request_ref, *, producer_source_seal=None):
     request = read(request_ref)
     require(request.get("schema_version") == REQUEST_SCHEMA, "REQUEST_SCHEMA")
     plan = read(request["research_plan"])
     plan_scope(plan)
     validate_model(plan, "CapacityProducerRequest", request)
+    producer_identity(request, producer_source_seal)
     require(request["identity"] == digest({k: v for k, v in request.items() if k != "identity"})
-        and request["source_identity"] == implementation_identity()
         and request["account_id"] == plan["candidate_account_id"]
         and request["common_opening"] == plan["common_opening"]
         and all(request[k] == plan[k] for k in ("trade_dates", "candidate_manifest", "selection_inventory", "price_templates",
@@ -177,7 +220,7 @@ def request_scope(request_ref):
         and preparation["stage"] == "COMPLETE_SOURCE_BATCH_INSPECTED", "PREPARATION_BINDING")
     raw_refs = [FileRef.model_validate(r) for r in preparation["source_refs"]]
     needed = pins(request_ref, request, preparation["source_delivery"], preparation["legacy_serial_regression"], plan["source_refs"])
-    require(all(p in raw_refs for p in needed), "MISSING_SOURCE_PIN")
+    require(contains_pins(needed, raw_refs), "MISSING_SOURCE_PIN")
     verify(raw_refs)  # ALL inputs before any new account-day is interpreted.
     regression_binding(preparation["legacy_serial_regression"], plan, request["producer_source_commit"])
     require(read(request["initial_opening"]) == clone_opening(request["research_plan"], plan), "OPENING_CLONE")
@@ -237,7 +280,7 @@ def run(request_ref, *, performance=None, stop_after_account_days=None):
             return inspect(request_ref) | {"status": "ALREADY_MATERIALIZED"}
         plan_ref, inspected_plan, inspected, refs = sources(FileRef.model_validate(preparation["source_delivery"]))
         require(plan_ref == request["research_plan"] and inspected_plan == plan
-            and all(p in pins(preparation["source_refs"]) for p in refs), "RUN_SOURCE_BINDING")
+            and contains_pins(refs, preparation["source_refs"]), "RUN_SOURCE_BINDING")
         opening = read(request["initial_opening"])
         native = native_request(request, plan)
         package = read(plan["package"])["package"]
@@ -274,13 +317,14 @@ def run(request_ref, *, performance=None, stop_after_account_days=None):
             "recomputed_account_days": result["recomputed"], "verified_account_days": count, "performance": metrics}
 
 
-def inspect(request_ref, *, allow_prefix=False):
-    request, plan, preparation = request_scope(request_ref)
+def inspect(request_ref, *, allow_prefix=False, producer_source_seal=None):
+    request, plan, preparation = request_scope(request_ref, producer_source_seal=producer_source_seal)
     root = Path(request_ref.path).parent
     accounts = account_refs(root, request, plan, allow_prefix=allow_prefix)
     if allow_prefix and not (root/"result_receipt.json").exists():
         return {"status": "VERIFIED_PREFIX", "verified_account_days": verify_days(root, request, plan, accounts),
-            "computed_account_days": 0, "recomputed_account_days": 0, "new_economic_commits": 0}
+            "computed_account_days": 0, "recomputed_account_days": 0, "new_economic_commits": 0,
+            **reader_evidence(producer_source_seal)}
     marker = read(ref(root/"result_receipt.json"))
     require(marker == receipt(root, request_ref), "RESULT_MARKER")
     inspection = read(marker["source_inspection"])
@@ -296,13 +340,13 @@ def inspect(request_ref, *, allow_prefix=False):
     count = verify_days(root, request, plan, accounts)
     require(count == 17, "DAY_COUNT")
     return marker | {"status": "VERIFIED", "verified_account_days": count, "computed_account_days": 0,
-        "recomputed_account_days": 0, "new_economic_commits": 0}
+        "recomputed_account_days": 0, "new_economic_commits": 0, **reader_evidence(producer_source_seal)}
 
 
-def exact_artifact_retry(request_ref):
+def exact_artifact_retry(request_ref, *, producer_source_seal=None):
     root = Path(request_ref.path).parent
     with FileLock(root/"study-writer.lock", timeout=0):
-        inspected = inspect(request_ref)
+        inspected = inspect(request_ref, producer_source_seal=producer_source_seal)
         request = read(request_ref)
         plan = read(request["research_plan"])
         retry = {"schema_version": "localsim_dispatch_capacity_artifact_retry_v1", "status": "EXACT_ARTIFACT_RETRY_VERIFIED",
@@ -316,7 +360,8 @@ def exact_artifact_retry(request_ref):
             "facts": inspected["facts"], "producer_artifact_retry": ref(root/"artifact_retry.json")}
         validate_model(plan, "CapacityAnalysisSpec", spec)
         publish(root/"analysis_spec.json", spec)
-        return retry | {"artifact_retry": ref(root/"artifact_retry.json"), "analysis_spec": ref(root/"analysis_spec.json")}
+        return retry | {"artifact_retry": ref(root/"artifact_retry.json"), "analysis_spec": ref(root/"analysis_spec.json"),
+            **reader_evidence(producer_source_seal)}
 
 
 def main():
@@ -329,8 +374,15 @@ def main():
     parser.add_argument("--legacy-regression")
     parser.add_argument("--legacy-sha256")
     parser.add_argument("--stop-after-account-days", type=int)
+    parser.add_argument("--producer-source-seal")
+    parser.add_argument("--producer-seal-sha256")
     args = parser.parse_args()
     source = FileRef(path=args.input, sha256=args.sha256)
+    if bool(args.producer_source_seal) != bool(args.producer_seal_sha256):
+        parser.error("producer-source-seal and producer-seal-sha256 must be paired")
+    seal = FileRef(path=args.producer_source_seal, sha256=args.producer_seal_sha256) if args.producer_source_seal else None
+    if seal is not None and args.command not in {"inspect", "exact-retry"}:
+        parser.error("sealed producer compatibility is read-only")
     if args.command == "prepare":
         if not all((args.output_root, args.producer_commit, args.legacy_regression, args.legacy_sha256)):
             parser.error("prepare requires output-root, producer-commit and legacy-regression/sha256")
@@ -339,7 +391,7 @@ def main():
     elif args.command == "run":
         result = run(source, stop_after_account_days=args.stop_after_account_days)
     else:
-        result = inspect(source) if args.command == "inspect" else exact_artifact_retry(source)
+        result = inspect(source, producer_source_seal=seal) if args.command == "inspect" else exact_artifact_retry(source, producer_source_seal=seal)
     print(json.dumps(result, ensure_ascii=False))
 
 
