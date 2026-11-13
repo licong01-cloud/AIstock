@@ -418,10 +418,12 @@ C2期初NAV10,323,814.57元、现金146,517.28元、53只持仓；W15期初NAV10
 
 `retry_receipt.json`完整SHA `0b2c3d8da91eb4a16b0c2f0704897bb408860d85d73eb952924c9553a035bd27`：完整来源preflight重新通过，报告返回ALREADY_MATERIALIZED、路径/完整SHA不变；本次重试只校验既有统计产物身份，统计重新归约0、账户重算0、新增经济提交0，不启动producer经济重算。原producer_economic_retry=NOT_SUPPLIED仍为合法状态。最终文档表格复核、PR/CI和root同步状态由同根`source_delivery_receipt_r1.json`绑定，不回写旧报告或旧回执。当前Agent执行多轮正确性/完整性自审，独立的是标准库数值复算，不冒称独立agent审核。
 
-方向不变但优先级更具体：保留C2研究候选、W15简单对照、B0基准和P2冻结证据，暂停阈值搜索、模型堆叠及线上晋升。下一轮优先形成一个“机会到派单耦合”的最小机制对照设计，先利用既有动作/机会投影，必要的最小只读生命周期差异交回LocalSIM owner；本窗口不修改队列/撮合/费用或重跑账户，不以补全所有投影作为其它研究门槛。必须单独冻结后续比较及owner边界，不能把本轮描述性结果直接变成新策略、同路径因果效果或样本外确认。
+方向不变但优先级更具体：保留C2研究候选、W15简单对照、B0基准和P2冻结证据，暂停阈值搜索、模型堆叠及线上晋升。当时提出的下一轮最小机制对照现由[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)单独冻结：仅新增C2L父计划独立容量臂，复用旧C2为唯一主对照，尚未实施或运行。本设计的P2/四户结果与验收不因此改写；仍不把历史描述性结果当同路径因果效果或样本外确认。
 
-复现使用现有CLI：`python -m backend.services.position_timing.intraday.natural_period_results analyze --spec /mnt/x/AIstock_temp/localsim-natural-october-replay-20261110/natural_analysis_spec.json --spec-sha256 9b623ffcf15a8635c9741b0f6b0c98187b90b4e1cc145c91685ae80121db2a66 --timing-root /mnt/x/AIstock_temp/position-timing-natural-october-analysis-20261111/artifacts`；同入口`inspect`只做来源校验。WSL执行前从本轮封印源码工作树加载，不依赖Windows的Git worktree元数据。
+### 2026-11-11结果消费者的历史复现说明（不属于新容量对照）
 
-本窗口首次新收益解析是完整来源预检及68个day内容检查之后的独立初算，UTC为`2026-11-10T18:02:22.805774+00:00`。正式消费者的首次新day解析阶段仍为`AFTER_COMPLETE_NATURAL_SOURCE_PREFLIGHT_BEFORE_DAY_HEADER_VALIDATION`；源码先在Windows封印，再于WSL验证26份源码身份。源码/软件、来源检查、账户回放、统计读回和经济有效性分别报告；本窗口数据库/行情网络/服务/账户操作均未执行，无需重启。
+原四户结果复现使用现有CLI：`python -m backend.services.position_timing.intraday.natural_period_results analyze --spec /mnt/x/AIstock_temp/localsim-natural-october-replay-20261110/natural_analysis_spec.json --spec-sha256 9b623ffcf15a8635c9741b0f6b0c98187b90b4e1cc145c91685ae80121db2a66 --timing-root /mnt/x/AIstock_temp/position-timing-natural-october-analysis-20261111/artifacts`；同入口`inspect`只做来源校验。WSL执行前从该次封印源码工作树加载，不依赖Windows的Git worktree元数据。该CLI不生成本节C2/W15机制诊断，也不支持新增C2L臂。
+
+2026-11-11结果消费的首次新收益解析是完整来源预检及68个day内容检查之后的独立初算，UTC为`2026-11-10T18:02:22.805774+00:00`，不是2026-11-13机制诊断的首次day读取时刻。该正式消费者的首次新day解析阶段仍为`AFTER_COMPLETE_NATURAL_SOURCE_PREFLIGHT_BEFORE_DAY_HEADER_VALIDATION`；源码先在Windows封印，再于WSL验证26份源码身份。源码/软件、来源检查、账户回放、统计读回和经济有效性分别报告；该次数据库/行情网络/服务/账户操作均未执行，无需重启。
 
 独立复核针对文件身份和所交付投影的统计归约，不冒称独立重演逐笔账本或撮合；原始账户/经济inspect仍委托LocalSIM，`account_day_journals_independently_reverified=false`保持。`producer_economic_retry=NOT_SUPPLIED`符合合同，不误判为失败或发起经济重算。
