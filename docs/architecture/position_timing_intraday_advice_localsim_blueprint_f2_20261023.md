@@ -376,8 +376,8 @@ C2−W15本期净差+5,902.13元，费用差−3,040.89元，加回费用差后�
 
 权威合同为[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)，不复制参数/来源清单。研究只增加C2L一臂，复用旧C2 17日为基准，唯一新增比较C2L−C2；两臂从共同C2真实经济期初出发，固定17日/850目标、C2底层policy、60秒反应、90秒TTL、费用、分钟来源及交易限制。唯一机制变化为操作员容量从账户共享时钟改为父计划独立时钟；同一plan跨修订仍每60秒最多一次动作，资金/持仓仍只有一个共享账户。它是容量消融，不是真实单人能力、收益Oracle或收益上限。
 
-代码核查确认现有链路已有机会续期与派单前复核；新设计不再造“重确认系统”、队列平台或撮合账本。新capacity overlay显式绑定新execution/operation身份，不能同时声称旧ACCOUNT_SINGLE_OPERATOR整份契约不变；分钟因果、原生匹配及成本子项保持。旧四户CLI仍不兼容直接加第五臂。本轮新增`intraday/dispatch_coupling_research.py`的plan/只读inspect与`dispatch_coupling_results.py`两臂消费者，复用完整旧来源检查、period_account_rows和等待/方向诊断；不修改LocalSIM、原四户解析器或旧implementation closure。
+代码核查确认现有链路已有机会续期与派单前复核；新设计不再造“重确认系统”、队列平台或撮合账本。新capacity overlay显式绑定新execution/operation身份，不能同时声称旧ACCOUNT_SINGLE_OPERATOR整份契约不变；分钟因果、原生匹配及成本子项保持。2026-11-14原生接口探针另证实初稿“派单即时预留”假设不成立，F1§3.1现显式修正为两臂共同沿用原生成交时现金边界：不新增预留器，决策仍只读可见反馈，已提交卖出所得可为原挂单成交提供现金；不借未来资金或透支。新plan为v2并绑定资金快照/hash，旧v1仅作历史证据，不覆盖或混用。旧四户CLI仍不兼容直接加第五臂。择时plan/只读inspect与两臂消费者复用完整旧来源检查、period_account_rows和等待/方向诊断；不修改LocalSIM、原四户解析器或旧implementation closure。
 
 计划以独立FileRef交付producer JSON schema和最小opening/day/父计划lane状态合同，不内嵌schema冒充行情来源，也不伪装成旧账户单队列快照。消费者使用共同opening、完整分钟NAV及原始1000万元归一，只有C2L−C2一项比较，记录完整分母和各时间样本；真实C2L事实尚未提供，不生成正式收益报告。具体接口、固定身份、直接测试和WSL来源验收由F1及其交付回执唯一记录，不在蓝图复制。
 
-下一步由LocalSIM owner做研究专用opt-in容量适配，仅新增C2L 17日并交回完整inspect/来源封印/artifact retry，再由择时执行正式比较；新消费者路径由owner明确后精确登记SDK，不泛化放行。旧生命周期未知保留UNKNOWN，缺完整盘中现金时暴露仍UNAVAILABLE；不补造，不因盈利/功效/未来自然日新增放行门槛。旧四户、1—9月、原13户/288案例均不重算；quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。LocalSIM接入/新账户/经济有效性仍未完成，不将它们冒充本轮择时接口交付；无生产数据或服务操作，无需后端重启。
+下一步由LocalSIM owner消费资金修正后的v2计划，继续研究专用opt-in容量适配，仅新增C2L 17日并交回完整inspect/来源封印/artifact retry，再由择时执行正式比较。新入口`localsim/dispatch_capacity_research.py`仅登记对`dispatch_coupling_research.inspect_dispatch_capacity_plan`的精确只读导入，不泛化放行。LocalSIM现有草稿/原生探针不等于C2L回放，当前仍0/17。旧生命周期未知保留UNKNOWN，缺完整盘中现金时暴露仍UNAVAILABLE；不补造，不因盈利/功效/未来自然日新增放行门槛。旧四户、1—9月、原13户/288案例均不重算；quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。LocalSIM接入/新账户/经济有效性仍未完成，不将它们冒充择时接口交付；无生产数据或服务操作，无需后端重启。
