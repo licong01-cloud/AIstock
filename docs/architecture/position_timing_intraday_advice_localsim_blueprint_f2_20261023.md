@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.13；更新日期：2026-11-13；Feature tier：F2。
-> 状态：`DISPATCH_COUPLING_TIMING_INTERFACE_IMPLEMENTED_LOCALSIM_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日，期间/累计统计及其重试已完成；#7236完成C2/W15十月机制诊断、独立复算与exact retry，账户重算0。#7237冻结C2父计划独立容量对照；择时plan/inspect与两臂消费者已实现，本轮来源验收/CI及源码交付状态由F1交付回执记录，LocalSIM容量overlay及C2L账户结果未开始。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新方向见§7.10及[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)。
+> 版本：v1.14；更新日期：2026-11-14；Feature tier：F2。
+> 状态：`DISPATCH_FUNDING_CONTRACT_REVISED_LOCALSIM_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日，期间/累计统计及其重试已完成；#7236完成C2/W15十月机制诊断、独立复算与exact retry，账户重算0。#7237/#7242交付容量对照设计及初版择时接口；LocalSIM草稿和原生探针发现派单预留假设不成立，现由F1§3.1显式修正共同资金边界、新计划升v2并精确登记SDK。C2L回放仍0/17，最新源码/来源/CI状态由F1最新回执记录。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新方向见§7.10及[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)。
 > 本轮P2实现源码基线：`f02cf9358a463cebd3043bf4813886864360ea51`（由最新origin/main基线c5a9e01b…在独立工作树实施）；既有543日分析源码基线仍为`85c1fb73965d188bca9f607c45ed799d1580fcfa`。历史plan与验收保持各自原commit/implementation身份。
 > 新四户结果消费源码基线：`26d29a1d48bc16541182637b25b6ba75d5630e3e`；原算法、底层B0及历史分析closure保持不变。PR #7158只交付离线分析与进度文档，不激活线上P2。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
