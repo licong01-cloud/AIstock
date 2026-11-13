@@ -2083,19 +2083,37 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
 def list_ingestion_schedules() -> Dict[str, Any]:
     rows = _fetchall(
         """
+        WITH job_keys AS MATERIALIZED (
+            -- Extract JSON identities once, not once per schedule. Keep every
+            -- status/date: a failed or old job is still the latest job.
+            SELECT job_id, created_at, summary->>'dataset' AS dataset,
+                   summary->>'schedule_id' AS schedule_id
+              FROM market.ingestion_jobs
+        ), latest_dataset AS (
+            SELECT DISTINCT ON (dataset) dataset, job_id, created_at
+              FROM job_keys WHERE dataset IS NOT NULL
+             ORDER BY dataset, created_at DESC, job_id DESC
+        ), latest_schedule AS (
+            SELECT DISTINCT ON (schedule_id) schedule_id, job_id, created_at
+              FROM job_keys WHERE schedule_id IS NOT NULL
+             ORDER BY schedule_id, created_at DESC, job_id DESC
+        )
         SELECT s.schedule_id, s.dataset, s.mode, s.enabled, s.frequency, s.options,
                s.last_run_at, s.next_run_at, s.last_status, s.last_error,
                s.created_at, s.updated_at,
                j.summary AS last_job_summary
           FROM market.ingestion_schedules s
+          LEFT JOIN latest_dataset d ON d.dataset = s.dataset
+          LEFT JOIN latest_schedule i ON i.schedule_id = s.schedule_id::text
           LEFT JOIN LATERAL (
-              SELECT summary
-                FROM market.ingestion_jobs
-               WHERE summary->>'schedule_id' = s.schedule_id::text
-                  OR summary->>'dataset' = s.dataset
-               ORDER BY created_at DESC
+              -- Preserve the original OR: newest of either matching identity.
+              SELECT job_id FROM (VALUES (d.job_id, d.created_at),
+                                        (i.job_id, i.created_at)) AS matches(job_id, created_at)
+               WHERE job_id IS NOT NULL
+               ORDER BY created_at DESC, job_id DESC
                LIMIT 1
-          ) j ON TRUE
+          ) newest ON TRUE
+          LEFT JOIN market.ingestion_jobs j ON j.job_id = newest.job_id
          ORDER BY s.dataset, s.mode
         """,
     )
