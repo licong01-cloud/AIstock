@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.11；更新日期：2026-11-13；Feature tier：F2。
-> 状态：`C2_W15_NATURAL_MECHANISM_VERIFIED_EXPLORATORY_NO_PROMOTION`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日；期间/累计统计及其重试已完成。本轮C2/W15十月机制诊断、独立数值复核与产物exact retry已完成，账户重算0。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新结论与优先级见§7.5—7.9及[P2 F1](position_timing_adverse_wait_p2_f1_20261109.md)。
+> 版本：v1.12；更新日期：2026-11-13；Feature tier：F2。
+> 状态：`DISPATCH_COUPLING_DESIGN_READY_NOT_IMPLEMENTED`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日，期间/累计统计及其重试已完成；#7236完成C2/W15十月机制诊断、独立复算与exact retry，账户重算0。本轮只设计C2父计划独立操作时钟容量对照，尚无新SDK、producer适配或账户结果。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新方向见§7.10及[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)。
 > 本轮P2实现源码基线：`f02cf9358a463cebd3043bf4813886864360ea51`（由最新origin/main基线c5a9e01b…在独立工作树实施）；既有543日分析源码基线仍为`85c1fb73965d188bca9f607c45ed799d1580fcfa`。历史plan与验收保持各自原commit/implementation身份。
 > 新四户结果消费源码基线：`26d29a1d48bc16541182637b25b6ba75d5630e3e`；原算法、底层B0及历史分析closure保持不变。PR #7158只交付离线分析与进度文档，不激活线上P2。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
@@ -266,7 +266,7 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 | F-009 | 本文§4.2/§4.3 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 | F-010 | 本文§4.1/§4.4 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 | F-011 | 本文§2.3/§5 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
-| F-012 | 本文§6.1/§6.2/§6.4及§7.9；P2 F1 Contracts-9 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md；artifact:X:/AIstock_temp/position-timing-c2-w15-mechanism-20261113/source_delivery_receipt_r1.json，研究软件/统计与经济确认分离 | DESIGN_VERIFIED | none |
+| F-012 | 本文§6.1/§6.2/§6.4及§7.9—7.10；容量机制对照F1 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md；artifact:X:/AIstock_temp/position-timing-c2-w15-mechanism-20261113/source_delivery_receipt_r1.json；容量F1验收矩阵，研究设计/软件/统计与经济确认分离 | DESIGN_VERIFIED | none |
 
 ## 7. 实施增量与演进记录（截至2026-11-13）
 
@@ -370,4 +370,12 @@ C2−W15本期净差+5,902.13元，费用差−3,040.89元，加回费用差后�
 
 上述队列证据限定于冻结选股包50目标/日、60秒响应与原排队容量，不外推为仅处理1—2笔人工交易的固有延迟；也不改变日频个股择时与长期持有比较的独立研究问题。
 
-下一步优先形成一个最小的“机会到派单耦合”机制对照设计，尽量使用已有动作/机会投影；仅在确需时向LocalSIM owner提出精确只读生命周期差异，不让补全全部投影成为研究门槛。新比较及owner范围必须单独冻结，不在本轮实施新政策或回放。本窗口不修改LocalSIM队列、费用、撮合或其他模块；保留C2研究候选、W15简单对照、B0基准和P2冻结证据，继续暂停阈值搜索、模型堆叠及线上晋升。本次无服务/数据库/数据集操作，无需后端重启。
+该次确定的下一步是形成“机会到派单耦合”最小机制对照；设计现见§7.10。必要的只读生命周期差异由LocalSIM owner处理，不把补全全部投影作为研究门槛。保留C2研究候选、W15简单对照、B0基准和P2冻结证据，继续暂停阈值搜索、模型堆叠及线上晋升。
+
+### 7.10 2026-11-13：单一父计划容量机制对照设计
+
+权威合同为[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)，不复制参数/来源清单。研究只增加C2L一臂，复用旧C2 17日为基准，唯一新增比较C2L−C2；两臂从共同C2真实经济期初出发，固定17日/850目标、C2底层policy、60秒反应、90秒TTL、费用、分钟来源及交易限制。唯一机制变化为操作员容量从账户共享时钟改为父计划独立时钟；同一plan跨修订仍每60秒最多一次动作，资金/持仓仍只有一个共享账户。它是容量消融，不是真实单人能力、收益Oracle或收益上限。
+
+代码核查确认现有链路已有机会续期与派单前复核；新设计不再造“重确认系统”、队列平台或撮合账本。新capacity overlay须诚实绑定新execution/operation身份，不能同时声称旧ACCOUNT_SINGLE_OPERATOR整份契约不变；分钟因果、原生匹配及成本子项保持。旧四户CLI不兼容直接加第五臂，后续需择时薄plan/inspect/两臂消费者及LocalSIM owner的opt-in接缝；本轮只设计，不跨模块实现或新跑17日。
+
+下一步按该F1的两个交付块推进：本轮文档交付后，由择时实现最小研究接口，再交LocalSIM owner新增C2L 17日并交回结果。优先复用已有投影，旧生命周期未知保留UNKNOWN，缺完整盘中现金时暴露仍UNAVAILABLE；不补造、不因盈利/功效/未来自然日新增放行门槛。旧四户、1—9月、原13户/288案例均不重算；quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。当前新SDK/账户/结果均未完成，无生产数据或服务操作、无需后端重启。
