@@ -1714,14 +1714,18 @@ class TDXScheduler:
                 and row.get("data_revision") == row.get("validated_revision") and symbols
                 and all(gap.get("classification") in {"MISSING", "INVALID"} for gap in gaps)):
             # Match the existing reconciler's input contract before spawning
-            # it. Some long-delisted securities have no local price or factor
-            # history at all. Repeated subprocesses cannot repair that absence.
+            # it. A listed IPO is independent collection scope even when BOTH
+            # local feeds missed its first day. Ended unknown histories keep
+            # their existing bounded deferral, not failing subprocess loops.
             observed = self._fetchall("""SELECT code AS ts_code FROM unnest(%s::character(9)[]) AS code
                 WHERE EXISTS (SELECT 1 FROM market.adj_factor f
                     WHERE f.ts_code=code::text AND f.trade_date<=%s)
                    OR EXISTS (SELECT 1 FROM market.kline_daily_raw p
                     WHERE p.ts_code=code AND p.trade_date<=%s
-                      AND (p.volume_hand>0 OR p.amount_li>0))""", (symbols, day, day))
+                      AND (p.volume_hand>0 OR p.amount_li>0))
+                   OR EXISTS (SELECT 1 FROM market.stock_basic b WHERE b.ts_code=code
+                      AND b.list_date<=%s AND (b.delist_date IS NULL OR b.delist_date>%s))""",
+                (symbols, day, day, day, day))
             available = {str(item["ts_code"]).strip() for item in observed}
             missing = sorted(set(symbols)-available)
             symbols = sorted(set(symbols) & available)

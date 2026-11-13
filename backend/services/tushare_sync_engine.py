@@ -744,6 +744,9 @@ class TushareSyncEngine:
             from .sw_industry_history_store import store_member_refresh
 
             return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        if spec.name == "stock_basic":
+            from .data_integrity.listing_scope import store_listing_refresh
+            return store_listing_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
         if spec.name in {"vix_index", "stock_daily_afterhours", "index_global", "us_tradecal"}:
             from .tushare_supplemental_inputs import store_observations
             return store_observations(conn, spec, rows,
