@@ -1,6 +1,7 @@
 {
   "actual": "002475.SZ ann_date 20261030 end_date 20261231 is returned upstream but absent locally; fina_indicator_vip period 20221231 returns 12000 with has_more=true.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/event_signal/tushare_event_raw_sync.py",
     "backend/services/tushare_sync_engine.py",
     "backend/tests/event_signal/test_tushare_event_raw_sync.py",
@@ -30,14 +31,24 @@
   ],
   "expected": "Paginate financial VIP APIs without loss and sync financial facts by announcement date with provider-specific parameter semantics; truthful date coverage and write counts.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261113_BUG-2223-financial-raw-sync-truncates-vip-pages-and-omits-announcement-period-fac.json",
       "backend/services/event_signal/tushare_event_raw_sync.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/event_signal/test_tushare_event_raw_sync.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261113_BUG-2223-financial-raw-sync-truncates-vip-pages-and-omits-announcement-period-fac.json",
+      "backend/services/event_signal/tushare_event_raw_sync.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/event_signal/test_tushare_event_raw_sync.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/event_signal/tushare_event_raw_sync.py",
@@ -146,13 +157,32 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
+  "implementation_review": {
+    "executor": "active_agent",
+    "independent_review": false,
+    "correctness": "PASS: explicit report-period tools retain scope; scheduled financial sync uses actual announcement clock with future and historical report dates, offset pagination, terminal-empty proof and real failures.",
+    "completeness_and_regression": "PASS: 235 targeted tests; existing DEV writes/readback 1051 real source versions, idempotent repeat zero; current original payloads and capture basis retained, no production or frozen bundle writes.",
+    "design_compliance_001": ["No partial delivery represented as production complete", "No silent empty/partial success", "No model, PIT, source field or vintage semantic changes", "No new approvals, thresholds or services"],
+    "scope_extension": "noxfile.py adds the direct raw-producer tests to existing data_sync_autonomy_backend CI; no public workflow or new CI lane."
+  },
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python loaded the tracked raw producer and wrote 1051 verified current-source versions into existing aistock_dev only; independent connection readback passed and repeat inserts were zero. Receipt X:/AIstock_temp/DATA_PREPARATION/financial-upstream-check-20261114/BUG-2223-dev-validation.json."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
