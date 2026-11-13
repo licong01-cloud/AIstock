@@ -86,7 +86,11 @@ def sources(delivery_ref):
         "cost_policy", "common_opening", "producer_contracts")), "FROZEN_BINDING")
     # Reuse the existing complete price/native preparation inspector. It is
     # read-only; it does not run or inspect new C2L economics.
-    _, _, context, inspected, _, base_commit = natural._sources(FileRef.model_validate(plan["source_delivery"]))
+    baseline_request = read(plan["baseline_producer_request"])
+    require(baseline_request["schema_version"] == "localsim_natural_period_request_v1"
+        and baseline_request["source_identity"] == plan["baseline_source_identity"]
+        and baseline_request["input_preparation_delivery"] == plan["source_delivery"], "NATIVE_PRODUCER_DELIVERY_BINDING")
+    _, _, context, inspected, _, base_commit = natural._sources(FileRef.model_validate(baseline_request["source_delivery"]))
     require(base_commit == plan["policy"]["source_commit"] and context["package"] == plan["package"]
         and context["delivery"]["preflight"] == plan["preflight"], "NATIVE_SOURCE_BINDING")
     refs = pins(delivery_ref, frozen, plan["source_refs"], inspected["source_refs"])

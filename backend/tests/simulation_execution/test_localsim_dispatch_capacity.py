@@ -215,8 +215,11 @@ def capacity_study(tmp_path, monkeypatch):
     old_sources = study.natural._sources
     delivery, contract, context, inspected, base_ref, _ = old_sources(None)
     context = {**context, "delivery": {"preflight": original["preflight"]}}
-    monkeypatch.setattr(study.natural, "_sources", lambda *_: (
-        delivery, contract, context, inspected, base_ref, "70e459c569020f09880d91c1f16d43e9e5d951f3"))
+    def native_sources(source):
+        assert source == FileRef.model_validate(original["source_delivery"])
+        assert source != FileRef.model_validate(original["input_preparation_delivery"])
+        return delivery, contract, context, inspected, base_ref, "70e459c569020f09880d91c1f16d43e9e5d951f3"
+    monkeypatch.setattr(study.natural, "_sources", native_sources)
     monkeypatch.setattr(study, "CandidateReader", study.natural.CandidateReader)
     def put(name, value):
         path = tmp_path/"capacity-inputs"/name
@@ -236,7 +239,7 @@ def capacity_study(tmp_path, monkeypatch):
         "capacity_control_sha256": digest(capacity_control()), "funding_boundary": funding,
         "funding_boundary_sha256": funding_sha, "producer_contracts": contracts,
         "operation": study.lanes.operation_envelope(HumanOperationPolicy(reaction_delay_seconds=60), capacity_control()),
-        "common_opening": opening_ref, "candidate_account_id": "fixture_C2L", "source_delivery": original["source_delivery"],
+        "common_opening": opening_ref, "candidate_account_id": "fixture_C2L", "source_delivery": original["input_preparation_delivery"],
         "package": context["package"], "preflight": original["preflight"], "baseline_producer_request": payload(old_request),
         "baseline_source_identity": original["source_identity"],
         **{k: original[k] for k in ("candidate_manifest", "selection_inventory", "price_templates", "cost_policy", "package_id")},
