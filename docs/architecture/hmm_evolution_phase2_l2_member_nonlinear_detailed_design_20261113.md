@@ -182,7 +182,7 @@ F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/
 
 最大风险不是缺数据，而是同一信息集确实没有可迁移收益信号，增加函数容量可能只增加拟合内乐观和选择偏差；新N未证明能改善上涨机会成本。已消费历史、Q4极短、价格非total-return、回溯分类与旧队列选择性全部保持。旧20维树失败亦是负面先验，不因模型名不同忽略它；本候选只是6-fit的一个受控未解问题，不开启常规模型搜索。
 
-production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop；database_access=false、dataset_write=false、active_profile_write=false、runtime_activation=false、service_control=false、QE_tasks=0。无需后端重启。未来rollout仅独立研究源码及版本化文件，不改任何线上默认/资产；无生产rollback。工作树/分支清理未授权，保留其他任务修改。
+production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop；database_access=false、dataset_write=false、active_profile_write=false、runtime_activation=false、service_control=false、QE_tasks=0。canonical changed-file分类为runtime_impact=backend、target_ids=[backend-main]、catalog_error=null，不擅自降为none；本轮无线上调用方/运行激活，不声明backend运行态验收完成。离线CLI在clean source独立process运行，研究执行不依赖后端重启；后端若需加载该源码由用户操作。未来rollout仅独立研究源码及版本化文件，不改任何线上默认/资产；无生产rollback。工作树/分支清理未授权，保留其他任务修改。
 
 ## 11. 批准、审修和交付状态
 
