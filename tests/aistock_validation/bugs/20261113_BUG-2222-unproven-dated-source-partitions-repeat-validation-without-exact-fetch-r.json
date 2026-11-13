@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "官方发布时钟到期后精确FETCH，保留revision和lease fence及正常重试去重",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/worker.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261113_BUG-2222-unproven-dated-source-partitions-repeat-validation-without-exact-fetch-r.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/data_integrity/worker.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261113_BUG-2222-unproven-dated-source-partitions-repeat-validation-without-exact-fetch-r.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/worker.py",
@@ -88,8 +94,8 @@
   },
   "first_seen_at": "2026-11-13T08:21:26.168809Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8da5341ccbae6ada0cd9a7acadb476b957570305",
+  "fixed_at": "2026-11-13T08:40:02Z",
   "github_issue_number": 7246,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7246",
   "last_seen_at": "2026-11-13T08:21:26.168809Z",
@@ -97,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7247",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -110,16 +117,20 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": ["Fresh Python imported tracked DailyIntegrityWorker; 11 targeted source-clock/unknown-calendar/dated-query tests passed including native existing DEV revision fence, exact-target idempotency and unchanged UNVERIFIED verdict; DEV writes rolled back, production_write=false, service_control=false."],
+    "fresh_process_evidence": [
+      "Fresh Python imported tracked DailyIntegrityWorker; 11 targeted source-clock/unknown-calendar/dated-query tests passed including native existing DEV revision fence, exact-target idempotency and unchanged UNVERIFIED verdict; DEV writes rolled back, production_write=false, service_control=false."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -129,7 +140,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2222",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e02a60fcf0e35629",
+    "recorded_at": "2026-11-13T08:40:52.305627Z",
+    "runtime_contract_digest": "ddbaf05345a9a3005fa81a62fb6ea823acdb7c7d7a66697936079ff9abba3dd1",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ff835f85abb287153bf7c34b84e0448d5667a066",
+    "source_merge_commit": "8da5341ccbae6ada0cd9a7acadb476b957570305",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7247",
+    "validation_evidence": [
+      "validation-receipt: id=a7e4ed5704480379 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`passed 214, 2 skipped; DEV exact-target/fence test passed`",
+      "validation-receipt: id=f62d6ea67fdbd016 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=f8fd4128f63d4961 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=ruff plan=direct status=passed command=`rtk ruff check and py_compile` result=`passed; correctness and completeness review passed; DESIGN-COMPLIANCE-001 four items passed`"
+    ],
+    "validation_evidence_digest": "fd9718294ab69ad1ee1fb9d7b9e25df4dea071392662e624a87bd49cb28ef617"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -138,6 +172,11 @@
     "fingerprint": "ea53b5fe1a0334eb75ab04ad",
     "source_event_id": "FE-20261113-ea53b5fe1a03"
   },
+  "validation_evidence": [
+    "validation-receipt: id=a7e4ed5704480379 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`passed 214, 2 skipped; DEV exact-target/fence test passed`",
+    "validation-receipt: id=f62d6ea67fdbd016 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=f8fd4128f63d4961 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=ruff plan=direct status=passed command=`rtk ruff check and py_compile` result=`passed; correctness and completeness review passed; DESIGN-COMPLIANCE-001 four items passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
