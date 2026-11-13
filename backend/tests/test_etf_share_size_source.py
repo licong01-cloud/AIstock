@@ -104,6 +104,9 @@ def test_single_call_injects_same_observation_date_before_upsert(monkeypatch) ->
     engine = TushareSyncEngine(target_repository=None)
     conn = _Connection()
     written: list[list[dict[str, object]]] = []
+    # This unit fixture has no integrity schema. Real revised-audit transactions
+    # are covered by the existing DEV integration test, not a fake cursor flag.
+    monkeypatch.setattr("backend.services.data_integrity.repository.schema_installed", lambda _conn: False)
 
     monkeypatch.setattr(
         engine,

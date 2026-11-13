@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import contextlib
@@ -99,6 +99,7 @@ SUPERSEDED_CLEANUP_MODES = (
     "canonical_bug_replacement",
     "owner_comment",
     "patch_equivalent",
+    "reviewed_disposal",
 )
 CLEANUP_BATCH_TARGET_KEYS = {
     "branch",
@@ -697,6 +698,61 @@ def _workflow_rule_digests(root: Path | None = None) -> list[dict[str, Any]]:
     return refs
 
 
+def _agent_execution_policy(record: dict[str, Any] | None = None, *, root: Path | None = None) -> dict[str, Any]:
+    """Expose the approved agent procedure; never manufacture a review verdict."""
+    record = record or {}
+    catalog = (root or REPO_ROOT) / "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    defaults = flow._load_yaml(catalog).get("agent_execution_defaults", {}) if catalog.exists() else {}
+    delivery = defaults.get("source_delivery") or {}
+    restrictions = flow._as_list(record.get("execution_restrictions"))
+    known = {"analysis_only", "no_commit", "no_pr", "no_merge"}
+    invalid = set(restrictions) - known
+    enabled = delivery.get("enabled") is True and bool(delivery.get("authorization_ref"))
+    actions = ["commit", "push", "create_or_update_pr", "merge_source", "metadata_sync", "root_sync"] if enabled else []
+    excluded = {
+        "analysis_only": set(actions),
+        "no_commit": set(actions),
+        "no_pr": {"push", "create_or_update_pr", "merge_source"},
+        "no_merge": {"merge_source"},
+    }
+    denied = set().union(*(excluded.get(item, set(actions)) for item in restrictions))
+    return {
+        "standard_refs": ["DOC-MINIMUM-001", "AUTO-REVIEW-DELIVERY-001"],
+        "documentation": {"extra_narrative_files": 0, "context_markdown": "on_demand", "preserve_required_evidence": True},
+        "review": {
+            "enabled": True, "perspectives": ["correctness", "completeness_and_regression"],
+            "repair_and_recheck": True, "max_consecutive_no_progress": 3,
+            "final_revision_required": True, "executor": "active_agent", "independent_review": False,
+            "record": "existing_task_state_or_pr_only",
+        },
+        "source_delivery": {
+            "enabled": enabled and not invalid and bool(set(actions) - denied),
+            "authorization_ref": delivery.get("authorization_ref"),
+            "actions": [item for item in actions if item not in denied] if not invalid else [],
+            "requires": ["final_revision_review_passed", "current_head_required_ci_passed", "branch_protection_satisfied"],
+            "implies_runtime_db_training_or_cleanup": False,
+        },
+        "execution_restrictions": restrictions,
+        "warnings": [f"unknown execution restrictions: {', '.join(sorted(invalid))}"] if invalid else [],
+    }
+
+
+def _assert_task_source_restrictions(bug_id: str, action: str, issue_json: str | None = None) -> None:
+    state = _load_state(bug_id, REPO_ROOT) or {}
+    restrictions = set(flow._as_list(state.get("execution_restrictions")))
+    record_ref = issue_json or state.get("target_bug_json") or state.get("source_bug_json")
+    if record_ref:
+        record_path = Path(record_ref)
+        if not record_path.is_absolute():
+            record_path = REPO_ROOT / record_path
+        if record_path.exists():
+            restrictions.update(flow._as_list(_load_json(record_path).get("execution_restrictions")))
+    denied = {"analysis_only", "no_commit", "no_pr"} | ({"no_merge"} if action == "merge" else set())
+    unknown = restrictions - {"analysis_only", "no_commit", "no_pr", "no_merge"}
+    if restrictions & denied or unknown:
+        raise WorkflowError(f"task execution restrictions prohibit source {action}: {', '.join(sorted(restrictions))}")
+
+
 def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     allowed = flow._as_list(state.get("allowed_write_scope"))
     required = flow._as_list(state.get("required_verification"))
@@ -704,6 +760,7 @@ def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None 
     return {
         "schema_version": "aistock_workflow_context_resume_digest_v1",
         "rule_digests": _workflow_rule_digests(root),
+        "execution_policy": _agent_execution_policy(state, root=root),
         "reuse_policy": [
             "After context compaction, read this resume digest and task-card.md first.",
             "Do not re-read skills, project memory, standards README, quickstart, or RTK unless a listed hash changed, state is missing, or the user explicitly asks.",
@@ -731,7 +788,8 @@ def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None 
         "success_artifact_policy": {
             "stdout": "compact_by_default",
             "json": "diagnostic_only_on_failure_or_AISTOCK_WORKFLOW_ARTIFACTS=1",
-            "required_runtime_state": ["state.json", "events.jsonl", "task-card.md", "context-pack.md", "pr-body.md"],
+            "required_runtime_state": ["state.json", "events.jsonl", "task-card.json", "task-card.md"],
+            "on_demand": ["context-pack.md", "pr-body.md"],
         },
     }
 
@@ -2017,11 +2075,46 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} requires sources outside its route"
                 )
+            route_mode = route.get("probe_mode")
+            if route_mode == "http":
+                # HTTP business defaults belong to exact existing backend sources,
+                # never a broad backend/** fallback or a Worker route.
+                if target.get("runtime_kind") != "backend" or probe_mode != "http":
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a backend HTTP target")
+                if any(
+                    any(character in path for character in "*?[\\")
+                    or Path(path).is_absolute()
+                    or ".." in Path(path).parts
+                    or not (root / path).is_file()
+                    or not any(_runtime_glob_matches(path, str(pattern)) for pattern in target["source_globs"])
+                    for path in route_globs
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires exact target-owned sources")
+                runbook_error = _validate_operator_runbook_ref(route.get("operator_runbook_ref"), root=root)
+                if runbook_error:
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route {runbook_error}")
+                route_probes = route.get("probes")
+                if not isinstance(route_probes, dict):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route probes must be a mapping")
+                for field in ("health_ref", "identity_ref", "business_smoke_ref"):
+                    error = _validate_runtime_probe_ref(
+                        field, route_probes.get(field), allowed_origins=flow._as_list(target.get("probe_origins"))
+                    )
+                    if error:
+                        raise WorkflowError(f"runtime target {target_id} HTTP probe route {error}")
+                smoke_path = urllib.parse.urlsplit(route_probes["business_smoke_ref"]).path
+                semantic = _business_smoke_semantic_contract(smoke_path)
+                contract_id = route.get("business_smoke_contract_id")
+                if (
+                    not contract_id or semantic is None or semantic[0] != contract_id
+                    or contract_id in {"health_ok", "openapi_document", "object_liveness", "research_pipeline_readiness_only"}
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a bound business semantic contract")
+                continue
             if not set(route_globs).issubset(set(flow._as_list(target.get("source_globs")))):
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} contains sources outside its target"
                 )
-            route_mode = route.get("probe_mode")
             if route_mode not in {
                 _DATASET_RELEASE_WORKER_HEARTBEAT_MODE,
                 _MONTHLY_RELEASE_WORKER_PROCESS_MODE,
@@ -2537,6 +2630,10 @@ def _runtime_contract_digest(contract: dict[str, Any]) -> str:
         "local_probe": target.get("local_probe") or None,
         "probes": target.get("probes") or {},
     }
+    # Preserve legacy receipt digests, but bind new HTTP routes to their
+    # source-owned business contract as well as their endpoint references.
+    if target.get("business_smoke_contract_id"):
+        payload["business_smoke_contract_id"] = target["business_smoke_contract_id"]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -2571,11 +2668,14 @@ def _select_runtime_probe_route(
         if partially_matched:
             return (
                 selected,
-                "runtime files mix routed and non-routed Worker sources: "
+                "runtime files mix routed and non-routed sources: "
                 + json.dumps(partially_matched, ensure_ascii=False),
             )
         return selected, None
     route = fully_matched[0]
+    if route.get("probe_mode") == "http":
+        selected["operator_runbook_ref"] = route["operator_runbook_ref"]
+        selected["business_smoke_contract_id"] = route["business_smoke_contract_id"]
     selected.update(
         {
             "probe_route_id": str(route.get("route_id")),
@@ -2677,11 +2777,22 @@ def build_runtime_contract(
                 if probe_route_error:
                     blocking.append(f"runtime target {target_id} {probe_route_error}")
                 probes = raw_target.get("probes") if isinstance(raw_target.get("probes"), dict) else {}
+                # HTTP routes provide defaults only. Keep explicit BUG references
+                # (including invalid/empty ones) subject to the normal strict gate.
+                http_route = raw_target.get("probe_route_id") and raw_target.get("probe_mode") == "http"
+                runbook = (
+                    explicit["operator_runbook_ref"]
+                    if http_route and "operator_runbook_ref" in explicit
+                    else raw_target.get("operator_runbook_ref")
+                )
                 target = {
                     **raw_target,
                     "target_id": target_id,
-                    "operator_runbook_ref": _resolve_runtime_ref(raw_target.get("operator_runbook_ref"), explicit),
-                    "probes": {key: _resolve_runtime_ref(value, explicit) for key, value in probes.items()},
+                    "operator_runbook_ref": _resolve_runtime_ref(runbook, explicit),
+                    "probes": {
+                        key: _resolve_runtime_ref(explicit[key] if http_route and key in explicit else value, explicit)
+                        for key, value in probes.items()
+                    },
                 }
                 if not target.get("operator_runbook_ref"):
                     blocking.append(f"runtime target {target_id} operator runbook ref is incomplete")
@@ -2729,6 +2840,10 @@ def build_runtime_contract(
                             f"runtime target {target_id} has no target-owned business-smoke "
                             f"semantic contract registered for endpoint path: {smoke_path}"
                         )
+                    elif smoke_ref and target.get("business_smoke_contract_id"):
+                        semantic = _business_smoke_semantic_contract(smoke_path)
+                        if semantic[0] != target["business_smoke_contract_id"]:
+                            blocking.append(f"runtime target {target_id} business smoke conflicts with its source-owned semantic contract")
                     if database_ref:
                         probe_error = _validate_runtime_probe_ref(
                             "database_readback_ref",
@@ -3403,6 +3518,7 @@ _collect_status_fields = _runtime_semantics._collect_status_fields
 _normalize_expected_terminal_outcome = _runtime_semantics._normalize_expected_terminal_outcome
 _expectation_outcome_digest = _runtime_semantics._expectation_outcome_digest
 _validate_run_terminal_success = _runtime_semantics._validate_run_terminal_success
+_validate_advisory_run_terminal = _runtime_semantics._validate_advisory_run_terminal
 _validate_run_terminal_evidence = _runtime_semantics._validate_run_terminal_evidence
 _structured_current_trade_date_blockers_are_clear = _runtime_semantics._structured_current_trade_date_blockers_are_clear
 _scheduler_failure_markers = _runtime_semantics._scheduler_failure_markers
@@ -3438,6 +3554,10 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/advisory/workbench/programs/[^/]+/daily$"),
+     "advisory_workbench_daily_snapshot", _runtime_semantics._validate_advisory_workbench_daily),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/reranking-shadow$"),
+     "advisory_lstm_shadow_capture", _runtime_semantics._validate_advisory_lstm_shadow_capture),
     (re.compile(r"^/api/v1/simulation-runtime/localsim/replays/[^/]+/recovery$"),
      "localsim_replay_recovery", _runtime_semantics._validate_localsim_replay_recovery),
     (re.compile(r"^/api/v1/simulation-runtime/localsim/workbench/overview$"),
@@ -3489,6 +3609,10 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_hmm_rotation_l2_overview,
     ),
     (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
+    (re.compile(r"^/api/v1/quantevolver/evolution/execution-policy$"),
+     "qe_batch_execution_policy", _runtime_semantics._validate_qe_batch_execution_policy),
+    (re.compile(r"^/api/v1/quantevolver/evolution/workspace-preflight/[^/]+$"),
+     "qe_workspace_preflight", _runtime_semantics._validate_qe_workspace_preflight),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (re.compile(r"^/api/v1/factor-metrics/results$"), "factor_metrics_results", _validate_factor_metrics_results),
@@ -3502,7 +3626,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-operations/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
-    (re.compile(r"^/api/v1/advisory/historical-range-runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-runs/[^/]+$"), "advisory_run_terminal_readback", _validate_advisory_run_terminal),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs$"), "collection", _validate_collection_payload),
@@ -3516,6 +3640,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/ingestion/schedule$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/data-stats$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/local-data/schedules$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/local-data/targets$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/dispatch/nodes$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+/.+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/advisory/historical-range-options$"), "object_liveness", _validate_object_liveness),
@@ -3629,10 +3754,13 @@ def _evaluate_business_smoke_semantics(
         "hmm_database_daily_coefficient_jobs",
         "hmm_frozen_coefficient_extension",
         "advisory_entry_price_status",
+        "advisory_lstm_shadow_capture",
+        "advisory_workbench_daily_snapshot",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
         "advisory_calendar_defaults_only",
         "advisory_historical_operation_status_readback",
+        "advisory_run_terminal_readback",
         "local_data_freshness",
         "monthly_release_ready",
     }:
@@ -8530,13 +8658,14 @@ def build_task_card(
         "module": record.get("module"),
         "severity": record.get("severity"),
         "risk_level": fix_ready.get("risk_level"),
+        "execution_policy": _agent_execution_policy(record, root=root),
         "branch": branch,
         "planned_branch": planned_branch,
         "worktree": worktree,
         "planned_worktree": planned_worktree,
         "artifact_refs": {
             "context_pack_json": _repo_rel(context_pack_json_path, root),
-            "context_pack_md": _repo_rel(context_pack_md_path, root),
+            "context_pack_md": None,
             "fix_ready_json": _repo_rel(fix_ready_path, root),
             "state_json": _repo_rel(state_path, root),
             "events_jsonl": _repo_rel(events_path, root),
@@ -8577,6 +8706,7 @@ def build_task_card(
                 "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
                 "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
                 "verification_budget": verification_budget,
+                "execution_restrictions": record.get("execution_restrictions") or [],
             },
             root=root,
         ),
@@ -8603,6 +8733,8 @@ def build_task_card(
             "for backend/worker/scheduler fixes, attach persistent-source and fresh-process evidence before PR readiness",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
+            "follow execution_policy: review correctness and completeness, repair findings and recheck the final revision; do not create review reports",
+            "when source_delivery is enabled, commit only task files and use existing PR/CI/merge commands without requesting the same authorization again; task restrictions win",
         ],
         "token_budget": {
             "context_pack_target_tokens": (context_pack.get("token_budget") or {}).get("target_tokens"),
@@ -8626,6 +8758,8 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         resume_digest.get("validation_loop_budget") if isinstance(resume_digest.get("validation_loop_budget"), dict) else {}
     )
     runtime_contract = task_card.get("runtime_contract") if isinstance(task_card.get("runtime_contract"), dict) else {}
+    execution = task_card.get("execution_policy") or {}
+    delivery = execution.get("source_delivery") or {}
     lines = [
         f"# AIstock Agent Task Card {task_card.get('bug_id')}",
         "",
@@ -8639,6 +8773,14 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "",
         "## Start Here",
         *[f"- {item}" for item in task_card.get("next_client_steps") or []],
+        "",
+        "## Execution Policy",
+        "- extra narrative files: `0`; context Markdown: `on_demand`; required evidence: `preserved`",
+        "- review: correctness + completeness/regression; repair and recheck final revision; stop after 3 consecutive attempts without progress",
+        f"- authorized source actions: `{', '.join(delivery.get('actions') or []) or 'none'}`",
+        f"- source authorization: `{delivery.get('authorization_ref') or 'not_enabled'}`",
+        f"- task restrictions: `{', '.join(execution.get('execution_restrictions') or []) or 'none'}`",
+        "- source delivery never authorizes runtime, DB, training or cleanup; review execution belongs to the active agent, not this CLI",
         "",
         "## Problem",
         f"- title: {((task_card.get('problem') or {}).get('title') if isinstance(task_card.get('problem'), dict) else None) or 'n/a'}",
@@ -9460,17 +9602,21 @@ def build_batch_workflow_smoke_plan() -> dict[str, Any]:
             task_slug="batch-smoke",
             allow_missing_linkage=False,
             allow_closed=False,
+            context_markdown=True,
             record_pairs=list(zip(records, issue_paths, strict=True)),
         )
         finish_payload = build_finish_batch_plan(
+            persist_pr_body=True,
             batch_id=str(start_payload["batch_id"]),
             bug_ids=[],
             changed_files=["scripts/aistock_issue_workflow.py"],
             base="origin/main",
             head="HEAD",
             validation_evidence=[
+                # Synthetic receipts exercise coverage only; this smoke is not source acceptance.
                 "python scripts/aistock_issue_workflow.py batch-workflow-smoke -> passed",
                 "python -m nox -s l0 -> passed",
+                "python -m nox -s validation_workflow_automation -> passed",
                 "python -m nox -s guardrail_changed_files -> passed",
             ],
             issue_commit=["BUG-000=synthetic-shared-pr", "BUG-001=synthetic-shared-pr"],
@@ -9707,6 +9853,7 @@ def build_start_plan(
     allow_closed: bool,
     active_decision: dict[str, Any] | None = None,
     code_intelligence_summary_override: dict[str, Any] | None = None,
+    context_markdown: bool = False,
 ) -> dict[str, Any]:
     if not issue_json and active_decision and active_decision.get("registry_issue_json"):
         issue_json = str(active_decision["registry_issue_json"])
@@ -9805,7 +9952,9 @@ def build_start_plan(
     if not dry_run:
         _write_json(fix_ready_path, fix_ready)
         _write_json(context_json_path, context_pack)
-        _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+        if context_markdown:
+            _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+            task_card["artifact_refs"]["context_pack_md"] = _repo_rel(context_md_path, target_root)
         _write_json(task_card_json_path, task_card)
         _write_text(task_card_md_path, render_task_card_markdown(task_card))
         context_metrics = {
@@ -9827,11 +9976,12 @@ def build_start_plan(
             base=worktree_plan.get("base"),
             source_bug_json=_repo_rel(source_path),
             target_bug_json=_repo_rel(target_bug_path, target_root),
-            context_pack_md=_repo_rel(context_md_path, target_root),
+            context_pack_md=task_card["artifact_refs"]["context_pack_md"],
             context_pack_json=_repo_rel(context_json_path, target_root),
             fix_ready_path=_repo_rel(fix_ready_path, target_root),
             task_card_json=_repo_rel(task_card_json_path, target_root),
             task_card_md=_repo_rel(task_card_md_path, target_root),
+            execution_restrictions=record.get("execution_restrictions") or [],
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
@@ -9880,7 +10030,7 @@ def build_start_plan(
         "worktree_plan": worktree_plan,
         "fix_ready_path": _repo_rel(fix_ready_path, target_root),
         "context_pack_json": _repo_rel(context_json_path, target_root),
-        "context_pack_md": _repo_rel(context_md_path, target_root),
+        "context_pack_md": task_card["artifact_refs"]["context_pack_md"],
         "task_card_json": _repo_rel(task_card_json_path, target_root),
         "task_card_md": _repo_rel(task_card_md_path, target_root),
         "state_path": _repo_rel(_state_path(canonical_bug_id, target_root), target_root),
@@ -9930,6 +10080,7 @@ def build_finish_plan(
     allow_missing_evidence: bool,
     fresh_process_evidence: list[str] | None = None,
     code_intelligence_summary_override: dict[str, Any] | None = None,
+    persist_pr_body: bool = False,
 ) -> dict[str, Any]:
     _assert_task_git_identity(REPO_ROOT)
     if _TASK_GIT_IDENTITY is not None and _git(["rev-parse", head], cwd=REPO_ROOT) != _TASK_GIT_IDENTITY[1]:
@@ -10056,14 +10207,16 @@ def build_finish_plan(
     elif finish_plan_path.exists():
         with contextlib.suppress(OSError):
             finish_plan_path.unlink()
-    _write_text(pr_body_path, pr_body)
+    if persist_pr_body:
+        _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
     _write_state(
         canonical_bug_id,
         state=next_state,
         changed_files=changed,
         validation_evidence=evidence,
-        pr_body_path=_repo_rel(pr_body_path),
+        pr_body_path=_repo_rel(pr_body_path) if persist_pr_body else None,
+        execution_restrictions=record.get("execution_restrictions") or [],
         allowed_write_scope=flow._as_list(record.get("allowed_write_scope")),
         required_verification=validation.get("required_plans") or [],
         verification_budget=record.get("verification_budget"),
@@ -10072,6 +10225,7 @@ def build_finish_plan(
                 "allowed_write_scope": flow._as_list(record.get("allowed_write_scope")),
                 "required_verification": validation.get("required_plans") or [],
                 "verification_budget": record.get("verification_budget"),
+                "execution_restrictions": record.get("execution_restrictions") or [],
             }
         ),
         production_gates=validation.get("production_gates") or {},
@@ -10179,7 +10333,7 @@ def build_finish_plan(
                 )
             )
         ),
-        "pr_body_path": _repo_rel(pr_body_path),
+        "pr_body_path": _repo_rel(pr_body_path) if persist_pr_body else None,
         "state_path": _repo_rel(_state_path(canonical_bug_id)),
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
         "artifact_metrics": {
@@ -10674,6 +10828,7 @@ def build_start_batch_plan(
     allow_missing_linkage: bool,
     allow_closed: bool,
     record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
+    context_markdown: bool = False,
 ) -> dict[str, Any]:
     if record_pairs is None:
         record_pairs = _records_for_bug_ids(
@@ -10728,7 +10883,8 @@ def build_start_batch_plan(
             context_pack["code_intelligence"] = batch_code_intelligence
             fix_ready["code_intelligence"] = batch_code_intelligence
             _write_json(context_dir / f"{bug_id}.json", context_pack)
-            _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
+            if context_markdown:
+                _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
             _write_json(fix_ready_dir / f"{bug_id}.json", fix_ready)
             context_metrics[bug_id] = {
                 "context_md": _size_and_token_estimate(context_dir / f"{bug_id}.md"),
@@ -10901,6 +11057,7 @@ def build_finish_batch_plan(
     plan_only: bool,
     allow_missing_evidence: bool,
     record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
+    persist_pr_body: bool = False,
 ) -> dict[str, Any]:
     if not batch_id and not bug_ids and record_pairs is None:
         raise WorkflowError("finish-batch requires --batch-id or at least two --bug-id values")
@@ -11002,20 +11159,19 @@ def build_finish_batch_plan(
     _write_json(output_dir / "finish-plan.json", finish_plan)
     if evidence:
         _write_json(output_dir / "validation-evidence.json", {"batch_id": canonical_batch_id, "items": evidence})
-    _write_text(
-        pr_body_path,
-        render_batch_pr_body(
-            canonical_batch_id,
-            records,
-            changed,
-            validation,
-            evidence,
-            commit_map,
-            code_intelligence_summary,
-            closure_ready,
-            runtime_contracts,
-        ),
+    pr_body = render_batch_pr_body(
+        canonical_batch_id,
+        records,
+        changed,
+        validation,
+        evidence,
+        commit_map,
+        code_intelligence_summary,
+        closure_ready,
+        runtime_contracts,
     )
+    if persist_pr_body:
+        _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
     _write_state(
         canonical_batch_id,
@@ -11024,7 +11180,7 @@ def build_finish_batch_plan(
         bug_ids=signature["bug_ids"],
         changed_files=changed,
         validation_evidence=evidence,
-        pr_body_path=_repo_rel(pr_body_path),
+        pr_body_path=_repo_rel(pr_body_path) if persist_pr_body else None,
         production_gates=validation.get("production_gates") or {},
         code_intelligence={
             "status": code_intelligence_summary.get("status"),
@@ -11073,7 +11229,7 @@ def build_finish_batch_plan(
             "fallback_used": code_intelligence_summary.get("fallback_used"),
         },
         "codegraph_suggested_tests": codegraph_tests,
-        "pr_body_path": _repo_rel(pr_body_path),
+        "pr_body_path": _repo_rel(pr_body_path) if persist_pr_body else None,
         "state_path": _repo_rel(_state_path(canonical_batch_id)),
         "events_path": _repo_rel(_events_path(canonical_batch_id)),
     }
@@ -12634,6 +12790,10 @@ def build_triage_ci_issue_plan(
     linked = _find_bug_by_github_issue(issue["number"])
     body = str(issue.get("body") or "")
     detected_run_id = run_id or _extract_run_id_from_issue_body(body)
+    try:
+        nightly_group = ci_failure_summary.nightly_issue_group(body)
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from exc
     summary: dict[str, Any]
     extraction_errors: list[str] = []
     if summary_json:
@@ -12644,6 +12804,7 @@ def build_triage_ci_issue_plan(
             run_id=detected_run_id,
             run_url=None,
             severity="P1",
+            **({"nox_sessions": nightly_group["sessions"]} if nightly_group else {}),
         )
     else:
         extraction_errors.append("No Actions run id was found in the GitHub Issue body.")
@@ -12661,6 +12822,11 @@ def build_triage_ci_issue_plan(
                 "extraction_errors": extraction_errors,
             }
         )
+    if nightly_group:
+        try:
+            summary = ci_failure_summary.bind_nightly_issue_group(summary, nightly_group)
+        except ValueError as exc:
+            raise WorkflowError(str(exc)) from exc
     summary = _merge_issue_body_regression_locator(summary, body)
     classification = _classify_ci_issue(summary, issue)
     superseding_run = _find_superseding_main_success(summary)
@@ -13015,13 +13181,24 @@ def build_ci_issue_janitor_plan(
         issue_value = int(issue_number) if str(issue_number).isdigit() else issue_number
         entry: dict[str, Any] = {"issue": issue_value, "action": "skip"}
         try:
+            if runner_recovered_only:
+                issue = _load_github_issue(issue_number)
+                group = ci_failure_summary.nightly_issue_group(str(issue.get("body") or ""))
+                if group and group["module"] != "validation.runner":
+                    entry["reason"] = "not_nightly_runner_recovery_scope"
+                    evaluated.append(entry)
+                    continue
             triage = build_triage_ci_issue_plan(
                 issue_number=issue_number,
                 skip_github_summary=skip_github_summary,
             )
-        except WorkflowError as exc:
+        except (WorkflowError, ValueError) as exc:
             entry.update({"action": "failed", "reason": str(exc)})
             failed.append(entry)
+            evaluated.append(entry)
+            continue
+        if runner_recovered_only and not _nightly_runner_infra_recovery_eligible(triage):
+            entry["reason"] = "not_nightly_runner_recovery_scope"
             evaluated.append(entry)
             continue
         entry["classification"] = triage.get("classification_recommendation")
@@ -16019,6 +16196,7 @@ def _persist_superseded_cleanup_receipt(
         "authority_ref": verification.get("authority_ref"),
         "reason": verification.get("reason"),
         "authority_digest": verification.get("authority_digest"),
+        "authority": verification.get("authority"),
         "recorded_at": _utc_now(),
     }
     if cleanup_verification is not None:
@@ -16154,6 +16332,129 @@ def _owner_supersession_comment_profile(
     }
 
 
+def _disposal_bound_file(reference: dict[str, Any], *, root: Path, worktree: Path) -> Path:
+    """Read only exact, external, digest-bound evidence; never follow reparse ancestors."""
+    path = Path(str(reference.get("path") or ""))
+    digest = str(reference.get("sha256") or "")
+    if not path.is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("disposal evidence requires an absolute path and SHA256")
+    if any(_is_reparse_or_symlink(part) for part in (path, *path.parents)):
+        raise ValueError("disposal evidence has a reparse/symlink ancestor")
+    path = path.resolve()
+    if any(path == parent.resolve() or parent.resolve() in path.parents for parent in (root, worktree)):
+        raise ValueError("disposal evidence must survive outside source and canonical roots")
+    observed = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            observed.update(chunk)
+    if observed.hexdigest() != digest:
+        raise ValueError("disposal evidence missing or SHA256 mismatch")
+    return path
+
+
+def _reviewed_disposal_profile(
+    *, branch: str, expected_head: str, worktree: str | None, authority_ref: str,
+    manifest_path: str | None, manifest_sha256: str | None, root: Path,
+) -> dict[str, Any]:
+    """A user-reviewed abandonment is distinct from source merge or patch equivalence."""
+    try:
+        if not worktree or not Path(worktree).is_absolute():
+            raise ValueError("reviewed disposal requires an explicit absolute worktree")
+        target_root = Path(worktree)
+        if any(_is_reparse_or_symlink(part) for part in (target_root, *target_root.parents)):
+            raise ValueError("disposal target has a reparse/symlink ancestor")
+        target = {"branch": branch, "head": expected_head, "worktree": str(target_root.resolve())}
+        registered = _registered_worktree_for_branch(branch, cwd=root)
+        if (registered is None or registered.resolve() != target_root.resolve()
+                or _git(["rev-parse", "HEAD"], cwd=target_root, check=False).strip() != expected_head
+                or _git(["branch", "--show-current"], cwd=target_root, check=False).strip() != branch):
+            raise ValueError("disposal worktree is not registered at the exact branch HEAD")
+        bound: list[tuple[dict[str, Any], Path]] = []
+
+        def read_bound(ref: dict[str, Any]) -> dict[str, Any]:
+            path = _disposal_bound_file(ref, root=root, worktree=target_root)
+            if path.stat().st_size > 1024 * 1024:
+                raise ValueError("disposal JSON exceeds bounded evidence size")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("disposal evidence must be a JSON object")
+            bound.append((ref, path))
+            return value
+
+        manifest = read_bound({"path": manifest_path, "sha256": manifest_sha256})
+        if (manifest.get("schema_version") != "aistock_reviewed_disposal_v1"
+                or manifest.get("repository") != GITHUB_REPO or manifest.get("target") != target):
+            raise ValueError("disposal manifest repository/target identity mismatch")
+        authorization = read_bound(manifest["authorization"])
+        if (str(manifest["authorization"]["path"]) != authority_ref
+                or authorization.get("schema_version") != "aistock_cleanup_authorization_v1"
+                or not str(authorization.get("user_instruction") or "").strip()
+                or "discard_reviewed_unmerged_branch" not in authorization.get("actions", [])
+                or target not in authorization.get("targets", [])):
+            raise ValueError("explicit user disposal authorization does not cover this target")
+        review = manifest["review"]
+        if (review.get("decision") != "DISCARD_AFTER_ARCHIVE"
+                or len(str(review.get("reason") or "").strip()) < 12):
+            raise ValueError("disposal requires a completed value review")
+        successors = review.get("successor_commits")
+        if not isinstance(successors, list) or not successors or any(
+            not isinstance(commit, str) or not _FULL_GIT_COMMIT_RE.fullmatch(commit)
+            or not _git_commit_is_ancestor(commit, "origin/main", root=root) for commit in successors
+        ):
+            raise ValueError("reviewed successors are not contained in origin/main")
+        references = read_bound(review["reference_evidence"])
+        if (references.get("schema_version") != "aistock_disposal_reference_review_v1"
+                or references.get("target") != target
+                or references.get("remaining_dependencies") != []
+                or not references.get("reviewed_roots")
+                or references.get("status") != "NO_REMAINING_DEPENDENCIES"):
+            raise ValueError("frozen/current/unknown references still block disposal")
+        for ref in references.get("protected_files", []):
+            _disposal_bound_file(ref, root=root, worktree=target_root)
+            bound.append((ref, Path(ref["path"])))
+        bundle_ref = manifest["recovery_bundle"]
+        bundle = _disposal_bound_file(bundle_ref, root=root, worktree=target_root)
+        bound.append((bundle_ref, bundle))
+        # Self-contained v2 bundles can be recovered even after all source refs disappear.
+        with bundle.open("rb") as stream:
+            if stream.readline(64) != b"# v2 git bundle\n":
+                raise ValueError("recovery bundle must use the self-contained v2 format")
+            header_size = 0
+            while True:
+                line = stream.readline(4096)
+                header_size += len(line)
+                if not line or header_size > 1024 * 1024 or len(line) == 4096:
+                    raise ValueError("invalid recovery bundle header")
+                if line == b"\n":
+                    break
+                if line.startswith(b"-"):
+                    raise ValueError("recovery bundle must not require external prerequisites")
+        heads = _run_command(["git", "bundle", "list-heads", str(bundle)], cwd=root, timeout=60)
+        verify = _run_command(["git", "bundle", "verify", str(bundle)], cwd=root, timeout=60)
+        expected_ref = f"{expected_head} refs/heads/{branch}"
+        if (not heads.get("ok") or expected_ref not in str(heads.get("stdout") or "").splitlines()
+                or not verify.get("ok")):
+            raise ValueError("recovery bundle does not verify the exact branch HEAD")
+        recovered = read_bound(manifest["recovery_receipt"])
+        tree = _git(["rev-parse", f"{expected_head}^{{tree}}"], cwd=root, check=False).strip()
+        if (recovered.get("schema_version") != "aistock_bundle_restore_receipt_v1"
+                or recovered.get("bundle_sha256") != bundle_ref["sha256"]
+                or recovered.get("independent_object_store") is not True
+                or recovered.get("fsck_passed") is not True
+                or {"branch": branch, "head": expected_head, "tree": tree}
+                not in recovered.get("restored_targets", [])):
+            raise ValueError("independent bundle restore receipt does not bind the exact source tree")
+        for ref, _path in bound:
+            _disposal_bound_file(ref, root=root, worktree=target_root)
+        return {"verified": True, "reason": "user_reviewed_disposal_with_verified_recovery",
+                "manifest_path": str(manifest_path), "manifest_sha256": manifest_sha256,
+                "target": target, "authorization": manifest["authorization"],
+                "recovery_bundle": bundle_ref, "recovery_receipt": manifest["recovery_receipt"],
+                "review": review, "source_merged": False}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {"verified": False, "reason": "reviewed_disposal_evidence_invalid", "error": str(exc)}
+
+
 def _cleanup_supersession_verification(
     *,
     branch: str,
@@ -16166,6 +16467,9 @@ def _cleanup_supersession_verification(
     supersession_comment_url: str | None,
     remote_ref: str,
     root: Path,
+    worktree: str | None = None,
+    disposal_manifest: str | None = None,
+    disposal_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     normalized_head = expected_head.strip().lower()
     blocking: list[str] = []
@@ -16193,6 +16497,10 @@ def _cleanup_supersession_verification(
         blocking.append("owner comment mode does not accept --replacement-pr-url")
     elif mode == "patch_equivalent" and (replacement_pr_url or supersession_comment_url):
         blocking.append("patch-equivalent mode does not accept PR or comment authority arguments")
+    elif mode == "reviewed_disposal" and (replacement_pr_url or supersession_comment_url):
+        blocking.append("reviewed disposal does not accept PR or comment authority arguments")
+    if mode != "reviewed_disposal" and (disposal_manifest or disposal_manifest_sha256):
+        blocking.append("disposal evidence requires reviewed_disposal mode")
     if len(reason.strip()) < 12:
         blocking.append("superseded cleanup reason must contain at least 12 characters")
     if not authority_ref.strip():
@@ -16243,6 +16551,12 @@ def _cleanup_supersession_verification(
             )
     elif not blocking and mode == "patch_equivalent":
         authority = _git_patch_equivalence_profile(branch, root=root)
+    elif not blocking and mode == "reviewed_disposal":
+        authority = _reviewed_disposal_profile(
+            branch=branch, expected_head=normalized_head, worktree=worktree,
+            authority_ref=authority_ref, manifest_path=disposal_manifest,
+            manifest_sha256=disposal_manifest_sha256, root=root,
+        )
     if not authority.get("verified"):
         blocking.append(f"supersession authority is not verified: {authority.get('reason') or 'unknown'}")
     authority_digest = hashlib.sha256(
@@ -19461,6 +19775,8 @@ def build_run_plan(
             "next_command": f"python scripts/aistock_issue_workflow.py resume --bug-id {start['bug_id']}",
         }
     if mode == "pr":
+        if push or create_pr:
+            _assert_task_source_restrictions(canonical_bug_id, "pr", issue_json)
         finish = build_finish_plan(
             bug_id=canonical_bug_id,
             issue_json=issue_json,
@@ -19470,6 +19786,7 @@ def build_run_plan(
             validation_evidence=validation_evidence,
             plan_only=not validation_evidence,
             allow_missing_evidence=False,
+            persist_pr_body=True,
         )
         state_name = "validation_passed" if finish.get("validation_evidence") else "validation_planned"
         _write_state(
@@ -19500,6 +19817,7 @@ def build_run_plan(
             else f"python scripts/aistock_issue_workflow.py finish --bug-id {canonical_bug_id} --validation-evidence \"<command> -> passed\"",
         }
     if mode == "merge":
+        _assert_task_source_restrictions(canonical_bug_id, "merge", issue_json)
         if not pr_url:
             raise WorkflowError("run --mode merge requires --pr-url")
         if not merge:
@@ -20650,6 +20968,9 @@ def build_cleanup_after_merge_plan(
             ),
             remote_ref=remote_ref,
             root=root,
+            worktree=worktree,
+            disposal_manifest=supersession.get("disposal_manifest"),
+            disposal_manifest_sha256=supersession.get("disposal_manifest_sha256"),
         )
         if supersession_verification.get("verified"):
             merge_verification = {
@@ -21086,6 +21407,14 @@ def build_cleanup_after_merge_plan(
             if payload["git_object_mirror"].get("warning"):
                 payload.setdefault("warnings", []).append(payload["git_object_mirror"]["warning"])
         if supersession_verification:
+            if supersession_verification.get("mode") == "reviewed_disposal":
+                refreshed = _cleanup_supersession_verification(
+                    branch=branch, bug_id=evidence_bug_id, worktree=worktree,
+                    remote_ref=remote_ref, root=root, **supersession,
+                )
+                if (not refreshed.get("verified")
+                        or refreshed.get("authority_digest") != supersession_verification.get("authority_digest")):
+                    raise WorkflowError("reviewed disposal identity/evidence changed before deletion")
             payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
                 supersession_verification,
                 status="authorized_pre_cleanup",
@@ -21123,6 +21452,9 @@ def build_cleanup_after_merge_plan(
                 }
             )
         if worktree_path and worktree_path.exists() and worktree_registered:
+            if supersession_verification and supersession_verification.get("mode") == "reviewed_disposal":
+                if _git(["rev-parse", "HEAD"], cwd=worktree_path, check=False).strip() != supersession_verification["expected_head"]:
+                    raise WorkflowError("reviewed disposal worktree HEAD changed before removal")
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _remove_worktree_with_reparse_fallback(root=root, worktree_path=worktree_path)})
         elif worktree_path and worktree_path.exists() and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
             removed = _remove_reparse_or_empty_tree(worktree_path)
@@ -21144,8 +21476,13 @@ def build_cleanup_after_merge_plan(
                     "profile": removed.get("profile"),
                 }
         if branch in local_branches:
-            delete_flag = "-d" if merged else "-D"
-            applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
+            if supersession_verification and supersession_verification.get("mode") == "reviewed_disposal":
+                expected = supersession_verification["expected_head"]
+                command = ["git", "update-ref", "-d", f"refs/heads/{branch}", expected]
+                applied.append({"command": " ".join(command), "result": _execute_checked(command, cwd=root, timeout=120)})
+            else:
+                delete_flag = "-d" if merged else "-D"
+                applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
         if remote_ref:
             applied.append(
                 {
@@ -21506,6 +21843,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
         active_decision=None,
+        context_markdown=getattr(args, "context_markdown", False),
     )
     _emit_args(payload, args)
     return 0
@@ -21522,6 +21860,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
         fresh_process_evidence=list(args.fresh_process_evidence or []),
+        persist_pr_body=getattr(args, "write_pr_body", False),
     )
     _emit_args(payload, args)
     return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
@@ -21570,6 +21909,7 @@ def cmd_start_batch(args: argparse.Namespace) -> int:
         task_slug=args.task_slug,
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
+        context_markdown=getattr(args, "context_markdown", False),
     )
     _emit_args(payload, args)
     return 0
@@ -21586,6 +21926,7 @@ def cmd_finish_batch(args: argparse.Namespace) -> int:
         issue_commit=list(args.issue_commit or []),
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
+        persist_pr_body=getattr(args, "write_pr_body", False),
     )
     _emit_args(payload, args)
     return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
@@ -22015,6 +22356,8 @@ def cmd_cleanup_superseded(args: argparse.Namespace) -> int:
             "reason": args.reason,
             "replacement_pr_url": args.replacement_pr_url,
             "supersession_comment_url": args.supersession_comment_url,
+            "disposal_manifest": getattr(args, "disposal_manifest", None),
+            "disposal_manifest_sha256": getattr(args, "disposal_manifest_sha256", None),
         },
     )
     _emit_args(payload, args)
@@ -22287,6 +22630,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--task-slug")
     start.add_argument("--allow-missing-linkage", action="store_true")
     start.add_argument("--allow-closed", action="store_true")
+    start.add_argument("--context-markdown", action="store_true", help="Explicitly render the optional Context Pack Markdown; task-card.md is the default view.")
     add_output_options(start)
     start.set_defaults(func=cmd_start)
 
@@ -22304,6 +22648,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finish.add_argument("--plan-only", action="store_true")
     finish.add_argument("--allow-missing-evidence", action="store_true")
+    finish.add_argument("--write-pr-body", action="store_true", help="Render a PR body for an explicit consumer; run --mode pr does this automatically.")
     add_output_options(finish)
     finish.set_defaults(func=cmd_finish)
 
@@ -22348,6 +22693,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_batch.add_argument("--task-slug")
     start_batch.add_argument("--allow-missing-linkage", action="store_true")
     start_batch.add_argument("--allow-closed", action="store_true")
+    start_batch.add_argument("--context-markdown", action="store_true", help="Explicitly render per-issue Context Pack Markdown.")
     add_output_options(start_batch)
     start_batch.set_defaults(func=cmd_start_batch)
 
@@ -22361,6 +22707,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_batch.add_argument("--issue-commit", action="append", help="Per-issue commit map entry, e.g. BUG-123=<sha>.")
     finish_batch.add_argument("--plan-only", action="store_true")
     finish_batch.add_argument("--allow-missing-evidence", action="store_true")
+    finish_batch.add_argument("--write-pr-body", action="store_true", help="Render the batch PR body for an explicit consumer.")
     add_output_options(finish_batch)
     finish_batch.set_defaults(func=cmd_finish_batch)
 
@@ -22529,6 +22876,8 @@ def build_parser() -> argparse.ArgumentParser:
     superseded_cleanup.add_argument("--reason", required=True)
     superseded_cleanup.add_argument("--replacement-pr-url")
     superseded_cleanup.add_argument("--supersession-comment-url")
+    superseded_cleanup.add_argument("--disposal-manifest")
+    superseded_cleanup.add_argument("--disposal-manifest-sha256")
     superseded_cleanup.add_argument("--sync-root", action="store_true")
     superseded_cleanup.add_argument("--canonical-root")
     superseded_cleanup.add_argument("--apply", action="store_true")
@@ -22644,4 +22993,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

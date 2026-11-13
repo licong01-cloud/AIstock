@@ -1,0 +1,306 @@
+{
+  "actual": "POST monthly-releases/adopt returns HTTP409 target cutoff is already bound to another operation after typed candidate proof passes.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+    "tests/aistock_validation/bugs/20261023_BUG-2083-same-cutoff-successor-adoption-rejects-verified-historical-activation-an.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2083",
+  "closed_at": "2026-10-23T17:58:21.759327Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-23T17:20:16.340672Z",
+  "description": "POST monthly-releases/adopt returns HTTP409 target cutoff is already bound to another operation after typed candidate proof passes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261023-968f48d4ee74",
+      "timestamp": "2026-10-23T17:20:16.340672Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/post-restart-verification-r2.json"
+  ],
+  "expected": "Verified historical activation ancestors do not block the sole exact successor; unrelated or live competing operations remain conflicts.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2083-same-cutoff-successor-adoption-rejects-verified-historical-activation-an.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2083-same-cutoff-successor-adoption-rejects-verified-historical-activation-an.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_minute_adoption.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_minute_adoption.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py"
+    ]
+  },
+  "first_seen_at": "2026-10-23T17:20:16.340672Z",
+  "fix_branch": null,
+  "fix_commit": "d0d0345babcd1a38cf2770f413c78755f6f5bdd1",
+  "fixed_at": "2026-10-23T17:44:16Z",
+  "github_issue_number": 6653,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6653",
+  "last_seen_at": "2026-10-23T17:20:16.340672Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6654",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Formal API adopt final facts1 with exact dcc4db predecessor after BUG-2080 runtime verification",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/BUG-2083-fresh-process.json: isolated import and exact durable activation chain readback PASS; no data/profile/database/runtime writes",
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/BUG-2083-fresh-process.json"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\september-finalization-20261023\\BUG-2083-post-restart-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2083",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "d0d0345babcd1a38cf2770f413c78755f6f5bdd1",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-23T17:57:29.677547Z",
+      "mode": "read_only",
+      "observed_identity": "d0d0345babcd1a38cf2770f413c78755f6f5bdd1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "edab2d8440f974d5b71ca58fac386aa913ae3124b1a56495d7f0b24a33dd4017",
+      "receipt_sha256": "715ccca68b3979a070875269cd83a6dc36b6763d94b9c94c8356cf4614f5282c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c0935c64269c6598ef65e6b8615a4f759ac835877430186dfa758db5106b34d3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2083",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "89577221cb49a87e",
+    "recorded_at": "2026-10-23T17:44:53.654037Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f1aacc62360f935485b95dc0072ab0ca66f691de",
+    "source_merge_commit": "d0d0345babcd1a38cf2770f413c78755f6f5bdd1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6654",
+    "validation_evidence": [
+      "validation-receipt: id=051cadd74b76555d commit=f1aacc62360f935485b95dc0072ab0ca66f691de kind=nox plan=l0 status=passed command=`python -m nox -s l0 --force-venv-backend none -- --changed-only` result=`passed; targeted pytest minute_adoption + existing_adoption 37 passed; Ruff compile diff-check passed; fresh-process exact live activation ancestry PASS`"
+    ],
+    "validation_evidence_digest": "51084d4b9035a03374e7081b6e64100db9062466bf8ae3705d22962bc1e199a3"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Same-cutoff successor adoption rejects verified historical activation ancestry",
+  "trigger_condition": {
+    "fingerprint": "968f48d4ee7434fc06c4f8e1",
+    "source_event_id": "FE-20261023-968f48d4ee74"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=051cadd74b76555d commit=f1aacc62360f935485b95dc0072ab0ca66f691de kind=nox plan=l0 status=passed command=`python -m nox -s l0 --force-venv-backend none -- --changed-only` result=`passed; targeted pytest minute_adoption + existing_adoption 37 passed; Ruff compile diff-check passed; fresh-process exact live activation ancestry PASS`",
+    "pytest backend/tests/dataset_release/test_monthly_minute_adoption.py backend/tests/dataset_release/test_monthly_existing_adoption.py -q -> 37 passed; source CI SUCCESS; post-restart supervision PASS; formal API adopt and CAS ACTIVATED_VERIFIED"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

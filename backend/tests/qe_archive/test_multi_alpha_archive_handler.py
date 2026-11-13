@@ -461,3 +461,90 @@ def test_multi_alpha_archive_worker_missing_source_is_audited_skip(case, reason)
     assert repo.writes == []
     assert repo.completed_jobs[0][0] == "job_missing_macb"
     assert repo.completed_jobs[0][1]["terminal_outbox_status"] == "skipped"
+
+
+@pytest.mark.parametrize("with_identity", [False, True])
+def test_ordinary_retry_lineage_is_preserved_without_fabricating_recovery(with_identity):
+    from backend.tests.qe_archive.test_multi_alpha_recovery_archive import _identity
+
+    repo = FakeMultiAlphaArchiveRepository()
+    source = repo.fetch_multi_alpha_combine_run("macb_retry")
+    source["run"].update(retry_of_run_id="macb_original", recovery_kind=None,
+                         recovery_scope_json={}, recovery_scope_hash=None)
+    if with_identity:
+        source["run"]["execution_identity_json"] = _identity()
+    bundle = MultiAlphaCombineArchiveHandler(repository=repo).build_bundle(source)
+    assert bundle.run_header["archive_schema_version"] == ("v2" if with_identity else "v1")
+    assert bundle.run_header["retry_of_run_id"] == (None if with_identity else "macb_original")
+    assert bundle.run_header["recovery_kind"] is None
+    assert bundle.run_header["recovery_scope_json"] is None
+    assert bundle.run_header["recovery_scope_hash"] is None
+    assert bundle.run_source["metadata"]["retry_lineage"] == {
+        "kind": "ordinary_retry", "retry_of_run_id": "macb_original",
+    }
+    assert source["run"]["retry_of_run_id"] == "macb_original"
+
+
+def test_orphaned_recovery_scope_is_not_erased_as_an_ordinary_retry():
+    from backend.tests.qe_archive.test_multi_alpha_recovery_archive import _identity
+
+    repo = FakeMultiAlphaArchiveRepository()
+    source = repo.fetch_multi_alpha_combine_run("macb_bad_retry")
+    source["run"].update(retry_of_run_id="macb_original", recovery_kind=None,
+                         recovery_scope_json={"invalid_orphan": True}, recovery_scope_hash=None,
+                         execution_identity_json=_identity())
+    bundle = MultiAlphaCombineArchiveHandler(repository=repo).build_bundle(source)
+    assert bundle.run_header["retry_of_run_id"] == "macb_original"
+    assert bundle.run_header["recovery_scope_json"] == {"invalid_orphan": True}
+    assert "retry_lineage" not in bundle.run_source["metadata"]
+
+
+def test_dev_existing_v2_constraint_accepts_retry_projection_and_rejects_invalid_tuples(dev_db_creds):
+    import copy
+    import psycopg2
+    from psycopg2 import sql
+    from psycopg2.extras import Json
+    from backend.tests.qe_archive.test_multi_alpha_recovery_archive import _identity
+
+    assert dev_db_creds["port"] == 5433 and "dev" in dev_db_creds["dbname"]
+    repo = FakeMultiAlphaArchiveRepository()
+    source = repo.fetch_multi_alpha_combine_run("macb_retry_dev")
+    source["run"].update(retry_of_run_id="macb_original", recovery_kind=None,
+                         recovery_scope_json={}, recovery_scope_hash=None,
+                         execution_identity_json=_identity())
+    header = dict(MultiAlphaCombineArchiveHandler(repository=repo).build_bundle(source).run_header)
+    conn = psycopg2.connect(**dev_db_creds)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE bug2215_header (LIKE qe_archive.multi_alpha_run INCLUDING CONSTRAINTS) ON COMMIT DROP")
+
+            def insert(row):
+                keys = list(row)
+                query = sql.SQL("INSERT INTO bug2215_header ({}) VALUES ({})").format(
+                    sql.SQL(",").join(map(sql.Identifier, keys)),
+                    sql.SQL(",").join(sql.Placeholder() for _ in keys),
+                )
+                cur.execute(query, [Json(row[k]) if isinstance(row[k], (dict, list)) else row[k] for k in keys])
+
+            insert(header)
+            old = copy.deepcopy(header)
+            old["retry_of_run_id"] = "macb_original"
+            cur.execute("SAVEPOINT invalid_plain_retry")
+            with pytest.raises(psycopg2.errors.CheckViolation) as error:
+                insert(old)
+            assert error.value.diag.constraint_name == "ck_qear_macb_v2_recovery_tuple"
+            cur.execute("ROLLBACK TO SAVEPOINT invalid_plain_retry")
+            targeted = copy.deepcopy(header)
+            targeted.update(retry_of_run_id="macb_original", recovery_kind="child_targeted",
+                            recovery_scope_json={"frozen": True}, recovery_scope_hash="a" * 64)
+            insert(targeted)
+            for field in ["recovery_scope_hash", "execution_identity_hash"]:
+                invalid = copy.deepcopy(targeted)
+                invalid[field] = None
+                cur.execute("SAVEPOINT invalid_recovery")
+                with pytest.raises(psycopg2.errors.CheckViolation):
+                    insert(invalid)
+                cur.execute("ROLLBACK TO SAVEPOINT invalid_recovery")
+    finally:
+        conn.rollback()
+        conn.close()

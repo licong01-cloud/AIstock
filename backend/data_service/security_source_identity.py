@@ -17,15 +17,19 @@ import pandas as pd
 SCHEMA_VERSION = "aistock_security_source_identity_v1"
 DEFAULT_RESOLUTION = "canonical_same_code"
 MONEYFLOW_DATASET = "market.moneyflow_ts"
+MARGIN_DETAIL_DATASET = "market.margin_detail"
 SUPPORTED_SOURCE_DATASETS = frozenset(
     {
         "market.daily_basic",
+        "market.cyq_perf",
+        "market.bak_basic",
         "market.kline_daily_raw",
         MONEYFLOW_DATASET,
+        MARGIN_DETAIL_DATASET,
         "market.stk_limit",
     }
 )
-DEFAULT_MANIFEST_PATH = Path(__file__).resolve().parent / "manifests" / "security_source_identity_v1.json"
+DEFAULT_MANIFEST_PATH = Path(__file__).resolve().parent / "manifests" / "security_source_identity_20261112_v2.json"
 _TS_CODE_RE = re.compile(r"^[0-9]{6}\.(?:BJ|SH|SZ)$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 

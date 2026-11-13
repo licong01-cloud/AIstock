@@ -47,6 +47,16 @@ def dev_connection_factory(env: dict):
     return connect
 
 
+def create_recovery_output(output: Path, source_root: Path) -> Path:
+    """Reserve one immutable audit namespace before writing any receipt."""
+    output, source_root = output.resolve(), source_root.resolve()
+    if output == source_root or source_root in output.parents or output in source_root.parents:
+        raise ValueError("output must be separate from the production asset store")
+    # A second invocation must never replace an earlier recovery's receipts or CAS.
+    output.mkdir(parents=True, exist_ok=False)
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package-id", required=True)
@@ -76,10 +86,10 @@ def main() -> int:
     source_root = Path(
         os.getenv("AISTOCK_PACKAGE_ASSET_STORE_ROOT") or args.source_root / "rdagent_assets/package_assets"
     ).resolve()
-    output = args.output.resolve()
-    if output == source_root or source_root in output.parents or output in source_root.parents:
-        parser.error("output must be separate from the production asset store")
-    output.mkdir(parents=True, exist_ok=True)
+    try:
+        output = create_recovery_output(args.output, source_root)
+    except (ValueError, FileExistsError) as exc:
+        parser.error(str(exc))
 
     def read_parent():
         response = requests.get(f"{args.api_base.rstrip('/')}/strategy-packages/{args.package_id}", timeout=30)

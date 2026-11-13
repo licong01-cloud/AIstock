@@ -243,6 +243,8 @@ def _live_input_context(
         "calendar_source": calendar_source,
         "universe_input_hash": _required_v2_hash(raw_context.get("universe_input_hash"), field_name="universe_input_hash"),
     }
+    if raw_context.get("input_capture") is not None:
+        context["input_capture"] = dict(raw_context["input_capture"])
     calendar_identity_hash = raw_context.get("calendar_identity_hash")
     if calendar_identity_hash is not None:
         context["calendar_identity_hash"] = _required_v2_hash(
@@ -1355,6 +1357,15 @@ class StrategyPackageSelectionArtifactService:
                     else []
                 ),
             )
+            input_bindings = ((runtime_config or {}).get("selection_artifact_config") or
+                              (runtime_config or {}).get("selection_artifact") or {}).get("input_readiness_by_package")
+            if input_bindings is not None:
+                from backend.services.data_integrity.inputs import verify_capture, InputReadinessError
+                binding = input_bindings.get(package_id)
+                captured = provenance.artifact_input_context.get("input_capture")
+                verify_capture(binding, captured)
+                if captured.get("readiness_binding_sha256") != binding["binding_sha256"]:
+                    raise InputReadinessError("score producer did not consume the frozen readiness binding")
             artifact = SelectionScoreArtifact(
                 package_id=package_id,
                 manifest_sha256=manifest.manifest_sha256,

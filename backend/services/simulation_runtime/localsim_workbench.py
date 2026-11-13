@@ -298,7 +298,7 @@ class LocalSimWorkbenchService:
                         description="账本记录简称；" + self._mark_description(data, selected, symbol, p["market_price"]), known=complete))
                 actual_end = day(selected["trade_date"])
             if kind == "summary":
-                _, ws, _, ms = self._pnl(data, None, None, "security")
+                _, ws, missing, ms = self._pnl(data, None, None, "security")
                 for field in ("pnl", "fees", "return_pct"):
                     setattr(summary, field, ms.get(field))
                 closes = [s for s in snaps if self._is_close(s)]

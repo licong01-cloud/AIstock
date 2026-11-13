@@ -163,3 +163,62 @@ def test_financing_amendment_rejects_incomplete_or_wrong_readback(tmp_path, case
     ref["sha256"] = _sha(path)
     with pytest.raises(MonthlyReleaseNotReady, match="late financing"):
         service.adopt_existing_successor(**values)
+
+
+@pytest.mark.parametrize("case", ["valid", "live", "no_marker", "wrong_backlink",
+    "wrong_physical", "wrong_logical", "wrong_target", "foreign_product", "foreign_cutoff",
+    "unactivated_replacement", "old_activated"])
+def test_typed_successor_follows_only_proven_retired_ancestor(tmp_path, case):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseConflict
+
+    service = _service(tmp_path, Pipeline())
+    values = _financing_successor(tmp_path, service)
+    retired, replacement, active = ["dmr_" + digit * 32 for digit in "123"]
+    logical, physical, intermediate = (digit * 64 for digit in "abc")
+    for operation, old, new in ((replacement, logical, intermediate),
+                               (active, intermediate, values["predecessor_profile_sha256"])):
+        root = service.store.operation_root(operation)
+        (root / "receipts").mkdir(parents=True)
+        request = {"operation_id": operation, "product_profile": "qe_hmm_full_v2",
+                   "target_cutoff": values["target_cutoff"].isoformat(), "idempotency_key": operation}
+        if operation == replacement:
+            request["supersedes_pending_operation"] = {
+                "operation_id": retired, "physical_profile_sha256": physical}
+            if case == "wrong_backlink":
+                request["supersedes_pending_operation"]["operation_id"] = active
+            if case == "foreign_product":
+                request["product_profile"] = "other"
+            if case == "foreign_cutoff":
+                request["target_cutoff"] = "2026-07-31"
+        _canonical(root / "request.json", request)
+        _canonical(root / "state.json", {"status": "READY_TO_ACTIVATE" if
+            operation == replacement and case == "unactivated_replacement" else "ACTIVATED_VERIFIED"})
+        _canonical(root / "receipts/activation.json", {
+            "old_profile_ref": {"sha256": old}, "new_profile_ref": {"sha256": new}})
+    root = service.store.operation_root(retired)
+    (root / "receipts").mkdir(parents=True)
+    _canonical(root / "request.json", {"operation_id": retired, "product_profile": "qe_hmm_full_v2",
+        "target_cutoff": values["target_cutoff"].isoformat(), "idempotency_key": retired,
+        "target_profile_sha256": physical})
+    _canonical(root / "state.json", {"status": "READY_TO_ACTIVATE" if case == "live" else "CANCELLED"})
+    marker = {"schema_version": "aistock_monthly_pending_successor_v1", "operation_id": retired,
+        "successor_operation_id": replacement, "physical_predecessor_profile_sha256": physical,
+        "logical_predecessor_profile_sha256": logical, "target_profile_sha256": intermediate}
+    for case_name, field in (("wrong_physical", "physical_predecessor_profile_sha256"),
+                             ("wrong_logical", "logical_predecessor_profile_sha256"),
+                             ("wrong_target", "target_profile_sha256")):
+        if case == case_name:
+            marker[field] = "f" * 64
+    if case != "no_marker":
+        _canonical(root / "receipts/superseded.json", marker)
+    if case == "old_activated":
+        _canonical(root / "receipts/activation.json", {"new_profile_ref": {"sha256": physical}})
+    before = service.active_profile.read_bytes()
+    if case == "valid":
+        result = service.adopt_existing_successor(**values)
+        assert result["status"] == "READY_TO_ACTIVATE"
+        assert service.adopt_existing_successor(**values)["operation_id"] == result["operation_id"]
+    else:
+        with pytest.raises(MonthlyReleaseConflict, match="another operation"):
+            service.adopt_existing_successor(**values)
+    assert service.active_profile.read_bytes() == before

@@ -67,6 +67,42 @@ from backend.services.trading_core.errors import (
 
 router = APIRouter(prefix="/simulation-runtime", tags=["simulation-runtime"])
 
+
+def get_localsim_dual_mode_service():
+    from backend.services.simulation_execution.localsim.dual_mode_projection import DualModeReadService
+    from backend.services.simulation_runtime.localsim_workbench_presentation import strategy_name
+
+    return DualModeReadService(name_resolver=strategy_name)
+
+
+@router.get("/localsim/comparisons")
+def localsim_comparison_studies(service=Depends(get_localsim_dual_mode_service)):
+    try:
+        return service.list_studies()
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/comparisons/{study_id}")
+def localsim_comparison_detail(study_id: str, service=Depends(get_localsim_dual_mode_service)):
+    try:
+        return service.detail(study_id)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/comparisons/{study_id}/accounts/{account_id}")
+def localsim_comparison_account(study_id: str, account_id: str,
+                               view: Literal["positions", "trades", "orders", "actions", "pnl"] = "positions",
+                               start: str | None = None, end: str | None = None,
+                               cursor: str | None = None, page_size: int = Query(default=50, ge=1, le=200),
+                               service=Depends(get_localsim_dual_mode_service)):
+    try:
+        return service.account_view(study_id, account_id, view=view, start=start, end=end,
+                                     cursor=cursor, page_size=page_size)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
 DESTRUCTIVE_MINIQMT_OPERATOR_COMMANDS = frozenset(
     {
         "CANCEL_ALL_OPEN_ORDERS",

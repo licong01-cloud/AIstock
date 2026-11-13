@@ -219,6 +219,69 @@ def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[
     return "passed", None, {"statuses": normalized}
 
 
+def _validate_advisory_run_terminal(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """显式绑定的 PARTIAL 只证明失败已终结；默认仍要求执行成功。"""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    fields = ("expected_terminal_status", "expected_batch_id", "expected_receipt_sha256")
+    if not any(name in query for name in fields):
+        return _validate_run_terminal_success(payload)
+    facts: dict[str, Any] = {"execution_completed": False, "economic_evaluated": False,
+        "artifact_content_verified": False, "verification_scope": "pinned_partial_terminal_receipt_reference"}
+    def failed(reason):
+        return "failed", reason, facts
+    if any(len(query.get(name, [])) != 1 or not query[name][0].strip() for name in fields):
+        return failed("partial closure requires one exact status, batch and receipt declaration")
+    status, batch_id, digest = (query[name][0] for name in fields)
+    if status != "PARTIAL" or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        return failed("partial closure declaration has invalid status or receipt hash")
+    match = re.fullmatch(r"/api/v1/advisory/historical-range-runs/([^/]+)", urllib.parse.urlsplit(url).path)
+    if not match or not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return failed("partial closure requires an exact run path and ok=true")
+    data = payload.get("data")
+    run = data.get("run") if isinstance(data, dict) else None
+    if not isinstance(run, dict) or run.get("range_run_id") != urllib.parse.unquote(match[1]) or run.get("batch_id") != batch_id:
+        return failed("partial closure run or batch identity differs")
+    if run.get("status") != status or run.get("error_json") is not None or "error_json" not in run:
+        return failed("partial closure status or error evidence contradicts its declaration")
+    statuses = _collect_status_fields(payload)
+    if any(value.upper() not in _RUN_STATUS_SUCCESS | {"PARTIAL"} for value in statuses.values()):
+        return failed("partial closure envelope carries contradictory status")
+    ref = run.get("final_receipt_ref")
+    if (not isinstance(ref, dict) or run.get("final_receipt_hash") != digest
+            or ref.get("semantic_content_hash") != digest
+            or ref.get("schema_version") != "advisory_historical_range_artifact_ref_v1"
+            or ref.get("artifact_kind") != "RANGE_RECEIPT"
+            or ref.get("payload_schema_version") != "advisory_historical_range_run_execution_receipt_v1"
+            or not isinstance(ref.get("producer_contract_version"), str) or not ref["producer_contract_version"].strip()):
+        return failed("partial closure final receipt identity or schema differs")
+    if any(not isinstance(ref.get(name), str) or re.fullmatch(r"[0-9a-f]{64}", ref[name]) is None
+           for name in ("payload_sha256", "file_sha256")):
+        return failed("partial closure receipt lacks content hashes")
+    path = ref.get("relative_path")
+    if (not isinstance(path, str) or not path.startswith("range-receipts/") or ":" in path
+            or "\\" in path or any(part in ("", ".", "..") for part in path.split("/"))):
+        return failed("partial closure receipt path is not contained")
+    counts = ("completed_day_count", "failed_day_count", "waiting_day_count", "retryable_day_count",
+              "materialized_day_count", "total_day_count")
+    if any(type(run.get(name)) is not int or run[name] < 0 for name in counts):
+        return failed("partial closure counts are missing or invalid")
+    success, failure, waiting, retryable, materialized, total = (run[name] for name in counts)
+    if (success < 1 or failure != 1 or waiting != 0 or retryable != 0
+            or materialized != total or success + failure > total or type(run.get("row_version")) is not int
+            or run["row_version"] < 1 or run.get("resume_trade_date") is not None):
+        return failed("partial closure counts or progress contradict a failed terminal prefix")
+    try:
+        stamps = [datetime.fromisoformat(run[name]) for name in ("created_at", "started_at", "finished_at", "updated_at")]
+        if any(stamp.utcoffset() is None for stamp in stamps) or stamps != sorted(stamps):
+            return failed("partial closure lifecycle timestamps contradict")
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return failed("partial closure requires complete aware lifecycle timestamps")
+    facts.update(range_run_id=run["range_run_id"], batch_id=batch_id, terminal_status=status,
+        final_receipt_hash=digest, successful_day_count=success, failed_day_count=failure,
+        unexecuted_day_count=total-success-failure, failure_preserved=True)
+    return "passed", None, facts
+
+
 def _validate_run_terminal_evidence(
     payload: Any,
     *,
@@ -517,10 +580,18 @@ def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[st
         value = payload.get(field)
         if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
             return "failed", f"collection payload reports failure {field}={value.strip()}", {}
+    # Local-data returns the standard {status, data: {items, ...}} envelope.
+    # Validate both levels; an outer success marker must not hide an inner
+    # error/malformed collection. Row statuses themselves are collection facts.
+    if isinstance(payload.get("data"), dict):
+        state, reason, facts = _validate_collection_payload(payload["data"])
+        return state, reason, {**facts, "envelope": "data"}
     for key in _COLLECTION_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list):
             return "passed", None, {"items_key": key, "size": len(value)}
+        if key == "items" and key in payload:
+            return "failed", "collection items must be an array", {}
     if payload.get("ok") is True:
         return "passed", None, {"ok": True}
     for field in _STATUS_FIELD_NAMES:
@@ -833,6 +904,60 @@ def _validate_advisory_historical_operations(
     }
 
 
+def _validate_advisory_lstm_shadow_capture(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Require an actual prospective capture; a configured model alone is not runtime proof."""
+    facts: dict[str, Any] = {}
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return "failed", "shadow status requires ok=true without errors", facts
+    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/reranking-shadow", urllib.parse.urlsplit(url).path)
+    if not match or payload.get("program_id") != urllib.parse.unquote(match.group(1)):
+        return "failed", "shadow program identity differs", facts
+    if (payload.get("status") != "SHADOW_ONLY" or payload.get("production_ranking_replaced") is not False
+            or payload.get("independent_economic_confirmation") is not False):
+        return "failed", "shadow must remain active observation without production or economic promotion", facts
+    release, days = payload.get("release"), payload.get("days")
+    if (not isinstance(release, dict) or release.get("schema") != "lstm_spo_shadow_v1"
+            or release.get("program_id") != payload["program_id"] or release.get("mode") != "SHADOW_ONLY"
+            or type(release.get("physical_fit_count")) is not int or release["physical_fit_count"] != 0
+            or not all(re.fullmatch(r"[0-9a-f]{64}", str(release.get(k, ""))) for k in ("sha256", "model_sha256"))):
+        return "failed", "shadow frozen release identity is invalid", facts
+    captured, complete = payload.get("captured_days"), payload.get("complete_days")
+    if (not isinstance(days, list) or type(captured) is not int or type(complete) is not int
+            or captured != len(days) or not 0 <= complete <= captured):
+        return "failed", "shadow capture counts are inconsistent", facts
+    facts.update(program_id=payload["program_id"], captured_days=captured, complete_days=complete,
+                 release_sha256=release["sha256"], economic_confirmation=False)
+    if not days:
+        return "failed", "no prospective capture yet; configured status is insufficient", facts
+    try:
+        instants = []
+        decision_dates = set()
+        for day in days:
+            decision = datetime.fromisoformat(day["decision_date"]).date()
+            target = datetime.fromisoformat(day["target_date"]).date()
+            observed = datetime.fromisoformat(day["observed_at"])
+            local = observed.astimezone(timezone(timedelta(hours=8)))
+            opened = datetime.combine(target, datetime.min.time(), tzinfo=local.tzinfo) + timedelta(hours=9, minutes=30)
+            closed = datetime.combine(decision, datetime.min.time(), tzinfo=local.tzinfo) + timedelta(hours=15)
+            if (observed.utcoffset() is None or decision >= target or not closed <= local < opened
+                    or day["decision_date"] in decision_dates
+                    or not re.fullmatch(r"[0-9a-f]{64}", day["prediction_sha256"])):
+                return "failed", "shadow capture identity or prospective clock is invalid", facts
+            decision_dates.add(day["decision_date"])
+            instants.append(observed)
+        if sum(day.get("evaluation", {}).get("status") == "COMPLETE" for day in days) != complete:
+            return "failed", "shadow complete count differs from persisted days", facts
+        failure = payload.get("last_failure")
+        if failure is not None:
+            failed_at = datetime.fromisoformat(failure["observed_at"])
+            if failed_at.utcoffset() is None or failed_at >= max(instants):
+                return "failed", "shadow has no successful capture after its last failure", facts
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "failed", "shadow capture evidence is malformed", facts
+    facts["latest_capture_at"] = max(instants).isoformat()
+    return "passed", None, facts
+
+
 def _validate_advisory_entry_price_status(
     payload: Any,
     *,
@@ -933,6 +1058,62 @@ def _validate_advisory_trading_day_defaults(payload: Any, *, url: str) -> tuple[
     return "passed", None, {"calendar_only": True, "market_data_readiness": "not_evaluated",
                              "as_of_date": as_of.isoformat(), "latest_trading_day": values[-1],
                              "next_trading_day": next_value, "trading_day_count": len(days)}
+
+
+def _validate_advisory_workbench_daily(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Validate a saved-list page; source identity and the two-request smoke remain separate."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        match = re.fullmatch(r"/api/v1/advisory/workbench/programs/([^/]+)/daily", parsed.path)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "advisory_workbench_v1":
+            raise ValueError("daily page schema is missing")
+        if not match or payload.get("program_id") != match[1]:
+            raise ValueError("daily page program differs")
+        target = payload.get("target_date")
+        if not isinstance(target, str) or datetime.strptime(target, "%Y-%m-%d").date().isoformat() != target:
+            raise ValueError("daily page target date is invalid")
+        snapshot = payload.get("snapshot_id")
+        if not isinstance(snapshot, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot):
+            raise ValueError("daily page snapshot is missing")
+        for name, actual in (("target_date", target), ("snapshot_id", snapshot)):
+            if name in query and query[name] != [actual]:
+                raise ValueError(f"daily page {name} differs from request")
+        limit, offset, total = (payload.get(k) for k in ("limit", "offset", "total_count"))
+        if any(type(v) is not int for v in (limit, offset, total)) or limit not in {20, 50, 100} or offset < 0 or total < 0:
+            raise ValueError("daily page bounds are invalid")
+        for name, actual, default in (("limit", limit, 20), ("offset", offset, 0)):
+            if query.get(name, [str(default)]) != [str(actual)]:
+                raise ValueError(f"daily page {name} differs from request")
+        items = payload.get("items")
+        if not isinstance(items, list) or len(items) != min(limit, max(0, total - offset)):
+            raise ValueError("daily page count differs")
+        status, version = payload.get("status"), payload.get("list_version_id")
+        if status == "NO_CURRENT_LIST":
+            if version is not None or total != 0 or items or payload.get("summary") is not None:
+                raise ValueError("absent daily list contains recommendation data")
+        elif status == "PUBLISHED":
+            binding = payload.get("binding_version_id")
+            if (not isinstance(version, str) or not version or not isinstance(binding, str) or not binding
+                    or not isinstance(payload.get("summary"), dict)):
+                raise ValueError("published daily list identity is missing")
+            symbols = []
+            for row in items:
+                if (not isinstance(row, dict) or row.get("program_id") != match[1]
+                        or row.get("list_version_id") != version
+                        or row.get("binding_version_id") != payload.get("binding_version_id")
+                        or not isinstance(row.get("symbol"), str) or not re.fullmatch(r"[0-9]{6}\.(SH|SZ|BJ)", row["symbol"])):
+                    raise ValueError("daily row identity differs")
+                symbols.append(row["symbol"])
+            if len(symbols) != len(set(symbols)):
+                raise ValueError("daily page contains duplicate symbols")
+        else:
+            raise ValueError("daily page is not a saved publication or explicit absence")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return "failed", str(exc), {}
+    return "passed", None, {"program_id": match[1], "target_date": target, "snapshot_id": snapshot,
+        "status": status, "page_rows": len(items), "total_count": total, "economic_acceptance": "not_evaluated",
+        "default_explicit_roundtrip": "requires_separate_readback"}
 
 
 def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
@@ -1797,6 +1978,50 @@ def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[st
     if len(pool_ids) != len(set(pool_ids)):
         return "failed", "QE dataset profile contains duplicate pool_id values", required
     return "passed", None, {**required, "universe_count": len(pool_ids)}
+
+
+def _validate_qe_batch_execution_policy(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Prove the loaded QE default placement and workload limits, not just HTTP."""
+    expected = {
+        "version": "qe_model_workload_v2",
+        "default_node_allocation": "balanced",
+        "per_node_workload_limits": {"cpu_full_fit_loop": 4, "gpu_full_fit_loop": 2, "pure_backtest_loop": 4},
+        "model_node_affinity": {"gpu": "wsl2-5080"},
+        "cpu_training_nodes": ["rdagent-node1", "wsl2-5080"],
+        "prediction_replay_nodes": ["rdagent-node1", "wsl2-5080"],
+        "slot_lifetime": "whole_loop",
+        "stricter_model_and_global_capacity_guards": "preserved",
+        "existing_task_bindings": "submitted_immutable_pending_explicit_cas",
+    }
+    if not isinstance(payload, dict):
+        return "failed", "QE execution policy must be a JSON object", {}
+    limits = payload.get("per_node_workload_limits")
+    if not isinstance(limits, dict) or any(type(limits.get(key)) is not int for key in ("cpu_full_fit_loop", "gpu_full_fit_loop", "pure_backtest_loop")):
+        return "failed", "QE execution policy limits must be integers", {}
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            return "failed", f"QE execution policy mismatch: {field}", {}
+    return "passed", None, expected
+
+
+def _validate_qe_workspace_preflight(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Require the actual loaded metadata-read contract, not HTTP-only success."""
+    expected = {
+        "status": "ready",
+        "workspace_config_read_policy": "qe_workspace_config_get_retry_v1",
+        "max_read_attempts": 3,
+        "submission_performed": False,
+    }
+    if not isinstance(payload, dict) or set(payload) != set(expected) | {"node_id"}:
+        return "failed", "QE workspace preflight payload fields are incomplete or unknown", {}
+    node_id = payload.get("node_id")
+    if not isinstance(node_id, str) or not node_id.strip() or node_id != node_id.strip():
+        return "failed", "QE workspace preflight node_id is invalid", {}
+    if type(payload["max_read_attempts"]) is not int or payload["submission_performed"] is not False:
+        return "failed", "QE workspace preflight read/submission contract is invalid", {}
+    if any(payload.get(field) != value for field, value in expected.items()):
+        return "failed", "QE workspace preflight loaded contract does not match", {}
+    return "passed", None, {**expected, "node_id": node_id}
 
 
 def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:

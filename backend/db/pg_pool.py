@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 import threading
 import traceback
 import inspect
@@ -25,6 +26,7 @@ warnings.filterwarnings(
 
 
 _DB_POOL: Optional[ThreadedConnectionPool] = None
+_READ_SNAPSHOT = ContextVar("aistock_read_snapshot", default=None)
 logger = logging.getLogger("aistock.db.pg_pool")
 
 DEFAULT_STATEMENT_TIMEOUT_MS = 60_000
@@ -360,6 +362,55 @@ def _rollback_connection(
 
 
 @contextmanager
+def capture_read_snapshot():
+    """Short, invocation-local capture shared by existing synchronous readers.
+
+    Borrowers neither commit nor reconfigure this READ ONLY transaction. Do not
+    carry it into model computation or submit readers to an independent thread.
+    Cross-process readers must consume captured frames, not reopen latest data.
+    """
+    active = _READ_SNAPSHOT.get()
+    if active is not None:
+        if active[1] != threading.get_ident():
+            raise RuntimeError("input snapshot cannot be borrowed across threads")
+        yield active[0]
+        return
+    with get_conn(autocommit=False, manage_transaction=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        token = _READ_SNAPSHOT.set((conn, threading.get_ident(), {}, _CapturedReader(conn)))
+        try:
+            yield conn
+        finally:
+            _READ_SNAPSHOT.reset(token)
+
+
+def captured_read_cache():
+    """Invocation-local raw cache, never reused by a later DB snapshot."""
+    active = _READ_SNAPSHOT.get()
+    return active[2] if active is not None else None
+
+
+class _CapturedReader:
+    """Nested legacy readers cannot end/reconfigure their owner's snapshot."""
+    def __init__(self, connection):
+        self._connection = connection
+
+    def __getattr__(self, name):
+        if name in {"commit", "rollback", "close", "set_session", "set_isolation_level", "reset"}:
+            raise RuntimeError("captured reader cannot alter snapshot ownership")
+        return getattr(self._connection, name)
+
+    @property
+    def autocommit(self):
+        return False
+
+    @autocommit.setter
+    def autocommit(self, value):
+        raise RuntimeError("captured reader cannot change autocommit")
+
+
+@contextmanager
 def get_conn(*, autocommit: bool = True, manage_transaction: bool = False):
     """Yield a DB connection, using pool when available.
 
@@ -367,6 +418,12 @@ def get_conn(*, autocommit: bool = True, manage_transaction: bool = False):
     - 若池未初始化或初始化失败，则退回到临时直连模式。
     """
 
+    active = _READ_SNAPSHOT.get()
+    if active is not None:
+        if active[1] != threading.get_ident() or manage_transaction or not autocommit:
+            raise RuntimeError("input snapshot is read-only; nested transaction ownership is forbidden")
+        yield active[3]
+        return
     global _DB_POOL
     start_time = time.time()
     if _DB_POOL is None:

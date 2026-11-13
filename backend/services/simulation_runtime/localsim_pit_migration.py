@@ -87,10 +87,35 @@ def freeze_pit_policy(config, *, start, end=None, resolver, expected_policy=None
 
 def refresh_migrated_daily_pit(metadata, *, trade_date, resolver=None):
     """Freeze a new business day, retaining the explicitly chosen rule set."""
+    return refresh_daily_pit(metadata, trade_date=trade_date, resolver=resolver,
+                             expected_policy=metadata[POLICY_KEY])
+
+
+def refresh_daily_pit(metadata, *, trade_date, resolver=None, expected_policy=None):
+    """Bind a new live daily release; never change a saved lease or replay plan."""
+    from .localsim_input_source_plan import PLAN_KEY
+
+    if PLAN_KEY in metadata:
+        _fail("a frozen replay source plan cannot be renewed as a live day",
+              "LOCALSIM_PIT_FROZEN_SOURCE_PLAN_REBIND_REQUIRED")
+    previous = SelectionPitRuntimeLease.from_mapping(metadata.get(CANONICAL_PIT_RUNTIME_LEASE_KEY))
+    if metadata["selection_runtime_config"].get(CANONICAL_PIT_RUNTIME_LEASE_KEY) != previous.as_dict():
+        _fail("LocalSIM daily PIT source projection differs from its saved lease",
+              "LOCALSIM_PIT_DAILY_SOURCE_LEASE_CONFLICT")
+    expected = expected_policy if expected_policy is not None else (
+        metadata[POLICY_KEY] if POLICY_KEY in metadata else _policy_identity(previous.as_dict()))
     config, lease, policy = freeze_pit_policy(metadata["selection_runtime_config"], start=trade_date,
-        resolver=resolver or CanonicalPitAuthorityResolver(), expected_policy=metadata[POLICY_KEY])
+        resolver=resolver or CanonicalPitAuthorityResolver(), expected_policy=expected)
     result = deepcopy(metadata)
-    result.update(selection_runtime_config=config, **{CANONICAL_PIT_RUNTIME_LEASE_KEY: lease, POLICY_KEY: policy})
+    result.update(selection_runtime_config=config, **{CANONICAL_PIT_RUNTIME_LEASE_KEY: lease})
+    if POLICY_KEY in metadata:
+        result[POLICY_KEY] = policy
+    result["localsim_daily_pit_renewal_v1"] = {
+        "schema_version": "localsim_daily_pit_renewal_v1", "trade_date": trade_date.isoformat(),
+        "previous_coverage_end": previous.coverage_end.isoformat(),
+        "previous_lease_sha256": canonical_json_sha256(previous.as_dict()),
+        "lease_sha256": canonical_json_sha256(lease), "policy_sha256": policy["policy_sha256"],
+    }
     return result
 
 

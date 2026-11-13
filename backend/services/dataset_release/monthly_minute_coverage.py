@@ -15,6 +15,8 @@ import numpy as np
 
 from .canonical_stock_transformer import _normalize_raw_values, _transform_raw_row
 from .monthly_build_resume import _plain, _signature
+from .monthly_legacy_prefix import resolve_legacy_component_pin
+from .source_fact_history import is_a_share
 from .stock_schema import QLIB_STOCK_FIELDS
 
 
@@ -48,24 +50,47 @@ def historical_catalog_gaps(spans, *, provider: Path, days, before: date):
     return [{'ts_code': code, 'trade_date': day} for code, day in sorted(holes)]
 
 
-def capture_historical_coverage(*, prefix, pit, cutoff, connection):
+def capture_historical_coverage(*, prefix, pit, cutoff, connection, additional_quote_days=(),
+                                suspension_authority=None):
     """Capture only historical catalog holes in the exported SOURCE snapshot.
 
     Empty source days remain explicit and must still be explained by the
     existing consumer's suspension/exclusion rules. No synthetic bars appear.
     """
     from .monthly_minute_repair import capture_database_minutes
-    provider = prefix.root / Path(prefix.manifest['components']['minute_meta_export']['path']).parent
+    provider = prefix.root / Path(resolve_legacy_component_pin(prefix, 'minute_meta_export')['path']).parent
     sessions = calendar_sessions(provider / 'calendars/1min.txt')
     # Some inherited calendars contain a 13:00 placeholder; it is not a bar.
     sessions = {day: [t for t in rows if t[11:] != '13:00:00'] for day, rows in sessions.items()}
-    daily = prefix.root / Path(prefix.manifest['components']['daily_meta_export']['path']).parent
+    from .monthly_construction_facts import daily_catalog_provider
+    daily = daily_catalog_provider(prefix)
     spans = [line.split('\t') for line in
              (daily / 'instruments/all.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
+    spans.extend((code,day,day) for code,day in additional_quote_days)
+    # Daily all also contains indexes. This stock-minute route uses fact
+    # identity, never PIT eligibility; indexes keep their independent route.
+    spans = [span for span in spans if is_a_share(span[0])]
     # Daily all is the factual quote catalog. Never substitute eligible spans:
     # ST, IPO-warmup and exited securities still require their real minute bars.
     keys = historical_catalog_gaps(spans,
         provider=provider, days=sessions, before=cutoff.replace(day=1))
+    if not keys:
+        return None
+    # A catalogue span includes suspended sessions. Reuse the shared day-state
+    # contract, not zero-volume bars or private S/R precedence, for exact holes.
+    from backend.data_service.suspension_day_authority import full_day_keys
+    with connection.cursor() as cursor:
+        cursor.execute(
+            'SELECT s.ts_code,s.trade_date,s.suspend_type,s.suspend_timing FROM market.suspend_d s '
+            'JOIN unnest(%s::text[],%s::date[]) AS k(ts_code,trade_date) '
+            'ON s.ts_code=k.ts_code AND s.trade_date=k.trade_date',
+            ([key['ts_code'] for key in keys], [date.fromisoformat(key['trade_date']) for key in keys]),
+        )
+        events = [dict(zip(('ts_code', 'trade_date', 'suspend_type', 'suspend_timing'), row))
+                  for row in cursor.fetchall()]
+    suspended = full_day_keys(events, authority=suspension_authority,
+                             required_dates={date.fromisoformat(key['trade_date']) for key in keys})
+    keys = [key for key in keys if (key['ts_code'], date.fromisoformat(key['trade_date'])) not in suspended]
     if not keys:
         return None
     return capture_database_minutes({'stock_dates': keys}, cutoff=cutoff, frozen_sessions=sessions,

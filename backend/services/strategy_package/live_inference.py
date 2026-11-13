@@ -1900,6 +1900,14 @@ class QEExperimentRuntimeAssetResolver:
         if artifact_config and not isinstance(artifact_config, dict):
             raise RuntimeConfigInvalidError("selection_artifact_config must be an object")
 
+        input_readiness = None
+        if "input_readiness_by_package" in artifact_config:
+            from backend.services.data_integrity.inputs import check_binding, InputReadinessError
+            input_readiness = artifact_config["input_readiness_by_package"].get(package_id)
+            check_binding(input_readiness)
+            if input_readiness["manifest_sha256"] != manifest_sha256:
+                raise InputReadinessError("workspace manifest differs from input readiness binding")
+
         source_conf = self._resolve_conf_path(source)
         factor_source_dir = self._resolve_factor_source_dir(source)
         factor_order_resolution = self._build_factor_order(
@@ -2000,6 +2008,7 @@ class QEExperimentRuntimeAssetResolver:
                 {
                     "schema_version": 1,
                     "task_id": package_id,
+                    "input_readiness": input_readiness,
                     "source": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
                     "primary_assets": {
                         "model_weight_relpath": "model/params.pkl",

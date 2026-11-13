@@ -26,6 +26,7 @@ non_runtime_source_paths:
   # Explicit offline packaging recovery; API/worker do not import this CLI.
   - backend/services/dataset_release/monthly_build_recovery.py
   # CLI-only canonical PIT evidence/preparation: no server/worker entrypoint.
+  - backend/services/canonical_pit_release.py
   - backend/services/dataset_release/canonical_pit_candidate_bundle.py
   - backend/services/dataset_release/canonical_pit_w8_attestation.py
   - backend/services/dataset_release/canonical_pit_activation_envelope.py
@@ -49,6 +50,25 @@ non_runtime_source_paths:
   - scripts/start_aistock_github_runner.ps1
   - scripts/supervise_aistock_github_runner.ps1
 source_role_rules:
+  # Independent main()/__main__ study CLI. research_performance imports its
+  # account computation only inside the CLI-owned serial/spawn pool paths.
+  # Keep the shared helpers, native runtime and dual_mode_projection online.
+  - rule_id: offline-localsim-dual-mode-study
+    role: non_runtime
+    source_globs:
+      - backend/services/simulation_execution/localsim/dual_mode_research.py
+  # Only the fresh-process builder and its tests import this source. The
+  # produced C-013 bundle is consumed as data; activation is a separate action.
+  - rule_id: offline-hmm-observed-industry-authority
+    role: non_runtime
+    source_globs:
+      - backend/services/hmm_risk/observed_industry_authority.py
+  # 调用闭包仅为 signed-member 离线研究 CLI 和测试；只登记此精确路径。
+  # 产物生成与运行激活分离，相邻 reader 和线上消费者继续按运行态验收。
+  - rule_id: offline-hmm-signed-member-return
+    role: non_runtime
+    source_globs:
+      - backend/services/hmm_risk/risk_l2_member_return.py
   # Exact offline sources pending their business PR; do not exempt adjacent versions or API consumers.
   - rule_id: offline-advisory-fixed5-valuation
     role: non_runtime
@@ -85,6 +105,7 @@ targets:
       - start_all_ai_stock.bat
       - start_backend.bat
       - scripts/start_ai_stock.py
+      - scripts/backend_lifecycle.py
       - requirements*.txt
       - pyproject.toml
     production_port: 8001
@@ -98,6 +119,20 @@ targets:
       business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
       database_readback_ref: bug_record.runtime_contract.database_readback_ref
     startup_budget_seconds: 120
+    probe_routes:
+      - route_id: hmm_database_risk_l2_readback
+        # Only the registered source gets these defaults; mixed changes fail closed.
+        source_globs:
+          - backend/services/hmm_risk/risk_l2_database_inference.py
+        probe_mode: http
+        business_smoke_contract_id: hmm_risk_l2_overview
+        operator_runbook_ref: docs/operations/hmm_database_runtime_finish_runbook.md
+        probes:
+          health_ref: http://127.0.0.1:8001/api/v1/health
+          identity_ref: http://127.0.0.1:8001/api/v1/runtime-identity
+          # Existing persisted Risk L2 run, also used by BUG-2065/BUG-2068.
+          business_smoke_ref: http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26
+          database_readback_ref: bug_record.runtime_contract.database_readback_ref
   tdx-go-backend:
     runtime_kind: backend
     source_globs:
@@ -234,6 +269,8 @@ targets:
           - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/factor_materializer.py
           - backend/services/dataset_release/source_fact_history.py
+          - backend/services/dataset_release/component_artifact_manifest.py
+          - backend/services/dataset_release/component_manifest_producer.py
           - backend/services/dataset_release/monthly_consumer_layout.py
           - backend/services/dataset_release/monthly_local_validation.py
           - backend/services/dataset_release/monthly_worker_nodes.py
@@ -250,6 +287,12 @@ targets:
           - backend/services/dataset_release/monthly_industry_history.py
           - backend/services/dataset_release/monthly_mature_build_runner.py
           - backend/services/dataset_release/artifact_ready_build_source.py
+          # Shared helpers imported by the current build_stage/monthly path
+          # also require the supervised worker when changed in isolation.
+          - backend/services/dataset_release/component_artifact_manifest.py
+          - backend/services/dataset_release/component_manifest_producer.py
+          - backend/services/dataset_release/factor_materializer.py
+          - backend/services/dataset_release/source_fact_history.py
           # New monthly releases own shared BUILD-only fixes as well. The old
           # direct-v2 worker entry keeps its separate heartbeat route below.
           - backend/services/dataset_release/build_stage.py
@@ -264,6 +307,9 @@ targets:
           - backend/services/dataset_release/monthly_supervised_build.py
           - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/candidate_consumer_smoke.py
+          - backend/services/dataset_release/artifact_ready_source.py
+          - backend/services/dataset_release/candidate_validator.py
+          - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
@@ -305,6 +351,30 @@ targets:
           - backend/services/dataset_release/source_pool.py
           - backend/services/dataset_release/component_artifact_manifest.py
           - backend/services/dataset_release/component_manifest_producer.py
+          - backend/services/dataset_release/mixed_planner.py
+          - backend/services/dataset_release/stk_limit_overlay.py
+          - backend/services/dataset_release/worker.py
+          - backend/services/dataset_release/windows_job.py
+          - backend/services/dataset_release/wsl_cgroup.py
+          - scripts/dataset_release_worker.py
+          - scripts/dataset_release_source_stage.py
+          - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
+        # Helpers shared with the supervised monthly build are not
+        # evidence of a legacy invocation by themselves. A legacy-owned source
+        # must participate; mixed actual legacy calls retain their heartbeat.
+        required_source_globs:
+          - backend/services/dataset_release/a_share_limit_rule.py
+          - backend/services/dataset_release/build_processor.py
+          - backend/services/dataset_release/index_contract.py
+          - backend/services/dataset_release/index_sources.py
+          - backend/services/dataset_release/minute_overlay.py
+          - backend/services/dataset_release/process_liveness.py
+          - backend/services/dataset_release/profile.py
+          - backend/services/dataset_release/resolution_processor.py
+          - backend/services/dataset_release/resource_budget.py
+          - backend/services/dataset_release/resource_gate.py
+          - backend/services/dataset_release/sector_data_candidate_source.py
+          - backend/services/dataset_release/source_pool.py
           - backend/services/dataset_release/mixed_planner.py
           - backend/services/dataset_release/stk_limit_overlay.py
           - backend/services/dataset_release/worker.py

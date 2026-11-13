@@ -13,7 +13,7 @@ import pandas as pd
 
 SOURCE_HISTORY_CONTRACT = "unique_selected_security_source_window_facts_v1"
 
-_A_SHARE = re.compile(r'(?:[03][0-9]{5}\.SZ|6[0-9]{5}\.SH)')
+_A_SHARE = re.compile(r'(?:(?:000|001|002|003|300|301|302)[0-9]{3}\.SZ|(?:600|601|603|605|688|689)[0-9]{3}\.SH)')
 
 
 def is_a_share(code: str) -> bool:

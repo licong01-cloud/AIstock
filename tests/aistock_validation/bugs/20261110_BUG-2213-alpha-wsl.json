@@ -1,0 +1,326 @@
+{
+  "actual": "B0/F0/PKG_LSTM三个恢复run在远端POST前被qe_wsl_isolation_requires_canonical_workspace_cd拒绝，远端CPU路径独立运行",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "tests/aistock_validation/bugs/20261110_BUG-2213-alpha-wsl.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2213",
+  "closed_at": "2026-11-10T19:20:57.489924Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-10T18:06:45.539332Z",
+  "description": "B0/F0/PKG_LSTM三个恢复run在远端POST前被qe_wsl_isolation_requires_canonical_workspace_cd拒绝，远端CPU路径独立运行",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261110-e3c4e1f16135",
+      "timestamp": "2026-11-10T18:06:45.539315Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-ensemble-materialization-repair-20261111/state.json"
+  ],
+  "expected": "真实多Alpha纯回测命令可通过WSL隔离并保留原执行命令及预算",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2213-alpha-wsl.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2213-alpha-wsl.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/remote_dispatch.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ]
+  },
+  "first_seen_at": "2026-11-10T18:06:45.539332Z",
+  "fix_branch": null,
+  "fix_commit": "d312b9a7d68006b7024016308ac881f3c2ff0607",
+  "fix_summary": "?WSL producer???????????????????Bash??????CAS???????CPU???????producer/coordinator??????????",
+  "fixed_at": "2026-11-10T18:20:51Z",
+  "github_issue_number": 7204,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7204",
+  "last_seen_at": "2026-11-10T18:06:45.539332Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7205",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py -k real_multi_alpha -q",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "review_evidence": [
+    "Correctness: genuine _remote_wsl_command passes actual coordinator isolation at final transport; immutable command/input hash and20GiB reservation checked.",
+    "Completeness/regression: remoteCPU unchanged; spaces/quote path safe; missing/relative/Windows path fails closed; 77 targeted tests pass; no service or dataset change.",
+    "DESIGN-COMPLIANCE-001: scope checked; no simplified/placeholder or protection bypass; original trading/economic inputs unchanged; runtime activation remains pending user restart."
+  ],
+  "risk_area": "bug",
+  "root_cause": "?Alpha producer??bash?????WSL guard?canonical cd &&????protocol???isolate_payload????????producer?guard???",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python loaded final producer and real WSL isolation; original Bash/CAS/scrub command preserved, replay20GiB, no POST/fit/inference/backtest. tmp/issue_workflow/BUG-2213/fresh-process-evidence.json. Real producer/coordinator transport matrix and existing isolation/credential regressions:77 passed."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2213/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2213",
+      "business_smoke_semantic": {
+        "contract_id": "qe_batch_execution_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "7156e5e98436784fb45b689681c4f3a78eca1547c0decf44e07b1cc039bde9af",
+      "expected_identity": "d312b9a7d68006b7024016308ac881f3c2ff0607",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-10T19:19:32.218197Z",
+      "mode": "read_only",
+      "observed_identity": "2d933398874b67dae255cd404b4de426364c4ee7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "963773420a87325bf27dac877ffd318f1457243a0500cc1c8d6d04f9a43e6416",
+      "receipt_sha256": "9fe4805b5d3aace8d40e994ab6b7a8d2200d8ec0e26ce25eb2a7e66ee3417621",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a4b3f85db93b5b958d56c435fcdb10904725f81a101b010c58294b7f7d1deb05",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2213",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f982c9ed03338a97",
+    "recorded_at": "2026-11-10T18:21:30.070668Z",
+    "runtime_contract_digest": "7156e5e98436784fb45b689681c4f3a78eca1547c0decf44e07b1cc039bde9af",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "18d95670627e177d708415e8d2f113e668ea23c9",
+    "source_merge_commit": "d312b9a7d68006b7024016308ac881f3c2ff0607",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7205",
+    "validation_evidence": [
+      "validation-receipt: id=8804bbd326072c14 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+      "validation-receipt: id=4b4b61f47c231f99 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py -q` result=`passed 77 tests`",
+      "validation-receipt: id=56df0adca16839b8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`",
+      "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "ab5171c2cc644d47d74256728cc27132e56cc31d610d7a9de25cad59dcd28c99"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "多Alpha纯回测命令不符合WSL隔离入口导致派发前失败",
+  "trigger_condition": {
+    "fingerprint": "e3c4e1f161351e6b98aa549c",
+    "source_event_id": "FE-20261110-e3c4e1f16135"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=8804bbd326072c14 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=4b4b61f47c231f99 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py -q` result=`passed 77 tests`",
+    "validation-receipt: id=56df0adca16839b8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`",
+    "validation-receipt: id=0465504ff6e8f4c8 commit=18d95670627e177d708415e8d2f113e668ea23c9 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2213 --target backend-main --expected-identity 2d933398874b67dae255cd404b4de426364c4ee7 -> passed runtime identity and business smoke; actual WSL B0 worker started with20GiB memory scope",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2213 --target backend-main --expected-identity d312b9a7d68006b7024016308ac881f3c2ff0607 -> passed source ancestry runtime identity and business smoke; actual WSL B0 worker active with20GiB memory scope"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

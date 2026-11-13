@@ -28,6 +28,76 @@ def stk_limit_prices_valid(row: Any) -> bool:
         return False
 
 
+def complete_stk_limit_daily_references(rows, daily_rows, trade_date):
+    """Supplement only invalid references with the same day's official daily fact.
+
+    This is NOT a shifted close: daily.pre_close already contains the provider's
+    ex-right reference. Keep finite original references and every limit intact.
+    The proof is shared by ingestion, bounded repair and frozen corrections.
+    """
+    day = str(trade_date).replace("-", "")
+
+    def positive(value):
+        try:
+            number = Decimal(str(value))
+            return not isinstance(value, bool) and number.is_finite() and number > 0
+        except (InvalidOperation, ValueError, TypeError):
+            return False
+
+    def number(value):
+        return None if value is None else format(Decimal(str(value)).normalize(), "f")
+
+    def keyed(items):
+        result = {}
+        for row in items:
+            code = row.get("ts_code")
+            if (not isinstance(code, str) or not code or code in result
+                    or str(row.get("trade_date")).replace("-", "") != day
+                    or "pre_close" not in row):
+                raise ValueError("same-day reference source key/date differs or is duplicated")
+            result[code] = row
+        return result
+
+    source, references = keyed(rows), keyed(daily_rows)
+    output, facts = [], []
+    for code, original in source.items():
+        row = dict(original)
+        daily = references.get(code)
+        if not positive(original.get("pre_close")) and daily is not None:
+            candidate = {**original, "pre_close": daily["pre_close"]}
+            if positive(daily["pre_close"]) and stk_limit_prices_valid(candidate):
+                row["pre_close"] = daily["pre_close"]
+                facts.append({"ts_code": code, "trade_date": day,
+                              "original_pre_close": number(original.get("pre_close")),
+                              "pre_close": number(daily["pre_close"]),
+                              "up_limit": number(row["up_limit"]), "down_limit": number(row["down_limit"])})
+        output.append(row)
+    return output, {"schema_version": "stk_limit_daily_reference_enrichment_v1",
+                    "trade_date": str(trade_date), "source_api": "tushare.daily",
+                    "source_field": "pre_close", "filled_reference_count": len(facts),
+                    "unresolved_reference_count": sum(not positive(row.get("pre_close")) for row in output),
+                    "facts": sorted(facts, key=lambda row: row["ts_code"])}
+
+
+def validate_stk_limit_daily_reference_proof(proof, source_rows, trade_date):
+    """Reproduce a mixed-source repair instead of relabeling it as stk_limit."""
+    if (not isinstance(proof, dict) or proof.get("schema_version") != "stk_limit_daily_reference_enrichment_v1"
+            or proof.get("source_api") != "tushare.daily" or proof.get("source_field") != "pre_close"
+            or proof.get("trade_date") != str(trade_date) or not proof.get("facts")):
+        raise ValueError("daily reference enrichment proof differs")
+    facts = proof["facts"]
+    original = [{**row, "pre_close": row["original_pre_close"]} for row in facts]
+    merged, repeated = complete_stk_limit_daily_references(original, facts, trade_date)
+    if repeated["facts"] != facts or repeated["filled_reference_count"] != proof.get("filled_reference_count"):
+        raise ValueError("daily reference enrichment facts do not reproduce")
+    by_key = {(row["ts_code"], row["trade_date"]): row for row in source_rows}
+    for row in merged:
+        published = by_key.get((row["ts_code"], row["trade_date"]))
+        if published is None or any(Decimal(str(row[key])) != Decimal(str(published[key]))
+                                    for key in ("pre_close", "up_limit", "down_limit")):
+            raise ValueError("daily reference enrichment differs from published facts")
+
+
 class QueryMode(str, Enum):
     """How the engine iterates over the Tushare API."""
     BY_DATE = "by_date"            # one API call per trade_date
@@ -71,6 +141,7 @@ class DatasetSpec:
     # retry-target -> 23:00 auto-retry chain re-fetches the day via upsert.
     # None (default) keeps the historical behavior (any non-empty day is "ok").
     min_expected_rows: Optional[int] = None
+    required_for_daily_complete: bool = True  # optional research feeds never block A-share readiness
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +173,92 @@ DAILY_BASIC = DatasetSpec(
         "free_share": "numeric",
         "total_mv": "numeric",
         "circ_mv": "numeric",
+        "limit_status": "smallint",
     },
     batch_sleep=0.12,
     rate_per_minute=500,
     trading_day_only=True,
 )
+
+US_INDEX_GLOBAL = DatasetSpec(
+    name="index_global", tushare_api="index_global", target_table="market.index_global",
+    primary_keys=["trade_date", "ts_code"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "ts_code": "text", **dict.fromkeys(
+        ("open", "close", "high", "low", "pre_close", "change", "pct_chg", "swing", "vol", "amount"), "numeric")},
+    row_limit=4000, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", incremental_cursor_from_audit=True,
+    required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_us_market_inputs_v1.sql",
+)
+
+US_TRADECAL = DatasetSpec(
+    name="us_tradecal", tushare_api="us_tradecal", target_table="market.us_tradecal",
+    primary_keys=["cal_date"], query_mode=QueryMode.BY_DATE,
+    columns={"cal_date": "date", "is_open": "smallint", "pretrade_date": "date"},
+    date_column="cal_date", row_limit=6000, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_us_market_inputs_v1.sql",
+)
+
+VIX_INDEX = DatasetSpec(
+    name="vix_index", tushare_api="vix_index", target_table="market.vix_index",
+    primary_keys=["trade_date"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "close": "numeric", "pct_change": "numeric"},
+    row_limit=300, rate_per_minute=60, batch_sleep=1.0,
+    initial_start_date="2018-08-01", incremental_cursor_from_audit=True,
+    required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
+)
+
+STOCK_DAILY_AFTERHOURS = DatasetSpec(
+    name="stock_daily_afterhours", tushare_api="daily", target_table="market.stock_daily_afterhours",
+    primary_keys=["trade_date", "ts_code"], query_mode=QueryMode.BY_DATE,
+    columns={"trade_date": "date", "ts_code": "text", "ah_vol": "numeric", "ah_amount": "numeric"},
+    row_limit=6000, rate_per_minute=500, batch_sleep=0.12, trading_day_only=True,
+    initial_start_date="2026-07-06", required_for_daily_complete=False,
+    create_table_script="backend/db/migrations/add_tushare_phase1_inputs_v1.sql",
+)
+
+# Raw event storage is handled by the same engine's bounded event producer.
+# These are provider fields only; locally captured identities are never sent
+# to Tushare as requested fields.
+_SEASONED_FIELDS = (
+    'ts_code ann_date first_ann_date proj_info_source board_approval_dt sh_approval_dt '
+    'sasac_approval_dt csrc_approval_dt fo_type fo_stock_type cur_stage valid_st_dt valid_end_dt '
+    'plan_chg_type plan_chg_ann_dt pricing_method pricing_base_dt price_basis fo_vol_high fo_vol_low '
+    'fo_price_high fo_price_low fo_price_ratio fo_raise_total fo_purpose fo_investor sub_method '
+    'fo_price_act fo_vol_act fo_raise_total_act fo_raise_net_act fo_exp_total uw_fee fo_exp_audit '
+    'fo_exp_legal fo_exp_inst fo_exp_pub fo_exp_reg fo_exp_other fo_exp_per_share issue_obj_type '
+    'pe_issue pub_plac_qty onl_pch_vol onl_pch_num onl_pch_excess onl_winning_rate inst_plac_qty '
+    'inst_sub_eff_total inst_sub_eff_cnt inst_oversub_times a_inv_plac_qty b_inv_plac_qty '
+    'old_sh_pre_plac_qty old_sh_pre_plac_ratio clw_between_inst_pub prospectus_pub_dt '
+    'offer_intent_pub_dt apply_date old_sh_pre_plac_dt onl_issue_date uw_start_dt uw_end_dt '
+    'uw_mode new_share_list_dt list_circ_qty right_reg_dt ex_right_dt update_flag'
+).split()
+
+
+def _event_spec(name, table, fields, floor, *, cap=1000, rate=60, date_param='trade_date'):
+    return DatasetSpec(
+        name=name, tushare_api=name, target_table=f'market.{table}',
+        primary_keys=['source_api', 'source_row_sha256'], query_mode=QueryMode.BY_DATE,
+        columns={field: 'text' for field in fields}, date_column='request_date',
+        date_param_name=date_param, incremental_cursor_from_audit=True,
+        initial_start_date=floor, required_for_daily_complete=False,
+        row_limit=cap, rate_per_minute=rate, batch_sleep=60/rate,
+        create_table_script='backend/db/migrations/add_tushare_event_inputs_v1.sql',
+    )
+
+
+STK_SHOCK = _event_spec('stk_shock', 'tushare_risk_event_raw',
+    'ts_code trade_date name trade_market reason period'.split(), '2018-08-01')
+STK_HIGH_SHOCK = _event_spec('stk_high_shock', 'tushare_risk_event_raw',
+    'ts_code trade_date name trade_market reason period'.split(), '2018-08-01')
+STK_ALERT = _event_spec('stk_alert', 'tushare_risk_event_raw',
+    'ts_code name start_date end_date type'.split(), '2018-08-01')
+IDX_ANNS = _event_spec('idx_anns', 'index_announcements_raw',
+    'ann_date title url source type'.split(), '2018-06-01', rate=50, date_param='ann_date')
+STK_SEASONED = _event_spec('stk_seasoned', 'stock_seasoned_raw', _SEASONED_FIELDS,
+    '2018-08-01', cap=3000, date_param='ann_date')
 
 ADJ_FACTOR = DatasetSpec(
     name="adj_factor",
@@ -177,9 +329,8 @@ STOCK_BASIC = DatasetSpec(
         "is_hs": "text",
     },
     single_call_param_sets=[
-        {"exchange": "", "list_status": "L"},
-        {"exchange": "", "list_status": "D"},
-        {"exchange": "", "list_status": "P"},
+        {"exchange": exchange, "list_status": status}
+        for exchange in ("SSE", "SZSE") for status in ("L", "D", "P")
     ],
     supports_incremental=False,
     date_column="list_date",
@@ -194,11 +345,11 @@ STOCK_ST = DatasetSpec(
     columns={
         "ann_date": "date",
         "ts_code": "text",
-        "start_date": "date",
-        "end_date": "date",
-        "market": "text",
-        "exchange": "text",
     },
+    # The current API publishes daily ST snapshot membership, not dated ST
+    # intervals or exchange metadata. Retain legacy DB columns untouched; do
+    # not invent NULLs for fields omitted by the provider. Event effective
+    # dates continue to come from the separate stock_st_events authority.
     api_field_map={"ann_date": "trade_date"},  # Tushare returns "trade_date", DB column is "ann_date"
     date_column="ann_date",
     batch_sleep=0.3,
@@ -635,6 +786,15 @@ SW_DAILY = DatasetSpec(
 DATASET_REGISTRY: Dict[str, DatasetSpec] = {
     s.name: s
     for s in [
+        VIX_INDEX,
+        US_INDEX_GLOBAL,
+        US_TRADECAL,
+        STOCK_DAILY_AFTERHOURS,
+        STK_SHOCK,
+        STK_HIGH_SHOCK,
+        STK_ALERT,
+        IDX_ANNS,
+        STK_SEASONED,
         DAILY_BASIC,
         ADJ_FACTOR,
         INDEX_DAILY,

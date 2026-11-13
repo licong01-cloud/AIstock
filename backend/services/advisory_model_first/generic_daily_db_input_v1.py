@@ -13,6 +13,7 @@ from backend.services.advisory_model_first.generic_daily_price_input_v1 import (
 from backend.services.advisory_model_first.entry_price_daily_service import BoundedEntryReadSession, EntryWorkBudget
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
+from backend.services.trading_core.errors import DataUnavailableError
 
 META = {"package_id", "run_id", "list_version_id", "universe_identity"}
 RAW_COLUMNS = ("anchor_date", "trade_date", "instrument", "open_li", "high_li", "low_li", "close_li",
@@ -95,9 +96,10 @@ def _unread(packet, status):
 
 
 class GenericDailyReadonlyDBInputV1:
-    def __init__(self, *, session_factory=None, now=None):
+    def __init__(self, *, session_factory=None, now=None, integrity_check=None):
         self._session = session_factory or (lambda: BoundedEntryReadSession(EntryWorkBudget(30.)))
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._integrity_check = integrity_check
 
     def load_day(self, **packet):
         return self.load_batch(packets=[packet])[0]
@@ -148,6 +150,8 @@ class GenericDailyReadonlyDBInputV1:
                                 or not rows.target_date.eq(t).all()):
                             _fail("generic DB authoritative twenty D sessions or immediate T differs")
                         calendars[index] = (*dates, t)
+                    integrity = {index: self._integrity_check(connection, calendars[index][:-1])
+                                 for index in active} if self._integrity_check else {}
                     requests = sorted({(values[i]["decision_date"], day, symbol)
                         for i in active for day in calendars[i][:-1] for symbol in values[i]["candidates"].instrument})
                     raw = _frame(cursor, """/* advisory_generic_raw */
@@ -204,10 +208,13 @@ class GenericDailyReadonlyDBInputV1:
                     shared_batch_query_count=3, market_reason="MARKET_DEFINITION_NOT_REQUESTED",
                     fit_count=0, database_write=False, historical_vintage_proven=False, new_native_receipt=False,
                     eod_ingestion_completeness_attested=False, qualification_rechecked=False)
+                if index in integrity:
+                    receipt["input_readiness"] = integrity[index]
+                    receipt["eod_ingestion_completeness_attested"] = True
                 results[index] = features, receipt
                 session.budget.check()
             return results
-        except AdvisoryModelFirstError:
+        except (AdvisoryModelFirstError, DataUnavailableError):
             raise
         except Exception as error:
             raise AdvisoryModelFirstError(f"generic readonly DB input unavailable: {type(error).__name__}",

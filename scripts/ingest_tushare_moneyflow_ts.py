@@ -13,17 +13,24 @@ Environment:
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import datetime as dt
 import json
 import os
+from pathlib import Path
 import sys
-import time
 import uuid
 from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras as pgx
 from dotenv import load_dotenv
+
+
+# Absolute-path scheduler launches do not put the repository on sys.path.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
 load_dotenv(override=True)
@@ -93,7 +100,8 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
 
 def _get_max_trade_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(trade_date) FROM market.moneyflow_ts")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(trade_date) FROM market.moneyflow_ts WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -186,8 +194,13 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
+    rows = filter_stock_rows(rows)
     if not rows:
         return 0
+    from backend.services.data_integrity.contracts import finite_number
+    rows = [{key: (None if key not in {"trade_date", "ts_code"} and value is not None
+                   and not finite_number(value) else value) for key, value in row.items()} for row in rows]
     sql = (
         "INSERT INTO market.moneyflow_ts (trade_date, ts_code, "
         "buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount, "
@@ -243,17 +256,27 @@ def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
         )
     if not values:
         return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.data_service.moneyflow_contract import TUSHARE_MONEYFLOW_AMOUNT_COLUMNS, TUSHARE_MONEYFLOW_VOLUME_COLUMNS
+    from backend.services.data_integrity.writes import changed_values
+    fields = TUSHARE_MONEYFLOW_AMOUNT_COLUMNS + TUSHARE_MONEYFLOW_VOLUME_COLUMNS
+    # Provider retries cannot erase finite history; compare the merged values
+    # so an identical retry does not dirty the canonical date.
+    for field in fields:
+        sql = sql.replace(f"{field}=EXCLUDED.{field}", f"{field}=COALESCE(EXCLUDED.{field},moneyflow_ts.{field})")
+    sql += " WHERE ROW("+",".join("moneyflow_ts."+f for f in fields)+") IS DISTINCT FROM ROW("+",".join(
+        f"COALESCE(EXCLUDED.{f},moneyflow_ts.{f})" for f in fields)+") RETURNING trade_date"
+    return changed_values(conn, sql, values, dataset="moneyflow_ts", source="tushare_moneyflow")
 
 
 def _fetch_moneyflow_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
+    from backend.services.data_integrity.stock_scope import filter_stock_rows
     ymd = trade_date.strftime("%Y%m%d")
     df = pro.moneyflow(trade_date=ymd, limit=6000)
     rows: List[Dict[str, Any]] = []
     if df is not None and not df.empty:
         for _, row in df.iterrows():
+            if not filter_stock_rows([row]):
+                continue
             rows.append(
                 {
                     "trade_date": trade_date,
@@ -298,12 +321,11 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
         try:
             _update_job_progress(conn, job_id, stats)
             conn.commit()
-        except Exception as exc:  # noqa: BLE001
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            print(f"[WARN] failed to update job progress: {exc}")
+        except Exception:
+            # Facts, revisions and progress did not commit. Never report a
+            # successful day after rollback, or swallow a rollback failure.
+            conn.rollback()
+            raise
     return stats
 
 
@@ -321,7 +343,9 @@ def main() -> None:
     else:
         end_date = today
 
-    with psycopg2.connect(**DB_CFG) as conn:
+    # Helpers own atomic fact/revision transactions; a psycopg connection
+    # context would create an outer transaction even with autocommit=True.
+    with closing(psycopg2.connect(**DB_CFG)) as conn:
         conn.autocommit = True
         _ensure_session_tune(conn, getattr(args, "bulk_session_tune", False))
         pro = pro_api()
@@ -376,6 +400,8 @@ def main() -> None:
             stats = run_ingestion(conn, pro, mode, start_date, end_date, job_id)
             _finish_job(conn, job_id, "success" if stats["failed_days"] == 0 else "failed", {"stats": stats})
             print(f"[DONE] moneyflow_ts mode={mode} stats={stats}")
+            if stats["failed_days"]:
+                sys.exit(1)
         except Exception as exc:  # noqa: BLE001
             _finish_job(conn, job_id, "failed", {"error": str(exc)})
             print(f"[ERROR] moneyflow_ts failed: {exc}")

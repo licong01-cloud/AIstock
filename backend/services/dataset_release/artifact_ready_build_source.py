@@ -286,10 +286,89 @@ class ArtifactReadyBuildSource:
                     instruments=selected_codes,
                     excluded_date_ranges=series_ranges if construction else (),
                 )
+            if effective and dataset == "kline_minute_raw":
+                rows = self._listed_minute_rows(rows, partition_identity=identity)
             output.append(OrderedMappingPartition(identity, rows))
         if not output:
             raise ArtifactReadyBuildSourceError(f"bounded source selection is empty: {component.value}:{dataset}")
         return tuple(output)
+
+    def _frozen_minute_listing_dates(self) -> Mapping[str, date]:
+        cached = getattr(self, "_minute_listing_dates", None)
+        if cached is not None:
+            return cached
+        dates: dict[str, date] = {}
+        # This is the already sealed stock lifecycle, not PIT buy eligibility
+        # and not a runtime query. Unknown lifecycle is never an exclusion.
+        for descriptor in self._descriptors.values():
+            if descriptor.get("dataset") != "stock_basic":
+                continue
+            iterator = iter(self._reader.iter_rows(
+                "stock_basic", str(descriptor["partition_key"]), decode_row_payload=True,
+            ))
+            try:
+                for row in iterator:
+                    if row.get("list_date") is None:
+                        continue
+                    code, listed = str(row["ts_code"]), _as_date(row["list_date"])
+                    if code in dates and dates[code] != listed:
+                        raise ArtifactReadyBuildSourceError("frozen stock listing date conflicts")
+                    dates[code] = listed
+            finally:
+                _close_iterator(iterator)
+        self._minute_listing_dates = dates
+        return dates
+
+    def _listed_minute_rows(
+        self, rows: Iterable[Mapping[str, Any]], *, partition_identity: str,
+    ) -> Iterator[Mapping[str, Any]]:
+        dates = self._frozen_minute_listing_dates()
+        exclusions: dict[tuple[str, str], dict[str, Any]] = {}
+        iterator = iter(rows)
+        try:
+            for row in iterator:
+                code = str(row["ts_code"])
+                listed = dates.get(code)
+                observed = _as_datetime(row["trade_time"]).date()
+                if listed is None or observed >= listed:
+                    yield row
+                    continue
+                # TDX can return a zero-turnover issue/reference quote before
+                # listing. It is not an exchange-traded bar and has no valid
+                # pre-listing adj_factor. Never invent one or use a PIT span.
+                fields = ["volume_hand", "amount_li"]
+                if row.get("volume_shares") is not None:
+                    fields.append("volume_shares")
+                try:
+                    turnover = [Decimal(str(row.get(field))) for field in fields]
+                except InvalidOperation as exc:
+                    raise ArtifactReadyBuildSourceError("pre-listing minute turnover is invalid") from exc
+                if any(not value.is_finite() or value != 0 for value in turnover):
+                    raise ArtifactReadyBuildSourceError(
+                        "pre-listing minute turnover contradicts frozen lifecycle",
+                        context={"ts_code": code, "trade_date": observed.isoformat(), "list_date": listed.isoformat()},
+                    )
+                key = (code, observed.isoformat())
+                item = exclusions.setdefault(key, {
+                    "ts_code": code, "trade_date": observed.isoformat(),
+                    "list_date": listed.isoformat(), "excluded_rows": 0,
+                    "raw_partition_identity": partition_identity,
+                    "reason_code": "PRE_LISTING_ZERO_TURNOVER_REFERENCE_QUOTE",
+                })
+                item["excluded_rows"] += 1
+        finally:
+            _close_iterator(iterator)
+            if not hasattr(self, "_minute_lifecycle_exclusions"):
+                self._minute_lifecycle_exclusions = {}
+            self._minute_lifecycle_exclusions[partition_identity] = exclusions
+
+    @property
+    def minute_lifecycle_summary(self) -> Mapping[str, Any]:
+        entries = [dict(item) for _, values in sorted(getattr(self, "_minute_lifecycle_exclusions", {}).items())
+                   for _, item in sorted(values.items())]
+        return {"excluded_rows": sum(item["excluded_rows"] for item in entries),
+                "entries": entries, "authority": "sealed_stock_basic.list_date",
+                "pit_eligibility_filter_applied": False, "source_rows_modified": False}
 
     def index_rows(self) -> Iterator[Mapping[str, Any]]:
         manifest = self.component_manifests[Component.DOMESTIC_INDEX_CONTEXT]

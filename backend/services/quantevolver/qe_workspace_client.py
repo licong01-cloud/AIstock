@@ -15,6 +15,24 @@ from backend.services.qe_archive.models import normalize_json
 
 logger = logging.getLogger(__name__)
 
+QE_WORKSPACE_CONFIG_READ_POLICY = "qe_workspace_config_get_retry_v1"
+QE_WORKSPACE_CONFIG_READ_ATTEMPTS = 3
+
+
+class QEWorkspaceAssetReadUnavailable(RuntimeError):
+    """A source asset GET is unavailable; its contents have not been rejected."""
+
+    reason_code = "qe_workspace_asset_read_unavailable"
+
+    def __init__(self, *, task_id: str, loop_id: str, error: Exception):
+        self.task_id = task_id
+        self.loop_id = loop_id
+        self.error_type = type(error).__name__
+        super().__init__(
+            f"{self.reason_code}: task={task_id} loop={loop_id} "
+            f"error_type={self.error_type} attempts=3"
+        )
+
 
 class QEWorkspaceResultReadUnavailable(RuntimeError):
     """A bounded GET exhausted transient failures; execution is not failed."""
@@ -1864,17 +1882,34 @@ class QEWorkspaceClient:
             raise
         
     async def get_workspace_config(self) -> Dict[str, Any]:
-        """
-        获取 RDAgent 侧的工作区配置（路径等），用于动态生成 WSL 命令。
-        """
+        """Read node metadata with bounded GET-only transient retries."""
         url = f"{self.base_url}/config"
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to get workspace config: {e}")
-            raise
+        for attempt in range(QE_WORKSPACE_CONFIG_READ_ATTEMPTS):
+            try:
+                response = await self.client.get(url)
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or not payload:
+                    raise ValueError("QE workspace config must be a nonempty JSON object")
+                return payload
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in {429, 502, 503, 504}:
+                    raise
+                transient_error = exc
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                transient_error = exc
+            if attempt == QE_WORKSPACE_CONFIG_READ_ATTEMPTS - 1:
+                logger.error(
+                    "Workspace config GET exhausted: node=%s error_type=%s attempts=%s",
+                    self.node_id, type(transient_error).__name__, QE_WORKSPACE_CONFIG_READ_ATTEMPTS,
+                )
+                raise transient_error
+            delay = attempt + 1
+            logger.warning(
+                "Workspace config GET transient failure: node=%s error_type=%s attempt=%s retry_in=%ss",
+                self.node_id, type(transient_error).__name__, attempt + 1, delay,
+            )
+            await asyncio.sleep(delay)
 
     async def download_group_predictions(
         self, task_id: str, loop_id: str, group_name: str
@@ -1889,6 +1924,32 @@ class QEWorkspaceClient:
         except httpx.HTTPError as e:
             raise RuntimeError(f"下载组预测失败: task={task_id} loop={loop_id} group={group_name}: {e}") from e
 
+    async def _get_workspace_asset(
+        self, url: str, *, task_id: str, loop_id: str, timeout: float,
+    ) -> httpx.Response:
+        """Retry only transient source reads; no mutation or invalid-content retry."""
+        for attempt in range(3):
+            try:
+                response = await self.client.get(url, timeout=timeout)
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in {429, 502, 503, 504}:
+                    raise
+                error = exc
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                error = exc
+            if attempt == 2:
+                raise QEWorkspaceAssetReadUnavailable(
+                    task_id=task_id, loop_id=loop_id, error=error,
+                ) from error
+            logger.warning(
+                "Workspace asset GET transient failure: node=%s task=%s loop=%s "
+                "error_type=%s attempt=%s/3", self.node_id, task_id, loop_id,
+                type(error).__name__, attempt + 1,
+            )
+            await asyncio.sleep(attempt + 1)
+
     async def download_workspace_file_bytes(
         self, task_id: str, loop_id: str, file_path: str
     ) -> bytes:
@@ -1896,8 +1957,9 @@ class QEWorkspaceClient:
         rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
         url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files/{file_path}"
         try:
-            response = await self.client.get(url, timeout=60.0)
-            response.raise_for_status()
+            response = await self._get_workspace_asset(
+                url, task_id=task_id, loop_id=loop_id, timeout=60.0,
+            )
             return response.content
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -1918,8 +1980,9 @@ class QEWorkspaceClient:
         rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
         url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files"
         try:
-            response = await self.client.get(url, timeout=60.0)
-            response.raise_for_status()
+            response = await self._get_workspace_asset(
+                url, task_id=task_id, loop_id=loop_id, timeout=60.0,
+            )
             payload = response.json()
             if not isinstance(payload, dict):
                 raise QEWorkspaceCatalogInvalid(
@@ -1977,8 +2040,9 @@ class QEWorkspaceClient:
         rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
         url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files/{file_path}"
         try:
-            response = await self.client.get(url, timeout=30.0)
-            response.raise_for_status()
+            response = await self._get_workspace_asset(
+                url, task_id=task_id, loop_id=loop_id, timeout=30.0,
+            )
             content_type = response.headers.get("content-type", "")
             if "json" in content_type:
                 payload = response.json()

@@ -202,6 +202,27 @@ def test_background_health_persists_one_real_transition(monkeypatch) -> None:
     assert calls["update"] == 1
 
 
+def test_failed_health_probe_logs_reason_even_without_state_transition(monkeypatch, caplog):
+    class Client:
+        def __init__(self, _base_url):
+            pass
+
+        async def probe_health(self):
+            return {
+                "online": False, "error": "ReadTimeout", "error_type": "ReadTimeout",
+                "latency_ms": 10001.5, "http_status": None,
+            }
+
+    monkeypatch.setattr(dispatch_module, "ComputeNodeClient", Client)
+    svc = DispatchService()
+    monkeypatch.setattr(svc, "update_node_observed_status", lambda *_a: pytest.fail("unchanged state must not write"))
+    assert asyncio.run(svc.observe_node_health(_node(status="offline"), busy=False)) is False
+    assert "node=node-1 error_type=ReadTimeout" in caplog.text
+    assert "latency_ms=10001.5" in caplog.text
+    _, observation = DispatchService.get_node_observation("node-1")
+    assert observation["error_type"] == "ReadTimeout"
+
+
 def test_remote_terminal_transition_and_node_release_happen_once(monkeypatch) -> None:
     task = _task()
     snapshot = {"nodes": [_node()], "tasks": [task]}

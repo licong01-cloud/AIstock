@@ -1,0 +1,404 @@
+{
+  "actual": "Failure summary: assert 'Materialize exhausted Nightly artifact transport receipt' in \"name: AIstock Nightly L3 + DR\\nrun-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule n... }}\\n          path: tmp/validation/nightly_summary/\\n          if-no-files-found: ignore\\n          overwrite: true\\n\"",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "scripts/ci_failure_issue_summary.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
+    "tests/aistock_validation/bugs/20261020_BUG-2032-advisory-nightly-full-regression-times-out-without-per-node-diagnostics.json",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+  ],
+  "assigned_agent": "codex-nightly-repair-20261025",
+  "bug_id": "BUG-2072",
+  "closed_at": "2026-10-25T07:25:57Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-23T04:07:35.204764Z",
+  "description": "Issue #6520 latest run 40123820570 fails the honest workflow test-debt ratio; existing PR also fixes retired miniQMT simulation admission and exhausted artifact transport receipts. Preserve LocalSIM and every original quality gate.",
+  "design_compliance_review": {
+    "business_semantics": "Business source and model contracts unchanged; only synthetic unit fixtures. No formal research training, service control or database writes.",
+    "failure_semantics": "Original 180s/1800s timeouts, 6300s overall cap, 0.30 ratio and branch-enabled combined coverage 70 retained. No failed/empty shard is accepted.",
+    "new_gates": "None",
+    "scope": "Complete offline files retained; HMM four workers, Advisory six workers; workflow setup deduplicated with all original positive/negative cases retained."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261023-7c0b0b0ae939",
+      "timestamp": "2026-10-23T04:07:35.204748Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/39837282906",
+    "https://github.com/licong01-cloud/AIstock/issues/6520",
+    "tmp/issue_workflow/ci-issue-6520/failure-event.json",
+    "tmp/issue_workflow/ci-issue-6520/context-pack.md"
+  ],
+  "expected": "CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
+      "tests/aistock_validation/bugs/20261020_BUG-2032-advisory-nightly-full-regression-times-out-without-per-node-diagnostics.json",
+      "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
+      "tests/aistock_validation/bugs/20261020_BUG-2032-advisory-nightly-full-regression-times-out-without-per-node-diagnostics.json",
+      "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "scripts/ci_failure_issue_summary.py",
+        "scripts/aistock_issue_workflow.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        },
+        {
+          "file": "scripts/ci_failure_issue_summary.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "scripts/ci_failure_issue_summary.py",
+        "scripts/aistock_issue_workflow.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/aistock_issue_workflow.py"
+    ]
+  },
+  "first_seen_at": "2026-10-23T04:07:35.204764Z",
+  "fix_branch": null,
+  "fix_commit": "f46f2c2bb4712aafdc352ef1f22211f724e484ad",
+  "fixed_at": "2026-10-25T07:25:57Z",
+  "github_issue_number": 6520,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6520",
+  "last_seen_at": "2026-10-23T04:07:35.204764Z",
+  "module": "validation",
+  "nightly_repair_20261025": {
+    "code_review_rounds": [
+      {
+        "kind": "source_and_scope",
+        "result": "passed",
+        "round": 1,
+        "summary": "Workflow/test runner only; real business source and model contracts unchanged; original timeout, ratio and coverage gates retained."
+      },
+      {
+        "kind": "failure_and_fixture_contracts",
+        "result": "passed",
+        "round": 2,
+        "summary": "All files partitioned exactly once; failed/empty shards and missing coverage fail closed; JUnit/coverage merged; worker-owned short external scratch, Advisory X volume and matching temp environment verified; 121 direct runner tests passed."
+      },
+      {
+        "kind": "complete_sessions_and_CI",
+        "result": "passed",
+        "round": 3,
+        "source_ci_commit": "a4ce72bc6ba27f8e139b45ed431dd2bc333a87e4",
+        "source_ci_run": "40172273503",
+        "summary": "All three previously failing complete sessions passed within original budgets; no extra skips or relaxed business rules."
+      }
+    ],
+    "full_scheduled_nightly_result": "not_rerun_no_claim",
+    "hmm_evidence_reuse": "HMM business source, tests and schema module have zero diff from the full-session execution commit; subsequent changes isolate fixture/temp paths and Advisory workers. Latest helper contracts passed 121 direct tests and source CI.",
+    "production_runtime_or_database_changed": false,
+    "sessions": [
+      {
+        "duration_seconds": 106.782,
+        "execution_source_commit": "e3e4bbde90fec2f14876ef9cea60d05f3a18fb9a",
+        "passed": 847,
+        "ratio_gate": 0.3,
+        "result": "success",
+        "session": "validation_workflow_automation",
+        "test_to_production_ratio": 0.2998988749841992,
+        "timeout_seconds": 300
+      },
+      {
+        "added_skip_rules": false,
+        "duration_seconds": 146.187,
+        "execution_source_commit": "a4ce72bc6ba27f8e139b45ed431dd2bc333a87e4",
+        "passed": 2762,
+        "result": "success",
+        "session": "advisory_modeling_backend",
+        "skipped": 5,
+        "timeout_seconds": 180
+      },
+      {
+        "branch_coverage_percent": 67.43,
+        "branch_enabled_combined_coverage_percent": 76.66666666666667,
+        "coverage_gate_percent": 70,
+        "deselected_integration": 6,
+        "duration_seconds": 1239.172,
+        "execution_source_commit": "e3e4bbde90fec2f14876ef9cea60d05f3a18fb9a",
+        "line_coverage_percent": 80.08,
+        "passed": 1103,
+        "result": "success",
+        "session": "hmm_risk_backend",
+        "timeout_seconds": 1800
+      }
+    ],
+    "source_failure_run": "40123820570",
+    "status": "failed_sessions_verified"
+  },
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6620",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Resume authorized Nightly repair: deduplicate workflow test setup; run all offline Advisory/HMM tests in bounded file shards, combine HMM branch coverage once, retain original 180s/1800s budgets. No service control, database writes or business source changes.",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2072",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dae7516fdb9f4ce1",
+    "recorded_at": "2026-10-25T07:26:46.930237Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "207dea3e26c1e4563ac6d8b47911dfc88d9b6417",
+    "source_merge_commit": "f46f2c2bb4712aafdc352ef1f22211f724e484ad",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6620",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed (8 tests)",
+      "python -m pytest backend/tests/test_noxfile_validation_env.py -> passed (121 tests)",
+      "python -m nox -s validation_workflow_automation -> passed (847 tests)",
+      "python -m nox -s advisory_modeling_backend -> passed (2762 passed, 5 skipped, 146.19 seconds)",
+      "python -m nox -s hmm_risk_backend -> passed (1103 tests, 1239.17 seconds, 76.67 percent combined coverage)",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "eef2325cc0ec49eb68c1c5d491dfeb13cea76329b24105a79c0d0b086c440892"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly workflow retirement, transport receipts and test-debt gate regressions",
+  "trigger_condition": {
+    "fingerprint": "7c0b0b0ae939833fb8063f62",
+    "source_event_id": "FE-20261023-7c0b0b0ae939"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=7a78265c6a5f9f31 commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py::test_transport_receipt_keeps_real_failures_and_rejects_foreign_run backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_retired_simulation_cannot_enter_nightly_from_changes_or_retry backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator` result=`passed`",
+    "validation-receipt: id=e3d95a505d0aa0ff commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=b8f8c170332062e1 commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files` result=`passed`",
+    "validation-receipt: id=11dedea1ff9eb7d4 commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed (8 tests)",
+    "python -m pytest backend/tests/test_noxfile_validation_env.py -> passed (121 tests)",
+    "python -m nox -s validation_workflow_automation -> passed (847 tests)",
+    "python -m nox -s advisory_modeling_backend -> passed (2762 passed, 5 skipped, 146.19 seconds)",
+    "python -m nox -s hmm_risk_backend -> passed (1103 tests, 1239.17 seconds, 76.67 percent combined coverage)",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

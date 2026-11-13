@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2075",
-  "closed_at": null,
+  "closed_at": "2026-10-23T06:48:49.002518Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,20 +38,20 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
       "backend/qlib_exporter/db_reader.py",
       "backend/qlib_exporter/quote_catalog.py",
       "backend/qlib_exporter/router.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/tests/test_qlib_export_stock_universe_filters.py",
       "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
     ],
     "changed_files": [
-      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
       "backend/qlib_exporter/db_reader.py",
       "backend/qlib_exporter/quote_catalog.py",
       "backend/qlib_exporter/router.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/tests/test_qlib_export_stock_universe_filters.py",
       "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
     ],
@@ -78,8 +78,8 @@
   },
   "first_seen_at": "2026-10-23T05:48:31.520196Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dba51ff094c402d1eea4fa655b10030e1f260d55",
+  "fixed_at": "2026-10-23T06:36:12Z",
   "github_issue_number": 6629,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6629",
   "last_seen_at": "2026-10-23T05:48:31.520196Z",
@@ -87,6 +87,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6632",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -113,8 +114,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\postrestart-20261023-fact-export\\BUG-2075.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2075",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "6b19ff9b8794865b1734ad4ff1e7a8fb4b319f1cf9fd368e9dedb47b414ef44e",
+      "expected_identity": "dba51ff094c402d1eea4fa655b10030e1f260d55",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-23T06:46:43.925661Z",
+      "mode": "read_only",
+      "observed_identity": "dba51ff094c402d1eea4fa655b10030e1f260d55",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8cc12a9bc222f9eefc4c5fc0fb417b41a75990addd5e9f26560b71001a3203b0",
+      "receipt_sha256": "42f94d0476174dac15f2a7ab2430bc7be809bd163b3346564422bf27c2fe0100",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7d5e04a55aef6ffac27b881203aa9c7f6a2389a2c01db83554378b047d0b3c8a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -124,7 +148,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2075",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "05b3e8ac165cbb60",
+    "recorded_at": "2026-10-23T06:36:52.175034Z",
+    "runtime_contract_digest": "6b19ff9b8794865b1734ad4ff1e7a8fb4b319f1cf9fd368e9dedb47b414ef44e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "83b656e129b49247bc63de80b0e1b28e9a310970",
+    "source_merge_commit": "dba51ff094c402d1eea4fa655b10030e1f260d55",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6632",
+    "validation_evidence": [
+      "validation-receipt: id=507ad25318dc0f81 commit=83b656e129b49247bc63de80b0e1b28e9a310970 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_authoritative_bin_pit_universe.py backend/tests/test_qlib_export_stock_universe_filters.py -q --tb=short` result=`passed 51 tests`",
+      "validation-receipt: id=a2e91e27fbd58d96 commit=83b656e129b49247bc63de80b0e1b28e9a310970 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py::test_real_quote_for_never_eligible_security_does_not_create_buy_membership -q` result=`passed 1 test`",
+      "validation-receipt: id=617ebd672a2dde41 commit=83b656e129b49247bc63de80b0e1b28e9a310970 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "7c3d5625b10bdcf8bb09ea8d8e866540a0f15e02fadb0914d5e5313d3872a803"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -133,6 +180,12 @@
     "fingerprint": "3bb98d932ade906e6bd8f246",
     "source_event_id": "FE-20261023-3bb98d932ade"
   },
+  "validation_evidence": [
+    "validation-receipt: id=507ad25318dc0f81 commit=83b656e129b49247bc63de80b0e1b28e9a310970 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_authoritative_bin_pit_universe.py backend/tests/test_qlib_export_stock_universe_filters.py -q --tb=short` result=`passed 51 tests`",
+    "validation-receipt: id=a2e91e27fbd58d96 commit=83b656e129b49247bc63de80b0e1b28e9a310970 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py::test_real_quote_for_never_eligible_security_does_not_create_buy_membership -q` result=`passed 1 test`",
+    "validation-receipt: id=617ebd672a2dde41 commit=83b656e129b49247bc63de80b0e1b28e9a310970 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2075 --target backend-main -> passed; runtime_identity_match=true"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

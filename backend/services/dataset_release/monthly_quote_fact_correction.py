@@ -177,13 +177,14 @@ def apply_quote_repairs(resume, *, finalized, plan, cas, prepare=None):
     datasets = {row["relative_path"].split("/")[0] for row in authority["files"]}
     inherited = all(load_sealed_build_json(cas, inner[dataset.removesuffix("_bin") + "_receipt_ref"])
         .get("quote_fact_correction", {}).get("authority_ref") == binding["authority_ref"] for dataset in datasets)
-    if inherited and plan["monthly_ready_correction"].get("base_plan", {}).get(BINDING) == binding:
+    ready = plan.get('monthly_ready_correction', {})
+    if inherited and ready.get("base_plan", {}).get(BINDING) == binding:
         record = copy.deepcopy(resume.record)
         record["steps"]["quote-facts"] = binding["authority_ref"]
         _atomic(resume.path, record)
         resume.record = record
         return finalized
-    if authority["base_manifest_ref"] != plan["monthly_ready_correction"]["base_manifest_ref"]:
+    if authority["base_manifest_ref"] != ready.get('base_manifest_ref',plan.get('predecessor_manifest_ref')):
         raise ValueError("quote correction authority differs from its retained export")
     from .qlib_bounded_update import read_calendar
     lengths = {dataset: len(read_calendar(root / dataset / "qlib/calendars" /
@@ -257,6 +258,22 @@ def apply_quote_repairs(resume, *, finalized, plan, cas, prepare=None):
     return result
 
 
+def following_correction_ref(materialization, *, relative, reference, owner):
+    """Follow exact file amendments, independent of daily/minute ordering."""
+    remaining = [row for name in ('prev_close_correction', 'minute_correction', 'quote_fact_correction')
+        if name != owner for row in materialization.get(name, {}).get('files', [])
+        if row['relative_path'] == relative]
+    while remaining:
+        matches = [row for row in remaining if row['original_sha256'] == reference['sha256']]
+        if not matches:
+            break
+        if len(matches) != 1:
+            raise ValueError('file corrections branch from the same original bytes')
+        reference = matches[0]['target_ref']
+        remaining.remove(matches[0])
+    return reference
+
+
 def correction_pins(materialization, *, provider, cas):
     correction = materialization.get("quote_fact_correction")
     if correction is None:
@@ -274,8 +291,9 @@ def correction_pins(materialization, *, provider, cas):
         _plain(path)
         before, raw = _signature(path), path.read_bytes()
         values = _array(raw)
-        if hashlib.sha256(raw).hexdigest() != row["target_ref"]["sha256"] or _signature(path) != before:
+        ref = following_correction_ref(materialization,relative=relative,reference=row['target_ref'],owner='quote_fact_correction')
+        if hashlib.sha256(raw).hexdigest() != ref['sha256'] or len(raw) != ref['size'] or _signature(path) != before:
             raise ValueError("quote repair bytes changed after construction")
-        result[path] = {"target_sha256": row["target_ref"]["sha256"], "target_size": len(raw),
+        result[path] = {"target_sha256": ref['sha256'], "target_size": len(raw),
             "target_signature": list(before), "start_index": int(values[0]), "end_index": int(values[0]) + len(values) - 2}
     return result

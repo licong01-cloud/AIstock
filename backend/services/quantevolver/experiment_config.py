@@ -13,6 +13,8 @@ from typing import Any, Mapping
 from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
 
 from backend.core.qe_prediction_replay_contract import normalize_prediction_replay_contract
+from .saved_prediction_recovery_contract import SavedPredictionRecovery, validate_recovery_mode
+from .frozen_inference_contract import FrozenInferenceSpec, validate_mode as validate_frozen_inference_mode
 
 from .long_trend_evaluation_contract import (
     EVALUATOR_VERSION,
@@ -453,6 +455,7 @@ class ExperimentConfig(BaseModel):
     backtest_only: bool = False
     model_source_task_id: str | None = None
     model_source_loop_index: int | None = None
+    frozen_inference: FrozenInferenceSpec | None = None
 
     # Immutable prediction replay mode.  These values are persisted as
     # control-plane identity and never enter model/strategy kwargs.
@@ -460,6 +463,7 @@ class ExperimentConfig(BaseModel):
     prediction_source_task_id: str | None = None
     prediction_source_loop_index: int | None = None
     prediction_source_sha256: str | None = None
+    prediction_recovery: SavedPredictionRecovery | None = None
 
     # ── Metadata (not passed to compose) ──────────────────────────────────────
     node_id: str | None = None
@@ -472,6 +476,7 @@ class ExperimentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_factor_names(self) -> "ExperimentConfig":
+        validate_frozen_inference_mode(self.model_dump(), allow_extra_params=True)
         if self.alpha_mode == "single" and not self.factor_names:
             raise ValueError("factor_names cannot be empty in single-alpha mode")
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
@@ -501,6 +506,7 @@ class ExperimentConfig(BaseModel):
         self.prediction_source_task_id = replay["prediction_source_task_id"]
         self.prediction_source_loop_index = replay["prediction_source_loop_index"]
         self.prediction_source_sha256 = replay["prediction_source_sha256"]
+        validate_recovery_mode(self.model_dump())
         if self.universe_selection is not None:
             self.universe_selection = UniverseSelection.from_value(self.universe_selection).as_dict()
             if self.stock_pool:

@@ -1,0 +1,61 @@
+{
+  "schema_version": "advisory_live_quotes_real_read_v1",
+  "observed_at": "2026-10-28T16:18:57.824539+08:00",
+  "quotes": {
+    "schema_version": "advisory_display_quotes_v1",
+    "observed_at": "2026-10-28T16:18:57.824539+08:00",
+    "items": {
+      "000001.SZ": {
+        "symbol": "000001.SZ",
+        "source": "TDX",
+        "price_basis": "RAW_CNY",
+        "price": 11.31,
+        "kind": "CLOSE",
+        "trade_date": "2026-10-28",
+        "observed_at": "2026-10-28T16:18:57.824539+08:00",
+        "reason_code": null,
+        "date_basis": "TDX_DAILY_BAR"
+      },
+      "603124.SH": {
+        "symbol": "603124.SH",
+        "source": "TDX",
+        "price_basis": "RAW_CNY",
+        "price": 91.79,
+        "kind": "CLOSE",
+        "trade_date": "2026-10-28",
+        "observed_at": "2026-10-28T16:18:57.824539+08:00",
+        "reason_code": null,
+        "date_basis": "TDX_DAILY_BAR"
+      },
+      "300664.SZ": {
+        "symbol": "300664.SZ",
+        "source": "TDX",
+        "price_basis": "RAW_CNY",
+        "price": 4.35,
+        "kind": "CLOSE",
+        "trade_date": "2026-10-28",
+        "observed_at": "2026-10-28T16:18:57.824539+08:00",
+        "reason_code": null,
+        "date_basis": "TDX_DAILY_BAR"
+      }
+    },
+    "source": "TDX",
+    "display_only": true,
+    "status": "READY"
+  },
+  "close_snapshot_parity": {
+    "000001.SZ": true,
+    "603124.SH": true,
+    "300664.SZ": true
+  },
+  "calendar_source": "market.trading_calendar:file_cache",
+  "source_sha256": {
+    "backend/services/advisory_workbench/quotes.py": "dc25748d5b6967d438deee326c8275a500a2f82bae38cf89b9091a396ab77d14",
+    "backend/routers/advisory_workbench.py": "8552303de333ce10fe9e650a5216c08346200466209a3302bcde33b78e8261c4"
+  },
+  "process": "independent Python loaded task source",
+  "production_db_writes": 0,
+  "service_control": 0,
+  "model_or_replay_calls": 0,
+  "production_runtime": "PENDING_USER_RESTART_AFTER_MERGE"
+}

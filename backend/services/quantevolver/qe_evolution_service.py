@@ -8,6 +8,7 @@ import base64
 import hashlib
 import re
 import weakref
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -21,6 +22,7 @@ from .qe_workspace_client import (
     QEWorkspaceLogEvent,
     QELoopWorkspaceCleanupUnavailable,
     QEWorkspaceResultReadUnavailable,
+    QEWorkspaceAssetReadUnavailable,
 )
 from .qe_log_broker import QELogBrokerSource, get_qe_log_broker
 from .qe_log_store import get_qe_live_log_store
@@ -54,10 +56,15 @@ from .qe_gpu_training_policy import (
     resolve_gpu_training_policy,
 )
 from .node_execution import (
-    normalize_node_parallelism,
     preflight_qe_node,
     resolve_custom_loop_nodes,
     resolve_default_qe_node_id,
+)
+from .qe_batch_execution_policy import (
+    POLICY_KEY,
+    QE_BATCH_EXECUTION_POLICY,
+    batch_node_parallelism,
+    strategy_node_parallelism,
 )
 from .results_only_retry import (
     ResultsOnlyRegistrationError,
@@ -929,9 +936,13 @@ class AutoEvolutionScheduler:
         source_loop_index: int,
         *,
         reason: str,
+        frozen_inference=None,
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         """Package reusable model params through the QE node API for backtest-only runs."""
         source_loop = f"Loop{source_loop_index}"
+        if frozen_inference is not None:
+            self._get_prediction_replay_source_loop(source_task_id, source_loop_index)
+            self._validate_frozen_source_metadata(source_task_id, source_loop_index, frozen_inference)
         mlruns_tar = await source_client.download_mlruns_params(source_task_id, source_loop)
         if not mlruns_tar:
             raise RuntimeError(
@@ -956,6 +967,11 @@ class AutoEvolutionScheduler:
             "mlruns_params.tar.gz.b64": base64.b64encode(mlruns_tar).decode("ascii"),
             "qe_backtest_source_ref.json": json.dumps(source_ref, ensure_ascii=False, indent=2),
         }
+        if frozen_inference is not None:
+            from .frozen_inference_contract import source_assets
+            extra_experiment_files.update(await source_assets(
+                source_client, source_task_id, source_loop, frozen_inference, mlruns_tar,
+            ))
         logger.info(
             "%s packaged source model params via node API: source=%s/%s bytes=%s",
             reason,
@@ -965,10 +981,39 @@ class AutoEvolutionScheduler:
         )
         return model_source, extra_experiment_files
 
+    def _validate_frozen_source_metadata(self, task_id, loop_index, spec, *, model_id=None):
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT status, config_json FROM qe_evolution_loops WHERE task_id=%s AND loop_index=%s",
+                            (task_id, loop_index))
+                row = cur.fetchone()
+        if not row or row["status"] != "completed":
+            raise ValueError("QE_FROZEN_SOURCE_NOT_COMPLETED")
+        meta = row["config_json"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        params = meta.get("custom_params") or meta.get("model_params") or {}
+        summary = params.get("_qe_active_dataset_summary") or {}
+        # A data-vintage change is explicit in the contract, never an implicit rebind.
+        if spec.source_training_manifest_sha256 != summary.get("dataset_manifest_sha256"):
+            raise ValueError("QE_FROZEN_TRAINING_IDENTITY_MISMATCH")
+        if model_id is not None and model_id != meta.get("model_id"):
+            raise ValueError("QE_FROZEN_SOURCE_MODEL_ID_MISMATCH")
+        expected_code = {"qe_custom_loaders.py"} | {f"factors/{name}.py" for name in meta.get("factor_list") or []}
+        if set(spec.code_sha256) != expected_code:
+            raise ValueError("QE_FROZEN_FACTOR_CODE_PIN_SET_MISMATCH")
+        processing = params.get("feature_processing") or {}
+        if sorted(processing.get("exclude_from_model") or []) != sorted(spec.excluded_reference_columns):
+            raise ValueError("QE_FROZEN_SOURCE_REFERENCE_SCHEMA_MISMATCH")
+        if set(meta.get("factor_list") or []) != set(spec.feature_names + spec.excluded_reference_columns):
+            raise ValueError("QE_FROZEN_SOURCE_FACTOR_SCHEMA_MISMATCH")
+
     def _get_prediction_replay_source_loop(
         self,
         source_task_id: str,
         source_loop_index: int,
+        *,
+        recovery=None,
     ) -> Dict[str, str]:
         """Return a completed source loop and its persisted execution node."""
 
@@ -990,7 +1035,8 @@ class AutoEvolutionScheduler:
                 f"{source_task_id}/Loop{source_loop_index}"
             )
         status = str(row.get("status") or "").strip().lower()
-        if status != "completed":
+        expected_status = recovery.source_status if recovery is not None else "completed"
+        if status != expected_status:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_SOURCE_NOT_COMPLETED: "
                 f"{source_task_id}/Loop{source_loop_index} status={status or 'missing'}"
@@ -1011,8 +1057,17 @@ class AutoEvolutionScheduler:
         *,
         source_node_id: str,
         expected_sha256: str | None,
+        member_loss_manifest: Dict[str, Any] | None = None,
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         """Resolve and stage one immutable completed-loop prediction artifact."""
+
+        if member_loss_manifest is not None and member_loss_manifest.get("af_evidence_mode") == "saved_asset_version_bridge_v1":
+            from .l2_member_loss_consumer import saved_member_prediction_payload
+
+            return saved_member_prediction_payload(
+                member_loss_manifest, source_task_id=source_task_id, source_loop_index=source_loop_index,
+                source_node_id=source_node_id, expected_sha256=expected_sha256,
+            )
 
         source_loop = f"Loop{source_loop_index}"
         catalog = await source_client.list_workspace_files(source_task_id, source_loop)
@@ -1029,6 +1084,7 @@ class AutoEvolutionScheduler:
                 "QE_PREDICTION_REPLAY_CATALOG_INVALID: files/assets must be a list"
             )
         matches: List[tuple[str, Dict[str, Any]]] = []
+        recorder_entries: List[Dict[str, Any]] = []
         for item in rows:
             if not isinstance(item, dict):
                 continue
@@ -1036,11 +1092,47 @@ class AutoEvolutionScheduler:
             normalized_path = str(raw_path or "").replace("\\", "/")
             while normalized_path.startswith("./"):
                 normalized_path = normalized_path[2:]
+            if normalized_path == "qe_current_recorder.json":
+                recorder_entries.append(item)
             if (
                 normalized_path == "artifacts/pred.pkl"
                 or normalized_path.endswith("/artifacts/pred.pkl")
             ):
                 matches.append((normalized_path, item))
+        current_recorder = None
+        if recorder_entries:
+            # A frozen-inference workspace also contains source_model/mlruns.
+            # The root recorder identifies this run; source copies are neither
+            # alternative current predictions nor candidates for hash guessing.
+            marker = recorder_entries[0]
+            if (
+                len(recorder_entries) != 1
+                or bool(marker.get("is_symlink"))
+                or str(marker.get("file_type") or "").lower() in {"directory", "symlink", "junction"}
+            ):
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID")
+            try:
+                current_recorder = await source_client.get_workspace_file(
+                    source_task_id, source_loop, "qe_current_recorder.json",
+                )
+                if isinstance(current_recorder, str):
+                    current_recorder = json.loads(current_recorder)
+                if not isinstance(current_recorder, dict) or any(
+                    not isinstance(current_recorder.get(key), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", current_recorder[key])
+                    or current_recorder[key] in {".", ".."}
+                    for key in ("experiment_id", "recorder_id")
+                ):
+                    raise ValueError("invalid recorder identity")
+            except QEWorkspaceAssetReadUnavailable:
+                raise
+            except Exception as exc:
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID") from exc
+            current_path = (
+                f"mlruns/{current_recorder['experiment_id']}/"
+                f"{current_recorder['recorder_id']}/artifacts/pred.pkl"
+            )
+            matches = [(path, item) for path, item in matches if path == current_path]
         if len(matches) != 1:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_ARTIFACT_CARDINALITY: "
@@ -1080,6 +1172,14 @@ class AutoEvolutionScheduler:
                 "QE_PREDICTION_REPLAY_ARTIFACT_SHA256_MISMATCH: "
                 f"expected={expected_sha256} observed={observed_sha256}"
             )
+        if current_recorder is not None:
+            latest_recorder = await source_client.get_workspace_file(
+                source_task_id, source_loop, "qe_current_recorder.json",
+            )
+            if isinstance(latest_recorder, str):
+                latest_recorder = json.loads(latest_recorder)
+            if latest_recorder != current_recorder:
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_CHANGED")
         source_ref: Dict[str, Any] = {
             "schema_version": "qe_prediction_replay_source_ref_v1",
             "mode": "prediction_replay",
@@ -1099,6 +1199,34 @@ class AutoEvolutionScheduler:
             ),
         }
         return source_ref, extra_experiment_files
+
+    @staticmethod
+    def _validate_frozen_inference_result(result, *, config):
+        expected = config.get("frozen_inference")
+        if (not isinstance(expected, dict) or not isinstance(result, dict) or result.get("schema_version") != "qe_frozen_inference_result_v1"
+                or result.get("status") != "verified" or result.get("mode") != "frozen_inference"
+                or result.get("spec") != expected or type(result.get("fit_calls")) is not int
+                or result["fit_calls"] != 0 or result.get("source_bytes_unchanged") is not True
+                or result.get("reference_equivalent") is not True
+                or result.get("source_task_id") != config.get("model_source_task_id")
+                or result.get("source_loop_index") != config.get("model_source_loop_index")):
+            raise ValueError("QE_FROZEN_RESULT_CONTRACT_MISMATCH")
+        for field in ("processor_state", "model_weights"):
+            before = result.get(field + "_before")
+            if not isinstance(before, str) or not re.fullmatch(r"[0-9a-f]{64}", before) or before != result.get(field + "_after"):
+                raise ValueError("QE_FROZEN_RESULT_STATE_CHANGED")
+        for field in ("output_rows", "reference_rows"):
+            if type(result.get(field)) is not int or result[field] < 1:
+                raise ValueError("QE_FROZEN_RESULT_ROWS_INVALID")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(result.get("executable_prediction_panel_sha256") or "")):
+            raise ValueError("QE_FROZEN_RESULT_PANEL_PIN_MISSING")
+        if result.get("feature_names") != expected["feature_names"] or result.get("step_len") != expected["step_len"]:
+            raise ValueError("QE_FROZEN_RESULT_SCHEMA_CHANGED")
+        split = config.get("data_split") or {}
+        if any(str(result.get("output_" + edge, ""))[:10] != str(split.get("test_" + edge, ""))[:10]
+               for edge in ("start", "end")):
+            raise ValueError("QE_FROZEN_RESULT_WINDOW_MISMATCH")
+        return result
 
     @staticmethod
     def _validate_prediction_replay_result(
@@ -2756,6 +2884,11 @@ class AutoEvolutionScheduler:
                 td = self._compute_training_diagnostics(enhanced_data.get("training_curves", {}))
                 enhanced_data["training_diagnostics"] = td
             metrics["enhanced_metrics"] = enhanced_data
+            if config.get("frozen_inference") is not None:
+                frozen_client = self._get_workspace_client_for_node_id(config.get("node_id") or config.get("execution_node_id"))
+                metrics["frozen_inference_result"] = self._validate_frozen_inference_result(
+                    await frozen_client.get_workspace_file(task_id, loop_id, "qe_frozen_inference_result.json"), config=config,
+                )
             if bool(config.get("prediction_replay")):
                 replay_client = self._get_workspace_client_for_node_id(
                     config.get("node_id") or config.get("execution_node_id")
@@ -4262,10 +4395,18 @@ class AutoEvolutionScheduler:
         loop_id = f"Loop{loop_index}"
         try:
             replay_result = None
+            failed_upload = False
             if config.get("prediction_replay"):
                 receipt = await client.inspect_loop_submission(task_id, loop_id)
-                if (receipt.task_id, receipt.loop_id, receipt.status) != (task_id, loop_id, "completed"):
+                if (receipt.task_id, receipt.loop_id) != (task_id, loop_id) or receipt.status not in {"completed", "failed"}:
                     raise ValueError("QE_PREDICTION_REPLAY_RESULTS_NOT_COMPLETED")
+                failed_upload = receipt.status == "failed"
+                if failed_upload and any(
+                    not isinstance(getattr(receipt, key, None), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", getattr(receipt, key))
+                    for key in ("request_digest", "submission_intent_hash")
+                ):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_SUBMISSION_IDENTITY_MISSING")
                 source_ref = await client.get_workspace_file(
                     task_id, loop_id, "qe_prediction_replay_source_ref.json"
                 )
@@ -4291,18 +4432,46 @@ class AutoEvolutionScheduler:
                     await client.get_workspace_file(task_id, loop_id, "qe_prediction_replay_result.json"),
                     expected_source_sha256=str(config.get("prediction_source_sha256") or ""),
                 )
+            frozen_result = None
+            if config.get("frozen_inference") is not None:
+                frozen_result = self._validate_frozen_inference_result(
+                    await client.get_workspace_file(task_id, loop_id, "qe_frozen_inference_result.json"), config=config,
+                )
             artifacts = await collect_results_only_artifacts(
                 client=client,
                 task_id=task_id,
                 loop_id=loop_id,
                 node_id=effective_node_id,
+                **({"failed_upload_config": config} if failed_upload else {}),
                 **({
-                    "expected_prediction_panel_sha256": replay_result["executable_prediction_panel_sha256"],
-                    "expected_prediction_rows": replay_result["executable_prediction_rows"],
-                } if replay_result is not None else {}),
+                    "expected_prediction_panel_sha256": (replay_result or frozen_result)["executable_prediction_panel_sha256"],
+                    "expected_prediction_rows": (replay_result["executable_prediction_rows"] if replay_result is not None
+                                                 else frozen_result["output_rows"]),
+                } if replay_result is not None or frozen_result is not None else {}),
             )
             if replay_result is not None:
                 artifacts.metrics["prediction_replay_result"] = replay_result
+            if failed_upload:
+                # Do not register against a changed attempt or a new recorder.
+                current = await client.inspect_loop_submission(task_id, loop_id)
+                current_ref = await client.get_workspace_file(task_id, loop_id, "qe_current_recorder.json")
+                current_upload = await client.get_workspace_file(task_id, loop_id, "qe_prediction_store_upload.json")
+                recovery = artifacts.metrics["results_only_upload_recovery"]
+                if (
+                    any(getattr(current, key, None) != getattr(receipt, key) for key in (
+                        "task_id", "loop_id", "status", "request_digest", "submission_intent_hash",
+                    ))
+                    or not isinstance(current_ref, dict)
+                    or any(current_ref.get(key) != artifacts.recorder_ref.get(key) for key in (
+                        "recorder_id", "experiment_id", "written_at",
+                    ))
+                    or current_upload != recovery["original_upload"]
+                ):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_ATTEMPT_CHANGED")
+                recovery["request_digest"] = receipt.request_digest
+                recovery["submission_intent_hash"] = receipt.submission_intent_hash
+            if frozen_result is not None:
+                artifacts.metrics["frozen_inference_result"] = frozen_result
             manifest = upload_results_only_prediction_store(
                 artifacts=artifacts,
                 task_id=task_id,
@@ -4567,6 +4736,8 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         config = dict(config or {})
+        if config.get("frozen_inference") is not None and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
+            raise ValueError("QE_FROZEN_GENERIC_RETRY_FORBIDDEN: reconcile original artifacts; no training fallback")
         if bool(config.get("prediction_replay")) and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
@@ -6375,7 +6546,17 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             node_id,
         )
-        node_parallelism = normalize_node_parallelism(selected_node_ids, node_parallelism)
+        from .qe_batch_execution_policy import bind_batch_model_nodes
+        loops_config = bind_batch_model_nodes(
+            loops_config, available_nodes=sorted(selected_node_ids), balanced=False,
+        )
+        node_parallelism = batch_node_parallelism(loops_config, node_parallelism)
+        for loop_cfg in loops_config:
+            loop_cfg.setdefault(POLICY_KEY, {
+                "version": QE_BATCH_EXECUTION_POLICY,
+                "placement": "explicit",
+                "node_parallelism": node_parallelism,
+            })
 
         normalized_loops = []
         for idx, loop_cfg in enumerate(loops_config, start=1):
@@ -6487,7 +6668,8 @@ class AutoEvolutionScheduler:
                         "node_parallelism": node_parallelism,
                         "phase_pipeline_enabled": bool(phase_pipeline_enabled),
                         "resource_telemetry_enabled": bool(resource_telemetry_enabled),
-                        "node_resolution_policy": "loop1_inherit_v1",
+                        "node_resolution_policy": QE_BATCH_EXECUTION_POLICY,
+                        "execution_policy": loops_config[0][POLICY_KEY],
                         "clone_from_task_id": clone_from_task_id,
                     }),
                     first_label_horizon,
@@ -6551,47 +6733,50 @@ class AutoEvolutionScheduler:
         parsed["loops"] = sorted(normalized_loops, key=lambda item: int(item.get("loop_index") or 0))
         return parsed
 
+    @staticmethod
+    def _custom_evo_has_submission_evidence(row: Dict[str, Any]) -> bool:
+        row_status = str(row.get("status") or "").lower()
+        if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
+            return True
+        if row_status != "pending":
+            return False
+        if row.get("experiment_id"):
+            return True
+        raw_config = row.get("config_json")
+        if isinstance(raw_config, str):
+            try:
+                raw_config = json.loads(raw_config)
+            except json.JSONDecodeError:
+                # An unreadable pending config cannot be proven to be an
+                # untouched registry reservation, so fail closed.
+                return True
+        if not isinstance(raw_config, dict):
+            return True
+        registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
+        if not isinstance(registration, dict):
+            # Only a canonical registry reservation is allowed to keep a
+            # pending row editable/startable. Legacy or malformed pending
+            # rows remain nonstartable until explicitly reconciled.
+            return True
+        return any(
+            key in raw_config
+            for key in (
+                "execution_manifest",
+                "execution_manifest_sha256",
+                _QE_RETRY_SUBMISSION_KEY,
+                _QE_RERUN_SUBMISSION_KEY,
+            )
+        )
+
     def _custom_evo_start_state_from_rows(
         self,
         task: Dict[str, Any],
         loop_rows: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         status = str(task.get("status") or "").lower()
-        def _has_submission_evidence(row: Dict[str, Any]) -> bool:
-            row_status = str(row.get("status") or "").lower()
-            if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
-                return True
-            if row_status != "pending":
-                return False
-            if row.get("experiment_id"):
-                return True
-            raw_config = row.get("config_json")
-            if isinstance(raw_config, str):
-                try:
-                    raw_config = json.loads(raw_config)
-                except json.JSONDecodeError:
-                    # An unreadable pending config cannot be proven to be an
-                    # untouched registry reservation, so fail closed.
-                    return True
-            if not isinstance(raw_config, dict):
-                return True
-            registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
-            if not isinstance(registration, dict):
-                # Only a canonical registry reservation is allowed to keep a
-                # pending row editable/startable. Legacy or malformed pending
-                # rows remain nonstartable until explicitly reconciled.
-                return True
-            return any(
-                key in raw_config
-                for key in (
-                    "execution_manifest",
-                    "execution_manifest_sha256",
-                    _QE_RETRY_SUBMISSION_KEY,
-                    _QE_RERUN_SUBMISSION_KEY,
-                )
-            )
-
-        submitted_loop_count = sum(1 for row in loop_rows if _has_submission_evidence(row))
+        submitted_loop_count = sum(
+            1 for row in loop_rows if self._custom_evo_has_submission_evidence(row)
+        )
         startable = (
             task.get("task_type") == "custom_evo"
             and status == "pending"
@@ -6751,6 +6936,8 @@ class AutoEvolutionScheduler:
             "execution_mode": "serial",  # deprecated: kept for frontend backward compat
             "engine_mode": strategy_config.get("engine_mode") or "unified",
             "node_parallelism": strategy_config.get("node_parallelism") or {},
+            "execution_policy": strategy_config.get("execution_policy"),
+            "pending_node_reassignments": strategy_config.get("pending_node_reassignments") or [],
             "phase_pipeline_enabled": bool(strategy_config.get("phase_pipeline_enabled", False)),
             "resource_telemetry_enabled": False,
             "resource_monitoring_status": "removed",
@@ -6879,6 +7066,12 @@ class AutoEvolutionScheduler:
                             task.get("strategy_evo_config") or {}
                         ).get("clone_from_task_id") if isinstance(task.get("strategy_evo_config"), dict) else None,
                     }
+                    batch_policy = next((cfg[POLICY_KEY] for cfg in resolved_loops if cfg.get(POLICY_KEY)), None)
+                    if batch_policy:
+                        strategy_config["node_resolution_policy"] = QE_BATCH_EXECUTION_POLICY
+                        strategy_config["execution_policy"] = {
+                            **batch_policy, "node_parallelism": full_node_parallelism,
+                        }
                     if isinstance(task.get("strategy_evo_config"), str):
                         try:
                             old_cfg = json.loads(task.get("strategy_evo_config") or "{}")
@@ -7077,7 +7270,15 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             task_node_id,
         )
-        node_parallelism = normalize_node_parallelism(selected_node_ids, raw_node_parallelism)
+        policies = [cfg.get(POLICY_KEY) for cfg in loops_config if cfg.get(POLICY_KEY)]
+        if any(p.get("version") == QE_BATCH_EXECUTION_POLICY for p in policies):
+            from .qe_batch_execution_policy import bind_batch_model_nodes
+            loops_config = bind_batch_model_nodes(
+                loops_config, available_nodes=sorted(selected_node_ids), balanced=False,
+            )
+            for cfg in loops_config:
+                cfg.setdefault(POLICY_KEY, dict(policies[0]))
+        node_parallelism = strategy_node_parallelism(loops_config, raw_node_parallelism)
         return loops_config, loop1_node_id, node_parallelism
 
     def _resolve_custom_evo_parallelism_slot(
@@ -7100,9 +7301,8 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in strategy_config["loops"]],
             task.get("node_id"),
         )
-        node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
-            strategy_config.get("node_parallelism"),
+        node_parallelism = strategy_node_parallelism(
+            loops_config, strategy_config.get("node_parallelism"),
         )
         selected_loop = next(
             (
@@ -7217,7 +7417,7 @@ class AutoEvolutionScheduler:
                         conn.commit()
                         return None
                     cur.execute(
-                        "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s",
+                        "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s FOR UPDATE",
                         (loop_db_id,),
                     )
                     existing = cur.fetchone()
@@ -7231,6 +7431,13 @@ class AutoEvolutionScheduler:
                         if isinstance(existing, dict)
                         else existing[1] if existing and len(existing) > 1 else None
                     )
+                    claim_node_id = target_node_id or slot.get("node_id")
+                    if existing_node_id and claim_node_id and existing_node_id != claim_node_id:
+                        # A pending Loop may have been explicitly reassigned while
+                        # this waiter held an old task snapshot. Never claim it on
+                        # the stale node; the new node's submitter owns the work.
+                        conn.commit()
+                        return None
                     if (existing is not None and existing_status != "pending") or (
                         existing is None and not insert_if_missing
                     ):
@@ -7455,6 +7662,138 @@ class AutoEvolutionScheduler:
             finally:
                 lock_cm.__exit__(None, None, None)
 
+    @staticmethod
+    def _pending_node_reassignment_config(old: Dict[str, Any], prepared: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace physical locations only; retain every research/registry field."""
+        from .qe_active_dataset_profile import QE_ACTIVE_PROFILE_SUMMARY_PARAM
+        from .qe_dataset_contract import QE_DIRECT_V2_DATASET_BINDING_PARAM
+        from .qe_batch_execution_policy import DATASET_FIELDS
+
+        if old.get(POLICY_KEY, {}).get("version") != QE_BATCH_EXECUTION_POLICY:
+            raise ValueError("QE_PENDING_MOVE_VERSIONED_BINDING_REQUIRED")
+        identity = old[POLICY_KEY].get("dataset_identity") or {}
+        if not all(identity.get(field) for field in DATASET_FIELDS):
+            raise ValueError("QE_PENDING_MOVE_DATASET_IDENTITY_INCOMPLETE")
+        if prepared.get(POLICY_KEY, {}).get("dataset_identity") != old[POLICY_KEY].get("dataset_identity"):
+            raise ValueError("QE_PENDING_MOVE_DATASET_IDENTITY_CHANGED")
+        old_params = deepcopy(old.get("custom_params") or {})
+        new_params = deepcopy(prepared.get("custom_params") or {})
+        physical_paths = {
+            "candidate_root", "provider_uri_day", "provider_uri_1min", "factor_data_dir",
+            "suspend_data_dir", "index_context_path",
+        }
+        old_binding = old_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+        new_binding = new_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+        if not isinstance(old_binding, dict) or not isinstance(new_binding, dict):
+            raise ValueError("QE_PENDING_MOVE_DATASET_BINDING_REQUIRED")
+        if ({k: v for k, v in old_binding.items() if k not in physical_paths}
+                != {k: v for k, v in new_binding.items() if k not in physical_paths}):
+            raise ValueError("QE_PENDING_MOVE_DATASET_PINS_CHANGED")
+        node_id = str(prepared.get("node_id") or "")
+        if not node_id or node_id == old.get("node_id"):
+            raise ValueError("QE_PENDING_MOVE_DIFFERENT_NODE_REQUIRED")
+        result = deepcopy(old)
+        result["node_id"] = node_id
+        for key in (QE_DIRECT_V2_DATASET_BINDING_PARAM, QE_ACTIVE_PROFILE_SUMMARY_PARAM):
+            if key not in new_params:
+                raise ValueError("QE_PENDING_MOVE_PROFILE_REQUIRED")
+            old_params[key] = new_params[key]
+        old_params["execution_node_id"] = node_id
+        for registration in (result.get(QE_RUN_REGISTRATION_PARAM), old_params.get(QE_RUN_REGISTRATION_PARAM)):
+            if not isinstance(registration, dict):
+                raise ValueError("QE_PENDING_MOVE_REGISTRATION_REQUIRED")
+            registration["node_id"] = node_id
+        result["custom_params"] = old_params
+        result["resolved_dataset"] = deepcopy(prepared.get("resolved_dataset"))
+        result["stock_pool"] = prepared.get("stock_pool")
+        return result
+
+    async def reassign_pending_custom_evo_loops(
+        self, *, task_id: str, operation_id: str,
+        expected_loop_configs: List[Dict[str, Any]], prepared_loop_configs: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """CAS-move untouched reservations, without creating or retrying a Loop."""
+        indexes = [int(cfg["loop_index"]) for cfg in expected_loop_configs]
+        prepared = {int(cfg["loop_index"]): cfg for cfg in prepared_loop_configs}
+        if not indexes or len(set(indexes)) != len(indexes) or set(indexes) != set(prepared):
+            raise ValueError("QE_PENDING_MOVE_INVALID_LOOP_INDEXES")
+        request_identity = {"indexes": sorted(indexes), "nodes": {str(i): prepared[i]["node_id"] for i in indexes}}
+        with get_conn() as conn:
+            self._acquire_custom_evo_mutation_lock(conn, task_id)
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Lock reservations before the task: the submission CAS also
+                    # takes the Loop row before updating task status.
+                    cur.execute(
+                        "SELECT * FROM qe_evolution_loops WHERE task_id = %s "
+                        "AND loop_index = ANY(%s) ORDER BY loop_index FOR UPDATE",
+                        (task_id, indexes),
+                    )
+                    rows = {int(row["loop_index"]): dict(row) for row in cur.fetchall()}
+                    cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s FOR UPDATE", (task_id,))
+                    task = cur.fetchone()
+                    if not task or task.get("task_type") != "custom_evo":
+                        raise ValueError("QE_PENDING_MOVE_CUSTOM_TASK_REQUIRED")
+                    strategy = self._parse_custom_evo_strategy_config(task["strategy_evo_config"], task_id=task_id)
+                    history = list(strategy.get("pending_node_reassignments") or [])
+                    prior = next((r for r in history if r["operation_id"] == operation_id), None)
+                    if prior is not None:
+                        if prior["request_identity"] != request_identity:
+                            raise ValueError("QE_PENDING_MOVE_OPERATION_ID_CONFLICT")
+                        conn.commit()
+                        return {**prior, "already_applied": True}
+                    if task.get("status") not in ("pending", "running"):
+                        raise ValueError("QE_PENDING_MOVE_TASK_NOT_ACTIVE")
+                    current = {int(cfg["loop_index"]): cfg for cfg in strategy["loops"]}
+                    moves = []
+                    for old in expected_loop_configs:
+                        index = int(old["loop_index"])
+                        row = rows.get(index)
+                        if not row or row.get("status") != "pending" or self._custom_evo_has_submission_evidence(row):
+                            raise ValueError(f"QE_PENDING_MOVE_LOOP_ALREADY_SUBMITTED: Loop{index}")
+                        row_config = row.get("config_json")
+                        if isinstance(row_config, str):
+                            row_config = json.loads(row_config)
+                        if current.get(index) != old or row_config != old or row.get("node_id") != old.get("node_id"):
+                            raise ValueError(f"QE_PENDING_MOVE_CONFIG_CHANGED: Loop{index}")
+                        replacement = self._pending_node_reassignment_config(old, prepared[index])
+                        current[index] = replacement
+                        moves.append({"loop_index": index, "from_node": old["node_id"],
+                                      "to_node": replacement["node_id"], "before_sha256": sha256_json(old),
+                                      "after_sha256": sha256_json(replacement)})
+                    combined = [current[int(cfg["loop_index"])] for cfg in strategy["loops"]]
+                    nodes = {str(cfg["node_id"]) for cfg in combined}
+                    requested = {k: v for k, v in (strategy.get("node_parallelism") or {}).items() if k in nodes}
+                    normalized, _, limits = self._normalize_full_custom_evo_nodes(combined, task.get("node_id"), requested)
+                    # Model/capacity validation must not rewrite any running config.
+                    if normalized != combined:
+                        raise ValueError("QE_PENDING_MOVE_NORMALIZATION_CHANGED_CONFIG")
+                    receipt = {"task_id": task_id, "operation_id": operation_id, "request_identity": request_identity,
+                               "moved_loop_indexes": sorted(indexes), "moves": moves, "node_parallelism": limits,
+                               "at": datetime.now(timezone.utc).isoformat()}
+                    strategy["loops"] = combined
+                    strategy["node_parallelism"] = limits
+                    strategy["pending_node_reassignments"] = history + [receipt]
+                    for index in indexes:
+                        cur.execute(
+                            "UPDATE qe_evolution_loops SET node_id = %s, config_json = %s, updated_at = NOW() "
+                            "WHERE task_id = %s AND loop_index = %s AND status = 'pending'",
+                            (current[index]["node_id"], json.dumps(current[index]), task_id, index),
+                        )
+                        if cur.rowcount != 1:
+                            raise ValueError("QE_PENDING_MOVE_CAS_FAILED")
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET strategy_evo_config = %s, updated_at = NOW() WHERE task_id = %s",
+                        (json.dumps(strategy), task_id),
+                    )
+                conn.commit()
+                return {**receipt, "already_applied": False}
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                self._release_custom_evo_mutation_lock(conn, task_id)
+
     async def append_custom_evo_loops(
         self,
         task_id: str,
@@ -7668,9 +8007,8 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in strategy_config["loops"]],
             task.get("node_id"),
         )
-        node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
-            strategy_config.get("node_parallelism"),
+        node_parallelism = strategy_node_parallelism(
+            loops_config, strategy_config.get("node_parallelism"),
         )
         selected_configs = [cfg for cfg in loops_config if int(cfg.get("loop_index") or 0) in selected_indexes]
         found_indexes = {int(cfg.get("loop_index") or 0) for cfg in selected_configs}
@@ -7753,6 +8091,8 @@ class AutoEvolutionScheduler:
         if not loop_config:
             logger.error(f"Loop {loop_index} 的配置未找到")
             raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
+        if force_full_train and loop_config.get("frozen_inference") is not None:
+            raise ValueError("QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN")
         if force_full_train and bool(loop_config.get("prediction_replay")):
             raise ValueError(
                 "QE_PREDICTION_REPLAY_FORCE_FULL_TRAIN_FORBIDDEN: "
@@ -7794,6 +8134,14 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         effective_node_id = loop_config.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
+        if (loop_config.get(POLICY_KEY) or {}).get("version") == QE_BATCH_EXECUTION_POLICY:
+            from .qe_batch_execution_policy import bind_batch_model_nodes
+            validation_config = {**loop_config, "node_id": effective_node_id}
+            if force_full_train:
+                validation_config.update(backtest_only=False, prediction_replay=False)
+            bind_batch_model_nodes(
+                [validation_config], available_nodes=[effective_node_id], balanced=False,
+            )
         submission_source_execution_id, submission_source_claim_id = (
             self._custom_evo_submission_identity(
                 loop_config,
@@ -7879,19 +8227,36 @@ class AutoEvolutionScheduler:
             if cfg.prediction_replay:
                 if not cfg.prediction_source_task_id or cfg.prediction_source_loop_index is None:
                     raise ValueError("QE_PREDICTION_REPLAY_SOURCE_IDENTITY_MISSING")
+                recovery_kwargs = {"recovery": cfg.prediction_recovery} if cfg.prediction_recovery else {}
                 source_runtime = self._get_prediction_replay_source_loop(
                     cfg.prediction_source_task_id,
                     cfg.prediction_source_loop_index,
+                    **recovery_kwargs,
                 )
                 source_node_id = source_runtime["node_id"]
                 source_client = self._get_workspace_client_for_node_id(source_node_id)
-                source_ref, prediction_replay_files = await self._build_prediction_replay_payload(
-                    source_client,
-                    cfg.prediction_source_task_id,
-                    cfg.prediction_source_loop_index,
-                    source_node_id=source_node_id,
-                    expected_sha256=cfg.prediction_source_sha256,
-                )
+                if cfg.prediction_recovery is not None:
+                    from .saved_prediction_recovery import verify_saved_prediction_recovery
+
+                    recovered = await verify_saved_prediction_recovery(
+                        cfg.prediction_recovery, client=source_client, task_id=task_id,
+                        loop_index=loop_index, source_task_id=cfg.prediction_source_task_id,
+                        source_loop_index=cfg.prediction_source_loop_index, cfg=cfg,
+                        target_seed=(loop_config.get("runtime_flags") or {}).get("random_seed"),
+                    )
+                    source_ref, prediction_replay_files = recovered.payload(
+                        source_task_id=cfg.prediction_source_task_id,
+                        source_loop_index=cfg.prediction_source_loop_index, source_node_id=source_node_id,
+                    )
+                else:
+                    source_ref, prediction_replay_files = await self._build_prediction_replay_payload(
+                        source_client,
+                        cfg.prediction_source_task_id,
+                        cfg.prediction_source_loop_index,
+                        source_node_id=source_node_id,
+                        expected_sha256=cfg.prediction_source_sha256,
+                        member_loss_manifest=cfg.build_custom_params().get("qe_l2_member_loss_manifest"),
+                    )
                 prediction_replay_source = PredictionReplaySource.model_validate(source_ref)
                 cfg = cfg.model_copy(
                     update={"prediction_source_sha256": prediction_replay_source.sha256}
@@ -7925,6 +8290,15 @@ class AutoEvolutionScheduler:
                 )
 
             # 2. 保存 config 记录到 loop
+            if cfg.frozen_inference is not None:
+                if force_full_train:
+                    raise ValueError("QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN")
+                self._validate_frozen_source_metadata(
+                    cfg.model_source_task_id, cfg.model_source_loop_index, cfg.frozen_inference, model_id=cfg.model_id,
+                )
+                summary = cfg.build_custom_params().get("_qe_active_dataset_summary") or {}
+                if summary.get("dataset_manifest_sha256") != cfg.frozen_inference.input_manifest_sha256:
+                    raise ValueError("QE_FROZEN_INPUT_IDENTITY_MISMATCH")
             runtime_flags = cfg.build_runtime_flags()
             requested_seed = runtime_flags.get("random_seed")
             if requested_seed is None and not (cfg.backtest_only or cfg.prediction_replay):
@@ -7951,6 +8325,7 @@ class AutoEvolutionScheduler:
                 "prediction_source_task_id": cfg.prediction_source_task_id,
                 "prediction_source_loop_index": cfg.prediction_source_loop_index,
                 "prediction_source_sha256": cfg.prediction_source_sha256,
+                "prediction_recovery": cfg.prediction_recovery.model_dump(mode="json") if cfg.prediction_recovery else None,
                 "prediction_replay_source": (
                     prediction_replay_source.model_dump(mode="json")
                     if prediction_replay_source is not None
@@ -8028,6 +8403,10 @@ class AutoEvolutionScheduler:
                     else None
                 ),
             }
+            if cfg.frozen_inference is not None:
+                frozen_spec = cfg.frozen_inference.model_dump(mode="json")
+                config_record["frozen_inference"] = frozen_spec
+                config_record["execution_manifest"]["frozen_inference"] = frozen_spec
             config_record["execution_manifest_sha256"] = sha256_json(config_record["execution_manifest"])
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -8131,6 +8510,7 @@ class AutoEvolutionScheduler:
                     cfg.model_source_task_id,
                     int(cfg.model_source_loop_index),
                     reason="custom evolution backtest-only",
+                    frozen_inference=cfg.frozen_inference,
                 )
                 logger.info(
                     "custom evolution backtest-only packaged source model: source=%s/Loop%s source_node=%s target_node=%s",
@@ -8286,13 +8666,13 @@ class AutoEvolutionScheduler:
             [dict(loop_cfg) for loop_cfg in loops_config],
             task.get("node_id"),
         )
-        node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
-            custom_evo_config.get("node_parallelism"),
+        node_parallelism = strategy_node_parallelism(
+            loops_config, custom_evo_config.get("node_parallelism"),
         )
         custom_evo_config["loops"] = loops_config
         custom_evo_config["node_parallelism"] = node_parallelism
-        custom_evo_config["node_resolution_policy"] = "loop1_inherit_v1"
+        if any(loop.get(POLICY_KEY) for loop in loops_config):
+            custom_evo_config["node_resolution_policy"] = QE_BATCH_EXECUTION_POLICY
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(

@@ -10,6 +10,8 @@ scan.
 from __future__ import annotations
 
 import datetime as dt
+from contextlib import contextmanager
+from dataclasses import asdict
 import logging
 import time
 from dataclasses import dataclass, field
@@ -214,6 +216,22 @@ class AuditBackedDataHealthChecker:
                         (dataset, expected_date),
                     )
                     latest_expected = cur.fetchone()
+            # Read the same canonical revision interpretation as require_success.
+            # The provider queries above remain useful pre-migration and for
+            # transport diagnostics, but cannot override an invalid canonical row.
+            from .data_refresh_audit import DataRefreshAuditRepository
+
+            @contextmanager
+            def borrowed_connection():
+                yield conn
+
+            repository = DataRefreshAuditRepository(borrowed_connection)
+            if latest_success:
+                canonical = repository.get_latest_status(dataset=dataset, trade_date=latest_success["trade_date"])
+                latest_success = asdict(canonical) if canonical and canonical.status == "success" else None
+            if expected_date is not None:
+                canonical = repository.get_latest_status(dataset=dataset, trade_date=expected_date)
+                latest_expected = asdict(canonical) if canonical else latest_expected
         return (dict(latest_success) if latest_success else None, dict(latest_expected) if latest_expected else None)
 
     def _verify_daily_basic_coverage_from_table(
@@ -321,6 +339,21 @@ class AuditBackedDataHealthChecker:
         latest_expected: dict[str, Any] | None,
     ) -> AuditDatasetCheckResult:
         result = self._base_result(dataset, expected_date)
+        canonical = latest_expected if latest_expected and latest_expected.get("data_source") == "canonical_db" else latest_success
+        if canonical and canonical.get("data_source") == "canonical_db":
+            row = canonical
+            result.max_date = row["trade_date"]
+            result.refreshed_at = row["refreshed_at"]
+            result.data_source = "canonical_db"
+            result.quality_status = row["quality_status"]
+            result.failure_category = row.get("failure_category")
+            result.row_counts = {str(row["trade_date"]): row["row_count"]}
+            result.expected_rows = row.get("expected_rows")
+            if row["status"] == "success" and row["quality_status"] in {"ok", "empty_valid"}:
+                result.status = "ok" if expected_date is None or row["trade_date"] >= expected_date else "stale"
+            else:
+                result.status = {"ERROR": "error", "INCOMPLETE": "gap"}.get(row.get("validation_status"), "unknown")
+            return result
         row = latest_success or latest_expected
         if row:
             result.max_date = row.get("trade_date")

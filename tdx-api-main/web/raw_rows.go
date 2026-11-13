@@ -170,6 +170,9 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 	if _, err := tx.Exec(ctx, "CREATE TEMP TABLE tdx_raw_stage (LIKE "+name+" INCLUDING DEFAULTS) ON COMMIT DROP"); err != nil {
 		return 0, err
 	}
+	if _, err := tx.Exec(ctx, "CREATE TEMP TABLE tdx_integrity_dates (day date PRIMARY KEY) ON COMMIT DROP"); err != nil {
+		return 0, err
+	}
 	for off := 0; off < len(rows); off += chunkSize {
 		end := off + chunkSize
 		if end > len(rows) {
@@ -182,10 +185,12 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 	key := "a.ts_code=b.ts_code AND a.trade_date=b.trade_date"
 	keyCols := "ts_code,trade_date"
 	dateCol := "a.trade_date"
+	changedDate := "trade_date"
 	if table[1] == "kline_minute_raw" {
 		key = "a.ts_code=b.ts_code AND a.trade_time=b.trade_time AND a.freq=b.freq"
 		keyCols = "ts_code,trade_time,freq"
 		dateCol = "a.trade_time"
+		changedDate = "(trade_time AT TIME ZONE 'Asia/Shanghai')::date"
 	}
 	cols := make([]string, len(columns))
 	for i, col := range columns {
@@ -194,13 +199,13 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 	c := strings.Join(cols, ",")
 	// RETURNING drives deletion of exactly the newly inserted stage keys.
 	// This also handles mixed new/replayed batches without re-reading new facts.
-	result, err := tx.Exec(ctx, "WITH inserted AS (INSERT INTO "+name+" ("+c+") SELECT "+c+" FROM tdx_raw_stage ON CONFLICT DO NOTHING RETURNING "+keyCols+") DELETE FROM tdx_raw_stage b USING inserted a WHERE "+key)
+	result, err := tx.Exec(ctx, "WITH inserted AS (INSERT INTO "+name+" ("+c+") SELECT "+c+" FROM tdx_raw_stage ON CONFLICT DO NOTHING RETURNING "+keyCols+"), marked AS (INSERT INTO tdx_integrity_dates SELECT DISTINCT "+changedDate+" FROM inserted ON CONFLICT DO NOTHING) DELETE FROM tdx_raw_stage b USING inserted a WHERE "+key)
 	if err != nil {
 		return 0, err
 	}
 	inserted := int(result.RowsAffected())
 	if inserted == len(rows) {
-		return inserted, nil // ordinary daily ingestion: no target-table checks/updates
+		return inserted, markRawIntegrity(ctx, tx, table) // same transaction; no target-table checks/updates
 	}
 	// Only duplicate keys require statistics and a lookup of existing facts.
 	if _, err := tx.Exec(ctx, "ANALYZE tdx_raw_stage"); err != nil {
@@ -239,10 +244,36 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 		return 0, fmt.Errorf("existing raw facts conflict; explicit bounded repair required")
 	}
 	if !needsPrecision {
-		return inserted, nil // exact replay: no no-op UPDATE
+		if inserted == 0 {
+			return 0, nil // exact replay: no no-op UPDATE or revision increment
+		}
+		return inserted, markRawIntegrity(ctx, tx, table)
 	}
 	// Conflict resolution uses primary-key probes, not another hypertable join.
 	// Valid existing precision and all original OHLCV/amount remain untouched.
-	_, err = tx.Exec(ctx, "INSERT INTO "+name+" AS a ("+c+") SELECT "+c+" FROM tdx_raw_stage WHERE volume_shares IS NOT NULL ON CONFLICT ("+keyCols+") DO UPDATE SET volume_shares=EXCLUDED.volume_shares,volume_shares_source=EXCLUDED.volume_shares_source,volume_shares_sha256=EXCLUDED.volume_shares_sha256 WHERE a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL")
-	return inserted, err
+	_, err = tx.Exec(ctx, "WITH enriched AS (INSERT INTO "+name+" AS a ("+c+") SELECT "+c+" FROM tdx_raw_stage WHERE volume_shares IS NOT NULL ON CONFLICT ("+keyCols+") DO UPDATE SET volume_shares=EXCLUDED.volume_shares,volume_shares_source=EXCLUDED.volume_shares_source,volume_shares_sha256=EXCLUDED.volume_shares_sha256 WHERE a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL RETURNING "+keyCols+") INSERT INTO tdx_integrity_dates SELECT DISTINCT "+changedDate+" FROM enriched ON CONFLICT DO NOTHING")
+	if err != nil {
+		return 0, err
+	}
+	return inserted, markRawIntegrity(ctx, tx, table)
+}
+
+// One marker per actually changed partition, not one per bar. Migration is an
+// independent rollout step: old installations keep ingesting, but cannot serve
+// the new integrity API as ready. No runtime DDL or synthesized success.
+func markRawIntegrity(ctx context.Context, tx pgx.Tx, table pgx.Identifier) error {
+	if len(table) == 2 && table[0] == "pg_temp" {
+		return nil // isolated DEV facts are not shared production partitions
+	}
+	if len(table) != 2 || table[0] != "market" || (table[1] != "kline_daily_raw" && table[1] != "kline_minute_raw") {
+		return fmt.Errorf("unsupported integrity raw table")
+	}
+	_, err := tx.Exec(ctx, `DO $integrity$ DECLARE d date; BEGIN
+		IF to_regprocedure('market.mark_data_integrity_changed(text,date,text,text)') IS NOT NULL THEN
+			FOR d IN SELECT day FROM tdx_integrity_dates ORDER BY day LOOP
+				PERFORM market.mark_data_integrity_changed('`+table[1]+`',d,'raw_fact_changed','tdx_go');
+			END LOOP;
+		END IF;
+	END $integrity$`)
+	return err
 }

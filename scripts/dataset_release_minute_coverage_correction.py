@@ -121,9 +121,11 @@ def assemble(args):
     profile, correction = _read(args.profile), _read(args.component / 'component-amendment.json')
     base, target = Path(profile['controller_paths']['candidate_root']), args.output.absolute()
     if (correction['predecessor_profile']['sha256'] != file_pin(args.profile)['sha256']
-            or target == base or target.parent != base.parent or target.exists()):
+            or target == base or target.parent != base.parent):
         raise ValueError('minute amendment requires its exact predecessor and a new sibling root')
     _plain_chain(base)
+    if (target / 'release_closure_receipt.json').exists():
+        raise ValueError('sealed minute successor is immutable')
     manifest = _read(base / 'qe_dataset_manifest.json')
     if file_pin(base / 'qe_dataset_manifest.json')['sha256'] != profile['components']['dataset_manifest_file_sha256']:
         raise ValueError('minute predecessor manifest bytes differ')
@@ -140,7 +142,15 @@ def assemble(args):
     special = {prefix + relative for prefix in ('components/minute_bin_candidate/', 'minute_bin/qlib/')
         for relative in ('instruments/all.txt', 'meta_export.json')}
     special.add('minute_bin/materialization_receipt.json')
-    target.mkdir(exist_ok=False)
+    marker = target / '.minute-assembly-inputs.json'
+    assembly_inputs = {'predecessor_profile_sha256': file_pin(args.profile)['sha256'],
+                       'correction_sha256': file_pin(args.component / 'component-amendment.json')['sha256']}
+    if target.exists():
+        if not marker.is_file() or _read(marker) != assembly_inputs:
+            raise ValueError('existing minute candidate belongs to another assembly')
+    else:
+        target.mkdir(exist_ok=False)
+        _write(marker, assembly_inputs)
     seen, reused = set(), []
     for count, pin in enumerate(manifest['components'].values(), 1):
         relative = _relative(pin['path']).as_posix()
@@ -152,21 +162,33 @@ def assemble(args):
         source, destination = base / relative, target / relative
         _plain_chain(source)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        os.link(source, destination)
+        if destination.exists():
+            if not os.path.samefile(source, destination):
+                raise ValueError('resumed unchanged pin differs')
+        else:
+            os.link(source, destination)
         reused.append({'path': relative, 'sha256': pin['sha256'], 'size': pin['size']})
         if count % 20000 == 0:
             print(json.dumps({'phase': 'adopt_unchanged_pins', 'files': count, 'total': len(manifest['components'])}), flush=True)
     for relative, source in replaced.items():
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        if destination.exists():
+            if file_pin(destination) != file_pin(source):
+                raise ValueError('resumed repaired pin differs')
+        else:
+            shutil.copyfile(source, destination)
     provider = target / 'components/minute_bin_candidate'
     catalog = build_minute_quote_catalog(provider)
     for prefix in ('components/minute_bin_candidate/', 'minute_bin/qlib/'):
         path = target / prefix / 'instruments/all.txt'
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('xb') as handle:
-            handle.write(catalog.payload)
+        if path.exists():
+            if path.read_bytes() != catalog.payload:
+                raise ValueError('resumed quote catalog differs')
+        else:
+            with path.open('xb') as handle:
+                handle.write(catalog.payload)
         meta = _read(base / prefix / 'meta_export.json')
         meta['minute_coverage_amendment'] = {'receipt': 'reports/minute-coverage-amendment.json',
             'calendar_sha256': catalog.calendar_sha256, 'quote_catalog_sha256': hashlib.sha256(catalog.payload).hexdigest()}
@@ -179,7 +201,12 @@ def assemble(args):
     source_path = Path(correction['source_ref']['path'])
     if file_pin(source_path) != {k: correction['source_ref'][k] for k in ('sha256', 'size')}:
         raise ValueError('minute source changed during assembly')
-    shutil.copyfile(source_path, target / 'reports/minute-coverage-source.json')
+    target_source = target / 'reports/minute-coverage-source.json'
+    if target_source.exists():
+        if file_pin(target_source) != file_pin(source_path):
+            raise ValueError('resumed frozen source differs')
+    else:
+        shutil.copyfile(source_path, target_source)
     revised = copy.deepcopy(manifest)
     by_path = {pin['path']: pin for pin in revised['components'].values()}
     changed = set(replaced) | special | {'reports/minute-coverage-amendment.json', 'reports/minute-coverage-source.json'}

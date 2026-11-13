@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 3ef873d84b2c5b72accb2bd576a17e37daa6735e505e07e7529996e0518236ee
+source_sha256: a718c1a7e948077a3cfdf50c0d5ec79e726dbfe2b2633a2103eeb742241192ff
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-10-08"
@@ -10,6 +10,16 @@ rule_sync_policy:
   requirement: Every enabled machine rule references a stable section in the sole human-readable standard.
   source_digest_required: true
   archive_directory: docs/standards/archive
+agent_execution_defaults:
+  standard_refs:
+    - docs/standards/aistock_development_standard_v1.5_20260523.md#rule-doc-minimum-001
+    - docs/standards/aistock_development_standard_v1.5_20260523.md#rule-auto-review-delivery-001
+  extra_narrative_files: 0
+  review_executor: active_agent
+  source_delivery:
+    enabled: true
+    authorization_ref: "用户批准统一实施计划：最小文档、自动多轮审核修复和授权源码交付（2026-11-06）"
+  task_restrictions_override_defaults: true
 control_taxonomy:
   effects:
     block: Blocks only the declared enforcement phase when the control applies.
@@ -690,10 +700,12 @@ rules:
         - bare_merge_does_not_imply_cleanup
         - superseded_cleanup_requires_exact_head_no_open_pr_and_verified_authority
         - superseded_cleanup_receipt_persisted_outside_target_before_deletion
-        - dirty_unknown_protected_active_or_unique_unmerged_work_still_blocks
+        - dirty_unknown_protected_active_or_unreviewed_unique_work_still_blocks
+        - reviewed_disposal_requires_user_scope_and_self_contained_independent_restore
+        - reviewed_disposal_rechecks_exact_target_and_all_bound_evidence_before_delete
         - intrinsic_transient_roots_collapsed_with_targeted_unknown_or_content_bound_expansion
     baseline_policy: block_incomplete_cleanup_claim_only
-    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, collapse intrinsically transient ignored roots before inventory and expand only unknown or content-bound roots, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts. For an unmerged branch that was authoritatively replaced, use cleanup-superseded with exact expected HEAD, no open PR, one verified replacement/comment/patch-equivalence authority and a repo-external pre-delete receipt; never use it to discard dirty, unknown, protected, active, drifted or unique unmerged work.
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, collapse intrinsically transient ignored roots before inventory and expand only unknown or content-bound roots, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts. For an unmerged branch that was authoritatively replaced or explicitly abandoned by the user, use cleanup-superseded with exact expected HEAD, no open PR, one verified replacement/comment/patch-equivalence/reviewed-disposal authority and a repo-external pre-delete receipt. Reviewed disposal requires a pinned external manifest, exact user authorization, merged successor commits, no remaining source dependencies, unchanged protected files, a self-contained v2 Git bundle and independent restore HEAD/tree/fsck evidence; recheck all identity and evidence before deletion. Dirty, unknown, protected, active, drifted or unreviewed unique work remains blocked.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001

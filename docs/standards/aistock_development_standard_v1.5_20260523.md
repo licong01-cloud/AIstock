@@ -69,6 +69,16 @@
 9. merge finalizer 在 runtime/client 推断前先幂等同步 canonical `main` 到已验证 merge commit；相同输入可安全重试，旧 root snapshot 不得触发业务窗口重新执行或抢占客户端 owner。
 10. source PR 创建和 close-sync PR 创建遇到 GitHub GraphQL/TLS/EOF 等传输错误时，只允许对已推送且 SHA 已验证的 head 使用一次 REST 创建或读回；先查询同 head 的现有 open PR，创建后再次校验 head/base。权限、参数、冲突或策略错误不得降级，也不得重复创建 PR 或要求用户重新授权。
 
+<a id="rule-auto-review-delivery-001"></a>
+### 2.4.1 [AUTO-REVIEW-DELIVERY-001] 自动审核、修复和源码交付
+
+1. 所有 BUG 修复和代码修改完成后，由当前执行 Agent 自动进行正确性审核和完整性/回归审核。检查真实调用、边界、异常、兼容性、业务语义、需求覆盖、测试有效性及验收合同；在原授权范围内发现问题直接修复并复核受影响部分。最终结论绑定实际交付版本；后续修改使受影响结论失效，不能复用旧 HEAD 的绿灯。自审不冒充独立审核，不自动启动子代理，也不替代分支保护要求的真实审核。
+2. 用户已批准本仓库在授权实施任务中默认自动提交、push、创建或更新同一 PR、满足现有条件后合入源码、同步必要 BUG/metadata 和主目录；派生 YAML 的 `agent_execution_defaults.source_delivery` 保存开关、授权引用和动作范围。后续任务的只分析、暂不提交、不创建 PR、不合入等明确限制优先，Agent 在已有任务记录的 `execution_restrictions` 中记录 `analysis_only`、`no_commit`、`no_pr`、`no_merge`；未启用或无授权引用时不推导源码交付授权。CLI 展示策略和执行现有命令，审核与修复由当前 Agent 执行，不能由 CLI 自动声明审核通过。
+3. 自动交付继续满足最小本地验证、scope、设计符合性、精确当前 HEAD 的 required CI、分支保护和合入条件，不使用 bypass/admin、不弱化测试或 runtime 合同，不新增独立审批、检查上下文、服务或后台调度器。已有完整授权不重复询问；PR 更新复用同一任务分支和 PR。
+4. 失败先恢复失败测试或受影响检查；同一根因连续三次修复尝试无进展时停止空转并报告实际阻断。网络和 runner 故障采用现有有限重试，保留可恢复状态，不盲目重提 PR、无限 watch 或请求重复授权。需要改变需求/设计/业务语义或执行未授权动作时，只澄清缺失决策。
+5. 源码交付不授权服务启停、生产 DDL/DML、依赖安装、运行激活、训练、部署或删除；这些动作与结果继续独立处理。运行态 BUG 保留 `fixed_source_pending_user_restart` 等真实状态，源码合入不等于业务验收。
+6. 各轮问题、处理结果、最终版本和验证引用只写已有任务记录或 PR；不生成逐轮审核、修复、通过或交付报告。
+
 <a id="rule-worktree-cleanup-evidence-001"></a>
 ### 2.5 [WORKTREE-CLEANUP-EVIDENCE-001] worktree 临时证据终结与清理
 
@@ -82,7 +92,8 @@
 8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 9. cleanup 对同一目标 worktree 只生成一次完整 ignored-artifact manifest；后续分类和删除复用该 manifest，并仅对实际删除的精确 roots 做漂移读回。除 manifest 漂移、路径身份变化或删除失败外，禁止重复遍历整个 ignored tree。
 10. 同一次 merge finalizer 内，source 与 close-sync cleanup 可复用已成功完成且没有中间 main 变更的 `fetch origin --prune` receipt，以及各自前序步骤已验证的精确 PR/HEAD receipt；branch remote SHA、目标 worktree、ignored-artifact、活动进程和删除后四态仍逐目标重新验证。root-sync 因 canonical root 脏而 deferred 时，直接复用首次完整阻断 payload 生成提示并执行一次 `sync_root=false` 安全重试，禁止为生成相同提示插入第二次完整 dry-run 预检。
-11. 未合入但已被权威替代的旧分支只能通过独立 `cleanup-superseded` 合同清理，禁止用普通 `cleanup-after-merge`、手工 `git branch -D` 或放宽 merged 判定绕过。命令必须绑定精确 worktree、完整 expected HEAD、授权引用和处置原因，确认没有开放 PR，并且只接受三种权威之一：canonical BUG 的 `fixed`/`verified` 记录与另一已合入 PR/fix commit 完全一致；仓库 `OWNER`/`MEMBER`/`COLLABORATOR` 在绑定同一 branch/HEAD 的关闭未合入 PR 上明确标注 superseded/obsolete/do-not-merge；或所有非 merge commit 均与 `origin/main` patch 等价且未合入 merge commit 引入的路径也与主线一致。删除前先在 worktree 外持久化 `aistock_superseded_cleanup_receipt_v1`，随后仍执行 clean、ignored/protected/unknown artifact、活动进程、remote SHA lease、manifest 漂移和四态读回；dirty、unknown/protected artifact、HEAD 漂移、开放 PR、独有提交或权威读取失败继续 fail closed。
+11. 未合入但已被权威替代或用户明确批准废弃的旧分支只能通过独立 `cleanup-superseded` 合同清理，禁止用普通 `cleanup-after-merge`、手工 `git branch -D` 或放宽 merged 判定绕过。命令必须绑定精确 worktree、完整 expected HEAD、授权引用和处置原因，确认没有开放 PR，并且只接受四种权威之一：canonical BUG 的 `fixed`/`verified` 记录与另一已合入 PR/fix commit 完全一致；仓库 `OWNER`/`MEMBER`/`COLLABORATOR` 在绑定同一 branch/HEAD 的关闭未合入 PR 上明确标注 superseded/obsolete/do-not-merge；所有非 merge commit 均与 `origin/main` patch 等价且未合入 merge commit 引入的路径也与主线一致；或按下项合同验证通过的 `reviewed_disposal`。删除前先在 worktree 外持久化 `aistock_superseded_cleanup_receipt_v1`，随后仍执行 clean、ignored/protected/unknown artifact、活动进程、remote SHA lease、manifest 漂移和四态读回；dirty、unknown/protected artifact、HEAD 漂移、开放 PR 或权威读取失败继续 fail closed。独有提交仅能在显式 `reviewed_disposal` 全部验证通过时废弃，绝不伪称已合入。
+12. `reviewed_disposal` 用于已有明确后继实现、经用户批准停止交付的旧源码，必须传 `--disposal-manifest` 及 `--disposal-manifest-sha256`。外置 `aistock_reviewed_disposal_v1` 清单绑定 repository、branch、完整 HEAD、实际注册工作树，以及带 SHA256 的授权、引用评审、恢复 bundle 和恢复回执。`aistock_cleanup_authorization_v1` 必须记录真实用户指令、`discard_reviewed_unmerged_branch` 动作和精确目标；`review` 必须为 `DISCARD_AFTER_ARCHIVE`、说明理由并列出已包含于 `origin/main` 的后继 commit。`aistock_disposal_reference_review_v1` 必须记录检查范围、受保护文件哈希及空的剩余依赖，冻结模型动态读取或未知引用仍阻断；仅作来源记录的历史训练路径须保留原件并记录恢复方法。归档必须为无外部 prerequisite 的 v2 Git bundle，包含精确 branch/HEAD；`aistock_bundle_restore_receipt_v1` 绑定该 bundle 哈希、独立对象库恢复后的 HEAD/tree 和完整 fsck PASS。清单、授权及恢复材料须位于目标和 canonical 源码根之外，路径及祖先不得为 reparse/symlink。删除前再次验证 HEAD、开放 PR、清单和全部证据哈希；保留前置回执与恢复材料，继续原有脏文件、资产、进程、远端 lease 和四态保护，不以归档授权修改模型、冻结合同或研究结果。
 12. ignored-artifact 预检必须先折叠语义上整根可删除的固有 transient 目录（例如 `node_modules`、Python/测试缓存和 `.next*`），禁止为生成 manifest 逐个列举这些根内的全部文件；只有不能按根安全分类或需要内容约束验证的目录才做定向展开。折叠 inventory 仍须记录根级 manifest digest，并在 purge 前后使用相同范围重新读取；tracked file、protected/unknown artifact、symlink/junction/reparse point、内容上限与 schema 校验不得因折叠而放宽。
 
 ## 3. 风险与工作量分级
@@ -244,6 +255,15 @@ PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 Gr
 ### 6.14 [DOC-LOCATION-001] 文档归属
 
 规范位于 `docs/standards/`，设计位于 `docs/architecture/`，分析位于 `docs/analysis/`，运维位于 `docs/operations/`，用户说明位于 `docs/user_guides/`，验证历史位于 `tests/aistock_validation/history/`。同主题保留一个主文档，其他文件引用主文档。
+
+<a id="rule-doc-minimum-001"></a>
+### 6.14.1 [DOC-MINIMUM-001] 最小文档默认
+
+1. 除用户明确要求外，不新增非必要说明文件：若不生成该文字/文件仍可完整执行、验收、复现、恢复和交接，就不生成。分析、问答、只读排查和状态检查直接在对话回答；普通 BUG/维护复用 BUG/Issue、PR 和必要回执，额外计划、过程、审核、总结和完成报告默认零份。不因复杂、阶段切换、换窗口或成功而自动叠加文档，也不为少写文档增加审批或审计报告。
+2. 一个事实保留一个权威载体；优先更新已有相关段落，其他位置用引用。功能设计复用已有权威设计，必要新设计只保留一份，验收矩阵可放同一文件；保持 F0/F1/F2、Design Acceptance Index、逐项验收和证据完整，不以最小文档绕过设计，也不另建重复 Feature Card/验收文件。
+3. 机器必需的 BUG、state/events、数据身份、manifest、冻结研究约束、验证/运行态回执与负面或 UNKNOWN 证据不属于可删除的说明副本；最小化重复字段和响应正文，但不能损害恢复、审计、科学复现或业务合同。完整日志按既有证据生命周期保留，默认不重复读入上下文。
+4. 任务卡是默认日常视图；Context Pack Markdown 按需生成，PR 正文只在实际消费时生成并更新同一文件，复盘 Markdown 默认不落盘。跨窗口先使用已有任务状态和恢复摘要，无法承载必要下一步时才保留一份持续更新的短交接，不创建 plan/findings/progress/review/summary/handoff 成套文件或叙述性版本快照。
+5. 最小范围按用途和语义确定，不用固定行数/token 上限截断必要内容。已有规范按摘要变化和任务相关性读取，成功命令使用紧凑输出；历史文件不因本规则生效自动删除。用户明确要求的文档按指定范围交付。
 
 <a id="rule-memory-dataframe-001"></a>
 ### 6.15 [MEMORY-DATAFRAME-001] 数据规模边界

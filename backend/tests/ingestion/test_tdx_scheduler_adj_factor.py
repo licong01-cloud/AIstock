@@ -1,21 +1,159 @@
 from __future__ import annotations
 
 import datetime as dt
+from contextlib import nullcontext
 from concurrent.futures import Future
 from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 import scripts.ingest_tushare_adj_factor as ingest_adj_factor
-
 from backend.ingestion.tdx_scheduler import TDXScheduler
+from backend.services.data_integrity.listing_scope import listing_change_window
+
+
+def test_known_history_conflict_cannot_be_reconciled_by_permissive_freshness(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduler_module
+    scheduler = object.__new__(TDXScheduler)
+    repository = Mock()
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repository)
+    scheduler._target_date_for_retry = lambda *args: dt.date(2026, 10, 27)
+    scheduler._job_update_outcome = lambda _job: {
+        "status": "failed", "history_reconciliation": {"failures": [
+            {"symbol": "920047.BJ", "retryable": False, "error": "source history conflict"}]}}
+    scheduler._check_dataset_recovered = Mock(return_value=SimpleNamespace(status="ok"))
+    scheduler._reconcile_recovered_target_state = Mock()
+    done = Future()
+    done.set_result(None)
+    scheduler._finalize_data_sync_target_retry(done, target_id="target", dataset="adj_factor",
+        mode="incremental", options={"job_id": "c197fd66-9de8-4e0c-a994-f774a42a89e7"})
+    repository.mark_final_blocked.assert_called_once()
+    scheduler._reconcile_recovered_target_state.assert_not_called()
+    scheduler._check_dataset_recovered.assert_not_called()
+
+
+@pytest.mark.parametrize("records", [[],
+    [{"ts_code": "300506.SZ", "trade_date": "20261026", "adj_factor": 1}],
+    [{"ts_code": "300506.SZ", "trade_date": "20261027", "adj_factor": float("nan")}],
+    [{"ts_code": "300506.SZ", "trade_date": "20261027", "adj_factor": 1}]*2,
+])
+def test_daily_provider_empty_wrong_date_invalid_or_duplicate_cannot_succeed(records):
+    import pandas as pd
+    class Provider:
+        def adj_factor(self, **_kwargs):
+            return pd.DataFrame(records)
+    with pytest.raises((RuntimeError, ValueError)):
+        ingest_adj_factor._fetch_adj_factor_for_date(Provider(), dt.date(2026, 10, 27))
+
 
 
 def _argument_value(args: list[str], name: str) -> str:
     return args[args.index(name) + 1]
+
+
+def test_exact_factor_repair_passes_each_symbol_not_a_stringified_list():
+    args = TDXScheduler._default_ingestion_args("adj_factor", "incremental", {
+        "history_reconcile_symbol": ["000001.SZ", "600000.SH"]})
+    assert [args[i + 1] for i, arg in enumerate(args) if arg == "--history-reconcile-symbol"] == [
+        "000001.SZ", "600000.SH"]
+
+
+def test_exact_factor_repair_cannot_fall_back_to_the_whole_market():
+    scheduler = object.__new__(TDXScheduler)
+    with pytest.raises(ValueError, match="symbol"):
+        scheduler._enqueue_target_retry(target={"dataset": "adj_factor", "data_source": "integrity_repair",
+            "target_id": "repair", "target_date": dt.date(2018, 8, 8)}, schedule={},
+            retry_mode="incremental", triggered_by="unit", attempt=1)
+
+
+def test_exact_factor_repair_uses_only_current_named_supported_gaps():
+    scheduler = object.__new__(TDXScheduler)
+    queries = []
+    def fetch(query, params):
+        queries.append((query, params))
+        if "unnest" in query:
+            return [{"ts_code": "000001.SZ"}]
+        return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
+                 "validation": {"gaps": [{"classification": "MISSING",
+                     "symbols": ["000001.SZ", "000001.SZ", "920001.BJ"]}]}}]
+    scheduler._fetchall = fetch
+    target = {"target_date": dt.date(2018, 8, 8)}
+    assert scheduler._scope_adj_factor_repair(target)
+    assert target["metadata"]["history_reconcile_symbols"] == ["000001.SZ"]
+    assert len(queries) == 2 and "FROM market.dataset_date_refresh_audit" in queries[0][0]
+    assert "character(9)[]" in queries[1][0] and "EXISTS" in queries[1][0]
+
+
+def test_factor_gap_without_local_history_is_deferred_without_launching_a_failing_job(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduling
+    scheduler = object.__new__(TDXScheduler)
+    repo = Mock()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    day = dt.date(2010, 1, 4)
+    now = dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(scheduling, "_now", lambda: now)
+    verdict = {"data_revision": 1, "validated_revision": 1, "validation_status": "INCOMPLETE",
+               "validation": {"gaps": [{"classification": "MISSING", "symbols": ["000787.SZ"]}]}}
+    scheduler._fetchall = lambda query, params: [verdict] if "refresh_audit" in query else []
+    target = {"target_id": "old-gap", "target_date": day}
+    assert scheduler._scope_adj_factor_repair(target) is False
+    repo.mark_retry.assert_called_once()
+    assert repo.mark_retry.call_args.kwargs["retry_after"] == now + dt.timedelta(days=1)
+    assert repo.mark_retry.call_args.kwargs["context"]["missing_symbols"] == ["000787.SZ"]
+
+
+def test_first_listing_factor_gap_is_fetchable_without_local_prices(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduling
+    monkeypatch.setattr(scheduling, 'DataSyncTargetRepository', Mock)
+    scheduler = object.__new__(TDXScheduler)
+    queries = []
+
+    def fetch(query, params):
+        queries.append(query)
+        if "refresh_audit" in query:
+            return [{"data_revision": 1, "validated_revision": 1, "validation_status": "INCOMPLETE",
+                     "validation": {"gaps": [{"classification": "MISSING", "symbols": ["688827.SH"]}]}}]
+        # Independent listed identity is sufficient to FETCH, never to certify a factor.
+        if "stock_basic" in query and "list_date" in query:
+            return [{"ts_code": "688827.SH"}]
+        return []
+
+    scheduler._fetchall = fetch
+    target = {"target_id": "ipo", "target_date": dt.date(2026, 11, 10)}
+    assert scheduler._scope_adj_factor_repair(target)
+    assert target["metadata"]["history_reconcile_symbols"] == ["688827.SH"]
+    assert len(queries) == 2
+
+
+def test_existing_factor_job_preserves_scheduler_target_identity():
+    queries = []
+    cursor = SimpleNamespace(execute=lambda sql, params: queries.append((sql, params)))
+    conn = SimpleNamespace(cursor=lambda: nullcontext(cursor))
+    ingest_adj_factor._start_existing_job(conn, "job", {"dataset": "adj_factor"})
+    assert "COALESCE(summary" in queries[0][0] and "||" in queries[0][0]
+
+
+@pytest.mark.parametrize("day,delay_hours", [(dt.date(2026, 5, 20), 24), (dt.date(2026, 11, 4), 6)])
+def test_exact_source_gap_backoff_keeps_recent_days_fast(monkeypatch, day, delay_hours):
+    import backend.ingestion.tdx_scheduler as scheduling
+    now = dt.datetime(2026, 11, 5, 8, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(scheduling, "_now", lambda: now)
+    repo = Mock()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    scheduler = object.__new__(TDXScheduler)
+    scheduler._target_date_for_retry = lambda *_: day
+    scheduler._final_deadline_for_target = lambda *_: now-dt.timedelta(days=1)
+    scheduler._check_dataset_recovered = lambda *_: SimpleNamespace(status="gap", failure_category="physical_gap")
+    done = Future()
+    done.set_result(None)
+    scheduler._finalize_data_sync_target_retry(done, target_id="dated", dataset="bak_basic",
+        mode="incremental", options={"integrity_repair": True})
+    assert repo.mark_retry.call_args.kwargs["retry_after"] == now+dt.timedelta(hours=delay_hours)
+    repo.mark_final_blocked.assert_not_called()
 
 
 def test_adj_factor_script_starts_by_absolute_path_outside_repository(tmp_path: Path) -> None:
@@ -139,17 +277,23 @@ def test_incremental_adj_factor_scheduler_passes_optional_history_controls() -> 
     assert "--history-reconcile-dry-run" in args
 
 
+@pytest.mark.parametrize("history_error", [False, True])
 def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write_path(
-    monkeypatch,
+    monkeypatch, history_error,
 ) -> None:
     class _Connection:
         autocommit = False
 
         def __enter__(self):
-            return self
+            pytest.fail("autocommit CLI must not enter a psycopg2 transaction context")
 
         def __exit__(self, exc_type, exc, traceback):
             return False
+
+        def close(self):
+            self.closed = True
+
+    connection = _Connection()
 
     calls: list[tuple[str, object]] = []
 
@@ -181,7 +325,7 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         bulk_session_tune=False,
     )
     monkeypatch.setattr(ingest_adj_factor, "parse_args", lambda: args)
-    monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: _Connection())
+    monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: connection)
     monkeypatch.setattr(ingest_adj_factor, "pro_api", lambda: object())
     monkeypatch.setattr(ingest_adj_factor, "_get_max_trade_date", lambda connection: dt.date(2026, 9, 13))
     monkeypatch.setattr(ingest_adj_factor, "_create_job", lambda *args: "job-id")
@@ -192,17 +336,117 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         "_finish_job",
         lambda connection, job_id, status, summary: calls.append(("finished", (status, summary))),
     )
-    monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository", lambda connection: object())
-    monkeypatch.setattr(ingest_adj_factor, "AdjFactorHistoryReconciler", _Reconciler)
+    def run_history(connection, arguments, job_id, end_date):
+        reconciler = _Reconciler(repository=object())
+        result = reconciler.reconcile(end_date=end_date)
+        if history_error:
+            raise RuntimeError("real history failure must remain failed")
+        return result
+    monkeypatch.setattr(ingest_adj_factor, "run_history_ingestion", run_history)
+    monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository",
+                        lambda _connection: SimpleNamespace(writer_lock=nullcontext))
     monkeypatch.setattr(
         ingest_adj_factor,
         "run_ingestion",
         lambda *args, **kwargs: pytest.fail("incremental mode must not use the date-only upsert path"),
     )
 
-    ingest_adj_factor.main()
+    if history_error:
+        with pytest.raises(SystemExit) as error:
+            ingest_adj_factor.main()
+        assert error.value.code == 1
+    else:
+        ingest_adj_factor.main()
 
     assert [name for name, _ in calls] == ["constructed", "reconciled", "finished"]
     status, summary = calls[-1][1]
-    assert status == "success"
-    assert summary["history_reconciliation"]["status"] == "unchanged"
+    assert connection.closed is True
+    assert status == ("failed" if history_error else "success")
+    if not history_error:
+        assert summary["history_reconciliation"]["status"] == "unchanged"
+
+
+@pytest.mark.parametrize('old,new,today,expected', [
+    (None, '20261110', dt.date(2026, 11, 13), (dt.date(2026, 11, 10), dt.date(2026, 11, 13))),
+    (dt.date(2026, 11, 10), '20261110', dt.date(2026, 11, 13), None),
+    (None, '20261116', dt.date(2026, 11, 13), None),
+    (dt.date(2026, 11, 11), '20261110', dt.date(2026, 11, 13), (dt.date(2026, 11, 10), dt.date(2026, 11, 10))),
+    (dt.date(2026, 11, 10), '20261111', dt.date(2026, 11, 13), (dt.date(2026, 11, 10), dt.date(2026, 11, 10))),
+    (None, None, dt.date(2026, 11, 13), None),
+])
+def test_only_dates_with_changed_listing_membership_are_invalidated(old, new, today, expected):
+    assert listing_change_window(old, new, today=today) == expected
+
+
+def test_refresh_is_atomic_and_only_invalidates_existing_affected_partitions(monkeypatch):
+    import backend.services.data_integrity.listing_scope as scope
+    monkeypatch.setattr(scope, 'schema_installed', lambda _conn: True)
+    dirty = Mock()
+    monkeypatch.setattr(scope, 'mark_changed', dirty)
+    calls = []
+    results = iter([[], [('adj_factor', dt.date(2026, 11, 10)), ('kline_daily_raw', dt.date(2026, 11, 10))]])
+    cursor = SimpleNamespace(execute=lambda query, params: calls.append((query, params)),
+                             fetchall=lambda: next(results))
+    conn = SimpleNamespace(autocommit=True, cursor=lambda: nullcontext(cursor), commit=Mock(), rollback=Mock())
+
+    def write(_rows):
+        assert conn.autocommit is False
+        calls.append(('actual fact writer', ()))
+        return 1
+
+    assert scope.store_listing_refresh(conn, [{'ts_code': '688827.SH', 'list_date': '20261110'}], write) == 1
+    assert dirty.call_count == 2
+    assert all(call.args[2] == [dt.date(2026, 11, 10)] for call in dirty.call_args_list)
+    assert all('kline_daily_raw' not in query for query, _ in calls)  # no physical quote scan
+    assert calls[1][0] == 'actual fact writer'
+    conn.commit.assert_called_once()
+    conn.rollback.assert_not_called()
+    assert conn.autocommit is True
+
+
+def test_catalogue_write_failure_rolls_back_and_never_publishes_valid(monkeypatch):
+    import backend.services.data_integrity.listing_scope as scope
+    monkeypatch.setattr(scope, 'schema_installed', lambda _conn: False)
+    dirty = Mock()
+    monkeypatch.setattr(scope, 'mark_changed', dirty)
+    conn = SimpleNamespace(autocommit=True, commit=Mock(), rollback=Mock())
+    with pytest.raises(RuntimeError, match='source write failed'):
+        scope.store_listing_refresh(conn, [{'ts_code': '688827.SH', 'list_date': '20261110'}],
+            Mock(side_effect=RuntimeError('source write failed')))
+    dirty.assert_not_called()
+    conn.rollback.assert_called_once()
+    assert conn.autocommit is True
+
+
+def test_both_stock_basic_entrypoints_share_listing_scope_invalidation(monkeypatch):
+    from backend.services import tushare_sync_engine as engine
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    import scripts.ingest_tushare_stock_basic as script
+    import backend.services.data_integrity.listing_scope as scope
+    seen = []
+    monkeypatch.setattr(scope, 'store_listing_refresh',
+        lambda conn, rows, write: seen.append((conn, rows)) or 7)
+    conn = object()
+    rows = [{'ts_code': '688827.SH', 'list_date': '20261110'}]
+    reader = object.__new__(engine.TushareSyncEngine)
+    assert reader._upsert_batch(conn, DATASET_REGISTRY['stock_basic'], rows) == 7
+    assert script._insert_stock_basic(conn, rows) == 7
+    assert seen == [(conn, rows), (conn, rows)]
+
+
+def test_future_max_listing_date_does_not_skip_directory_refresh(monkeypatch):
+    import scripts.ingest_tushare_stock_basic as script
+    monkeypatch.setattr(script, 'parse_args', lambda: SimpleNamespace(mode='incremental',
+        start_date=None, end_date='2026-11-10', job_id=None, bulk_session_tune=False, truncate=False))
+    conn = SimpleNamespace(autocommit=True)
+    monkeypatch.setattr(script.psycopg2, 'connect', lambda **_kwargs: nullcontext(conn))
+    monkeypatch.setattr(script, 'pro_api', Mock())
+    maximum = Mock(return_value=dt.date(2026, 11, 16))
+    monkeypatch.setattr(script, '_get_max_list_date', maximum)
+    fetch = Mock(return_value=[{'ts_code': '688827.SH', 'list_date': '20261110'}])
+    monkeypatch.setattr(script, '_fetch_stock_basic', fetch)
+    for name in ('_insert_stock_basic', '_create_job', '_log', '_update_job_progress', '_finish_job'):
+        monkeypatch.setattr(script, name, Mock(return_value=1))
+    script.main()
+    fetch.assert_called_once()
+    maximum.assert_not_called()

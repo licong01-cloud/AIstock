@@ -404,6 +404,12 @@ def activate_canonical_pit_authority(
                 raise CanonicalPitContractError("activation target state disappeared after preflight")
             _require_canonical_ready_state(dict(locked_target), target=target)
             cur.execute(
+                "SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans "
+                "WHERE universe_key=%s AND rule_version=%s FOR SHARE",
+                (before["current_rolling_key"], before["current_rule_version"]),
+            )
+            previous_sector_population = [dict(row) for row in cur.fetchall()]
+            cur.execute(
                 """
                 UPDATE market.stock_universe_pit_authority_versions
                    SET status = 'SESSION_PINNED_DRAINING', updated_at = NOW()
@@ -460,6 +466,18 @@ def activate_canonical_pit_authority(
             )
             if cur.rowcount != 1:
                 raise CanonicalPitContractError("activation pointer CAS affected a non-unit row count")
+            cur.execute(
+                "SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans "
+                "WHERE universe_key=%s AND rule_version=%s FOR SHARE",
+                (target.target_rolling_key, target.target_rule_version),
+            )
+            from .sector_data_repair import mark_pit_revision
+
+            # The producer follows the global pointer. Switching it changes the
+            # historical aggregation population even without a span-table write.
+            # Queue the exact interval difference atomically with this CAS;
+            # unchanged identities do not trigger a historical facts scan.
+            mark_pit_revision(conn, previous_sector_population, [dict(row) for row in cur.fetchall()])
             cur.execute(
                 """
                 INSERT INTO market.stock_universe_pit_authority_events (
@@ -606,16 +624,32 @@ def require_dataset_runtime_pit_policy(
     components = profile.get("components")
     if not isinstance(components, Mapping):
         raise CanonicalPitContractError("dataset PIT components are missing")
-    for name in ("day_pins", "minute_pins"):
-        pins = components.get(name)
-        if (not isinstance(pins, Mapping)
-                or pins.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
-                or pins.get("rule_version") != binding.rule_version):
-            raise CanonicalPitContractError(f"dataset {name} differs from global canonical PIT policy")
-    factor = components.get("factor_meta")
-    if factor is not None and (not isinstance(factor, Mapping)
-                              or factor.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY):
-        raise CanonicalPitContractError("dataset factor_meta differs from global canonical PIT policy")
+    if profile.get("pit_binding") is not None:
+        # Fact catalogs and selection eligibility are separate identities.
+        # Lazy import avoids the frozen-primitives -> policy import cycle.
+        from backend.services.dataset_release.pit import DatasetPitBinding, PitSnapshotError
+        try:
+            frozen = DatasetPitBinding.from_release_manifest(profile["pit_binding"])
+            require_same_canonical_policy(
+                binding, frozen.consumer_binding(consumer="dataset_publication"),
+                consumer="dataset_publication",
+            )
+            if frozen.cutoff.isoformat() != str(profile.get("cutoff")):
+                raise ValueError("frozen PIT cutoff differs from dataset")
+        except (TypeError, ValueError, PitSnapshotError) as exc:
+            raise CanonicalPitContractError("dataset independent PIT binding differs") from exc
+    else:
+        # Historical profiles without an explicit binding keep their contract.
+        for name in ("day_pins", "minute_pins"):
+            pins = components.get(name)
+            if (not isinstance(pins, Mapping)
+                    or pins.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+                    or pins.get("rule_version") != binding.rule_version):
+                raise CanonicalPitContractError(f"dataset {name} differs from global canonical PIT policy")
+        factor = components.get("factor_meta")
+        if factor is not None and (not isinstance(factor, Mapping)
+                                  or factor.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY):
+            raise CanonicalPitContractError("dataset factor_meta differs from global canonical PIT policy")
     try:
         cutoff = date.fromisoformat(str(profile["cutoff"]))
     except (KeyError, TypeError, ValueError) as exc:

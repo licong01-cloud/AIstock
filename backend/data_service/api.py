@@ -23,6 +23,12 @@ from .miniqmt_adapter import Order, PortfolioState, Trade
 logger = logging.getLogger("aistock.data_service")
 
 
+def get_shared_input_history(dataset, start, end, *, symbols=None, observed_by=None):
+    """Optional shared source facts, without changing the global equity PIT."""
+    from .shared_tushare_inputs import read_history
+    return read_history(dataset, start, end, symbols=symbols, observed_by=observed_by)
+
+
 @dataclass
 class QuoteBatch:
     timestamp: datetime

@@ -11,7 +11,8 @@ from backend.services.dataset_release.source_fact_history import filter_source_f
 def test_fact_population_excludes_b_shares_not_st_ipo_or_delisted():
     from backend.services.dataset_release.source_fact_history import fact_codes
     assert fact_codes(['000861.SZ', '301396.SZ', '600811.SH', '200001.SZ', '900901.SH',
-                       '000985.SH', '430047.BJ', '600811.sh ']) == ('000861.SZ', '301396.SZ', '600811.SH')
+                       '000985.SH', '430047.BJ', '600811.sh ', '038043.SZ', '072452.SZ',
+                       '082452.SZ', '310001.SZ']) == ('000861.SZ', '301396.SZ', '600811.SH')
 
 
 def test_factor_default_keeps_observed_history_before_pit_entry():

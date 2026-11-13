@@ -543,6 +543,46 @@ def test_pipeline_computes_hashes_from_registered_artifacts(tmp_path: Path) -> N
     assert receipt["output_refs"][0]["sha256"] != SHA
 
 
+@pytest.mark.parametrize("mutation", [None, "time", "snapshot", "isolation", "performed", "integer", "missing", "unknown"])
+def test_source_asof_consistency_proof_is_exact_and_legacy_proofs_remain_supported(tmp_path, mutation):
+    from backend.services.dataset_release.canonical import canonical_json_bytes
+
+    def replace_proof(scope):
+        proof = {
+            "schema_version": "aistock_monthly_source_asof_consistency_v1",
+            "snapshot_group_id": scope["snapshot_group_id"],
+            "source_as_of": scope["source_as_of"],
+            "isolation_level": "REPEATABLE READ READ ONLY",
+            "post_snapshot_writer_check_performed": False,
+            "status": "PASS",
+        }
+        if mutation == "time":
+            proof["source_as_of"] = "2026-10-02T00:00:00+00:00"
+        elif mutation == "snapshot":
+            proof["snapshot_group_id"] = "another-snapshot"
+        elif mutation == "isolation":
+            proof["isolation_level"] = "READ COMMITTED"
+        elif mutation == "performed":
+            proof["post_snapshot_writer_check_performed"] = True
+        elif mutation == "integer":
+            proof["post_snapshot_writer_check_performed"] = 0
+        elif mutation == "missing":
+            proof.pop("post_snapshot_writer_check_performed")
+        elif mutation == "unknown":
+            proof["skip_missing"] = True
+        reference = scope["repair_overlap_check_refs"][0]
+        path = tmp_path / reference["id"]
+        data = canonical_json_bytes(proof) + b"\n"
+        path.write_bytes(data)
+        reference.update(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+
+    if mutation is None:
+        assert _run(_pipeline(tmp_path, mutate=replace_proof), "SOURCE")["status"] == "PASS"
+    else:
+        with pytest.raises(MonthlyProducerError, match="source repair overlap artifact differs"):
+            _run(_pipeline(tmp_path, mutate=replace_proof), "SOURCE")
+
+
 def test_pipeline_rejects_caller_style_pass_without_full_scope(tmp_path: Path) -> None:
     pipeline = _pipeline(tmp_path, mutate=lambda scope: scope.clear())
     with pytest.raises(MonthlyProducerError, match="gates and changes"):

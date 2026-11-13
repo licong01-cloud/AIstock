@@ -14,7 +14,9 @@ from typing import Any, Iterable, Mapping
 
 from .canonical import canonical_json_bytes, digest_named_fields, ensure_sha256
 from .errors import SourceManifestError
-from .monthly_legacy_prefix import _plain_chain, _relative, _signature
+from .monthly_legacy_prefix import (
+    LegacyMonthlyPrefixError, _plain_chain, _relative, _signature, resolve_legacy_component_pin,
+)
 from .sector_enrichment import FrozenSectorEnricher
 from .shared_sector_context import validate_release_sw_l2_code_map
 from . import sw_l2_quote_policy
@@ -56,7 +58,7 @@ def _validate_binding(value: Any) -> Mapping[str, Any]:
 def load_predecessor_sector_mapping(prefix: Any) -> Mapping[str, Any]:
     """The caller already resolved the controller-bound predecessor manifest."""
     try:
-        pin = prefix.manifest["components"]["sector_code_map"]
+        pin = resolve_legacy_component_pin(prefix, "sector_code_map")
         relative = _relative(pin["path"])
         path = prefix.root.joinpath(*relative.parts)
         _plain_chain(path)
@@ -72,7 +74,7 @@ def load_predecessor_sector_mapping(prefix: Any) -> Mapping[str, Any]:
             "code_map_file": {key: pin[key] for key in ("path", "sha256", "size")},
             "code_map": json.loads(raw),
         })
-    except (KeyError, TypeError, ValueError, OSError) as exc:
+    except (KeyError, TypeError, ValueError, OSError, LegacyMonthlyPrefixError) as exc:
         raise SourceManifestError(f"monthly predecessor sector mapping unreadable: {exc}") from exc
 
 

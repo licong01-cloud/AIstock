@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import datetime as dt
 import json
 import os
@@ -40,7 +41,143 @@ def test_pit_day_roll_uses_existing_executor_and_never_duplicates_inflight_work(
     assert len(calls) == 1  # cheap sweep is throttled even after completion
 
 
+@pytest.mark.parametrize("state", ["recovering", "recovered", "incomplete", "obsolete_green"])
+def test_partition_retry_alarm_reflects_current_data_and_active_repair(monkeypatch, state):
+    from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    partition = {"dataset": "bak_basic", "data_revision": 2, "validated_revision": 2,
+                 "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION,
+                 "validation_id": "dated-check", "validation_status": "INCOMPLETE",
+                 "metadata": {"validation": {"checks": {"coverage_basis": "independent_dated_traded_stock_keys"}}}}
+    if state in {"recovered", "obsolete_green"}:
+        partition["validation_status"] = "VALID"
+    if state == "obsolete_green":
+        partition["metadata"] = {"validation": {"checks": {"provider": "tushare"}}}
+    scheduler._fetchall = lambda *_: [{"partition": partition,
+        "recovery_target_ids": ["repair"] if state == "recovering" else []}]
+    alerts, reconciled, updates = [], [], []
+    scheduler._execute = lambda query, params=(): updates.append((query, params))
+    scheduler._reconcile_recovered_target_state = lambda **kw: reconciled.append(kw)
+    monkeypatch.setattr(scheduler_module, "DataHealthAlerter", lambda *_: SimpleNamespace(
+        flush=lambda values: alerts.extend(values) or {"written": len(values)}))
+    target = {"dataset": "bak_basic", "target_date": dt.date(2026, 10, 27),
+              "target_id": "expired", "target_status": "final_blocked",
+              "failure_category": "canonical_partition_not_validated", "attempt_count": 6}
+    scheduler._flush_final_data_sync_alerts([target])
+    if state == "recovered":
+        assert not alerts and len(reconciled) == 1
+    elif state == "recovering":
+        assert not reconciled and len(alerts) == 1
+        assert alerts[0].alert_type == "gap" and alerts[0].severity == "warning"
+        assert alerts[0].details["retry_result"] == "pending"
+        assert alerts[0].details["recovery_target_ids"] == ["repair"]
+        assert any("data_alerts" in query and "acknowledged" in query for query, _ in updates)
+    else:
+        assert not reconciled and len(alerts) == 1
+        assert alerts[0].alert_type == "retry_exhausted"
+
+
+def test_native_tushare_schedule_preserves_failed_result_reason(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    updates = []
+    scheduler._update_ingestion_schedule = lambda sid, **kw: updates.append(kw)
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", lambda: SimpleNamespace(
+        sync=lambda **kw: SimpleNamespace(ok=False, error="bak_basic: provider permission denied")))
+    scheduler._run_tushare_engine_sync(uuid.uuid4(), "schedule", "bak_basic", "incremental", "unit", {})
+    assert updates[0]["last_status"] == "failed"
+    assert updates[0]["last_error"] == "bak_basic: provider permission denied"
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_pending_gap_warning_dedup_does_not_suppress_real_gap(monkeypatch, pending):
+    from unittest.mock import Mock
+    from backend.services.data_health_alerter import DataHealthAlerter
+    alerter = DataHealthAlerter({"dbname": "unused"})
+    cursor = Mock()
+    cursor.fetchone.return_value = None
+    conn = SimpleNamespace(cursor=lambda: nullcontext(cursor))
+    monkeypatch.setattr(alerter, "_conn", lambda: nullcontext(conn))
+    assert not alerter._alert_exists_today("stk_alert", "gap", "2024-04-01",
+        retry_result="pending" if pending else None)
+    query, params = cursor.execute.call_args.args
+    assert "retry_result" in query
+    assert params[-1] == ("pending" if pending else "")
+
+
+def test_pending_warning_write_failure_keeps_old_error_visible(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    scheduler._fetchall = lambda *_: [{"partition": None, "recovery_target_ids": ["repair"]}]
+    scheduler._execute = lambda *_: pytest.fail("old error must not be acknowledged before replacement is saved")
+    def fail(_alerts):
+        raise RuntimeError("alert persistence failed")
+    monkeypatch.setattr(scheduler_module, "DataHealthAlerter", lambda *_: SimpleNamespace(flush=fail))
+    with pytest.raises(RuntimeError, match="alert persistence failed"):
+        scheduler._flush_final_data_sync_alerts([{"dataset": "bak_basic", "target_date": dt.date(2026, 10, 27),
+            "target_id": "expired", "target_status": "final_blocked"}])
+
+
+def test_alert_recovery_cannot_acknowledge_partition_changed_since_readback(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    statements = []
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def execute(self, sql, params):
+            statements.append(sql)
+        def fetchone(self):
+            return {"dataset": "bak_basic", "data_revision": 3, "validated_revision": 2,
+                    "validation_status": "VALID", "validation_id": "previous"}
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_: nullcontext(
+        SimpleNamespace(cursor=lambda **_: Cursor())))
+    result = scheduler._reconcile_recovered_target_state(dataset="bak_basic", target_id="expired",
+        target_date=dt.date(2026, 10, 27), trigger_source="unit",
+        context={"canonical_validation_id": "previous"})
+    assert result == {"targets_reconciled": 0, "alerts_acknowledged": 0}
+    assert len(statements) == 1 and "FOR UPDATE" in statements[0]
+
+
+def test_existing_final_sweep_reclassifies_old_provider_alert_without_refetch():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._reconcile_recovered_schedule_states = lambda: None
+    queries, alerts = [], []
+    target = {"dataset": "bak_basic", "target_id": "expired", "target_date": dt.date(2026, 10, 27),
+              "data_source": "tushare", "target_status": "final_blocked"}
+    def fetch(query, params=()):
+        queries.append(query)
+        return [target]
+    scheduler._fetchall = fetch
+    scheduler._flush_final_data_sync_alerts = lambda values: alerts.extend(values)
+    scheduler._check_dataset_recovered = lambda *_: pytest.fail("provider target uses canonical ledger readback")
+    scheduler._reconcile_recovered_final_targets()
+    assert alerts == [target]
+    assert "'tushare'" in queries[0] and "'integrity_repair'" in queries[0]
+
+
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_sector_source_partial_is_waiting_without_another_physical_scan(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder_module
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 11, 4)
+    queries, logs, retries = [], [], []
+    scheduler._fetchall = lambda *_: pytest.fail("must reuse producer preflight, not add another check")
+    scheduler._execute = lambda *_: None
+    scheduler._log_ingestion_run = lambda *a, **kw: logs.append(a)
+    scheduler._schedule_delayed_retry = lambda *a, **kw: retries.append((a, kw))
+    def pending(*args):
+        queries.append(args)
+        raise sector_builder_module.SectorDataSourcePending("missing_sw_daily_facts=4902")
+    builder = SimpleNamespace(build_range=pending)
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: builder)
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit",
+        {"start_date": str(day), "end_date": str(day)})
+    assert logs[0][4] == "delayed" and len(retries) == 1
+    assert len(queries) == 1
 BUG_1106_MIGRATION = (
     ROOT / "backend" / "migrations" / "ingestion_jobs_scheduler_scan_indexes_20260816.sql"
 )
@@ -686,7 +823,23 @@ def test_go_provider_population_includes_real_ipo_quotes_without_widening_buy_po
         assert params == (dt.date(2026, 10, 15), dt.date(2026, 10, 15))
         return [{"ts_code": "301569.SZ"}, {"ts_code": "920162.BJ"}]
     scheduler._fetchall = fetch
-    assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ", "920162.BJ"]
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ"]
+
+
+def test_go_default_population_ends_before_delisting_effective_day_but_keeps_quote_evidence():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    def fetch(sql, params):
+        assert "delist_date>start_day" in sql
+        assert "delist_date>=start_day" not in sql
+        assert "k.trade_date BETWEEN start_day AND end_day" in sql
+        assert "k.volume_hand>0 OR k.volume_shares>0" in sql
+        assert "stock_universe" not in sql and "list_status='L'" not in sql
+        assert params == (dt.date(2026, 10, 23), dt.date(2026, 10, 23))
+        return [{"ts_code": "000001.SZ"}]
+
+    scheduler._fetchall = fetch
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 23), dt.date(2026, 10, 23)) == ["000001.SZ"]
 
 
 def test_go_provider_population_excludes_b_shares_from_both_source_branches():
@@ -695,12 +848,12 @@ def test_go_provider_population_excludes_b_shares_from_both_source_branches():
     def fetch(sql, params):
         assert "stock_universe" not in sql
         assert "population" in sql
-        for pattern in ("200%%.SZ", "201%%.SZ", "900%%.SH"):
-            assert f"ts_code NOT LIKE '{pattern}'" in sql
+        assert "00[0-9]{4}[.]SZ" in sql and "6[0-9]{5}[.]SH" in sql
+        assert "\\.BJ$" not in sql
         return [{"ts_code": code} for code in ("000001.SZ", "200706.SZ", "201872.SZ", "900901.SH", "920162.BJ")]
 
     scheduler._fetchall = fetch
-    assert scheduler._go_provider_codes(dt.date(2026, 10, 20), dt.date(2026, 10, 20)) == ["000001.SZ", "920162.BJ"]
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 20), dt.date(2026, 10, 20)) == ["000001.SZ"]
 
 
 def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested():
@@ -709,6 +862,7 @@ def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested(
     day = dt.date(2026, 10, 20)
     assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "900901.SH"]) == []
     assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "000001.SZ"]) == ["000001.SZ"]
+    assert scheduler._go_provider_codes(day, day, requested_codes=["920296.BJ", "BJ430047"]) == []
 
 
 @pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
@@ -716,14 +870,18 @@ def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested(
 def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset, missing_a):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     latest = dt.datetime(2026, 10, 20, 15)
-    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000}
-             for code in ["000001.SZ", "200706.SZ"]]
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000, "invalid_fact": False}
+             for code in ["000001.SZ", "200706.SZ", "920296.BJ"]]
     minute = [{"ts_code": code, "freq": "1m", "bars": 240, "bad_bars": 0,
-               "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH"]]
+               "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH", "920296.BJ"]]
     if missing_a:
         (daily if dataset == "kline_daily_raw" else minute).pop(0)
 
     def fetch(sql, _params=()):
+        if "suspend_d" in sql:
+            return []
+        if "WITH bounds" in sql:
+            return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH", "920296.BJ"]]
         if "kline_daily_raw" in sql:
             return daily
         if "kline_minute_raw" in sql:
@@ -734,6 +892,47 @@ def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset
     count, _, coverage = scheduler._raw_date_observation(dataset, dt.date(2026, 10, 20))
     assert count == (0 if missing_a else 1 if dataset == "kline_daily_raw" else 240)
     assert coverage == {"expected_symbols": 1, "incomplete_symbols": int(missing_a)}
+
+
+@pytest.mark.parametrize("missing,invalid,suspended", [(False,False,False), (True,False,False), (False,True,False), (True,False,True)])
+def test_daily_completion_does_not_depend_on_minute_schedule(missing, invalid, suspended):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 10, 26)
+    scheduler._go_provider_codes = lambda start, end: ["000001.SZ", "200706.SZ"]
+    minute_reads = []
+
+    def fetch(sql, params=()):
+        if "kline_minute_raw" in sql:
+            minute_reads.append(sql)
+            return []
+        if "suspend_d" in sql:
+            return [{"ts_code": "000001.SZ", "trade_date": day,
+                     "suspend_type": "S", "suspend_timing": None}] if suspended else []
+        if "kline_daily_raw" in sql:
+            return [] if missing else [{"ts_code": "000001.SZ", "volume_hand": 10,
+                                        "volume_shares": 1000, "invalid_fact": invalid}]
+        return [{"ts_code": "000001.SZ"}, {"ts_code": "200706.SZ"}]
+
+    scheduler._fetchall = fetch
+    count, maximum, coverage = scheduler._raw_date_observation("kline_daily_raw", day)
+    assert minute_reads == [], "daily completion must not scan or wait for minute input"
+    assert maximum is None and count == int(not missing)
+    assert coverage == {"expected_symbols": int(not suspended),
+                        "incomplete_symbols": int((missing or invalid) and not suspended)}
+
+
+def test_full_day_suspension_does_not_excuse_conflicting_actual_turnover():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 9, 1)
+    scheduler._go_provider_codes = lambda *_a: ["000001.SZ"]
+    def fetch(query, _parameters=()):
+        if "suspend_d" in query:
+            return [{"ts_code": "000001.SZ", "trade_date": day, "suspend_type": "S", "suspend_timing": None}]
+        return [{"ts_code": "000001.SZ", "invalid_fact": False, "volume_hand": 1, "volume_shares": 100}]
+    scheduler._fetchall = fetch
+    count, _maximum, coverage = scheduler._raw_date_observation("kline_daily_raw", day, include_details=True)
+    assert count == 1 and coverage["incomplete_symbols"] == 1
+    assert coverage["invalid_symbols"] == ["000001.SZ"]
 
 
 @pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
@@ -855,6 +1054,7 @@ def test_orphan_go_reconciliation_has_bounded_refresh_budget(monkeypatch):
 
 def test_final_target_recovery_sweep_repairs_historical_recovered_family(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._reconcile_recovered_schedule_states = lambda: None
     calls = []
     fixed_now = dt.datetime(2026, 7, 17, 2, 0, tzinfo=dt.timezone.utc)
     monkeypatch.setattr(scheduler_module, "_now", lambda: fixed_now)
@@ -888,6 +1088,92 @@ def test_final_target_recovery_sweep_repairs_historical_recovered_family(monkeyp
         }
     ]
     assert scheduler._reconcile_recovered_final_targets() == []
+
+
+def test_final_recovery_sweep_repairs_schedule_even_when_targets_already_reconciled(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc))
+    scheduler._fetchall = lambda *_: []  # no final targets remain after recovery
+    scheduler._reconcile_recovered_schedule_states = lambda: calls.append("schedule_projection")
+    assert scheduler._reconcile_recovered_final_targets() == []
+    assert calls == ["schedule_projection"]
+    scheduler._reconcile_recovered_final_targets()
+    assert calls == ["schedule_projection"]  # reuse the existing ten-minute sweep
+
+
+def test_alarm_recovery_candidates_are_fair_and_include_reconciled_targets():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._reconcile_recovered_schedule_states = lambda: None
+    captured = []
+    scheduler._fetchall = lambda query, params=(): captured.append(query) or []
+    scheduler._reconcile_recovered_final_targets()
+    query = captured[0]
+    assert "ROW_NUMBER() OVER (PARTITION BY dataset" in query
+    assert "'reconciled'" in query and "market.data_alerts" in query
+    assert "LIMIT 100" in query
+
+
+@pytest.mark.parametrize("validated", [False, True])
+def test_reconciled_target_alarm_requires_current_canonical_validation(monkeypatch, validated):
+    from backend.services.data_integrity.catalog import RULE_VERSION, SCOPE_VERSION
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    partition = {"dataset": "stock_daily_afterhours", "data_revision": 1, "validated_revision": 1,
+                 "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION,
+                 "validation_status": "VALID" if validated else "UNVERIFIED", "validation_id": "check"}
+    scheduler._fetchall = lambda *_: [{"partition": partition}]
+    recovered, alarms = [], []
+    scheduler._reconcile_recovered_target_state = lambda **kw: recovered.append(kw)
+    monkeypatch.setattr(scheduler_module, "DataHealthAlerter", lambda *_: SimpleNamespace(
+        flush=lambda values: alarms.extend(values) or {}))
+    scheduler._flush_final_data_sync_alerts([{"target_status": "reconciled", "dataset": "stock_daily_afterhours",
+        "target_id": "already-done", "target_date": dt.date(2026, 11, 5)}])
+    assert bool(recovered) is validated
+    assert alarms == []  # neither target status alone nor source success can fabricate completeness
+
+
+def test_successful_sector_retry_clears_previous_active_error(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._execute = lambda query, params=(): queries.append((query, params))
+    scheduler._audit_sector_build = lambda **_: None
+    scheduler._log_ingestion_run = lambda *_a, **_kw: None
+    monkeypatch.setattr(sector_builder, "SectorDataBuilder", lambda: SimpleNamespace(build_range=lambda *_: 4920))
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "delayed_retry",
+        {"job_id": str(uuid.uuid4()), "start_date": "2026-11-06", "end_date": "2026-11-06"})
+    patch = next(json.loads(params[1]) for query, params in queries if "summary=" in query)
+    assert "error" in patch and patch["error"] is None
+    assert "delay_reason" in patch and patch["delay_reason"] is None
+
+
+def test_recovered_schedule_projection_uses_only_bounded_current_ledger_metadata():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._execute = lambda query, params=(): queries.append((query, params))
+    scheduler._reconcile_recovered_schedule_states()
+    query, _params = queries[0]
+    assert "LIMIT 100" in query and "SKIP LOCKED" in query
+    assert "data_revision=p.validated_revision" in query
+    assert "p.refreshed_at>=s.updated_at" not in query
+    assert "j.finished_at>p.refreshed_at" in query
+    assert "s.last_status IN ('failed','delayed')" in query
+    assert "s.last_run_at AT TIME ZONE 'Asia/Shanghai'" in query
+    assert "UPDATE market.ingestion_jobs" not in query and "market.kline" not in query
+
+
+def test_schedule_projection_error_is_visible_and_does_not_stop_other_recovery(monkeypatch, caplog):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    reads = []
+    scheduler._fetchall = lambda query, params=(): reads.append(query) or []
+    def fail():
+        raise RuntimeError("DEV injected projection error")
+    scheduler._reconcile_recovered_schedule_states = fail
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc))
+    assert scheduler._reconcile_recovered_final_targets() == []
+    assert len(reads) == 1 and "final_blocked" in reads[0]
+    assert "DEV injected projection error" in caplog.text
 
 
 def test_recent_submission_keeps_running_job_visible_outside_recent_window():
@@ -941,7 +1227,8 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     }
 
     class _Repo:
-        def list_fillable_targets(self, **_kwargs):
+        def list_fillable_targets(self, **kwargs):
+            assert kwargs == {"limit": 100, "exclude_operation": "VALIDATE_ONLY", "latest_per_dataset": True}
             return [target]
 
         def claim_fillable_target(self, *_args, **_kwargs):
@@ -976,7 +1263,65 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     )
 
 
-def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
+@pytest.mark.parametrize("dataset,verdict,expected", [
+    ("kline_daily_raw", {"state": "INCOMPLETE", "gaps": [{"classification": "MISSING", "symbols": ["920680.BJ"]}]}, True),
+    ("kline_daily_raw", {"state": "INCOMPLETE", "gaps": [{"classification": "MISSING", "symbols": ["000001.SZ"]}]}, False),
+    ("cyq_perf", {"state": "UNVERIFIED", "reason": "complete_source_scan_not_bound_to_revision"}, True),
+    ("sector_data", {"state": "INCOMPLETE", "gaps": [{"classification": "INVALID", "ts_code": "000001.SZ"}]}, False),
+])
+def test_integrity_retry_revalidates_obsolete_scope_before_refetch(monkeypatch, dataset, verdict, expected):
+    from backend.services.data_integrity import repository
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queued = []
+    scheduler._fetchall = lambda *_a, **_kw: [{"validation_status": verdict["state"], "validation": verdict}]
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_kw: nullcontext(object()))
+    monkeypatch.setattr(repository, "enqueue_validation", lambda _conn, ds, day: queued.append((ds, day)))
+    target = {"dataset": dataset, "data_source": "integrity_repair", "target_date": dt.date(2025, 8, 22)}
+    assert scheduler._defer_obsolete_integrity_fetch(target) is expected
+    assert queued == ([(dataset, dt.date(2025, 8, 22))] if expected else [])
+    target["data_source"] = "normal_sync"
+    assert scheduler._defer_obsolete_integrity_fetch(target) is False
+
+
+@pytest.mark.parametrize("confirmed,missing_count,expected", [(True, 1, True), (False, 1, False), (True, 2, False)])
+def test_delisting_panel_retry_preserves_gap_without_refetch(monkeypatch, confirmed, missing_count, expected):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    verdict = {"counts": [{"expected": 10, "valid": 10-missing_count, "missing": missing_count,
+                           "invalid": 0, "unverified": 0, "legal_na": 0}],
+               "gaps": [{"classification": "MISSING", "symbols": ["002731.SZ"]}]}
+    def read(query, params):
+        if "stock_st_events" in query:
+            assert "pub_date<=%s" in query and "imp_date<=%s" in query
+            return [{"ts_code": "002731.SZ"}] if confirmed else []
+        return [{"validation_status": "INCOMPLETE", "validation": verdict}]
+    scheduler._fetchall = read
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: SimpleNamespace(
+        mark_retry=lambda *args, **kwargs: calls.append((args, kwargs))))
+    target = {"target_id": "target-retired", "dataset": "bak_basic", "data_source": "integrity_repair",
+              "target_date": dt.date(2026, 10, 28)}
+    assert scheduler._defer_obsolete_integrity_fetch(target) is expected
+    assert bool(calls) is expected
+    if expected:
+        assert calls[0][1]["reason"] == "delisting_panel_optional_fetch_deferred"
+        assert calls[0][1]["context"]["source_gap_preserved"] is True
+
+
+def test_obsolete_integrity_fetch_never_reaches_collector_dispatch(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = {"target_id": "old-bse-gap", "dataset": "kline_daily_raw", "data_source": "integrity_repair",
+              "target_date": dt.date(2025, 8, 22), "metadata": {"integrity_dataset": "kline_daily_raw"}}
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: SimpleNamespace(
+        list_fillable_targets=lambda **_kw: [target]))
+    scheduler._defer_obsolete_integrity_fetch = lambda row: row is target
+    scheduler._check_dataset_recovered = lambda *_a: pytest.fail("no collector precheck after deferred verification")
+    scheduler._enqueue_target_retry = lambda **_kw: pytest.fail("no refetch for an obsolete unsupported gap")
+    assert scheduler._reconcile_due_data_sync_targets({"kline_daily_raw": {"mode": "incremental"}}) == []
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"schedule_dataset": "sw_sector"},
+    {"schedule_dataset": "sw_daily"}, '{"schedule_dataset":"sw_daily"}'])
+def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch, metadata):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
     target = {
@@ -984,7 +1329,7 @@ def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
         "dataset": "sw_daily",
         "target_date": dt.date(2026, 7, 14),
         "attempt_count": 0,
-        "metadata": {"schedule_dataset": "sw_sector"},
+        "metadata": metadata,
     }
 
     class _Repo:
@@ -1018,6 +1363,17 @@ def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
     enqueue = next(call[1] for call in calls if call[0] == "enqueue")
     assert enqueue["target"] is target
     assert enqueue["execution_dataset"] == "sw_sector"
+
+
+@pytest.mark.parametrize("dataset,metadata,expected", [
+    ("sw_daily", {"schedule_dataset": " SW_DAILY "}, "sw_sector"),
+    ("sw_daily", "not-json", "sw_sector"),
+    ("sw_daily", {"schedule_dataset": "custom_owner"}, "custom_owner"),
+    ("moneyflow_ts", {"schedule_dataset": "stock_moneyflow_ts"}, "stock_moneyflow_ts"),
+    ("orphan_dataset", None, "orphan_dataset"),
+])
+def test_retry_owner_alias_normalization_preserves_other_owners(dataset, metadata, expected):
+    assert TDXScheduler._retry_schedule_dataset(dataset, metadata) == expected
 
 
 def test_sw_daily_level_coverage_normalizes_l1_and_l2_rows():
@@ -1085,6 +1441,53 @@ def test_sw_daily_l1_incomplete_is_warning_retry_not_job_failure(monkeypatch):
     assert args == ("sw_sector", "incremental")
     assert kwargs["delay_minutes"] == 60
     assert "present=30" in kwargs["reason"]
+
+
+@pytest.mark.parametrize("failure", ["member_result", "member_exception", "member_and_quote", "classify_result", "none"])
+def test_sw_composite_member_failure_does_not_skip_independent_quotes(monkeypatch, failure):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls, writes, updates = [], [], []
+    scheduler._execute = lambda query, params=(): writes.append((query, params))
+    scheduler._update_ingestion_schedule = lambda sid, **kw: updates.append(kw)
+    scheduler._sw_daily_level_coverage = lambda _end: {
+        "status": "ok", "levels": {"L1": {"expected": 31, "present": 31},
+                                   "L2": {"expected": 124, "present": 124}},
+    }
+    scheduler._schedule_delayed_retry = lambda *_a, **_kw: pytest.fail("complete quotes need no retry")
+
+    class Engine:
+        def sync(self, *, spec, **_kwargs):
+            calls.append(spec.name)
+            bad = ((failure.startswith("member") and spec.name == "sw_index_member")
+                   or (failure == "member_and_quote" and spec.name == "sw_daily")
+                   or (failure == "classify_result" and spec.name == "sw_index_classify"))
+            if spec.name == "sw_index_member" and failure == "member_exception":
+                raise RuntimeError("member transport failed")
+            return SimpleNamespace(ok=not bad, inserted_rows=0 if bad else 155,
+                                   error="source failed: " + spec.name if bad else None)
+
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", Engine)
+    children = [str(uuid.uuid4()) for _ in range(3)]
+    parent = str(uuid.uuid4())
+    scheduler._run_sw_sector_composite_sync(uuid.uuid4(), "schedule", "incremental", "unit",
+                                           {"sub_job_ids": children, "job_id": parent})
+    assert calls == ["sw_index_classify", "sw_index_member", "sw_daily"]
+    assert updates[-1]["last_status"] == ("success" if failure == "none" else "failed")
+    parent_result = [params for query, params in writes if "finished_at=NOW()" in query
+                     and len(params) == 4 and str(params[-1]) == parent][-1]
+    parent_summary = json.loads(parent_result[2])
+    if failure == "none":
+        assert updates[-1]["last_error"] is None
+        assert parent_summary == {"errors": [], "error": None}
+    else:
+        failing = "sw_index_classify" if failure == "classify_result" else "sw_index_member"
+        assert failing in updates[-1]["last_error"]
+        assert failing in parent_summary["error"]
+    quote = [params for query, params in writes if "finished_at=NOW()" in query
+             and len(params) == 3 and str(params[-1]) == children[2]]
+    assert quote[-1][0] == ("failed" if failure == "member_and_quote" else "success")
+    if failure == "member_and_quote":
+        assert "sw_daily" in updates[-1]["last_error"]
 
 
 @pytest.mark.parametrize(
@@ -1162,6 +1565,49 @@ def test_index_daily_target_retry_waits_until_post_close(monkeypatch):
     assert scheduler._target_retry_window_open("index_daily") is True
 
 
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+@pytest.mark.parametrize("target,expected", [(29, True), (30, False), (31, False)])
+def test_raw_retry_uses_completed_day_not_just_calendar_date(dataset, target, expected):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    now = dt.datetime(2026, 10, 30, 13, 57, tzinfo=scheduler_module._CN_TZ)
+    scheduler._latest_completed_trading_day = lambda now=None: dt.date(2026, 10, 29)
+    assert scheduler._target_retry_window_open(dataset, target_date=dt.date(2026, 10, target), now=now) is expected
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+def test_raw_retry_reuses_existing_china_complete_day_clock(dataset):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._latest_trading_day = lambda as_of_date=None: as_of_date
+    day = dt.date(2026, 10, 30)
+    before = dt.datetime(2026, 10, 30, 7, 59, tzinfo=dt.timezone.utc)
+    after = dt.datetime(2026, 10, 30, 8, 0, tzinfo=dt.timezone.utc)
+    assert scheduler._target_retry_window_open(dataset, target_date=day, now=before) is False
+    assert scheduler._target_retry_window_open(dataset, target_date=day, now=after) is True
+    scheduler._latest_completed_trading_day = lambda now=None: None
+    assert scheduler._target_retry_window_open(dataset, target_date=day, now=after) is False
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+@pytest.mark.parametrize("source", ["normal_sync", "integrity_repair"])
+def test_unpublished_raw_target_does_not_create_failed_collector_job(monkeypatch, dataset, source):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = {"target_id": "unpublished", "dataset": dataset, "data_source": source,
+              "target_date": dt.date(2026, 10, 30), "attempt_count": 3}
+    dispatched = []
+    repo = SimpleNamespace(list_fillable_targets=lambda **_kw: [target],
+                           claim_fillable_target=lambda *_a, **_kw: True)
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 10, 30, 5, 57, tzinfo=dt.timezone.utc))
+    scheduler._latest_completed_trading_day = lambda now=None: dt.date(2026, 10, 29)
+    scheduler._defer_obsolete_integrity_fetch = lambda _: False
+    scheduler._check_dataset_recovered = lambda *_a, **_kw: SimpleNamespace(status="stale")
+    scheduler._final_deadline_for_target = lambda *_a: dt.datetime(2026, 10, 31, tzinfo=dt.timezone.utc)
+    scheduler._recent_dataset_submission_exists = lambda *_a, **_kw: False
+    scheduler._enqueue_target_retry = lambda **kw: dispatched.append(kw) or uuid.uuid4()
+    scheduler._reconcile_due_data_sync_targets({dataset: {"mode": "incremental"}})
+    assert dispatched == []
+
+
 def test_expired_due_target_is_final_blocked_without_job(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
@@ -1213,6 +1659,88 @@ def test_expired_due_target_is_final_blocked_without_job(monkeypatch):
     assert calls[0][0:2] == ("final", "target-1")
     assert calls[1] == ("attempt", "final_blocked", "target-1", "data_sync_target_precheck")
     assert calls[2][0] == "alert"
+
+
+@pytest.mark.parametrize("source", ["tushare", "integrity_repair"])
+def test_historical_event_target_gets_real_retry_not_expired_fact_deadline(monkeypatch, source):
+    from unittest.mock import Mock
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = {"target_id": "event-history", "dataset": "stk_alert", "data_source": source,
+        "target_date": dt.date(2024, 4, 1), "created_at": dt.datetime(2026, 11, 7, tzinfo=dt.timezone.utc)}
+    repo = Mock()
+    repo.list_fillable_targets.return_value = [target]
+    repo.claim_fillable_target.return_value = True
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 11, 8, tzinfo=dt.timezone.utc))
+    scheduler._defer_obsolete_integrity_fetch = lambda _: False
+    scheduler._defer_completed_event_fetch = lambda *_a: False
+    scheduler._check_dataset_recovered = lambda *_a: SimpleNamespace(status="stale", failure_category="canonical_partition_not_validated")
+    scheduler._recent_dataset_submission_exists = lambda *_a: False
+    scheduler._enqueue_target_retry = Mock(return_value=uuid.uuid4())
+    assert scheduler._reconcile_due_data_sync_targets({"stk_alert": {"mode": "incremental"}}) == ["stk_alert"]
+    repo.mark_final_blocked.assert_not_called()
+
+
+@pytest.mark.parametrize("source,status,revision,scan_revision,expected", [
+    ("tushare", "success", 0, 0, True), ("tushare", "failed", 0, 0, False),
+    ("tushare", "success", 1, 0, False), ("tushare", "success", 1, 1, True),
+    ("canonical_db", "success", 0, 0, False)])
+def test_event_source_success_waits_for_physical_validation_without_false_alarm(
+        monkeypatch, source, status, revision, scan_revision, expected):
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+    from backend.services.data_integrity import repository
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    row = {"data_revision": revision, "validation_status": "UNVERIFIED", "status": status,
+        "metadata": {"event_scan": {"complete": True, "schema_version": "tushare_event_scan_v1"},
+                     "integrity_observed_revision": scan_revision}}
+    cursor = Mock()
+    cursor.fetchone.return_value = row
+    conn = Mock()
+    conn.cursor.return_value = nullcontext(cursor)
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_: nullcontext(conn))
+    queued = Mock()
+    monkeypatch.setattr(repository, "enqueue_validation", queued)
+    repo = Mock()
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    result = scheduler._defer_completed_event_fetch({"target_id": "event", "dataset": "stk_alert",
+        "data_source": source, "target_date": dt.date(2024, 4, 1)})
+    assert result is expected and queued.called is expected
+    repo.mark_reconciled.assert_not_called()  # source success is not a physical VALID verdict
+    assert repo.mark_retry.called is expected
+
+
+@pytest.mark.parametrize("source_failed", [False, True])
+def test_event_retry_finalizer_separates_source_failure_from_pending_validation(monkeypatch, source_failed):
+    from concurrent.futures import Future
+    from unittest.mock import Mock
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    repo = Mock()
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    scheduler._check_dataset_recovered = lambda *_a: SimpleNamespace(status="stale",
+        failure_category="canonical_partition_not_validated")
+    scheduler._fetchall = Mock(return_value=[{"status": "failed", "error_message": "HTTP 502"}]
+        if source_failed else [{"status": "success", "error_message": None}])
+    scheduler._defer_completed_event_fetch = Mock(return_value=not source_failed)
+    scheduler._flush_final_data_sync_alerts = Mock()
+    future = Future()
+    future.set_result(None)  # native engine failure can be persisted, not raised
+    scheduler._finalize_data_sync_target_retry(future, target_id="history", dataset="stk_alert",
+        mode="incremental", options={"target_date": "2024-04-01", "historical_event_retry": True,
+                                     "data_sync_target_source": "tushare"})
+    repo.mark_final_blocked.assert_not_called()
+    scheduler._flush_final_data_sync_alerts.assert_not_called()
+    if source_failed:
+        assert repo.mark_retry.call_args.kwargs["reason"] == "HTTP 502"
+        assert repo.mark_retry.call_args.kwargs["context"]["failure_category"] == "event_query_incomplete"
+    else:
+        repo.mark_retry.assert_not_called()  # helper owns the validation-only wait
+
+
+def test_historical_event_retry_does_not_erase_explicit_request_deadline():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    assert not scheduler._historical_event_retry({"dataset": "stk_alert", "target_date": dt.date(2024, 4, 1),
+        "required_before": "2026-11-07T12:00:00Z", "metadata": {"retry_intent": "historical_event_backfill"}})
 
 
 def test_enqueue_target_retry_anchors_original_date_and_isolates_schedule(monkeypatch):
@@ -1501,7 +2029,9 @@ def test_daily_basic_audit_with_required_field_receipt_is_ready():
     assert result.status == "ok"
 
 
-def test_low_coverage_retry_replays_exact_partition_instead_of_advancing_cursor():
+@pytest.mark.parametrize("failure_category", ["required_field_low_coverage", "raw_traded_date_incomplete",
+    "independent_dated_stock_panel_incomplete", "complete_source_scan_not_bound_to_revision", None])
+def test_quality_retry_replays_exact_partition_instead_of_advancing_cursor(failure_category):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     target = dt.date(2026, 9, 4)
     scheduler._compute_auto_range = lambda _dataset: (
@@ -1512,7 +2042,7 @@ def test_low_coverage_retry_replays_exact_partition_instead_of_advancing_cursor(
     assert scheduler._retry_range_for_health_failure(
         "daily_basic",
         target_date=target,
-        failure_category="required_field_low_coverage",
+        failure_category=failure_category,
     ) == (target, target)
 
 
@@ -1856,6 +2386,36 @@ def test_sector_data_recovery_deadline_extends_to_next_day_0200_china_time():
     assert deadline == dt.datetime(2026, 7, 15, 18, 0, tzinfo=dt.timezone.utc)
 
 
+@pytest.mark.parametrize("start,end,expected", [
+    ("2026-10-29", "2026-10-29", "success"),
+    ("2026-10-29", None, "failed"),
+    (None, "2026-10-29", "failed"),
+    ("2026-10-29", "2026-10-28", "failed"),
+    ("invalid", "2026-10-29", "failed"),
+])
+def test_sector_exact_repair_never_drains_unrelated_history(monkeypatch, start, end, expected):
+    import backend.services.sector_data_builder as sector_builder_module
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls, logs = [], []
+    builder = SimpleNamespace(build_range=lambda a, b: calls.append((a, b)) or 4902,
+        pending_dates=lambda *_: pytest.fail("exact repair must not drain historical revisions"))
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: builder)
+    scheduler._query_max_date = lambda *_: pytest.fail("exact repair must not use the global maximum")
+    scheduler._execute = lambda *_: None
+    scheduler._record_refresh_audit_from_table_range = lambda **kw: calls.append(kw) or True
+    scheduler._log_ingestion_run = lambda *args, **kw: logs.append((args, kw))
+    options = {key: value for key, value in {"start_date": start, "end_date": end}.items() if value is not None}
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit", options)
+    assert logs[0][0][4] == expected
+    if expected == "success":
+        day = dt.date(2026, 10, 29)
+        assert calls[0] == (day, day)
+        assert calls[1]["start_date"] == calls[1]["end_date"] == day
+    else:
+        assert calls == []
+
+
 def test_sector_data_upstream_delay_finalizes_job_as_delayed(monkeypatch):
     import backend.services.sector_data_builder as sector_builder_module
 
@@ -2111,6 +2671,8 @@ def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_c
             }]
         if "INTERVAL '45 days'" in sql:
             return [{"mx": dt.date(2026, 7, 10)}]
+        if "dataset_date_refresh_audit" in sql:
+            return []
         raise AssertionError(f"unexpected query: {sql}")
 
     scheduler._fetchall = _fetchall
@@ -2121,7 +2683,7 @@ def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_c
         dt.date(2026, 7, 10),
         dt.date(2026, 7, 13),
     )
-    assert not any("MAX(trade_time)" in sql or "dataset_date_refresh_audit" in sql for sql in queries)
+    assert not any("MAX(trade_time)" in sql for sql in queries)
     probe = next(sql for sql in queries if "FROM market.kline_minute_raw" in sql)
     assert "ORDER BY trade_time DESC" in probe and "LIMIT 1" in probe
     assert "AT TIME ZONE 'Asia/Shanghai'" in probe
@@ -2688,6 +3250,28 @@ def test_completion_change_dispatches_once_and_explicit_request_recovers(complet
     asyncio.run(scenario())
 
 
+def test_historical_revision_wakes_callback_without_advancing_latest_day(completion_owner):
+    scheduler, state = completion_owner
+    async def scenario():
+        calls = []
+        async def callback():
+            calls.append(1)
+        scheduler.register_completion_callback("old-repair", datasets=("sector_data",), callback=callback)
+        state["rows"][0]["integrity_watermark"] = "old-date-R1"
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 1
+        latest = state["rows"][0]["trade_date"]
+        state["rows"][0]["integrity_watermark"] = "old-date-R2"
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 2 and state["rows"][0]["trade_date"] == latest
+        assert "data_source='canonical_db'" in state["queries"][0][0]
+    asyncio.run(scenario())
+
+
 def test_single_flight_preserves_watermark_and_requests_arriving_in_flight(completion_owner):
     scheduler, state = completion_owner
 
@@ -2860,3 +3444,92 @@ def test_refresh_schedules_uses_shared_dispatch_after_existing_work(completion_o
     scheduler.refresh_schedules()
     assert order[-2:] == ["_reconcile_due_data_sync_targets", "completion_dispatch"]
     assert "existing_jobs" in order
+# Complete-day cursor regression uses the existing scheduled-sync CI lane.
+COMMITTED_DAY = dt.date(2026, 10, 23)
+NEXT_COMMITTED_DAY = dt.date(2026, 10, 26)
+COMMITTED_PROOF = {
+    'status': 'success', 'quality_status': 'ok', 'row_count': 480,
+    'data_max_at': dt.datetime(2026, 10, 23, 15, tzinfo=dt.timezone(dt.timedelta(hours=8))),
+    'metadata': {'audit_from_target_table': True, 'table': 'market.kline_minute_raw',
+                 'raw_date_completeness': {'expected_symbols': 2, 'incomplete_symbols': 0}},
+}
+
+
+def _committed_cursor_scheduler(proof, latest=NEXT_COMMITTED_DAY):
+    obj = TDXScheduler.__new__(TDXScheduler)
+    obj._minute_replay_start = lambda: COMMITTED_DAY
+    obj._next_trading_day = lambda day: NEXT_COMMITTED_DAY
+    obj._latest_completed_trading_day = lambda: latest
+    queries = []
+
+    def fetch(sql, params=()):
+        queries.append((sql, params))
+        if 'data_stats_config' in sql:
+            return [{'table_name': 'market.kline_minute_raw', 'date_column': 'trade_time', 'extra_info': {}}]
+        assert 'dataset_date_refresh_audit' in sql
+        assert 'ORDER BY refreshed_at DESC' in sql
+        assert 'LIMIT 1' in sql
+        assert params == (COMMITTED_DAY,)
+        return [proof] if proof is not None else []
+
+    obj._fetchall = fetch
+    return obj, queries
+
+
+def test_complete_physical_day_advances_to_new_date():
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF))
+    assert obj._compute_auto_range('kline_minute_raw') == (NEXT_COMMITTED_DAY, NEXT_COMMITTED_DAY)
+
+
+@pytest.mark.parametrize('mutation', [
+    {'status': 'failed'}, {'quality_status': 'low_coverage'}, {'row_count': 479},
+    {'data_max_at': dt.datetime(2026, 10, 23, 14, 59)},
+    {'data_max_at': dt.datetime(2026, 10, 22, 15)},
+    {'metadata': {}}, {'metadata': {'audit_from_target_table': 'true'}},
+    {'metadata': {'audit_from_target_table': True, 'table': 'market.kline_minute_raw',
+                  'raw_date_completeness': {'expected_symbols': 2, 'incomplete_symbols': 1}}},
+])
+def test_legacy_partial_or_latest_failed_receipt_cannot_skip_day(mutation):
+    proof = {**deepcopy(COMMITTED_PROOF), **mutation}
+    obj, _ = _committed_cursor_scheduler(proof)
+    assert obj._compute_auto_range('kline_minute_raw') == (COMMITTED_DAY, NEXT_COMMITTED_DAY)
+
+
+def test_absent_proof_replays_and_complete_current_day_is_noop():
+    obj, _ = _committed_cursor_scheduler(None)
+    assert obj._compute_auto_range('kline_minute_raw') == (COMMITTED_DAY, NEXT_COMMITTED_DAY)
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF), latest=COMMITTED_DAY)
+    assert obj._compute_auto_range('kline_minute_raw') == (None, None)
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_dispatch_uses_proven_cursor_but_explicit_repair_preserves_exact_window(monkeypatch, explicit):
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF))
+    posted, logs = [], []
+    obj._execute = lambda *_: None
+    obj._log_ingestion_run = lambda *args, **kwargs: logs.append(args)
+    obj._go_provider_codes = lambda *_a, **_kw: ['000001.SZ']
+    obj._record_refresh_audit_from_table_range = lambda **_kw: True
+    monkeypatch.setattr(scheduler_module.time, 'sleep', lambda *_: None)
+    monkeypatch.setattr(scheduler_module.requests, 'post', lambda _url, **kw: posted.append(kw['json']) or SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {'code': 0, 'data': {'task_id': str(uuid.uuid4())}}))
+    monkeypatch.setattr(scheduler_module.requests, 'get', lambda *_a, **_kw: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {'code': 0, 'data': {'status': 'done'}}))
+    options = {'start_date': str(COMMITTED_DAY), 'end_date': str(NEXT_COMMITTED_DAY)} if explicit else {}
+    obj._run_go_incremental(uuid.uuid4(), None, 'kline_minute_raw', 'unit', options)
+    assert len(posted) == 1
+    assert posted[0]['start_time'][:10] == str(COMMITTED_DAY if explicit else NEXT_COMMITTED_DAY)
+    assert posted[0]['end_time'] == str(NEXT_COMMITTED_DAY)
+    assert not any(r[4] == 'failed' for r in logs)
+
+
+def test_completed_current_day_noop_does_not_submit_go_or_fake_new_source_job(monkeypatch):
+    obj, _ = _committed_cursor_scheduler(deepcopy(COMMITTED_PROOF), latest=COMMITTED_DAY)
+    logs, updates = [], []
+    obj._execute = lambda *args: updates.append(args)
+    obj._log_ingestion_run = lambda *args, **_kw: logs.append(args)
+    monkeypatch.setattr(scheduler_module.requests, 'post', lambda *_a, **_kw: pytest.fail('complete day must not be re-ingested'))
+    obj._run_go_incremental(uuid.uuid4(), None, 'kline_minute_raw', 'unit', {'job_id': str(uuid.uuid4())})
+    assert logs[-1][4] == 'success'
+    assert logs[-1][5]['already_complete'] is True
+    assert not any('INSERT' in sql for sql, _ in updates)

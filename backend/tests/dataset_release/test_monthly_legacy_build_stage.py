@@ -126,6 +126,54 @@ def test_real_month_prepare_generates_native_operation_without_old_csv_lineage(t
 
 
 @pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_completed_month_csvs_are_reused_without_transforming_again(tmp_path, monkeypatch, dataset):
+    invocation, source, pit, toolchain, _, _, calls = _setup(tmp_path, dataset=dataset)
+    first = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
+                                     toolchain=toolchain, checkpoint=lambda: None)
+    path = invocation.staging_root / '.month-inputs' / dataset / 'csv/000001.SZ.csv'
+    before = path.stat()
+    old_daily = stages.CanonicalStockTransformer.transform_daily
+    def no_retransform(*args, **kwargs):
+        raise AssertionError('completed canonical CSV must not be transformed again')
+    monkeypatch.setattr(stages.CanonicalStockTransformer, 'transform_daily' if dataset == 'daily_bin' else 'transform_minute', no_retransform)
+    calls.clear()
+    second = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
+                                      toolchain=toolchain, checkpoint=lambda: None)
+    assert second['patch_preparation']['csv'] == first['patch_preparation']['csv']
+    assert second['patch_preparation']['actual_work']['stock_rows_transformed'] == 0
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert not any(name == 'kline_minute_raw' for name, _, _ in calls)
+    assert callable(old_daily)
+
+
+def test_partial_minute_preparation_reads_only_unfinished_stock_on_retry(tmp_path,monkeypatch):
+    invocation,source,pit,toolchain,_,data,calls=_setup(tmp_path,dataset='minute_bin')
+    for name in ('adj_factor','kline_daily_raw','stk_limit','kline_minute_raw'):
+        data[name].extend({**row,'ts_code':'600000.SH'} for row in tuple(data[name]))
+    source.qfq_authority=build_qfq_denominator_authority(data['adj_factor'],pit_snapshot=pit,cutoff=pit.cutoff)
+    transform=stages.CanonicalStockTransformer.transform_minute
+    def fault(self,*args,**kwargs):
+        for n,row in enumerate(transform(self,*args,**kwargs)):
+            if n==241:
+                raise OSError('interruption in second instrument')
+            yield row
+    monkeypatch.setattr(stages.CanonicalStockTransformer,'transform_minute',fault)
+    with pytest.raises(OSError,match='second instrument'):
+        stages._prepare_bin_patch(invocation,source=source,pit=pit,dataset='minute_bin',toolchain=toolchain,checkpoint=lambda:None)
+    first=invocation.staging_root/'.month-inputs/minute_bin/csv/000001.SZ.csv'
+    before=first.stat()
+    assert not (first.parent/'600000.SH.csv').exists()
+    monkeypatch.setattr(stages.CanonicalStockTransformer,'transform_minute',transform)
+    calls.clear()
+    receipt=stages._prepare_bin_patch(invocation,source=source,pit=pit,dataset='minute_bin',toolchain=toolchain,checkpoint=lambda:None)
+    assert receipt['patch_preparation']['csv']['rows']==480
+    assert receipt['patch_preparation']['actual_work']['stock_rows_reused']==240
+    assert receipt['patch_preparation']['actual_work']['stock_rows_transformed']==240
+    assert [codes for name,_,codes in calls if name=='kline_minute_raw']==[('600000.SH',)]
+    assert first.stat().st_mtime_ns==before.st_mtime_ns
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
 def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
     invocation, source, pit, toolchain, _, data, _ = _setup(tmp_path, dataset=dataset)
     # Real September quotes must remain readable for an August holding. This
@@ -146,6 +194,61 @@ def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
     assert len(rows) == (240 if dataset == "minute_bin" else 1)
     assert all(float(row["close"]) == 6.0 for row in rows)
     assert pit.spans[0].eligible_end == date(2026, 8, 31)
+
+
+@pytest.mark.parametrize("missing_limit", [False, True])
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_daily_halted_fact_survives_buy_exit_without_minute_bar_or_limit_fallback(tmp_path, missing_limit, dataset):
+    invocation, source, pit, toolchain, provider, data, _ = _setup(tmp_path, dataset=dataset)
+    first, last = date(2026, 9, 1), date(2026, 9, 2)
+    pit = replace(pit, cutoff=last, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    old_file = provider / ("features/000001.sz/close.day.bin" if dataset == "daily_bin" else "features/000001.sz/close.1min.bin")
+    original = old_file.read_bytes()
+    daily = data["kline_daily_raw"][0]
+    data["kline_daily_raw"] = [{**daily, "volume_hand": 0, "amount_li": 0}, {**daily, "trade_date": last}]
+    limit = data["stk_limit"][0]
+    data["stk_limit"] = ([] if missing_limit and dataset == "daily_bin" else [limit]) + (
+        [] if missing_limit and dataset == "minute_bin" else [{**limit, "trade_date": last}])
+    data["adj_factor"].append({**data["adj_factor"][-1], "trade_date": last})
+    data["suspend_d"] = [{"ts_code": "000001.SZ", "trade_date": first, "suspend_type": "S", "suspend_timing": None}]
+    source.trading_days = lambda: (date(2026, 8, 31), first, last)
+    source.qfq_authority = build_qfq_denominator_authority(data["adj_factor"], pit_snapshot=pit, cutoff=last)
+    if dataset == "minute_bin":
+        data["kline_minute_raw"] = [
+            {**row, "trade_time": stamp} for row, stamp in zip(data["kline_minute_raw"], canonical_session_times(last))]
+    base = source.ordered_partitions
+
+    def partitions(component, dataset, **kwargs):
+        result = base(component, dataset, **kwargs)
+        if dataset == "stk_limit":
+            return tuple(OrderedMappingPartition(p.identity, _filter_stk_limit_rows_to_pit(
+                p.rows, pit, quote_days=kwargs.get("quote_days", ()))) for p in result)
+        return result
+
+    source.ordered_partitions = partitions
+    index_csv = invocation.staging_root / "index_context/index_csv/000300.SH.csv"
+    with index_csv.open("a", encoding="utf-8") as stream:
+        stream.write(index_csv.read_text(encoding="utf-8").splitlines()[1].replace(str(first), str(last)) + "\n")
+    if missing_limit:
+        with pytest.raises(CanonicalStockTransformError, match="stk_limit"):
+            stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
+                                      toolchain=toolchain, checkpoint=lambda: None)
+    else:
+        prepared = stages._prepare_bin_patch(invocation, source=source, pit=pit, dataset=dataset,
+                                             toolchain=toolchain, checkpoint=lambda: None)
+        payload = invocation.cas.get_json(prepared["qlib_dump_operations"][0]["preparation_ref"])
+        stock = next(item for item in payload["csv_refs"] if Path(item["id"]).stem == "000001.SZ")
+        with (invocation.staging_root / stock["id"]).open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        if dataset == "daily_bin":
+            assert [row["date"] for row in rows] == [str(first), str(last)]
+            assert float(rows[0]["volume"]) == float(rows[0]["amount"]) == 0
+        else:
+            assert len(rows) == 240 and all(row["date"].startswith(str(last)) for row in rows)
+        assert float(rows[0]["close"]) == float(rows[0]["prev_close"]) == 6
+    assert old_file.read_bytes() == original
+    assert pit.spans[0].eligible_end < first
+    assert observed_quote_days(data["kline_daily_raw"], trading_days=(first, last)) == (("000001.SZ", last),)
 
 
 def test_month_prepare_appends_all_declared_index_csv_not_only_csi300(tmp_path):
@@ -441,7 +544,8 @@ def test_prev_close_failed_packaging_does_not_allow_published_root(tmp_path):
     assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
-@pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope"])
+@pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope",
+                                  "daily_reference", "daily_reference_bad_date", "daily_reference_bad_value"])
 def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, fault):
     from backend.services.dataset_release import monthly_prev_close_repair as correction
     root = tmp_path / "data_repair_staging"
@@ -451,10 +555,22 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
         path.write_text(json.dumps(value), encoding="utf-8")
         return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
     row = {"ts_code": "000001.SZ", "trade_date": "20260831", "pre_close": "11" if fault != "nonfinite" else "nan"}
+    proof = None
+    if fault and fault.startswith("daily_reference"):
+        row.update(up_limit="12.1", down_limit="9.9")
+        proof = {"schema_version": "stk_limit_daily_reference_enrichment_v1", "trade_date": "2026-08-31",
+                 "source_api": "tushare.daily", "source_field": "pre_close", "filled_reference_count": 1,
+                 "facts": [{**row, "original_pre_close": None}]}
+        if fault == "daily_reference_bad_date":
+            proof["trade_date"] = "2026-08-30"
+        elif fault == "daily_reference_bad_value":
+            proof["facts"][0]["pre_close"] = "11.1"
     rows_hash = hashlib.sha256(canonical_json_bytes([row])).hexdigest()
     source = {"schema_version": "local_data_stk_limit_pre_close_repair_v1", "provider": "tushare.stk_limit", "units": "CNY_per_share",
               "trade_date": "2026-08-31", "source_rows": [row], "patches": [row], "source_rows_sha256": rows_hash,
               "target_database": "aistock"}
+    if proof is not None:
+        source.update(provider="tushare.daily.pre_close_with_stk_limit_bounds", reference_enrichment=proof)
     source_path, source_hash = pin("source.json", source)
     plan = {"schema_version": "local_data_stk_limit_history_production_plan_v1", "target_database": "aistock", "target_table": "market.stk_limit",
             "changed_columns": ["pre_close"] if fault != "scope" else ["up_limit"],
@@ -466,12 +582,15 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
                "non_target_columns_unchanged": True, "verified_keys": 1}
     receipt_path, receipt_hash = pin("receipt.json", receipt)
     inputs = {"plan_path": plan_path, "plan_sha256": plan_hash, "receipt_path": receipt_path, "receipt_sha256": receipt_hash}
-    if fault:
+    if fault and fault != "daily_reference":
         with pytest.raises(ValueError):
             correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
     else:
         actual = correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
         assert actual["facts"] == [{**row, "trade_date": "2026-08-31"}] and actual["database_write"] is False
+        if proof is not None:
+            assert actual["provider"] == "tushare.daily.pre_close_with_stk_limit_bounds"
+            assert actual["sources"][0]["provider"] == actual["provider"]
         single_receipt = {"schema_version": "local_data_stk_limit_pre_close_production_readback_v1",
             "source_plan_sha256": source_hash, "source_rows_sha256": rows_hash, "database": "aistock",
             "production_database_written": True, "other_columns_unchanged": True, "other_same_day_keys_unchanged": True,
@@ -492,6 +611,23 @@ def test_quote_population_is_exact_observed_trading_days_not_catalog_extension()
             {**fact, "ts_code": "000002.SZ"}, {**fact, "trade_date": date(2026, 10, 1)}]
     assert observed_quote_days(rows, known_codes=frozenset({"000001.SZ"}),
                                trading_days=(day, date(2026, 9, 2))) == (("000001.SZ", day),)
+    from backend.services.dataset_release.monthly_quote_population import observed_daily_fact_days
+    assert observed_daily_fact_days(rows, known_codes=frozenset({"000001.SZ"}),
+                                    trading_days=(day, date(2026, 9, 2))) == (
+        ("000001.SZ", day), ("000001.SZ", date(2026, 9, 2)))
+
+
+def test_minute_support_preserves_required_invalid_facts_and_same_day_events(tmp_path):
+    from backend.services.dataset_release.monthly_quote_population import filter_minute_support_rows
+    _, _, pit, _, _, _, _ = _setup(tmp_path)
+    first, second, outside = date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)
+    rows = [{"ts_code": "000001.SZ", "trade_date": first, "pre_close": None},
+            {"ts_code": "000001.SZ", "trade_date": second, "suspend_type": "S"},
+            {"ts_code": "000001.SZ", "trade_date": second, "suspend_type": "R"},
+            {"ts_code": "000001.SZ", "trade_date": outside, "suspend_type": "S"}]
+    assert list(filter_minute_support_rows(iter(rows), pit_snapshot=pit,
+                                           quote_days=(("000001.SZ", second),))) == rows[:3]
+    assert rows[0]["pre_close"] is None  # Still fails in the existing price normalizer.
 
 
 def test_quote_keys_keep_limit_fact_without_changing_buy_spans(tmp_path):

@@ -13,6 +13,10 @@ import datetime as dt
 import json
 import os
 import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -108,7 +112,8 @@ def _get_trading_days(conn, start: dt.date, end: dt.date) -> List[dt.date]:
 
 def _get_max_ann_date(conn) -> Optional[dt.date]:
     with conn.cursor() as cur:
-        cur.execute("SELECT max(ann_date) FROM market.stock_st")
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        cur.execute("SELECT max(ann_date) FROM market.stock_st WHERE TRUE" + stock_scope_sql())
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -195,36 +200,13 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
 
 
 def _fetch_stock_st_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
-    ymd = trade_date.strftime("%Y%m%d")
-    offset = 0
-    limit = 1000  # Tushare 单次最大 1000；该接口每日数据实际不应超过 1000
-    rows: List[Dict[str, Any]] = []
-    while True:
-        # 按 Tushare 文档使用 trade_date 参数。
-        df = pro.stock_st(trade_date=ymd, limit=limit, offset=offset)
-        if df is None or df.empty:
-            break
-        for _, row in df.iterrows():
-            rows.append(
-                {
-                    "ts_code": row.get("ts_code"),
-                    # 表字段命名为 ann_date，这里保存 trade_date 到该字段。
-                    "ann_date": trade_date,
-                    "start_date": row.get("start_date"),
-                    "end_date": row.get("end_date"),
-                    "market": row.get("market"),
-                    "exchange": row.get("exchange"),
-                }
-            )
-        if len(df.index) < limit:
-            break
-        offset += limit
-        # Tushare 限流：接口约 200 次/分钟，单次调用后休眠以维持 ~190 req/min。
-        time.sleep(0.32)
-    # 即便第一页就空，也做轻微节流，避免紧密循环触碰频控。
-    if offset == 0:
-        time.sleep(0.32)
-    return rows
+    # Compatibility entrypoint: keep one source contract instead of silently
+    # reintroducing obsolete fields or SDK empty-on-error behavior here.
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+
+    return TushareSyncEngine()._fetch_from_tushare(
+        STOCK_ST, {"trade_date": trade_date.strftime("%Y%m%d")})
 
 
 def _parse_ymd(val) -> dt.date | None:
@@ -235,40 +217,15 @@ def _parse_ymd(val) -> dt.date | None:
         if len(s) == 8:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
-    except Exception:
-        return None
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid source date: {val!r}") from exc
 
 
 def _upsert_stock_st(conn, rows: List[Dict[str, Any]]) -> int:
-    if not rows:
-        return 0
-    sql = (
-        "INSERT INTO market.stock_st (ts_code, ann_date, start_date, end_date, market, exchange) "
-        "VALUES %s ON CONFLICT (ts_code, ann_date) DO UPDATE SET "
-        "start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, market=EXCLUDED.market, exchange=EXCLUDED.exchange"
-    )
-    # Deduplicate within the batch by PK (ts_code, ann_date) to avoid
-    # "ON CONFLICT DO UPDATE command cannot affect row a second time".
-    dedup: Dict[tuple[str, dt.date], tuple[str, dt.date, Optional[dt.date], Optional[dt.date], Any, Any]] = {}
-    for r in rows:
-        ts_code = (r.get("ts_code") or "").strip()
-        ann_date = r.get("ann_date")
-        if not ts_code or not ann_date:
-            continue
-        dedup[(ts_code, ann_date)] = (
-            ts_code,
-            ann_date,
-            _parse_ymd(r.get("start_date")),
-            _parse_ymd(r.get("end_date")),
-            r.get("market"),
-            r.get("exchange"),
-        )
-    values = list(dedup.values())
-    if not values:
-        return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+
+    return TushareSyncEngine()._upsert_batch(conn, STOCK_ST, rows)
 
 
 def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, job_id: uuid.UUID, batch_sleep: float) -> Dict[str, Any]:
@@ -289,17 +246,9 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
         try:
             _update_job_progress(conn, job_id, stats)
             conn.commit()
-        except Exception as exc:  # noqa: BLE001
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            msg = f"failed to update job progress: {exc}"
-            print(f"[WARN] {msg}")
-            try:
-                _log(conn, job_id, "warn", msg)
-            except Exception:
-                pass
+        except Exception:
+            conn.rollback()
+            raise
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats

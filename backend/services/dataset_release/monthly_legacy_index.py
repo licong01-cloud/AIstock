@@ -18,7 +18,10 @@ import pandas as pd
 from .canonical import canonical_json_bytes, ensure_sha256
 from .index_contract import DOMESTIC_INDEX_DEFINITIONS, IndexDefinition, index_contract_digest, merge_index_rows_missing_only, validate_index_definitions
 from .index_materializer import IndexContextSource, IndexMaterializationReceipt, _index_csv_frames, _normalized_rows, _to_context_frame
-from .monthly_legacy_prefix import LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature
+from .monthly_legacy_prefix import (
+    LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature,
+    resolve_legacy_component_pin,
+)
 
 
 RAW_COLUMNS = ("trade_date", "ts_code", "open", "high", "low", "close", "volume", "amount")
@@ -39,7 +42,7 @@ def append_legacy_index_context(
     _plain_chain(output_root.parent)
     if output_root.exists() or output_root.resolve().is_relative_to(prefix.root.resolve()) or prefix.root.resolve().is_relative_to(output_root.resolve()):
         raise LegacyMonthlyPrefixError("native index output root overlaps predecessor or exists")
-    pin = prefix.manifest["components"]["index_daily"]
+    pin = resolve_legacy_component_pin(prefix, "index_daily")
     path = prefix.root / _relative(pin["path"])
     _plain_chain(path)
     signature = _signature(path)

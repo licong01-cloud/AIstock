@@ -27,6 +27,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261023-e332c63ef338",
       "timestamp": "2026-10-23T06:45:23.572344Z"
+    },
+    {
+      "action": "resume_source_review",
+      "actor": "Codex",
+      "timestamp": "2026-11-13T07:52:37.130922+00:00",
+      "note": "Resumed existing PR #6635, integrated latest main, two-pass current author review; exclusive output namespace prevents recovery evidence overwrite. True asset recovery incomplete; source review is not economic or runtime acceptance."
     }
   ],
   "evidence_uris": [
@@ -187,7 +193,8 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/strategy_package/test_seed_asset_recovery.py -q -> 11 passed",
-      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json: DEV governance transaction passed; five original FUND models loaded in fresh WSL processes"
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json: DEV governance transaction passed; five original FUND models loaded in fresh WSL processes",
+      "2026-11-13 latest-main integration: python -m pytest backend/tests/strategy_package/test_seed_asset_recovery.py -q -x --disable-warnings -> 14 passed; ruff passed; validation_module_registry_l0 -> 8 passed, 14/14 mapped. Original source gaps remain 33 LSTM; no production writes, recovery execution, inference or service control."
     ],
     "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",

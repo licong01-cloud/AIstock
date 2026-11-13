@@ -588,6 +588,7 @@ def compile_initial_monthly_build(
         "source_bundle_sha256": bundle_sha,
         "monthly_repair_inputs": context_plan.get("monthly_repair_inputs"),
         "historical_minute_coverage_ref": bundle.get("historical_minute_coverage_ref"),
+        "historical_daily_catalog_ref": bundle.get("historical_daily_catalog_ref"),
         "business_validation_scope": {
             "start": month_start.isoformat(), "end": target_cutoff.isoformat(),
             "mode": "month_delta",

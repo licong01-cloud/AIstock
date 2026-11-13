@@ -1,0 +1,338 @@
+{
+  "actual": "BUG-2103 renews only the current live day. LSTM and TCN 2026-10-26 pre-run failures retain PIT leases ending 2026-10-23 and remain FAILED_RETRYABLE despite successful later days; the stale recovery sweep claims and clears retries without a possible durable generation. Close proven zero-effect missed live days with an explicit immutable-audit terminal reason, preserve the missing-day evidence and frozen leases, never backfill orders or change account economics. Frozen replay plans, unknown side effects and economic runs remain excluded.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+    "docs/analysis/localsim_historical_pit_admission_repair_20261029.md",
+    "tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2133",
+  "closed_at": "2026-10-30T17:24:39.877457Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-29T05:55:38.552829Z",
+  "description": "BUG-2103 renews only the current live day. LSTM and TCN 2026-10-26 pre-run failures retain PIT leases ending 2026-10-23 and remain FAILED_RETRYABLE despite successful later days; the stale recovery sweep claims and clears retries without a possible durable generation. Close proven zero-effect missed live days with an explicit immutable-audit terminal reason, preserve the missing-day evidence and frozen leases, never backfill orders or change account economics. Frozen replay plans, unknown side effects and economic runs remain excluded.",
+  "design_compliance": {
+    "no_business_logic_change": "No package, PIT rules, account, fills, fees or ledger change.",
+    "no_silent_error": "Original failure and strict identity errors preserved; no unknown economics fabricated.",
+    "no_unapproved_gate": "Uses existing pre-run zero-effect contract and frozen identity; no new approval or data gate.",
+    "no_unapproved_simplification": "Missed live days stay explicitly failed; no historical backfill."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261029-aa801ba43dd5",
+      "timestamp": "2026-10-29T05:55:38.552829Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/localsim-reliability-followup-20261029/TASK_STATE.md"
+  ],
+  "expected": "Past unattended live PIT admission failures with proved zero effects stop retrying and remain explicitly failed with audit; current-day recovery, original TWAP, historical replay and economic facts retain existing behavior.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+      "docs/analysis/localsim_historical_pit_admission_repair_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json"
+    ],
+    "added_files": [
+      "docs/analysis/localsim_historical_pit_admission_repair_20261029.md"
+    ],
+    "changed_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+      "docs/analysis/localsim_historical_pit_admission_repair_20261029.md",
+      "tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+        "docs/analysis/localsim_historical_pit_admission_repair_20261029.md"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "docs/analysis/localsim_historical_pit_admission_repair_20261029.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+        "docs/analysis/localsim_historical_pit_admission_repair_20261029.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+      "docs/analysis/localsim_historical_pit_admission_repair_20261029.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py",
+      "docs/analysis/localsim_historical_pit_admission_repair_20261029.md"
+    ]
+  },
+  "first_seen_at": "2026-10-29T05:55:38.552829Z",
+  "fix_branch": null,
+  "fix_commit": "3cf9daa1526c594e8e803d23a47f50061f0da702",
+  "fixed_at": "2026-10-29T06:27:31Z",
+  "github_issue_number": 6869,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6869",
+  "last_seen_at": "2026-10-29T05:55:38.552829Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6872",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "review_rounds": [
+    "R1: before-fix failing node; R2: immutable identity and zero-effect exclusions; R3: 26 targeted tests, strict read-only real records, lint/compile/diff and L0."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python loaded persistent scheduler/PIT source: 26 direct tests passed; X:/AIstock_temp/localsim-reliability-followup-20261029/pit-matrix.xml",
+      "Fresh persistent scheduler source inspected both original 2026-10-26 rows through enforced read-only DB connections with updates captured only in memory; production states remain FAILED_RETRYABLE. Receipt: X:/AIstock_temp/localsim-reliability-followup-20261029/pit-fresh-readonly-r1.json SHA256 76dadfda21a724bea8fe115d3aa39aadd3b1ba39394d98f41d992ddb2d216c7a",
+      "Fresh process captured both real PIT rows using enforced read-only DB connections; no production writes; pit-fresh-readonly-r1.json -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2133/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2133",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0a99e9fa60680d83ce91d07ed0692d53b20c8fc89d26d8202519b7e282eba003",
+      "contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+      "expected_identity": "3cf9daa1526c594e8e803d23a47f50061f0da702",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-30T17:21:16.180534Z",
+      "mode": "read_only",
+      "observed_identity": "0a45d94c98fcf8704802702e0ce3f8f7540a51eb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4e7ab1a33294f974602846583b596223890d36f31e7b13b532e1e14a85ee4648",
+      "receipt_sha256": "a735ee4a7496f16c66519aec971f81825edf39c3ce1fe3bc21e3b9ab0d90c385",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0fe1e5d64832dd9c4af4fbfa1b4400de4fa6097b3cae5e5551182f5d6003d610",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2133",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f443bebc31a65403",
+    "recorded_at": "2026-10-29T06:28:13.047215Z",
+    "runtime_contract_digest": "2f634b678072cdd683a39dee392f6c88470be4931ac89f71ff1facb26fda0439",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1e35d00c59b8769e5717c78f92bf252531f40a87",
+    "source_merge_commit": "3cf9daa1526c594e8e803d23a47f50061f0da702",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6872",
+    "validation_evidence": [
+      "validation-receipt: id=10e10b0bf03690ae commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py -q` result=`26 passed`",
+      "validation-receipt: id=62b3057f0b7261c0 commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py docs/analysis/localsim_historical_pit_admission_repair_20261029.md tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json` result=`passed, 0 blocking`"
+    ],
+    "validation_evidence_digest": "ed08b70ce5a238dec8808b9bdebbe2762782e336914c030c93290ea88cb28f0b"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM historical zero-effect PIT admission failures retry after their business day",
+  "trigger_condition": {
+    "fingerprint": "aa801ba43dd599e887c919a2",
+    "source_event_id": "FE-20261029-aa801ba43dd5"
+  },
+  "validation": [],
+  "validation_evidence": [
+    "validation-receipt: id=10e10b0bf03690ae commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py -q` result=`26 passed`",
+    "validation-receipt: id=62b3057f0b7261c0 commit=1e35d00c59b8769e5717c78f92bf252531f40a87 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_daily_pit_roll_forward.py docs/analysis/localsim_historical_pit_admission_repair_20261029.md tests/aistock_validation/bugs/20261029_BUG-2133-localsim-historical-zero-effect-pit-admission-failures-retry-after-their.json` result=`passed, 0 blocking`",
+    "2026-10-31 formal post-restart identity and scoped scheduler business semantic passed; original 10-26 two PIT days FAILED_TERMINAL with MISSED audit, broker false, submitted 0, backfilled false. X:/AIstock_temp/localsim-runtime-activation-20261031/historical-business-acceptance-r1.json. Original source validation receipts retained."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

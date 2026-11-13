@@ -11,6 +11,7 @@ import hashlib
 from backend.data_service.suspension_day_authority import digest, frozen_authority, load_authority
 
 from .canonical import canonical_json_bytes
+from .monthly_suspension_prefix import merge_authorities
 
 BINDING = "monthly_suspension_authority"
 SCHEMA = "aistock_monthly_suspension_authority_binding_v1"
@@ -39,15 +40,10 @@ def build_authority(cas, snapshot, *, plan, operation_id, source_bundle_sha256):
         raise ValueError("suspension binding differs from sealed monthly SOURCE")
     approved = load_authority(cas.get_json_bounded(binding["authority_ref"], max_bytes=1024 * 1024))
     cutoff = date.fromisoformat(plan["target_cutoff"])
-    start = cutoff.replace(day=1)
-    entries = {(r["ts_code"], r["trade_date"]): r for r in authority["entries"]}
-    for row in approved["entries"]:
-        if not start <= date.fromisoformat(row["trade_date"]) <= cutoff:
-            continue
-        key = row["ts_code"], row["trade_date"]
-        if key in entries and entries[key] != row:
-            raise ValueError("suspension supplement conflicts with frozen disclosure")
-        entries[key] = row
-    merged = load_authority({**authority, "entries": [entries[k] for k in sorted(entries)]})
+    # A reviewed historical correction is still relevant to a new month. The
+    # explicit binding, not the latest-month boundary, fixes its provenance.
+    approved = {**approved, "entries": [r for r in approved["entries"]
+                if date.fromisoformat(r["trade_date"]) <= cutoff]}
+    merged = merge_authorities(authority, approved)
     return merged, {"binding_sha256": digest(binding), "authority_ref": binding["authority_ref"],
         "source_manifest_ref": snapshot.source_manifest_ref.as_dict(), "source_bundle_sha256": source_bundle_sha256}

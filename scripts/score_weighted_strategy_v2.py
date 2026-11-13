@@ -168,6 +168,10 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         """Extension hook; default keeps legacy ScoreWeighted V2 weights unchanged."""
         return dict(weight_map)
 
+    def _prepare_buy_candidates(self, ranked, current_holdings, buy_candidates):
+        """Optional buy-only eligibility hook; default preserves the original list."""
+        return buy_candidates
+
     def _build_additional_rebalance_orders(
         self,
         *,
@@ -221,6 +225,7 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
             self.topk,
             current_holdings,
         )
+        buy_candidates = self._prepare_buy_candidates(ranked, current_holdings, buy_candidates)
 
         # ── Fix #2: 幽灵持仓强制卖出 ──
         # 无评分的旧持仓（停牌/退市等）直接加入卖出列表，不再静默积累

@@ -314,6 +314,23 @@ def test_cli_rejects_production_database_identity(monkeypatch):
         dev_connection_factory({"TDX_DB_DEV_NAME": "production", "TDX_DB_NAME": "production"})
 
 
+def test_cli_recovery_namespace_never_overwrites_previous_evidence(tmp_path):
+    from scripts.recover_multi_alpha_seed_assets import create_recovery_output
+
+    source = tmp_path / "production-cas"
+    output = create_recovery_output(tmp_path / "audit-v1", source)
+    receipt = output / "recovery-receipt.json"
+    original = b'{"ready": false, "unknown": "preserved"}'
+    receipt.write_bytes(original)
+    with pytest.raises(FileExistsError):
+        create_recovery_output(output, source)
+    assert receipt.read_bytes() == original
+    for overlap in (source, source / "audit", tmp_path):
+        with pytest.raises(ValueError, match="separate"):
+            create_recovery_output(overlap, source)
+    assert not source.exists()
+
+
 def test_cli_factory_owns_transaction_and_checks_database_before_writes(monkeypatch):
     import psycopg2
     from scripts.recover_multi_alpha_seed_assets import dev_connection_factory

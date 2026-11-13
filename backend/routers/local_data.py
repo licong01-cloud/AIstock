@@ -4,12 +4,56 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from backend.services.local_data_management import LocalDataManagementService
 
 router = APIRouter(prefix="/local-data", tags=["local-data"])
+
+
+def get_integrity_service():
+    from backend.services.data_integrity.service import DailyIntegrityService
+    return DailyIntegrityService()
+
+
+def _integrity_read(call):
+    from backend.services.data_integrity.repository import IntegrityRevisionChanged
+    try:
+        return call()
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+    except IntegrityRevisionChanged as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except Exception as exc:
+        # No DB configuration/credential text is returned to callers.
+        import logging
+        logging.getLogger(__name__).exception("daily integrity read unavailable")
+        raise HTTPException(503, detail={"reason_code": "DAILY_INTEGRITY_READ_UNAVAILABLE"}) from exc
+
+
+@router.get("/integrity/calendar")
+def integrity_calendar(month: str, response: Response, service=Depends(get_integrity_service)):
+    result = _integrity_read(lambda: service.calendar(month))
+    response.headers["ETag"] = '"' + result["etag"] + '"'
+    response.headers["Cache-Control"] = "no-cache"
+    return result
+
+
+@router.get("/integrity/days/{fact_date}")
+def integrity_day(fact_date: str, service=Depends(get_integrity_service)):
+    return _integrity_read(lambda: service.day(fact_date))
+
+
+@router.get("/integrity/days/{fact_date}/gaps")
+def integrity_gaps(fact_date: str, dataset: str, cursor: str | None = None, limit: int = 100,
+                   service=Depends(get_integrity_service)):
+    return _integrity_read(lambda: service.gaps(fact_date, dataset, cursor=cursor, limit=limit))
+
+
+@router.get("/readiness")
+def integrity_readiness(data_date: str, consumer: str, binding_id: str, service=Depends(get_integrity_service)):
+    return _integrity_read(lambda: service.readiness(data_date=data_date, consumer=consumer, binding_id=binding_id))
 
 
 def get_local_data_service() -> LocalDataManagementService:

@@ -155,8 +155,9 @@ def build_sql(facts, *, database):
                    f"JOIN market.kline_daily_raw r ON {join} WHERE {bounds} AND "
                    f"ROW({comparisons}) IS DISTINCT FROM ROW({expected})) THEN "
                    "RAISE EXCEPTION 'existing raw daily fact conflicts'; END IF; END; $guard$;")
-        sql.append(f'INSERT INTO market.kline_daily_raw ({columns}) VALUES {values_sql}\n'
-                   'ON CONFLICT (ts_code,trade_date) DO NOTHING;')
+        from backend.services.data_integrity.writes import tracked_repair_sql
+        sql.append(tracked_repair_sql(f'INSERT INTO market.kline_daily_raw ({columns}) VALUES {values_sql}\n'
+                   'ON CONFLICT (ts_code,trade_date) DO NOTHING RETURNING trade_date', 'kline_daily_raw'))
         sql.append(f"DO $guard$ BEGIN IF EXISTS (SELECT 1 FROM {source} "
                    f"LEFT JOIN market.kline_daily_raw r ON {join} AND {bounds} "
                    f"WHERE r.ts_code IS NULL OR ROW({comparisons}) IS DISTINCT FROM ROW({expected})) "

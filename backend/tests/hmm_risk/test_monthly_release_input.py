@@ -3,12 +3,14 @@
 from datetime import date
 import hashlib
 import json
+import shutil
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+from backend.services.hmm_risk import monthly_release_input as monthly_reader
 from backend.services.hmm_risk.contracts import canonical_sha256
 
 
@@ -256,6 +258,124 @@ def _rewrite_receipt(root, name, change):
     closure.pop("canonical_sha256")
     closure["canonical_sha256"] = canonical_sha256(closure)
     _write(closure_path, closure)
+
+
+def _successor(monthly, name="successor"):
+    parent, _, provider, previous = monthly
+    root = parent.parent / name
+    shutil.copytree(parent, root)
+    manifest = json.loads((root / "qe_dataset_manifest.json").read_bytes())
+    predecessor = manifest["dataset_manifest_sha256"]
+    amendment = "reports/suspension-amendment.json"
+    _write(root / amendment, {
+        "schema_version": "aistock_monthly_suspension_amendment_v1",
+        "predecessor_manifest_sha256": predecessor,
+    })
+    # This is deliberately outside the HMM read set. Inheritance must verify
+    # the whole physical delta, rather than just trust PASS or consumed files.
+    _write(root / "reports/changed-fact.json", {"source": name})
+    refs = [dict(value) for value in manifest["components"].values()]
+    refs = [ref for ref in refs if ref["path"] not in {amendment, "reports/changed-fact.json"}]
+    refs += [_ref(root, amendment), _ref(root, "reports/changed-fact.json")]
+    manifest["components"] = {str(i):ref for i, ref in enumerate(refs)}
+    manifest["deployment_content_sha256"] = canonical_sha256(manifest["components"])
+    manifest["revision"] += "-" + name
+    manifest["source_contract"] = {"suspension_amendment": {
+        "predecessor_manifest_sha256": predecessor, "receipt_sha256": _ref(root, amendment)["sha256"],
+    }}
+    manifest.pop("dataset_manifest_sha256")
+    manifest["dataset_manifest_sha256"] = canonical_sha256(manifest)
+    _write(root / "qe_dataset_manifest.json", manifest)
+    identity = manifest["dataset_manifest_sha256"]
+    inherited = {"path":str(parent / "release_closure_receipt.json"),
+        "sha256":_ref(parent, "release_closure_receipt.json")["sha256"]}
+    consumer = json.loads((root / "consumer.json").read_bytes())
+    consumer["dataset_manifest_sha256"] = identity
+    consumer["component_refs"]["manifest"] = [_ref(root, "qe_dataset_manifest.json")]
+    _write(root / "consumer.json", consumer)
+    _write(root / "readiness.json", {
+        "schema_version":"aistock_monthly_source_readiness_v1", "dataset_manifest_sha256":identity,
+        "status":"PASS", "unexplained_gap_count":0, "inherited_unchanged_readiness":inherited,
+        "suspension_amendment_ref":_ref(root, amendment),
+    })
+    _write(root / "validation.json", {
+        "schema_version":"aistock_monthly_component_validation_v1", "dataset_manifest_sha256":identity,
+        "status":"PASS", "validation_scope":"EXACT_REVIEWED_SUSPENSION_KEYS_AND_INHERITED_PINS",
+        "historical_content_revalidated":False, "inherited_unchanged_readiness":inherited,
+        "deployment_content_sha256":manifest["deployment_content_sha256"], "manifest_component_count":len(refs),
+    })
+    _write(root / "lineage.json", {
+        "schema_version":"aistock_monthly_release_lineage_v1", "status":"SEALED_SUCCESSOR",
+        **{k:manifest[k] for k in ("dataset_manifest_sha256","release_id","revision","cutoff_trade_date")},
+        "predecessor_dataset_manifest_sha256":predecessor,
+    })
+    closure = json.loads((root / "release_closure_receipt.json").read_bytes())
+    closure["dataset_manifest_ref"] = _ref(root, "qe_dataset_manifest.json", field="id")
+    for group, filename in [("consumer_contract_refs","consumer.json"),
+        ("source_readiness_refs","readiness.json"),("component_validation_refs","validation.json")]:
+        closure[group] = [_ref(root, filename, field="id")]
+    closure["lineage_ref"] = _ref(root, "lineage.json", field="id")
+    closure.pop("canonical_sha256")
+    closure["canonical_sha256"] = canonical_sha256(closure)
+    _write(root / "release_closure_receipt.json", closure)
+    binding = {**previous, "revision":manifest["revision"], "manifest_sha256":identity,
+        "manifest_file_sha256":_ref(root, "qe_dataset_manifest.json")["sha256"]}
+    return root, root/"components/factor_h5_static_candidate_v2/security_source_identity.json", provider, binding
+
+
+def test_monthly_accepts_verified_multilevel_inheritance_without_inventing_counters(monthly):
+    successor = _successor(_successor(monthly), name="second-successor")
+    before = (successor[0]/"validation.json").read_bytes()
+    assets = _load(successor)
+    assert assets["release_identity"]["dataset_manifest_sha256"] == successor[3]["manifest_sha256"]
+    assert (successor[0]/"validation.json").read_bytes() == before
+    assert not any(k in json.loads(before) for k in monthly_reader._ZERO_COUNTERS)
+
+
+@pytest.mark.parametrize("receipt,key,value", [
+    ("validation.json","validation_scope","UNKNOWN"),
+    ("validation.json","hash_mismatch_count",0),  # partial counters are not zero counters
+    ("validation.json","hash_mismatch_count",1),
+    ("validation.json","manifest_component_count",1),
+    ("lineage.json","predecessor_dataset_manifest_sha256","0"*64),
+    ("readiness.json","inherited_unchanged_readiness",{}),
+    ("validation.json","inherited_unchanged_readiness",{"path":"relative","sha256":"0"*64}),
+])
+def test_monthly_inheritance_rejects_rehashed_conflicts(monthly, receipt, key, value):
+    successor = _successor(monthly)
+    _rewrite_receipt(successor[0], receipt, lambda obj:obj.update({key:value}))
+    with pytest.raises(reader.RotationL1InputBundleError):
+        _load(successor)
+
+
+def test_monthly_inheritance_hashes_changed_files_outside_hmm_read_set(monthly):
+    successor = _successor(monthly)
+    (successor[0]/"reports/changed-fact.json").write_bytes(b"drift")
+    with pytest.raises(reader.RotationL1InputBundleError):
+        _load(successor)
+
+
+def test_monthly_inheritance_requires_full_terminal_validation(monthly):
+    _rewrite_receipt(monthly[0], "validation.json", lambda obj:obj.pop("hash_mismatch_count"))
+    successor = _successor(monthly)
+    with pytest.raises(reader.RotationL1InputBundleError):
+        _load(successor)
+
+
+def test_monthly_inheritance_never_masks_changed_predecessor_closure(monthly):
+    successor = _successor(monthly)
+    _rewrite_receipt(monthly[0], "readiness.json", lambda obj:obj.update(status="BLOCKED"))
+    with pytest.raises(reader.RotationL1InputBundleError):
+        _load(successor)
+
+
+def test_monthly_inheritance_depth_and_cycle_are_bounded(monthly):
+    root = monthly[0].resolve()
+    manifest = json.loads((root/"qe_dataset_manifest.json").read_bytes())
+    pins = monthly_reader._manifest_pins(manifest)
+    for ancestry in ((root/"release_closure_receipt.json",), tuple(range(8))):
+        with pytest.raises(reader.RotationL1InputBundleError):
+            monthly_reader._closure(monthly_reader._Files(root), manifest, pins, ancestry=ancestry)
 
 
 def test_monthly_l2_consumes_native_closure_without_state_or_l1(monthly):

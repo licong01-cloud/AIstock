@@ -116,6 +116,11 @@ class BacktestExecutor(BaseExecutor):
             ctx:    执行上下文（task_id, loop_index 等）
             mode:   FULL_TRAIN 或 BACKTEST_ONLY
         """
+        if config.frozen_inference is not None:
+            if mode != BacktestMode.BACKTEST_ONLY or not ctx.model_source:
+                raise ValueError("QE_FROZEN_REQUIRES_BACKTEST_ONLY_SOURCE")
+            if not ctx.extra_experiment_files or "qe_frozen_source_assets.json" not in ctx.extra_experiment_files:
+                raise ValueError("QE_FROZEN_SOURCE_ASSETS_REQUIRED")
         if mode == BacktestMode.BACKTEST_ONLY and not ctx.model_source:
             raise ValueError(
                 "BACKTEST_ONLY requires ctx.model_source; refusing to assume an "
@@ -140,6 +145,41 @@ class BacktestExecutor(BaseExecutor):
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
+        from ..terminal_replay_consumer import require_terminal_replay_mode
+
+        require_terminal_replay_mode(
+            custom_params.get("qe_terminal_replay"), mode=mode.value, source=ctx.prediction_replay_source
+        )
+        member_loss_study = custom_params.get("qe_l2_member_loss_manifest")
+        if member_loss_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_L2_MEMBER_REQUIRES_PREDICTION_REPLAY")
+            if (
+                not isinstance(member_loss_study, dict)
+                or member_loss_study.get("assets", {}).get("prediction", {}).get("sha256") != source.sha256
+            ):
+                raise ValueError("QE_L2_MEMBER_SOURCE_PREDICTION_MISMATCH")
+        natural_entry_study = custom_params.get("qe_l2_natural_entry_manifest")
+        if natural_entry_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_L2_NATURAL_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(natural_entry_study, dict)
+                    or natural_entry_study.get("assets", {}).get("prediction", {}).get("sha256") != source.sha256):
+                raise ValueError("QE_L2_NATURAL_SOURCE_PREDICTION_MISMATCH")
+        relative_study = custom_params.get("qe_l2_relative_manifest")
+        if relative_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_L2_RELATIVE_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(relative_study, dict)
+                    or relative_study.get("assets", {}).get("prediction", {}).get("sha256") != source.sha256):
+                raise ValueError("QE_L2_RELATIVE_SOURCE_PREDICTION_MISMATCH")
+        probability_study = custom_params.get("qe_stock_probability_study")
+        if probability_study is not None:
+            if mode != BacktestMode.PREDICTION_REPLAY:
+                raise ValueError("QE_STOCK_PROBABILITY_REQUIRES_PREDICTION_REPLAY")
+            if (not isinstance(probability_study, dict)
+                    or probability_study.get("manifest", {}).get("prediction_sha256") != source.sha256):
+                raise ValueError("QE_STOCK_PROBABILITY_SOURCE_PREDICTION_MISMATCH")
         runtime_flags = config.build_runtime_flags()
         fixed_seed = extract_qe_random_seed(runtime_flags)
         require_fixed_seed = bool(ctx.require_fixed_seed or kwargs.get("require_fixed_seed"))
@@ -306,6 +346,37 @@ class BacktestExecutor(BaseExecutor):
                     f"{sorted(duplicate_keys)}"
                 )
             experiment_files.update(ctx.extra_experiment_files)
+
+        if config.frozen_inference is not None:
+            import hashlib
+            import json
+            import yaml
+            from ..frozen_inference_contract import canonical_sha
+
+            spec = config.frozen_inference.model_dump(mode="json")
+            for name, digest in spec["code_sha256"].items():
+                text = experiment_files.get(name)
+                if text is None or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+                    raise ValueError(f"QE_FROZEN_TARGET_CODE_MISMATCH: {name}")
+            binding = json.loads(experiment_files["qe_direct_v2_dataset_binding.json"])
+            envelope = {"schema_version": "qe_frozen_inference_manifest_v1", "spec": spec,
+                        "input_binding_sha256": canonical_sha(binding),
+                        "source_task_id": config.model_source_task_id,
+                        "source_loop_index": config.model_source_loop_index}
+            for name in ("qe_frozen_inference.py", "qe_frozen_inference_manifest.json"):
+                if name in experiment_files:
+                    raise ValueError(f"QE_FROZEN_GENERATED_FILE_COLLISION: {name}")
+            experiment_files["qe_frozen_inference.py"] = (
+                Path(__file__).resolve().parents[4] / "scripts/qe_frozen_inference.py"
+            ).read_text(encoding="utf-8")
+            experiment_files["qe_frozen_inference_manifest.json"] = json.dumps(envelope, ensure_ascii=False)
+            experiment_files["conf.yaml"] += "\n" + yaml.safe_dump({"qe_frozen_inference": spec}, sort_keys=True)
+            experiment_files["conf.yaml"] = re.sub(
+                r"\{\{\s*num_features\s*\}\}", str(len(spec["feature_names"])), experiment_files["conf.yaml"],
+            )
+            experiment_files["conf.yaml"] = re.sub(
+                r"\{\{\s*num_timesteps\s*\}\}", str(spec["step_len"]), experiment_files["conf.yaml"],
+            )
 
         # 3. 注入 --backtest-only（Path 3 专用）
         if mode == BacktestMode.BACKTEST_ONLY:

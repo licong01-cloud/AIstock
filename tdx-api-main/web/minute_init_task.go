@@ -1096,6 +1096,14 @@ func ingestDailyQfqSingleSymbol(ctx context.Context, tsCode string, opt MinuteIn
 	return inserted, nil
 }
 
+func fetchRawDailyKline(code string, stop func(*protocol.Kline) bool,
+	fetch func(uint8, string, func(*protocol.Kline) bool) (*protocol.KlineResp, error)) (*protocol.KlineResp, error) {
+	// TypeKlineDay (9) reports whole hands and cannot recover odd shares.
+	// TypeKlineDay2 (4) is the same unadjusted day fact with wire share volume;
+	// the decoder retains legacy whole hands and additive VolumeShares.
+	return fetch(protocol.TypeKlineDay2, code, stop)
+}
+
 // ingestDailyRawSingleSymbol 使用 TDX 日线未复权数据填充 kline_daily_raw。
 func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt MinuteInitOptions) (int, error) {
 	code, err := sourceCode(tsCode)
@@ -1107,7 +1115,7 @@ func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.T
 		return 0, err
 	}
 	stop := func(k *protocol.Kline) bool { return !opt.TruncateBefore && k.Time.Before(start) }
-	resp, err := client.GetKlineDayUntil(code, stop)
+	resp, err := fetchRawDailyKline(code, stop, client.GetKlineUntil)
 	if err != nil {
 		return 0, fmt.Errorf("获取日线K线失败: %w", err)
 	}

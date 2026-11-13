@@ -110,7 +110,8 @@ def test_missing_source_baseline_does_not_invent_schema_or_historical_repairs() 
     assert all(item.start == date(2026, 9, 1) and item.end == date(2026, 9, 30) for item in observed)
 
 
-def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
+@pytest.mark.parametrize("has_revision_pins", [False, True])
+def test_frozen_bundle_pins_formal_source_stage_receipt(has_revision_pins) -> None:
     digest = "a" * 64
     reference = CASRef(digest, 7, f"cas/sha256/aa/{digest}")
     frozen = SimpleNamespace(
@@ -137,7 +138,14 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
         source_as_of="2026-10-01T00:00:00+00:00",
         initial_repair_watermark="repair-1",
     )
-    adapter = SimpleNamespace(profile=SimpleNamespace(profile="qe_hmm_full_v2"))
+    pins = [{"dataset": "daily_basic", "fact_date": "2026-09-30", "data_revision": 7,
+             "validated_revision": 7, "validation_status": "VALID", "validation_id": "div_7",
+             "scope_version": "scope", "rule_version": "rule"}] if has_revision_pins else None
+    def read_audit(ref, *, max_bytes):
+        assert ref is frozen.source_audit_ref
+        return {"integrity_revision_pins": pins} if pins is not None else {}
+    adapter = SimpleNamespace(profile=SimpleNamespace(profile="qe_hmm_full_v2"),
+                              cas=SimpleNamespace(get_json_bounded=read_audit))
 
     bundle = PostgresMonthlySourceAdapter._bundle(
         adapter,
@@ -150,9 +158,10 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
 
     assert bundle["schema_version"] == FROZEN_SOURCE_BUNDLE_SCHEMA
     assert bundle["source_stage_receipt_ref"] == reference.as_dict()
+    assert bundle["integrity_revision_pins"] == pins
 
 
-@pytest.mark.parametrize("repair_kind", ["deferred", "arrived", "no_deferral", "absent", "wrong_date", "wrong_predecessor", "history"])
+@pytest.mark.parametrize("repair_kind", ["deferred", "arrived", "no_deferral", "absent", "wrong_date", "wrong_predecessor", "history", "daily_history"])
 def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp_path, monkeypatch, repair_kind):
     from dataclasses import replace
     from backend.services.dataset_release import monthly_postgres_source as source
@@ -196,9 +205,20 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
                         lambda **_kw: SimpleNamespace(manifest_sha256="a" * 64))
     from backend.services.dataset_release import monthly_minute_coverage
     captured_history = {"schema_version": "aistock_monthly_database_minute_correction_v1", "facts": []}
+    from backend.services.dataset_release import monthly_construction_facts
+    captured_daily = {'schema_version':monthly_construction_facts.DAILY_CATALOG_SCHEMA,
+        'database_write':False,'facts':[{'ts_code':'000585.SZ','trade_date':'2018-08-01'}]}
+    def capture_daily(**kwargs):
+        assert kwargs['connection'] is connection
+        return captured_daily if repair_kind == 'daily_history' else None
+    monkeypatch.setattr(monthly_construction_facts, 'capture_daily_catalog_history', capture_daily)
     def capture_history(**kwargs):
         assert kwargs["pit"] is frozen.pit_snapshot
         assert kwargs["connection"] is connection
+        assert kwargs['suspension_authority'] == {
+            'schema_version': 'aistock_suspension_day_authority_v1',
+            'policy': 'provider_events_with_disclosure_resolution_v1', 'entries': []}
+        assert kwargs['additional_quote_days'] == ((('000585.SZ','2018-08-01'),) if repair_kind == 'daily_history' else ())
         return captured_history if repair_kind == "history" else None
     monkeypatch.setattr(monthly_minute_coverage, "capture_historical_coverage", capture_history)
 
@@ -245,6 +265,12 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
     bundle_path = next(item.path for item in read_set.input_artifacts if item.path.name == "frozen-source-bundle.json")
     bundle = json.loads(bundle_path.read_bytes())
     assert bundle["monthly_repair_inputs"] == repair
+    if repair_kind == 'daily_history':
+        daily_ref = CASRef.from_value(bundle['historical_daily_catalog_ref'])
+        assert hashes[daily_ref.relative_path] == daily_ref.sha256
+        assert cas.get_json(daily_ref) == captured_daily
+    else:
+        assert bundle.get('historical_daily_catalog_ref') is None
     if repair_kind == "history":
         history_ref = CASRef.from_value(bundle["historical_minute_coverage_ref"])
         assert hashes[history_ref.relative_path] == history_ref.sha256
@@ -343,7 +369,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "18"
+    assert adapter.adapter_version == "21"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -351,6 +377,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             **old_fields,
             "sector_source_policy": "classification_published_snapshot_v1",
             "refresh_audit_readiness_policy": source.REFRESH_READINESS_POLICY,
+            "required_fact_readiness_policy": "same_snapshot_monthly_required_fact_projection_v1",
             "business_validation_scope": "target_calendar_month_only_v1",
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "factual_population_policy": "all_shsz_source_facts_independent_of_pit_v1",

@@ -331,10 +331,9 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
     independently sealed quotes and same-day PIT stock flows; unavailable facts
     remain NA. All unrelated static columns remain byte-value equivalent.
     """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
     from .monthly_legacy_prefix import _plain_chain, _signature
     from .monthly_file_identity import file_sha256
+    from .monthly_industry_static import materialize_static, read_checkpoint, seal_checkpoint
 
     if not 0 < max_rows <= 100_000:
         raise SourceManifestError("industry repair row bound differs")
@@ -361,7 +360,7 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
         for name in names:
             _plain_chain(factor / name)
     originals = {name: _signature(factor / name) for name in names}
-    if scratch.exists():
+    if scratch.exists() and (scratch / "projection_receipt.json").exists():
         import json
         completed = scratch / "projection_receipt.json"
         _plain_chain(completed)
@@ -380,10 +379,15 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
             raise SourceManifestError("retained industry output population differs")
         progress({"phase": "INDUSTRY_HISTORY_REUSE_VERIFIED"})
         return value
-    scratch.mkdir(exist_ok=False)
+    scratch.mkdir(exist_ok=True)
     outputs = {}
     counts = {"classification_cells_changed": 0, "classification_only_rows_added": 0}
     sector_target = scratch / "sector_data.h5"
+    binding = {"schema_version": "industry_private_checkpoint_v1", "projection_sha256": projection.sha256,
+               "context_identity": context_identity,
+               "input_signatures": {name: list(signature) for name, signature in originals.items()}}
+    stage_path = scratch / "sector_stage_receipt.json"
+    retained_sector = read_checkpoint(stage_path, binding=binding, output=sector_target)
     left, right = projection.payload["start_date"], projection.payload["end_date"]
     def remap_context(frame, original):
         """Same-day frozen industry facts, not another industry's substitute.
@@ -412,69 +416,55 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
             actual.loc[selected, column] = resolved[column].to_numpy().astype(frame[column].dtype)
         return _align_sector_tail(actual, original, after=projection.payload["end_date"])
     try:
-        with pd.HDFStore(factor / "sector_data.h5", "r") as old, pd.HDFStore(factor / "daily_pv.h5", "r") as price, pd.HDFStore(sector_target, "w") as new:
-            template = old.select("data", start=0, stop=1)
-            columns, dtypes = list(template.columns), template.dtypes.to_dict()
-            # Month chunks are only the explicitly requested industry repair,
-            # not a full-price quality scan. No price values are read.
-            for period in pd.period_range(left, right, freq="M"):
-                checkpoint()
-                a = max(pd.Timestamp(left), period.start_time)
-                b = min(pd.Timestamp(right), period.end_time.normalize())
-                where = [f"datetime >= {str(a.date())!r}", f"datetime <= {str(b.date())!r}"]
-                existing = old.select("data", where=where)
-                keys = price.select("data", where=where, columns=[]).index
-                union = existing.index.union(keys).sort_values()
-                for offset in range(0, len(union), max_rows):
+        if retained_sector is None:
+            with pd.HDFStore(factor / "sector_data.h5", "r") as old, pd.HDFStore(factor / "daily_pv.h5", "r") as price, pd.HDFStore(sector_target, "w") as new:
+                template = old.select("data", start=0, stop=1)
+                columns, dtypes = list(template.columns), template.dtypes.to_dict()
+                # Only the explicitly requested classification repair; no
+                # full-price scan. Price values are never read here.
+                for period in pd.period_range(left, right, freq="M"):
                     checkpoint()
-                    index = union[offset:offset + max_rows]
-                    frame = existing.reindex(index)
-                    for column in columns:
-                        if pd.api.types.is_integer_dtype(dtypes[column]):
-                            frame[column] = frame[column].fillna(-1).astype(dtypes[column])
-                        else:
-                            frame[column] = frame[column].astype(dtypes[column])
-                    actual = remap_context(frame, existing)
-                    counts["classification_cells_changed"] += int((actual["l2_code_id"] != frame["l2_code_id"]).sum())
-                    counts["classification_only_rows_added"] += int((~index.isin(existing.index)).sum())
-                    new.append("data", actual[columns], format="table", data_columns=["datetime", "instrument"], index=False, min_itemsize={"instrument": 16})
-                progress({"phase": "INDUSTRY_HISTORY_REPAIR", "dataset": "sector_data", "partition_key": str(period),
-                          "rows_validated": counts["classification_cells_changed"],
-                          "rows_sealed": counts["classification_only_rows_added"]})
-            # Preserve all existing rows outside the repair window exactly.
-            for where in ([f"datetime < {left!r}"], [f"datetime > {right!r}"]):
-                for frame in old.select("data", where=where, chunksize=max_rows):
-                    checkpoint()
-                    new.append("data", frame, format="table", data_columns=["datetime", "instrument"], index=False, min_itemsize={"instrument": 16})
-            new.create_table_index("data", columns=["datetime", "instrument"], kind="full")
+                    a = max(pd.Timestamp(left), period.start_time)
+                    b = min(pd.Timestamp(right), period.end_time.normalize())
+                    where = [f"datetime >= {str(a.date())!r}", f"datetime <= {str(b.date())!r}"]
+                    existing = old.select("data", where=where)
+                    keys = price.select("data", where=where, columns=[]).index
+                    union = existing.index.union(keys).sort_values()
+                    for offset in range(0, len(union), max_rows):
+                        checkpoint()
+                        index = union[offset:offset + max_rows]
+                        frame = existing.reindex(index)
+                        for column in columns:
+                            if pd.api.types.is_integer_dtype(dtypes[column]):
+                                frame[column] = frame[column].fillna(-1).astype(dtypes[column])
+                            else:
+                                frame[column] = frame[column].astype(dtypes[column])
+                        actual = remap_context(frame, existing)
+                        counts["classification_cells_changed"] += int((actual["l2_code_id"] != frame["l2_code_id"]).sum())
+                        counts["classification_only_rows_added"] += int((~index.isin(existing.index)).sum())
+                        new.append("data", actual[columns], format="table", data_columns=["datetime", "instrument"], index=False, min_itemsize={"instrument": 16})
+                    progress({"phase": "INDUSTRY_HISTORY_REPAIR", "dataset": "sector_data", "partition_key": str(period),
+                              "rows_validated": counts["classification_cells_changed"],
+                              "rows_sealed": counts["classification_only_rows_added"]})
+                for where in ([f"datetime < {left!r}"], [f"datetime > {right!r}"]):
+                    for frame in old.select("data", where=where, chunksize=max_rows):
+                        checkpoint()
+                        new.append("data", frame, format="table", data_columns=["datetime", "instrument"], index=False, min_itemsize={"instrument": 16})
+                new.create_table_index("data", columns=["datetime", "instrument"], kind="full")
+            retained_sector = seal_checkpoint(stage_path, binding=binding, output=sector_target, counts=counts)
+        else:
+            counts = dict(retained_sector["counts"])
+            progress({"phase": "INDUSTRY_SECTOR_STAGE_REUSED"})
+        def fallback(frame):
+            with pd.HDFStore(factor / "sector_data.h5", "r") as old:
+                days = frame.index.get_level_values("datetime")
+                facts = old.select("data", where=[f"datetime >= {str(days.min().date())!r}",
+                                                   f"datetime <= {str(days.max().date())!r}"])
+            return remap_context(frame, facts)
         target = scratch / "static_factors.parquet"
-        with pq.ParquetFile(factor / "static_factors.parquet") as old:
-            with pq.ParquetWriter(target, old.schema_arrow) as new:
-                for batch in old.iter_batches(batch_size=max_rows):
-                    checkpoint()
-                    frame = pa.Table.from_batches([batch]).to_pandas()
-                    with pd.HDFStore(factor / "sector_data.h5", "r") as sector_source:
-                        start = str(frame.index.get_level_values("datetime").min().date())
-                        end = str(frame.index.get_level_values("datetime").max().date())
-                        facts = sector_source.select("data", where=[f"datetime >= {start!r}", f"datetime <= {end!r}"])
-                    actual = remap_context(frame, facts)
-                    counts["classification_cells_changed"] += int((actual["l2_code_id"] != frame["l2_code_id"]).sum())
-                    unrelated = [name for name in frame if name != "l2_code_id" and not name.startswith("sw2_")]
-                    pd.testing.assert_frame_equal(frame[unrelated], actual[unrelated], check_exact=True)
-                    new.write_table(pa.Table.from_pandas(actual, schema=old.schema_arrow, preserve_index=True))
-        # Real file-only readback of the changed industry field, and of the
-        # untouched static columns. Bounded batches; no unrelated QA or fit.
-        with pq.ParquetFile(factor / "static_factors.parquet") as original, pq.ParquetFile(target) as repaired:
-            old_batches, new_batches = original.iter_batches(batch_size=max_rows), repaired.iter_batches(batch_size=max_rows)
-            for before_batch, after_batch in zip(old_batches, new_batches, strict=True):
-                checkpoint()
-                before = pa.Table.from_batches([before_batch]).to_pandas()
-                with pd.HDFStore(factor / "sector_data.h5", "r") as sector_source:
-                    start = str(before.index.get_level_values("datetime").min().date())
-                    end = str(before.index.get_level_values("datetime").max().date())
-                    facts = sector_source.select("data", where=[f"datetime >= {start!r}", f"datetime <= {end!r}"])
-                expected = remap_context(before, facts)
-                pd.testing.assert_frame_equal(expected, pa.Table.from_batches([after_batch]).to_pandas(), check_exact=True)
+        counts["classification_cells_changed"] += materialize_static(
+            factor / "static_factors.parquet", sector_target, target, binding=binding, max_rows=max_rows,
+            fallback=fallback, checkpoint=checkpoint, progress=progress)
         with pd.HDFStore(sector_target, "r") as repaired:
             total = int(repaired.get_storer("data").nrows)
             for frame in repaired.select("data", chunksize=max_rows):
@@ -482,7 +472,10 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
                 pd.testing.assert_series_equal(projection.project(frame)["l2_code_id"], frame["l2_code_id"], check_exact=True)
         for name in ("sector_data.h5", "static_factors.parquet"):
             path = scratch / name
-            outputs[name] = {"sha256": file_sha256(path), "size": path.stat().st_size,
+            if name == "sector_data.h5" and list(_signature(path)) != retained_sector["signature"]:
+                raise SourceManifestError("retained industry sector changed during static readback")
+            digest = retained_sector["sha256"] if name == "sector_data.h5" else file_sha256(path)
+            outputs[name] = {"sha256": digest, "size": path.stat().st_size,
                              "target_signature": list(_signature(path)), "scratch_relative_path": path.relative_to(root.parent).as_posix(),
                              "original_signature": list(originals[name]), "context_sha256": context_sha}
         if any(_signature(factor / name) != value for name, value in originals.items()):

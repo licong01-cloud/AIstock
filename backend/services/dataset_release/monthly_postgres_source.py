@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "18"
+POSTGRES_SOURCE_ADAPTER_VERSION = "21"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -348,6 +348,7 @@ class PostgresMonthlySourceAdapter:
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
                 "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
                 "refresh_audit_readiness_policy": REFRESH_READINESS_POLICY,
+                "required_fact_readiness_policy": "same_snapshot_monthly_required_fact_projection_v1",
                 "component_preparation_dependency_digest": digest_named_fields(
                     "aistock_monthly_component_dependency_v1",
                     component_dependencies(),
@@ -675,8 +676,18 @@ class PostgresMonthlySourceAdapter:
         from .monthly_build_bridge import load_monthly_predecessor_prefix
 
         prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
+        from .monthly_construction_facts import capture_daily_catalog_history
+        historical_daily = capture_daily_catalog_history(
+            prefix=prefix, fact_stock_codes=fact_stock_codes, cutoff=target_cutoff,
+            connection=connection, checkpoint=checkpoint,
+        ) if prefix is not None else None
+        historical_daily_ref = self.cas.put_json(historical_daily) if historical_daily is not None else None
+        from backend.data_service.suspension_day_authority import frozen_authority
         historical_minutes = capture_historical_coverage(
             prefix=prefix, pit=frozen.pit_snapshot, cutoff=target_cutoff, connection=connection,
+            suspension_authority=frozen_authority(self.cas, frozen),
+            additional_quote_days=() if historical_daily is None else tuple(
+                (row['ts_code'],row['trade_date']) for row in historical_daily['facts']),
         ) if prefix is not None else None
         historical_minutes_ref = self.cas.put_json(historical_minutes) if historical_minutes is not None else None
         checkpoint()
@@ -690,9 +701,27 @@ class PostgresMonthlySourceAdapter:
             baseline_row=baseline_row,
             source_stage_ref=source_stage_ref,
         )
+        if bundle.get("integrity_revision_pins") is not None:
+            from backend.services.data_integrity.inputs import partition_pins
+            captured = {(p["dataset"], p["fact_date"]): p for p in bundle["integrity_revision_pins"]}
+            # Only exact declared changes, using this already imported SOURCE
+            # snapshot. No history price scan or checkpoint invalidation.
+            source_names = {"moneyflow": ["moneyflow_ts"],
+                "industry_classification": ["sector_data", "sw_index_classify", "sw_index_member"]}
+            for change in changes:
+                if change.kind == "TAIL_APPEND":
+                    continue
+                for pin in partition_pins(connection, change.start, change.end,
+                        datasets=source_names.get(change.dataset, [change.dataset])) or []:
+                    normalized = {"dataset": pin["dataset"], "fact_date": pin["trade_date"],
+                                  **{k: v for k, v in pin.items() if k not in {"dataset", "trade_date"}}}
+                    captured[(normalized["dataset"], normalized["fact_date"])] = normalized
+            bundle["integrity_revision_pins"] = [captured[k] for k in sorted(captured)]
         bundle["monthly_repair_inputs"] = repair_inputs
         if historical_minutes_ref is not None:
             bundle["historical_minute_coverage_ref"] = historical_minutes_ref.as_dict()
+        if historical_daily_ref is not None:
+            bundle['historical_daily_catalog_ref'] = historical_daily_ref.as_dict()
         repair_payload_ref = None
         if repair_inputs is not None:
             # Typed deferrals bind this exact canonical payload, not the outer
@@ -713,6 +742,8 @@ class PostgresMonthlySourceAdapter:
             artifacts.append(_cas_artifact(self.cas, repair_payload_ref))
         if historical_minutes_ref is not None:
             artifacts.append(_cas_artifact(self.cas, historical_minutes_ref))
+        if historical_daily_ref is not None:
+            artifacts.append(_cas_artifact(self.cas, historical_daily_ref))
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)
@@ -788,6 +819,9 @@ class PostgresMonthlySourceAdapter:
             "source_manifest_ref": frozen.source_manifest_ref.as_dict(),
             "source_reuse_manifest_ref": frozen.source_reuse_manifest_ref.as_dict(),
             "source_audit_ref": frozen.source_audit_ref.as_dict(),
+            "integrity_revision_pins": self.cas.get_json_bounded(
+                frozen.source_audit_ref, max_bytes=64 * 1024 * 1024
+            ).get("integrity_revision_pins") or None,
             "source_provenance_ref": frozen.source_provenance_ref.as_dict(),
             "pit_snapshot_ref": frozen.pit_snapshot_ref.as_dict(),
             "artifact_ready_contract_ref": frozen.artifact_ready_contract_ref.as_dict(),

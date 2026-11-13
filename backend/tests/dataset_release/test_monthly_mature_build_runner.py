@@ -460,6 +460,7 @@ def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, mon
         (staging / "reports").mkdir()
         (staging / "reports/private.json").write_bytes(b"retained-private-receipt")
     repairs = []
+    from backend.services.dataset_release import monthly_quote_fact_correction
 
     def check_order(name, original):
         def apply(resume, **kwargs):
@@ -470,6 +471,7 @@ def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, mon
 
     for module, name in ((monthly_prev_close_repair, "apply_prev_close_corrections"),
                          (monthly_minute_repair, "apply_minute_corrections"),
+                         (monthly_quote_fact_correction, "apply_quote_repairs"),
                          (monthly_industry_history, "apply_retained_history")):
         monkeypatch.setattr(module, name, check_order(name, getattr(module, name)))
     target = staging / "daily_bin/qlib/features/000001.sz/close.day.bin"
@@ -484,7 +486,9 @@ def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, mon
     assert struct.unpack("<fff", target.read_bytes()) == (0, 10, 12)
     assert target.stat().st_mtime_ns == before.st_mtime_ns
     assert struct.unpack("<ff", (provider / "features/000001.sz/close.day.bin").read_bytes()) == (0, 10)
-    assert repairs == ["apply_prev_close_corrections", "apply_minute_corrections", "apply_retained_history"]
+    # Daily catalogue/QFQ facts must exist before historical minutes read them.
+    assert repairs == ["apply_prev_close_corrections", "apply_retained_history",
+                       "apply_quote_repairs", "apply_minute_corrections"]
     if retained_packaging:
         saved = staging.parent / f".unfinished.{context.operation_id}.packaging.before-3"
         assert (saved / "qe_dataset_manifest.json").read_bytes() == b"retained-private-manifest"

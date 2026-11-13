@@ -1,0 +1,208 @@
+{
+  "actual": "QE custom evolution accepts node_parallelism=4, but qe_active_execution_capacity hard-codes WSL_BACKTEST_HARD_CAPACITY=2 and silently applies min(requested_limit, hard_cap). This violates the approved dual-node pure-backtest execution contract and leaves two WSL loops queued despite sufficient resources. Make the WSL pure-backtest hard capacity explicitly configurable with validated fail-closed bounds, preserve safe defaults and training/GAT limits, add focused capacity/coordinator tests, and do not restart or rerun the current experiment.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260917_BUG-1568-wsl-pure-backtest-node-parallelism-4-is-silently-capped-at-2.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1568",
+  "closed_at": "2026-09-17T07:48:14Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-17T07:34:53.490192Z",
+  "description": "QE custom evolution accepts node_parallelism=4, but qe_active_execution_capacity hard-codes WSL_BACKTEST_HARD_CAPACITY=2 and silently applies min(requested_limit, hard_cap). This violates the approved dual-node pure-backtest execution contract and leaves two WSL loops queued despite sufficient resources. Make the WSL pure-backtest hard capacity explicitly configurable with validated fail-closed bounds, preserve safe defaults and training/GAT limits, add focused capacity/coordinator tests, and do not restart or rerun the current experiment.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260917-742b82c71314",
+      "timestamp": "2026-09-17T07:34:53.490174Z"
+    },
+    {
+      "action": "recover_existing_github_resolution",
+      "actor": "merge_aftercare",
+      "evidence_refs": [
+        "https://github.com/licong01-cloud/AIstock/issues/4901#issuecomment-5710889693"
+      ],
+      "note": "重复登记，保留 BUG-1560 / Issue #4880 / PR #4881 的权威替代关系。",
+      "timestamp": "2026-11-06T17:49:37.671034+00:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-17T07:34:53.490192Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4901,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4901",
+  "last_seen_at": "2026-09-17T07:34:53.490192Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "registry_recovery": {
+    "github_closed_at": "2026-09-17T07:48:14Z",
+    "github_issue_state": "closed",
+    "github_observed_updated_at": "2026-09-17T07:48:14Z",
+    "github_state_reason": "not_planned",
+    "recovered_at": "2026-11-06T17:49:37.671034+00:00",
+    "resolution_refs": [
+      "https://github.com/licong01-cloud/AIstock/issues/4901#issuecomment-5710889693"
+    ],
+    "schema_version": "aistock_bug_registry_recovery_v1",
+    "scope": "metadata_only_no_business_fix_or_runtime_acceptance",
+    "source_blob_sha256": "e99e47448686b81db71159cec1e6029446d18292fdc4a433fa335fb3abcdd524",
+    "source_commit": "8025bf119d2320226c48701c2e12714f1f1b10c6",
+    "source_path": "tests/aistock_validation/bugs/20260917_BUG-1568-wsl-pure-backtest-node-parallelism-4-is-silently-capped-at-2.json"
+  },
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "wontfix",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "WSL pure-backtest node_parallelism=4 is silently capped at 2",
+  "trigger_condition": {
+    "fingerprint": "742b82c7131498e6cce6a331",
+    "source_event_id": "FE-20260917-742b82c71314"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

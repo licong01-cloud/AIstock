@@ -261,6 +261,87 @@ def test_quote_fact_creates_missing_feature_without_touching_other_files(tmp_pat
     quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
     assert np.all(np.fromfile(path,dtype='<f4')[1:241] == 5)
 
+
+def test_quote_fact_applies_to_regular_incremental_predecessor(tmp_path):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    plan['predecessor_manifest_ref'] = plan.pop('monthly_ready_correction')['base_manifest_ref']
+    quote.apply_quote_repairs(resume, finalized=finalized, plan=plan, cas=resume.cas)
+    assert np.all(np.fromfile(path, dtype='<f4')[1:241] == 5)
+
+
+@pytest.mark.parametrize('order', [('minute_correction','quote_fact_correction'),('quote_fact_correction','minute_correction')])
+def test_quote_and_minute_amendments_validate_actual_byte_order(tmp_path, order):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    relative = path.relative_to(resume.root).as_posix()
+    first = {'relative_path':relative,'original_sha256':'a'*64,'target_ref':resume.cas.put_bytes(b'first').as_dict()}
+    last = {'relative_path':relative,'original_sha256':first['target_ref']['sha256'],
+        'target_ref':resume.cas.put_bytes(b'last').as_dict()}
+    materialization = {order[0]:{'files':[first]},order[1]:{'files':[last]}}
+    for owner, row in zip(order,(first,last)):
+        assert quote.following_correction_ref(materialization,relative=relative,reference=row['target_ref'],owner=owner) == last['target_ref']
+    materialization['prev_close_correction'] = {'files':[{**last,'target_ref':first['target_ref']}]}
+    with pytest.raises(ValueError,match='branch'):
+        quote.following_correction_ref(materialization,relative=relative,reference=first['target_ref'],owner=order[0])
+
+
+def test_minute_fill_after_catalog_quote_keeps_both_physical_proofs(tmp_path):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    authority = resume.cas.get_json(plan[quote.BINDING]['authority_ref'])
+    target = np.frombuffer(resume.cas.get_bytes(resume.cas.validate_reference_metadata(
+        authority['files'][0]['target_ref'])),dtype='<f4').copy()
+    target[121:241] = np.nan
+    authority['files'][0]['target_ref'] = resume.cas.put_bytes(target.tobytes()).as_dict()
+    plan[quote.BINDING]['authority_ref'] = resume.cas.put_json(authority).as_dict()
+    finalized = quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    finalized = minute_repair_subject.apply_minute_corrections(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    materialization = resume.cas.get_json(resume.cas.get_json(finalized['finalize_receipt_ref'])['minute_receipt_ref'])
+    provider = path.parents[2]
+    quote_pins = quote.correction_pins(materialization,provider=provider,cas=resume.cas)
+    minute_pins = minute_repair_subject.correction_pins(materialization,provider=provider,cas=resume.cas)
+    assert quote_pins[path]['target_sha256'] == minute_pins[path]['target_sha256']
+    assert np.all(np.fromfile(path,dtype='<f4')[1:241]==5)
+
+
+def test_catalog_delta_reuses_atomic_quote_transaction_and_resume(tmp_path):
+    from backend.services.dataset_release.monthly_construction_facts import DAILY_CATALOG_SCHEMA, daily_catalog_repair_plan
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    plan['predecessor_manifest_ref'] = plan.pop('monthly_ready_correction')['base_manifest_ref']
+    plan.pop(quote.BINDING)
+    code, day = '000585.SZ', '2026-07-10'
+    provider = resume.root/'daily_bin/qlib'
+    (provider/'calendars').mkdir(parents=True, exist_ok=True)
+    (provider/'calendars/day.txt').write_text(day+'\n')
+    catalog = provider/'instruments/all.txt'
+    catalog.parent.mkdir()
+    catalog.write_text('603900.SH\t2026-07-10\t2026-09-01\n')
+    materialization = {'dataset':'daily_bin','cutoff':'2026-09-30'}
+    _atomic(resume.root/'daily_bin/materialization_receipt.json',materialization)
+    inner = resume.cas.get_json(finalized['finalize_receipt_ref'])
+    inner['daily_receipt_ref'] = resume.cas.put_json(materialization).as_dict()
+    finalized = {'finalize_receipt_ref':resume.cas.put_json(inner).as_dict()}
+    resume.record['steps']['finalize-bins'] = resume.cas.put_json(finalized).as_dict()
+    for target in (catalog,resume.root/'daily_bin/materialization_receipt.json'):
+        resume.record['files'][target.relative_to(resume.root).as_posix()] = list(_signature(target))
+    _atomic(resume.path,resume.record)
+    factor = resume.root/'factor_bundle/daily_pv.h5'
+    factor.parent.mkdir(exist_ok=True)
+    frame = pd.DataFrame({'open':[5.], 'high':[5.5], 'low':[4.5], 'close':[5.],
+        'volume':[2000.], 'amount':[10000.], 'factor':[.5]},
+        index=pd.MultiIndex.from_tuples([(code,pd.Timestamp(day))],names=['instrument','datetime']))
+    frame.to_hdf(factor,key='data',format='table',data_columns=True)
+    source = {'schema_version':DAILY_CATALOG_SCHEMA,'database_write':False,'stock_days':1,'codes':[code],
+        'facts':[{'ts_code':code,'trade_date':day,'pre_close':10.,'up_limit':11.,'down_limit':9.}]}
+    inputs = {'historical_daily_catalog_ref':resume.cas.put_json(source).as_dict()}
+    prepared = resume.cas.get_json(resume.record['steps']['prepare'])
+    computed = daily_catalog_repair_plan(plan,resume=resume,prepare=prepared,build_inputs=inputs,cas=resume.cas)
+    authority = resume.cas.get_json(computed[quote.BINDING]['authority_ref'])
+    assert len(authority['files']) == 12
+    assert authority['base_manifest_ref'] == plan['predecessor_manifest_ref']
+    result = quote.apply_quote_repairs(resume,finalized=finalized,prepare=prepared,plan=computed,cas=resume.cas)
+    assert np.fromfile(provider/'features/000585.sz/prev_close.day.bin',dtype='<f4').tolist() == [0.,10.]
+    assert daily_catalog_repair_plan(plan,resume=resume,prepare=prepared,build_inputs=inputs,cas=resume.cas) == computed
+    assert quote.apply_quote_repairs(resume,finalized=result,prepare=prepared,plan=computed,cas=resume.cas) == result
+
 @pytest.mark.parametrize("mode", ["prepend", "append", "absent"])
 @pytest.mark.parametrize("crash", [False, True])
 def test_expand_real_minute_facts_keeps_published_bytes_and_recovers(tmp_path, monkeypatch, mode, crash):
@@ -537,6 +618,60 @@ def _fixture(tmp_path):
     receipt = cas.put_json({"status": "PASS", "real_file": "daily_bin/close.bin"})
     journal.save("prepare", receipt, roots=("daily_bin",))
     return context, compiled, root, cas, journal
+
+
+def test_incomplete_prepare_is_journaled_and_retains_same_source_root(tmp_path):
+    context, compiled, root, cas, journal = _fixture(tmp_path)
+    journal.record['steps'].clear()
+    journal.record['files'].clear()
+    _atomic(journal.path,journal.record)
+    closed=root/'.month-inputs/minute_bin/csv/000001.SZ.csv'
+    closed.parent.mkdir(parents=True)
+    closed.write_bytes(b'closed native CSV')
+    before=closed.stat()
+    retry=replace(context,attempt=3)
+    selected=retained_staging_root(retry,compiled,tmp_path,tmp_path/'not-used')
+    assert selected==root
+    restored=MonthlyBuildResume(context=retry,compiled=compiled,release_root=tmp_path,
+        staging_root=selected,cas=cas)
+    assert restored.record['partial_prepare'] is True
+    assert restored.record['materialization_attempt']==2
+    assert restored.get('prepare') is None
+    assert closed.stat().st_mtime_ns==before.st_mtime_ns
+
+
+def test_prepare_stage_accepts_only_its_exact_partial_source_journal(tmp_path):
+    from backend.services.dataset_release.monthly_build_resume import validate_partial_preparation
+    context,compiled,root,_,_=_fixture(tmp_path)
+    invocation=SimpleNamespace(candidate_root=tmp_path,run_id=context.operation_id,
+        build_inputs={'source_bundle_sha256':compiled.source_bundle_sha256},
+        plan=compiled.physical_plan,release_id=context.plan['release_id'],
+        staging_relative_path=root.relative_to(tmp_path).as_posix(),staging_root=root)
+    validate_partial_preparation(invocation)
+    invocation.build_inputs={'source_bundle_sha256':'e'*64}
+    with pytest.raises(MonthlyBuildResumeError,match='no matching partial SOURCE journal'):
+        validate_partial_preparation(invocation)
+
+
+def test_legacy_partial_csv_root_requires_same_native_source_receipt(tmp_path):
+    context,compiled,root,cas,journal=_fixture(tmp_path)
+    journal.path.unlink()
+    (root/'daily_bin/close.bin').unlink()
+    index=root/'index_context/index_materialization_receipt.json'
+    index.parent.mkdir()
+    (root/'.month-inputs/minute_bin/csv').mkdir(parents=True)
+    native={'schema_version':'aistock_monthly_native_index_materialization_v1','status':'PASS',
+            'source_bundle_sha256':compiled.source_bundle_sha256,'cutoff':'2026-09-30',
+            'predecessor_manifest_sha256':None}
+    index.write_text(json.dumps(native),encoding='utf-8')
+    retry=replace(context,attempt=3)
+    assert retained_staging_root(retry,compiled,tmp_path,tmp_path/'not-used')==root
+    restored=MonthlyBuildResume(context=retry,compiled=compiled,release_root=tmp_path,staging_root=root,cas=cas)
+    assert restored.record['materialization_attempt']==2
+    restored.path.unlink()
+    index.write_text(json.dumps({**native,'source_bundle_sha256':'e'*64}),encoding='utf-8')
+    with pytest.raises(MonthlyBuildResumeError,match='SOURCE identity differs'):
+        retained_staging_root(retry,compiled,tmp_path,tmp_path/'not-used')
 
 
 def test_sealed_build_receipt_is_bounded_by_complete_reference_not_control_json_cap(tmp_path):
@@ -881,7 +1016,7 @@ def test_materialization_lease_never_weakens_current_execution_fence(tmp_path, f
             candidate_name="release", release_digest="d" * 64)
 
 
-def _legacy(tmp_path):
+def _legacy(tmp_path, *, layout="logical"):
     context = ProducerContext(stage="BUILD", operation_id="dmr_" + "a" * 32, attempt=3,
         request={}, prior_receipts={}, plan={"candidate_root": str(tmp_path / "release"),
         "release_id": "september", "target_cutoff": "2026-09-30",
@@ -908,7 +1043,8 @@ def _legacy(tmp_path):
         instruments = file(f"{dataset}/qlib/instruments/all.txt")
         feature = file(f"{dataset}/qlib/features/000001.sz/close.{frequency}.bin")
         native = {"target_root": str(root / dataset / "qlib"), "frequency": frequency,
-            "baseline_root": str(tmp_path / "baseline/components" / dataset),
+            "baseline_root": str(tmp_path / "baseline" / (
+                f"components/{dataset}" if layout == "logical" else f"{dataset}/qlib")),
             "calendar_signature": cal["target_signature"], "instruments_signature": instruments["target_signature"],
             "calendar_sha256": cal["sha256"], "instruments_sha256": instruments["sha256"],
             "feature_file_count": 1, "feature_receipts": [{"instrument": "000001.sz", "feature": "close",
@@ -995,20 +1131,26 @@ def test_wrong_receipt_or_changed_export_cannot_be_adopted(tmp_path, fault):
 
 
 @pytest.mark.parametrize("hardlinked", [True, False])
-def test_inherited_feature_requires_pinned_baseline_and_exact_unchanged_file_identity(tmp_path, hardlinked):
-    context, compiled, root, cas, prepare, finalize = _legacy(tmp_path)
+@pytest.mark.parametrize("layout", ["logical", "path_keyed"])
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_inherited_feature_requires_pinned_baseline_and_exact_unchanged_file_identity(tmp_path, hardlinked, layout, dataset):
+    context, compiled, root, cas, prepare, finalize = _legacy(tmp_path, layout=layout)
     baseline = tmp_path / "baseline"
-    old = baseline / "components/daily_bin/features/000004.sz/close.day.bin"
+    provider_relative = f"components/{dataset}" if layout == "logical" else f"{dataset}/qlib"
+    frequency = "day" if dataset == "daily_bin" else "1min"
+    old = baseline / provider_relative / f"features/000004.sz/close.{frequency}.bin"
     old.parent.mkdir(parents=True)
     old.write_bytes(b"old-delisted-stock-kept")
-    target = root / "daily_bin/qlib/features/000004.sz/close.day.bin"
+    target = root / dataset / f"qlib/features/000004.sz/close.{frequency}.bin"
     target.parent.mkdir()
     if hardlinked:
         os.link(old, target)
     else:
         target.write_bytes(old.read_bytes())
+    catalog = f"{provider_relative}/instruments/all.txt"
+    role = "day_provider_catalog" if dataset == "daily_bin" else "minute_provider_catalog"
     manifest = {"release_id": "old", "cutoff_trade_date": "2026-08-31",
-        "components": {"day_provider_catalog": {"path": "components/daily_bin/instruments/all.txt"}}}
+        "components": {role if layout == "logical" else catalog.replace('/', '__'): {"path": catalog}}}
     manifest_hash = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
     manifest["dataset_manifest_sha256"] = manifest_hash
     raw = canonical_json_bytes(manifest) + b"\n"

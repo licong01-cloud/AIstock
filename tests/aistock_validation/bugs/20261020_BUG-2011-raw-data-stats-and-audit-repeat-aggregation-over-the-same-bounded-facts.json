@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2011",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:22:01.254971Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -132,8 +132,8 @@
   },
   "first_seen_at": "2026-10-20T04:54:33.860636Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "07ba31e28e37a770e96677445ef12b6184476102",
+  "fixed_at": "2026-10-20T05:11:55Z",
   "github_issue_number": 6425,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6425",
   "last_seen_at": "2026-10-20T04:54:33.860636Z",
@@ -141,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6429",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -171,9 +172,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2011-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2011",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "07ba31e28e37a770e96677445ef12b6184476102",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:20:39.126837Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c5e5112441291b79c0306319780e7002347c48695e834359436aa5f325a15fec",
+      "receipt_sha256": "460566244a40960153601f4d09602317bb0f261f5b1607a9ec3583b531aeb70d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b99b8f957ebdbf4c7818843ee27f8669deac0cd93e068785d043685c956a1455",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -183,7 +207,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2011",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b05613b4779a712e",
+    "recorded_at": "2026-10-20T05:12:39.139475Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "626c1ca92a6f8c0ea630d1dacab326b333b58f11",
+    "source_merge_commit": "07ba31e28e37a770e96677445ef12b6184476102",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6429",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 173 passed, 1 skipped",
+      "python -m nox -s l0 -- backend/routers/ingestion.py backend/ingestion/tdx_scheduler.py backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py tests/aistock_validation/bugs/20261020_BUG-2011-raw-data-stats-and-audit-repeat-aggregation-over-the-same-bounded-facts.json -> passed, blocking=0",
+      "GitHub CI run 39372812546 at 626c1ca92a6f8c0ea630d1dacab326b333b58f11 -> passed"
+    ],
+    "validation_evidence_digest": "52d908df3ef4de1f796434be4c8f77de9e77de9fa1461c409d061b571c83dafa"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -192,6 +239,12 @@
     "fingerprint": "1479d8e5a9fc258b52c2d48d",
     "source_event_id": "FE-20261020-1479d8e5a9fc"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 173 passed, 1 skipped",
+    "python -m nox -s l0 -- backend/routers/ingestion.py backend/ingestion/tdx_scheduler.py backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py tests/aistock_validation/bugs/20261020_BUG-2011-raw-data-stats-and-audit-repeat-aggregation-over-the-same-bounded-facts.json -> passed, blocking=0",
+    "GitHub CI run 39372812546 at 626c1ca92a6f8c0ea630d1dacab326b333b58f11 -> passed",
+    "Current serving backend contains source merge; digest-bound runtime identity and local_data_freshness smoke PASS; original fourteen targets reconciled and five alerts closed; no service control or full-table rescans"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],

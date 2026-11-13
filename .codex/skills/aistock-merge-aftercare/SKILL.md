@@ -42,7 +42,7 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 - Squash merge cleanup is allowed when GitHub PR state is `MERGED`, there is no open PR for the branch, and the task worktree is clean; do not require the source HEAD to be an ancestor of `main`.
 - Clean only task-owned worktrees/branches. Keep open-PR branches, dirty worktrees, and unrelated root files; classify backup/temp leftovers for janitor review instead of dumping full lists.
 - Prefer `python scripts/aistock_issue_workflow.py cleanup-after-merge --branch <branch> --pr-url <merged-pr-url> --worktree <task-worktree> --sync-root --apply` for safe cleanup. Never use `git reset --hard` or `git clean`.
-- An unmerged branch that was authoritatively replaced uses the separate `cleanup-superseded` command with an exact worktree, full expected HEAD, authorization reference, reason, and one verified authority mode: canonical BUG replacement PR, trusted repository-owner supersession comment on the exact closed PR/head, or patch equivalence to `origin/main`. Never use it for an open PR, dirty worktree, unknown/protected artifact, active process reference, HEAD drift, or unique unmerged work; the command persists its repo-external supersession receipt before deletion.
+- An unmerged branch that was authoritatively replaced uses `cleanup-superseded` with an exact worktree, full expected HEAD, authorization reference, reason, and verified BUG replacement, exact closed-PR owner comment, or patch equivalence. User-approved abandonment of unique source uses the separate `--mode reviewed_disposal --disposal-manifest <external-json> --disposal-manifest-sha256 <digest>` contract in WORKTREE-CLEANUP-EVIDENCE-001: bind exact user scope, completed value/reference review, merged successors, a self-contained v2 Git bundle and independent restore HEAD/tree/fsck receipt. Preserve frozen consumers and protected evidence; provenance-only historical requests retain their original contents and an exact recovery mapping. Recheck identities and evidence before deletion and persist the external pre-delete receipt. Open PRs, dirty trees, unknown/protected artifacts, active references, reparse points, HEAD drift and unreviewed unique source remain blocked; disposal is never reported as a source merge.
 - Authorized cleanup uses `WORKTREE-CLEANUP-EVIDENCE-001`: the workflow first finalizes compact durable receipts, inventories ignored artifacts and active process references, removes only exact manifest-classified transient roots, then performs ordinary worktree/branch cleanup and four-state readback. Protected or unknown artifacts block cleanup; do not preserve full successful logs or caches after their receipt is durable.
 - Use HTTPS rewrite if Git SSH proxy fails under PowerShell.
 
@@ -59,3 +59,8 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 ## Report
 
 Include PR, merge commit, root `main...origin/main` status, cleanup result, client install status, production gates, and whether runtime/DB were untouched. For RD-Agent also include release SHA/tree/manifest/path, receipt path, state root, restart/runtime verification, and rollback target as separate states.
+
+## 最小文档与自动交付
+
+- 按唯一规范 `DOC-MINIMUM-001`：默认零额外说明文件，复用已有任务/Issue/PR/回执；Context Pack Markdown 按需，必要设计和真实证据完整保留。
+- 按 `AUTO-REVIEW-DELIVERY-001`：当前 Agent 执行正确性与完整性审核、自动修复和最终版本复核；启用且有授权的源码交付连续执行，任务明确限制优先，不扩展到运行态、数据库、训练或删除。

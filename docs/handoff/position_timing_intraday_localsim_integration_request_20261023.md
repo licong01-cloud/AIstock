@@ -1,6 +1,6 @@
-# LocalSIM 分钟择时接入包（源码合入后由用户转交）
+# LocalSIM 分钟择时接入包（由用户转交）
 
-状态：`TIMING_SDK_IMPLEMENTED_CONSUMER_PENDING`。择时纯SDK、提醒API/组件和功能回放已实施；本文件不触发或授权本窗口修改LocalSIM。源码合入后由用户转交模拟盘窗口；SDK离线接入无需等待用户后端重启，线上API尚待重启后核验。
+状态：`TIMING_SDK_RUNTIME_VERIFIED_RESEARCH_READY_CONSUMER_PENDING`（2026-10-24）。择时纯SDK、提醒API/组件、历史批研究及结果比较器已实施；本文件不触发或授权本窗口修改LocalSIM。阶段一PR #6611已合入且用户重启后核验通过；本次离线研究增量无需重启，不等待未来行情。
 
 权威设计：[总蓝图](../architecture/position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)、[阶段一详细设计](../architecture/position_timing_intraday_phase1_f2_detailed_design_20261023.md)。
 
@@ -9,7 +9,7 @@
 - 源码身份以携带本文的已合入PR/commit为准，核心入口为 `backend.services.position_timing.intraday.evaluate`；合同位于同目录 `contracts.py`，版本均v1；B0/C1/C2参数见详细设计§4与显式 `Policy`。
 - 每个计划固定 `Policy(source_commit=<实际消费源码commit>, policy_id=..., allow_split=...)`，`digest(policy)`写入 `Plan.policy_sha256`，不得把合成fixture的虚拟source_commit当作已部署身份。
 - 可重放输入、输出、测试与CLI证据见[实施验收记录](../analysis/position_timing_intraday_phase1_implementation_20261023.md)。功能fixture只有1个计划/10根分钟线，不是R8收益研究，所有延迟输出都是未确认成交的意图。
-- API/页面需用户后端重启后核验，当前 `runtime_verified=false`；LocalSIM/Advisory产品接入与经济效果均未确认。
+- 阶段一加载身份/health/五路由/只读合同核验通过，见[运行回执](https://github.com/licong01-cloud/AIstock/pull/6611#issuecomment-6356504087)；这不代表实际盘中采样、Advisory来源桥接或LocalSIM产品接入。
 
 本包已具备可调用核心与冻结例子，后续owner接入不以模型正收益或未来交易日为前置。纯SDK导入不创建运行客户端、订单、数据库连接或全局策略注册。
 
@@ -51,3 +51,29 @@ HUMAN_UNKNOWN不能用于模拟账户；同输入/同状态需与提醒核心输
 ## 交回证据
 
 策略版本与新release身份、old TWAP不变、三策略调用闭环、D0/1/3/5、价格/资金/partial/恢复/取消边界、费用与全计划分母、经济评价是否完成分别列明。接入功能可用不等于新策略优于TWAP。
+
+## 已就绪的真实历史研究消费包
+
+研究合同与命令见[研究详细设计](../architecture/position_timing_intraday_research_f2_detailed_design_20261023.md)，实际人口/诊断见[实施记录](../analysis/position_timing_intraday_research_implementation_20261023.md)。
+
+- 外置根：`F:\Dev\AIstock_model_artifacts\position_timing_advice_v1\intraday_v1\research_studies`，WSL对应`/mnt/f/Dev/AIstock_model_artifacts/position_timing_advice_v1/intraday_v1/research_studies`。
+- request/bundle身份：`1c684e78b94872878608cafc48a7a496540b9a9c8cdf62424d886154398d2062`；bundle manifest canonical SHA：`8b9128a33c15464c0784b953d658d0666fa2697608e46b073f3a3691ae81b9c1`。
+- `bundles/<身份>/consumption.json`包含24原计划×三规则×四延迟的288个case、候选/费用/执行合同及12个逐日逐规则子包。文件是`{sha256,payload}`不可变信封，先校验再消费；不得直接改写其中WSL路径或身份。
+- 子包提供派生计划、归一化raw市场、决策、机会和延迟意图。`EXECUTION_SLOT_ELIGIBLE`不是成交；无机会case也须保留。当前是冻结机会流延迟研究，不等于带成交反馈的分批闭环。
+- plan的target_quantity=1000只是预声明目标，不是已有资金或可卖量证明。LocalSIM owner需在读取收益前冻结每个计划的真实模拟初始账户；同计划三规则和全部延迟共用该账户、目标金额及14:57终值时刻。BUY须有足够现金，SELL须有合法可卖数量；不把反复评估或提醒解释成新父订单。
+- 费用使用本消费包指定的LocalSIM合计费率最低额模型：买0.000095、卖0.000595、最低5元、父订单累计。它不是用户个人净佣加规费合同。旧native TWAP独立命名，主比较使用同延迟matched B0。
+
+返回一个有完整文件SHA的JSON，schema=`position_timing_localsim_research_results_v1`，严格字段以`intraday/research_results.py::EconomicResults/EconomicRow`为准：
+
+1. 顶层：producer=`LOCALSIM`、真实producer_source_commit/release_identity、study_manifest_sha256、cost_policy_file_sha256、execution_contract_sha256、max_drawdown_definition=`POSITIVE_PEAK_TO_TROUGH_FRACTION`。
+2. 每个适用case恰一行：case_id、initial_account_sha256、initial_nav_cny、target_quantity/target_notional_cny、filled_quantity、average_price_raw、fees_cny、terminal_as_of/terminal_nav_cny、max_drawdown、mean_wait_seconds、status、reason_code、account_receipt_sha256。
+3. status限FILLED/PARTIAL/NO_FILL/UNAVAILABLE；未成交仍评价原现金/原持仓终值，不能丢行或填零收益；未知则UNAVAILABLE并说明来源。保留可回读的账户receipt，hash不代替账本真实性。
+4. 待执行机会若修订/取消/条件失效不能续用；最多执行预定目标，停牌/方向性涨跌停/零成交/资金/board-lot/T+1由LocalSIM原链路决定。不模拟市场冲击但不能取消交易资格检查。
+
+接回后由择时窗口在WSL调用：
+
+```text
+python -m backend.services.position_timing.intraday.research compare --bundle <上述bundle绝对路径> --results <LocalSIM结果绝对路径> --results-sha256 <完整文件SHA>
+```
+
+比较器先重新inspect整批输入/子包再读取账户结果，校验人口、费用、初始账户和终止时点，报告BUY/SELL/ALL、三规则×四延迟、净增量/条件成交价差/MDD降低/等待/完成率及缺失分母。没有LocalSIM结果时仍为`NOT_RUN_LOCALSIM_ADAPTER_PENDING`；不能用测试手算结果替代真实模拟评价。

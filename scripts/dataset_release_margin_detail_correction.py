@@ -258,6 +258,8 @@ def seal(args):
     layout = json.loads(layout_path.read_text(encoding="utf-8"))
     by_path = {pin["path"]: pin for pin in manifest["components"].values()}
     layout["components"]["factor"] = _content_summary(by_path, prefix="components/factor_h5_static_candidate_v2/")
+    if correction.get('additional_fact_amendment'):
+        layout['components']['day'] = _content_summary(by_path, prefix='components/daily_bin_candidate/')
     if minute_amendment:
         layout["components"]["minute"] = _content_summary(by_path, prefix="components/minute_bin_candidate/")
         proof = json.loads((args.component / "full-window-validation.json").read_text(encoding="utf-8"))

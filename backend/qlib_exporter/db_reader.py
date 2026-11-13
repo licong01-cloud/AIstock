@@ -424,9 +424,11 @@ class DBReader:
         return [self._normalize_ts_code(x) for x in df["ts_code"].astype(str).tolist()]
 
     def get_all_ts_codes(self) -> List[str]:
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
         sql = f"""
             SELECT DISTINCT ts_code
             FROM {DAILY_RAW_TABLE}
+            WHERE TRUE {stock_scope_sql('ts_code')}
             ORDER BY ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -697,10 +699,12 @@ class DBReader:
         return out
 
     def get_all_ts_codes_minute(self) -> List[str]:
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
         sql = f"""
             SELECT DISTINCT ts_code
             FROM {MINUTE_QFQ_TABLE}
             WHERE freq = '1m'
+            {stock_scope_sql('ts_code')}
             ORDER BY ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -727,7 +731,8 @@ class DBReader:
         - 若 with_factor=True, 则关联获取前复权因子 $factor.
         """
 
-        codes = list(ts_codes)
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        codes = [code for code in ts_codes if not is_excluded_stock_code(code)]
         if not codes:
             return pd.DataFrame()
 
@@ -819,11 +824,12 @@ class DBReader:
         当前仅包含基础 OHLCV + amount 列。
         """
 
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
         codes = list(
             dict.fromkeys(
                 normalized
                 for code in ts_codes
-                if (normalized := self._normalize_ts_code(code))
+                if (normalized := self._normalize_ts_code(code)) and not is_excluded_stock_code(normalized)
             )
         )
         if not codes:
@@ -921,7 +927,8 @@ class DBReader:
         """
         from datetime import timedelta
 
-        codes = list(ts_codes)
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        codes = [code for code in ts_codes if not is_excluded_stock_code(code)]
         if not codes:
             return
 
@@ -957,7 +964,8 @@ class DBReader:
         end: date | None,
     ) -> int:
         """获取分钟线数据行数（用于进度估算）."""
-        conditions: list[str] = []
+        from backend.services.data_integrity.stock_scope import stock_scope_sql
+        conditions: list[str] = [stock_scope_sql('ts_code').removeprefix(' AND ')]
         params: dict[str, object] = {}
 
         codes = list(ts_codes) if ts_codes else None
@@ -1024,7 +1032,8 @@ class DBReader:
         Returns:
             符合 Qlib 格式的 DataFrame
         """
-        codes = list(ts_codes)
+        from backend.services.data_integrity.stock_scope import is_excluded_stock_code
+        codes = [code for code in ts_codes if not is_excluded_stock_code(code)]
         if not codes:
             return pd.DataFrame()
 

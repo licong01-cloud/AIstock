@@ -86,26 +86,46 @@ changes firewall rules, or invokes a database migration.
 
 ## Read-only check and runtime verification
 
-### Start only the backend in a new tab
+### 单独启动或重启后端（每次新标签页）
 
-Run `.\start_backend.bat` in the Windows Terminal window where the new
-`AIstock Backend` tab should appear. Close the old backend tab manually first.
-The entry requests one tab in the most recently active Terminal window (`-w 0`);
-it does not configure a permanent window ID or guarantee routing if another
-Terminal window becomes active during dispatch. It does not alter the all-service
-launcher, start TDX/frontend, stop any process or use reload. It activates AIstock
-and uses its absolute UTF-8 Python. An occupied/unavailable 8001 port fails visibly
-without stopping its owner. The tab remains open after backend exit. Dispatch
-success only means the tab was requested, not that the API is healthy.
+```powershell
+# 只启动：已有后端时返回失败，不隐式重启
+.\start_backend.bat
 
-`start_backend.bat --check` checks the existing interpreter/Conda entry only;
-it does not open a tab, activate Conda, bind a port or start a service.
+# 明确重启：停止本项目旧后端及其派生进程，再在新标签页启动
+.\start_backend.bat --restart
+```
 
-`start_backend.bat --check-env` and `start_all_ai_stock.bat --check-env` perform
-real isolated Conda activation and verify interpreter/environment prefix agreement,
-without opening tabs, binding ports or starting applications. These are diagnostic
-commands, not additional mandatory startup gates. The backend-only entry uses the
-same private activation-temp policy as the all-service backend tab.
+两条命令均请求一个新的 `AIstock Backend` 标签页（Windows Terminal `-w 0 new-tab`）。
+`-w 0` 选择最近活动的 Terminal 窗口，不能保证是调用者所在的窗口。
+调用窗口等待本次唯一请求的结果，最多 180 秒；只有新后端进程仍存活、8001 的监听者
+确实是该进程、health 就绪且冻结的 runtime identity 与启动前干净源码 HEAD 一致，
+才打印 `Backend READY` 并返回 0。标签页创建成功本身不算启动成功。
+
+`--restart` 只允许终止工作目录、绝对解释器路径、命令参数均匹配本项目的后端、
+后端监督器及固定 `--supervised` 月度 worker；终止前复核进程创建时间，避免 PID
+重用。8001 被其他项目或未知进程占用时直接报错，不按端口盲杀。旧树未完全退出或
+端口无法独占绑定时不启动第二份。重启使用强制进程树终止，会中断旧后端正在处理的请求。
+该显式操作不会操作前端、TDX 或独立 QE 实验。
+
+新后端先以挂起状态创建，再加入不继承句柄的 Windows Job，绑定成功后才执行。
+关闭这个新服务标签页、监督器异常退出或启动验收失败时，Windows 会终止其受管
+后端及全部派生进程；关闭原始调用窗口不等于关闭服务标签页。此保证只覆盖这个
+专用入口创建的进程树，不接管其他入口已有的服务。
+
+缺少环境、Conda 激活失败、锁冲突、应用提前退出、身份不符和超时都返回非零；
+不循环重试或用旧进程冒充重启成功。超时或调用被中断会取消本次请求；新标签页
+在停止/启动前及等待就绪时核对取消标记，失败清理受管进程树。当前请求的日志和
+原子结果回执位于 `F:\Dev\AIstock_runtime\startup\backend-<nonce>\`，后端输出为
+`backend.log`。服务标签页在退出后保留错误输出，便于诊断。
+
+`start_backend.bat --check` 仅检查现有 Python/Conda 路径，不开标签、不占端口或启动服务。
+`start_backend.bat --check-env` 和 `start_all_ai_stock.bat --check-env` 使用各自独立的
+临时目录做真实 Conda 激活，并核对 Python 与 `CONDA_PREFIX`，不启动服务。
+
+上述 READY 证明启动和身份，不代表 QE、交易或模块业务验收通过。正式交付仍保留
+用户重启和对应 `post-restart-verify` 业务探针要求。全服务入口保持原来的只启动、
+不自动终止已有服务的策略。
 
 ### All-service check and runtime verification
 

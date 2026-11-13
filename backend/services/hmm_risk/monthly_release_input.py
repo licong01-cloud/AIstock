@@ -144,8 +144,112 @@ class _Files:
             self.external(path)
 
 
-def _closure(files: _Files, manifest: Mapping[str, Any], pins: Mapping[str, tuple]) -> dict[str, str]:
+_ZERO_COUNTERS = ("hash_mismatch_count", "duplicate_path_count", "unpinned_core_file_count")
+_AMENDMENTS = {
+    "EXACT_LATE_FACT_DATE_AND_INHERITED_PINS": (
+        "late_fact_amendment_ref", "late_fact_amendment", "aistock_monthly_late_financing_amendment_v1"
+    ),
+    "FULL_EXECUTION_WINDOW_AND_EXACT_MINUTE_REPAIRS": (
+        "late_fact_amendment_ref", "minute_coverage_amendment", "aistock_monthly_minute_coverage_amendment_v1"
+    ),
+    "EXACT_REVIEWED_SUSPENSION_KEYS_AND_INHERITED_PINS": (
+        "suspension_amendment_ref", "suspension_amendment", "aistock_monthly_suspension_amendment_v1"
+    ),
+    "ALL_CAPTURED_SPARSE_SUSPENSION_FACTS_AND_INHERITED_PINS": (
+        "suspension_amendment_ref", "suspension_amendment", "aistock_monthly_suspension_amendment_v1"
+    ),
+}
+
+
+def _manifest_pins(manifest):
+    identity = reader._require_sha256(manifest.get("dataset_manifest_sha256"), "monthly manifest identity")
+    if canonical_sha256({k: v for k, v in manifest.items() if k != "dataset_manifest_sha256"}) != identity:
+        raise _invalid("inherited manifest canonical identity differs")
+    raw = manifest.get("components")
+    if not isinstance(raw, Mapping) or not raw:
+        raise _invalid("inherited manifest components are missing")
+    pins = {}
+    for value in raw.values():
+        ref = _reference(value)
+        if ref[0] in pins:
+            raise _invalid("inherited manifest repeats a file path")
+        pins[ref[0]] = ref
+    return pins
+
+
+def _inherited_validation(files, manifest, pins, validation, readiness, lineage, ancestry):
+    """Verify a sealed amendment DAG, then hash every added/changed physical pin.
+
+    Unchanged pins inherit an explicitly validated predecessor. No absent counter
+    is converted to zero, and no current release readiness receipt is rewritten.
+    """
+    inherited = validation.get("inherited_unchanged_readiness")
+    if (
+        validation.get("validation_scope") not in _AMENDMENTS
+        or validation.get("historical_content_revalidated") is not False
+        or not isinstance(inherited, Mapping)
+        or set(inherited) != {"path", "sha256"}
+        or inherited != readiness.get("inherited_unchanged_readiness")
+        or not isinstance(inherited.get("path"), str)
+    ):
+        raise _invalid("monthly inherited validation is incomplete or unknown")
+    expected = reader._require_sha256(inherited["sha256"], "inherited closure")
+    parent_path = files.external(Path(inherited["path"]))
+    if parent_path.name != _CLOSURE or files.digest(parent_path) != expected:
+        raise _invalid("inherited closure path or hash differs")
+    parent_files = _Files(parent_path.parent)
+    parent = parent_files.read(parent_files.path(_MANIFEST))
+    parent_pins = _manifest_pins(parent)
+    predecessor = lineage.get(
+        "component_revision_predecessor_manifest_sha256", lineage.get("predecessor_dataset_manifest_sha256")
+    )
+    if (
+        predecessor != parent["dataset_manifest_sha256"]
+        or parent.get("schema_version") != manifest.get("schema_version")
+        or any(parent.get(k) != manifest.get(k) for k in ("release_id", "cutoff_trade_date"))
+        or parent.get("revision") == manifest.get("revision")
+        or set(parent_pins) - set(pins)
+        or type(validation.get("manifest_component_count")) is not int
+        or validation["manifest_component_count"] != len(pins)
+        or validation.get("deployment_content_sha256") != manifest.get("deployment_content_sha256")
+    ):
+        raise _invalid("inherited lineage or manifest inventory differs")
+    receipt_key, contract_key, schema = _AMENDMENTS[validation["validation_scope"]]
+    ref = _reference(readiness.get(receipt_key))
+    if pins.get(ref[0]) != ref:
+        raise _invalid("amendment evidence is not manifest-pinned")
+    amendment = files.read(files.verify(ref))
+    contract = manifest.get("source_contract", {}).get(contract_key)
+    if (
+        amendment.get("schema_version") != schema
+        or amendment.get("predecessor_manifest_sha256") != predecessor
+        or not isinstance(contract, Mapping)
+        or contract.get("predecessor_manifest_sha256") != predecessor
+        or contract.get("receipt_sha256") != ref[1]
+    ):
+        raise _invalid("amendment evidence identity differs")
+    _closure(parent_files, parent, parent_pins, ancestry=ancestry)
+    # Unlike a PASS-only check, this verifies the complete physical delta,
+    # including inputs not used by HMM. Current consumed files are also verified
+    # by their ordinary reader path before use.
+    for relative, pin in pins.items():
+        if parent_pins.get(relative) != pin:
+            files.verify(pin)
+    parent_files.unchanged()
+    for path, stamp in parent_files.stamps.items():
+        if path in files.stamps and files.stamps[path] != stamp:
+            raise _invalid("inherited input changed during validation")
+        files.stamps[path] = stamp
+    files.hashes.update(parent_files.hashes)
+
+
+def _closure(
+    files: _Files, manifest: Mapping[str, Any], pins: Mapping[str, tuple], *, ancestry=()
+) -> dict[str, str]:
     closure_path = files.path(_CLOSURE)
+    if closure_path in ancestry or len(ancestry) >= 8:
+        raise _invalid("inherited closure is cyclic or exceeds the bounded depth")
+    ancestry = (*ancestry, closure_path)
     closure = files.read(closure_path)
     body = {k: v for k, v in closure.items() if k != "canonical_sha256"}
     if closure.get("schema_version") != "aistock_release_closure_v1" or closure.get(
@@ -158,6 +262,7 @@ def _closure(files: _Files, manifest: Mapping[str, Any], pins: Mapping[str, tupl
     files.verify(manifest_ref)
     hashes = {"dataset_manifest": manifest_ref[1], "release_closure": files.digest(closure_path)}
     identity = manifest["dataset_manifest_sha256"]
+    receipts = {}
     for group, schema, name in (
         ("consumer_contract_refs", "aistock_monthly_consumer_contract_v1", "consumer_contract"),
         ("source_readiness_refs", "aistock_monthly_source_readiness_v1", "source_readiness"),
@@ -186,12 +291,16 @@ def _closure(files: _Files, manifest: Mapping[str, Any], pins: Mapping[str, tupl
                 type(receipt.get("unexplained_gap_count")) is not int or receipt["unexplained_gap_count"] != 0
             ):
                 raise _invalid("monthly source readiness has unexplained gaps")
-            elif name == "validation" and any(
-                type(receipt.get(k)) is not int or receipt[k] != 0
-                for k in ("hash_mismatch_count", "duplicate_path_count", "unpinned_core_file_count")
-            ):
-                raise _invalid("monthly component validation is incomplete")
+            elif name == "validation":
+                present = [k in receipt for k in _ZERO_COUNTERS]
+                if any(present) and (
+                    not all(present) or any(type(receipt[k]) is not int or receipt[k] != 0 for k in _ZERO_COUNTERS)
+                ):
+                    raise _invalid("monthly component validation is incomplete")
+                if not any(present) and "inherited_unchanged_readiness" not in receipt:
+                    raise _invalid("monthly component validation is incomplete")
             found.append(ref)
+            receipts[name] = receipt
         if len(found) != 1:
             raise _invalid(f"closure must contain one unambiguous {name}")
         hashes[name] = found[0][1]
@@ -206,6 +315,10 @@ def _closure(files: _Files, manifest: Mapping[str, Any], pins: Mapping[str, tupl
         )
     ):
         raise _invalid("monthly lineage identity is inconsistent")
+    if "inherited_unchanged_readiness" in receipts["validation"]:
+        _inherited_validation(
+            files, manifest, pins, receipts["validation"], receipts["source_readiness"], lineage, ancestry
+        )
     return {**hashes, "lineage": lineage_ref[1]}
 
 

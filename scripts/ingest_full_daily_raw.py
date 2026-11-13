@@ -16,6 +16,10 @@ import datetime as dt
 import json
 import os
 import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -36,12 +40,12 @@ DB_CFG = dict(
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
     application_name="AIstock-ingest-full-daily-raw",
 )
-SUPPORTED_EXCHANGES = {"sh", "sz", "bj"}
+SUPPORTED_EXCHANGES = {"sh", "sz"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TDX full daily RAW ingestion")
-    parser.add_argument("--exchanges", type=str, default="sh,sz,bj", help="Comma separated exchanges (sh,sz,bj)")
+    parser.add_argument("--exchanges", type=str, default="sh,sz", help="Comma separated SH/SZ stock exchanges")
     parser.add_argument("--start-date", type=str, default="1990-01-01", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", type=str, default=dt.date.today().isoformat(), help="End date (YYYY-MM-DD)")
     parser.add_argument("--batch-size", type=int, default=100, help="Codes per batch (sequential batches)")
@@ -87,10 +91,14 @@ def normalize_ts_code(code: str) -> Optional[str]:
         suffix = "BJ"
     else:
         suffix = "SZ"
-    return f"{code}.{suffix}"
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    normalized = f"{code}.{suffix}"
+    return normalized if is_supported_stock_code(normalized) else None
 
 
 def fetch_codes(exchanges: Iterable[str]) -> List[str]:
+    from backend.services.data_integrity.stock_scope import stock_exchange_selection
+    exchanges = stock_exchange_selection(exchanges)
     result: List[str] = []
     seen = set()
     for exch in exchanges:
@@ -165,6 +173,9 @@ def fetch_kline_daily_raw(code: str, start: str, end: str) -> List[Dict[str, Any
 
 
 def upsert_kline_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+    from backend.services.data_integrity.stock_scope import is_supported_stock_code
+    if not is_supported_stock_code(ts_code):
+        return 0, None
     sql = (
         "INSERT INTO market.kline_daily_raw (trade_date, ts_code, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
         "VALUES %s"

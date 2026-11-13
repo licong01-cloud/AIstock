@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
@@ -291,6 +293,12 @@ def test_forward_model_market_rows_reject_missing_limit_evidence() -> None:
 
 
 class _EvaluationRepository:
+    def cycle_lock(self):
+        return nullcontext(True)
+
+    def pending_publications(self, **_kwargs):
+        return []
+
     def __init__(self) -> None:
         self.rows = _observations()
         self.committed = None

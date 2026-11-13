@@ -226,7 +226,7 @@ def test_effect_strictly_prior_circ_context_is_used_without_same_day_substitutio
     context = {symbol: (prior, 500.0, "available", None)}
     kwargs = {
         "month_paths": [path],
-        "assets": {"files": {"daily_basic": tmp_path / "basic", "moneyflow": tmp_path / "flow"}},
+        "assets": {"qlib_root": tmp_path / "qlib", "files": {"daily_basic": tmp_path / "basic", "moneyflow": tmp_path / "flow"}},
         "calendar": [prior, day],
         "spans": {symbol: ((day, day),)},
         "adapter": adapter,

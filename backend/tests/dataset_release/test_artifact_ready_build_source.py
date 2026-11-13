@@ -49,6 +49,75 @@ class _Reader:
         )
 
 
+@pytest.mark.parametrize("effective", [True, False])
+def test_minute_listing_boundary_uses_frozen_lifecycle_not_pit(effective):
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    key = "2026-10-01_2026-10-30_bucket-0001"
+    minute = {"ts_code": "301718.SZ", "trade_time": "2026-10-09T09:31:00+08:00",
+              "freq": "1m", "open_li": 26880, "high_li": 26880,
+              "low_li": 26880, "close_li": 26880, "volume_hand": 0,
+              "volume_shares": 0, "amount_li": 0}
+    listed = {**minute, "trade_time": "2026-10-22T09:31:00+08:00", "volume_hand": 100}
+    values = {("kline_minute_raw", key): [minute, listed],
+              ("stock_basic", "2026-10-30"): [{"ts_code": "301718.SZ", "list_date": "2026-10-22"}]}
+    source._descriptors = {f"{name}:{part}": {"dataset": name, "partition_key": part}
+                           for name, part in values}
+    source.component_manifests = {Component.MINUTE_BIN: {"partitions": [{
+        "identity": f"kline_minute_raw:{key}", "dataset": "kline_minute_raw",
+        "partition_key": key, "role": "sealed_database_source"}]}}
+    source._reader = SimpleNamespace(iter_rows=lambda name, part, **kw: iter(values[name, part]))
+    source._raw_descriptor = lambda entry: entry
+    source._effective_minute_rows = lambda component, desc, rows: rows
+    # This newly listed stock has NO buy-eligible PIT span. Its genuine quote
+    # must still survive. Raw SOURCE inspection must also remain unchanged.
+    rows = [row for part in source.ordered_partitions(Component.MINUTE_BIN, "kline_minute_raw", effective=effective)
+            for row in part.rows]
+    assert rows == ([listed] if effective else [minute, listed])
+    if effective:
+        assert source.minute_lifecycle_summary["excluded_rows"] == 1
+        assert source.minute_lifecycle_summary["entries"][0]["list_date"] == "2026-10-22"
+
+
+@pytest.mark.parametrize("field,value", [("volume_hand", 1), ("amount_li", 1), ("volume_shares", 1),
+                                        ("amount_li", float("nan")), ("volume_hand", None)])
+def test_prelisting_positive_or_invalid_turnover_is_not_silently_dropped(field, value):
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source._minute_listing_dates = {"301718.SZ": date(2026, 10, 22)}
+    row = {"ts_code": "301718.SZ", "trade_time": "2026-10-09T09:31:00+08:00",
+           "volume_hand": 0, "amount_li": 0, "volume_shares": 0, field: value}
+    with pytest.raises(ArtifactReadyBuildSourceError, match="pre-listing minute turnover"):
+        list(source._listed_minute_rows([row], partition_identity="raw:fixture"))
+
+
+def test_listing_boundary_preserves_unknown_lifecycle_and_closes_input():
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source._minute_listing_dates = {}
+    row = {"ts_code": "600001.SH", "trade_time": "2026-10-09T09:31:00+08:00"}
+    closed = []
+    def stream():
+        try:
+            yield row
+        finally:
+            closed.append(True)
+    iterator = source._listed_minute_rows(stream(), partition_identity="raw:fixture")
+    assert next(iterator) == row
+    iterator.close()
+    assert closed == [True]
+
+
+def test_listing_boundary_is_shanghai_dated_and_deduplicates_readback_metrics():
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source._minute_listing_dates = {"301718.SZ": date(2026, 10, 22)}
+    previous = {"ts_code": "301718.SZ", "trade_time": "2026-10-21T07:00:00Z",
+                "volume_hand": 0, "amount_li": 0}
+    # This is already the listing day in Shanghai. Do not depend on the
+    # worker host timezone or treat zero turnover on a listed day as invalid.
+    listed = {**previous, "trade_time": "2026-10-21T16:00:00Z"}
+    for _ in range(2):
+        assert list(source._listed_minute_rows([previous, listed], partition_identity="raw:fixture")) == [listed]
+    assert source.minute_lifecycle_summary["excluded_rows"] == 1
+
+
 def _adj_source(component, *, duplicate_month=False):
     month_key = "2026-09-01_2026-09-30"
     values = {

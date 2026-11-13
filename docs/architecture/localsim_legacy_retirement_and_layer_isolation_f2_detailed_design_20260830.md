@@ -176,7 +176,11 @@ StrategyPackage 只冻结不可在模拟盘中修改的 alpha core：
 - approved runtime variant；
 - LocalSIM execution policy snapshot。
 
-LocalSIM 当前算法继续唯一为 `localsim_twap_only_v1 / TWAP`。control-plane writer 必须把完整 normalized policy snapshot 冻结进 release；runtime 只验证 ID/schema/hash 并消费，不读取 `manifest.minute_execution_policy`，也不得在 scheduler 中用代码内置 policy 覆盖另一份 release identity。策略包或创建请求携带的历史/V25 policy若需要保留，只能进入`requested_execution_policy_audit` metadata，明确`consulted_for_execution=false`，不得占用release的effective `execution_policy` component、触发LocalSIM运行准入或被自动翻译成TWAP。任何未来 TWAP 参数业务变化必须先修改上位蓝图，不能借本次重构改变。
+LocalSIM 旧账户、默认生产入口与历史 release 的算法继续为 `localsim_twap_only_v1 / TWAP`。2026-10-24 用户批准新增显式 opt-in、冻结文件离线研究身份 `localsim_position_timing_v1 / POSITION_TIMING_INTRADAY_V1`；其唯一择时核心、交易确认、因果和恢复合同见 `localsim_position_timing_integration_f2_detailed_design_20261024.md`。本轮不更改生产 control-plane 的 TWAP 默认，不自动创建生产 release 或账户。control-plane writer 必须把完整 normalized policy snapshot 冻结进 release；runtime 只验证 ID/schema/hash 并消费，不读取 `manifest.minute_execution_policy`，也不得在 scheduler 中用代码内置 policy 覆盖另一份 release identity。策略包或创建请求携带的历史/V25 policy若需要保留，只能进入`requested_execution_policy_audit` metadata，明确`consulted_for_execution=false`，不得占用release的effective `execution_policy` component、触发LocalSIM运行准入或被自动翻译成TWAP。任何未来 TWAP 参数业务变化必须先修改上位蓝图，不能借本次重构改变。
+
+新增连续离线消费者可以在同一原生账户中执行多个父订单，按日提交经济事实并恢复已完成前缀；数量继续由 TargetPositionEngine 和 RebalanceIntentService 产生。该能力不改变生产 scheduler 注册、TWAP 路由或现有账户，不能把合成功能场景当作全年真实账户验证。
+
+2026-10-26双模式设计增量：保留以上原生执行、TWAP默认、旧release、独立回放与统一control plane；新增独立选择的模拟人工模式及其政策归属，见[localsim_human_operation_dual_mode_f2_detailed_design_20261026.md](localsim_human_operation_dual_mode_f2_detailed_design_20261026.md)及父蓝图新增验收条目。人工队列属于LocalSIM execution owner，不改变data/signal/execution单向依赖，不增加第二账本或scheduler。首版只规划冻结文件离线实现；本轮只有设计，无生产模式字段启用、账户迁移、回放或服务操作。本节其余same-package validated TWAP约束继续约束现有生产创建路径；新人工生产路径未来必须通过明确schema/profile/release修订，不能借此绕过当前校验。
 
 ### 4.1.1 `SimulationAccountV1`
 

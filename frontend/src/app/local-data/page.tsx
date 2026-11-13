@@ -2,6 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./localData.module.css";
+import { DailyIntegrityCalendar } from "./components/DailyIntegrityCalendar";
+import { datasetLabel as formatDatasetLabel } from "./datasetLabels";
 
 const TDX_BASE =
   process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
@@ -48,12 +50,22 @@ const FINANCIAL_EVENT_RAW_DATASETS: string[] = [
   "tushare_express_raw",
   "tushare_fina_indicator_raw",
 ];
+const EVENT_INPUT_DATASETS = ["stk_shock", "stk_high_shock", "stk_alert", "idx_anns", "stk_seasoned"];
 const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> = {
   TDX: {
     kline_daily_raw: "日线（未复权 RAW）",
     kline_daily_raw_go: "日线（未复权 RAW · Go 直连）",
   },
   Tushare: {
+    stk_shock: "个股异常波动（原文；可选）",
+    stk_high_shock: "个股严重异常波动（原文；可选）",
+    stk_alert: "个股重点提示（参考区间；可选）",
+    idx_anns: "指数公司公告（原文；可选）",
+    stk_seasoned: "增发进程（原文及修订；可选）",
+    vix_index: "VIX 美国日频指数（可选；美国交易日历）",
+    index_global: "美股三大指数（标普500/纳斯达克/道琼斯）",
+    us_tradecal: "美股交易日历（含开市及休市日）",
+    stock_daily_afterhours: "股票盘后成交量额（手/千元；可选）",
     etf_share_size: "ETF 每日份额和规模（Tushare etf_share_size）",
     etf_basic_snapshots: "ETF 基础信息每日观察快照（Tushare etf_basic）",
     stock_moneyflow_ts: "个股资金流（moneyflow · Tushare）",
@@ -66,13 +78,13 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     sw_index_member: "申万行业成分股PIT映射（Tushare index_member_all）",
     sw_daily: "申万行业指数日线（Tushare sw_daily）",
     sector_data: "申万L2行业展开到个股（22列，后处理）",
-    suspend_d: "Tushare suspend_d daily suspend/resume info",
+    suspend_d: "每日停复牌信息（Tushare）",
     stk_limit: "每日涨跌停价格（Tushare stk_limit）",
     margin_detail: "融资融券明细（Tushare margin_detail）",
     anns_metadata: "公告元数据（Eastmoney/Cninfo，滚动两天）",
-    tushare_forecast_raw: "Performance forecast raw (Tushare forecast_vip)",
-    tushare_express_raw: "Performance express raw (Tushare express_vip)",
-    tushare_fina_indicator_raw: "Financial indicator raw (Tushare fina_indicator_vip)",
+    tushare_forecast_raw: "业绩预告原始数据（Tushare forecast_vip）",
+    tushare_express_raw: "业绩快报原始数据（Tushare express_vip）",
+    tushare_fina_indicator_raw: "财务指标原始数据（Tushare fina_indicator_vip）",
     stock_st_events: "ST 风险警示事件（Tushare st）",
     stock_universe_pit_events: "ST PIT 派生事件（本地规则）",
     stock_universe_pit_spans: "ST PIT 可选区间（本地规则）",
@@ -352,6 +364,9 @@ export default function LocalDataPage() {
       } else if (lower === "daily_basic") {
         dataSource = "Tushare";
         dataset = "daily_basic";
+      } else if (EVENT_INPUT_DATASETS.includes(lower) || lower === "index_global" || lower === "us_tradecal" || lower === "vix_index" || lower === "stock_daily_afterhours") {
+        dataSource = "Tushare";
+        dataset = lower;
       } else if (lower === "stk_limit") {
         dataSource = "Tushare";
         dataset = "stk_limit";
@@ -521,6 +536,8 @@ export default function LocalDataPage() {
         )}
       </section>
 
+      <DailyIntegrityCalendar backendBase={TDX_BASE} />
+
       {/* Tab 切换 */}
       <section className={styles.sectionBlock}>
         <div className={styles.tabBar}>
@@ -618,6 +635,11 @@ function InitTab({ onCalendarSynced }: { onCalendarSynced?: () => void }) {
   ];
 
   const datasetOptionsTushare: { key: string; label: string }[] = [
+    { key: "vix_index", label: "vix_index · VIX美国日频指数（可选）" },
+    { key: "index_global", label: "美股三大指数（Tushare）" },
+    { key: "us_tradecal", label: "美股交易日历（Tushare）" },
+    ...EVENT_INPUT_DATASETS.map((key) => ({ key, label: INGESTION_DATASETS_BY_SOURCE.Tushare[key] })),
+    { key: "stock_daily_afterhours", label: "stock_daily_afterhours · 盘后成交量额（手/千元）" },
     { key: "etf_share_size", label: "etf_share_size · ETF 每日份额和规模（Tushare）" },
     { key: "kline_weekly", label: "kline_weekly · 周线（由本地日线QFQ聚合）" },
     {
@@ -941,7 +963,7 @@ function InitTab({ onCalendarSynced }: { onCalendarSynced?: () => void }) {
           opts.index_markets = indexMarkets;
         }
       }
-      if (dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || FINANCIAL_EVENT_RAW_DATASETS.includes(dataset) || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (EVENT_INPUT_DATASETS.includes(dataset) || dataset === "index_global" || dataset === "us_tradecal" || dataset === "vix_index" || dataset === "stock_daily_afterhours" || dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || FINANCIAL_EVENT_RAW_DATASETS.includes(dataset) || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -1359,6 +1381,11 @@ function IncrementalTab({
   ];
 
   const datasetOptionsTushare = [
+    { key: "vix_index", label: "vix_index · VIX美国日频指数（可选）" },
+    { key: "index_global", label: "美股三大指数（Tushare）" },
+    { key: "us_tradecal", label: "美股交易日历（Tushare）" },
+    ...EVENT_INPUT_DATASETS.map((key) => ({ key, label: INGESTION_DATASETS_BY_SOURCE.Tushare[key] })),
+    { key: "stock_daily_afterhours", label: "stock_daily_afterhours · 盘后成交量额（手/千元）" },
     { key: "etf_share_size", label: "etf_share_size · ETF 每日份额和规模（Tushare）" },
     { key: "etf_basic_snapshots", label: "etf_basic_snapshots · ETF 基础信息每日观察快照（Tushare）" },
     {
@@ -3204,7 +3231,7 @@ function JobsTab() {
                 {qmtTasks.map((task: any, idx: number) => (
                   <tr key={task.task_id || task.job_id || idx} style={{ borderBottom: "1px solid #f3f4f6" }}>
                     <td style={{ padding: 8, fontSize: 11 }}>{(task.task_id || task.job_id || "—").slice(0, 8)}...</td>
-                    <td style={{ padding: 8 }}>{task.dataset_name || task.dataset_id || task.summary?.dataset || "—"}</td>
+                    <td style={{ padding: 8 }}>{formatDatasetLabel(task.dataset_id || task.summary?.dataset, task.dataset_name)}</td>
                     <td style={{ padding: 8 }}>{task.type || task.job_type || "—"}</td>
                     <td style={{ padding: 8 }}>
                       <span style={{
@@ -3285,7 +3312,7 @@ function JobsTab() {
             boxShadow: "0 4px 20px rgba(0, 0, 0, 0.15)"
           }}>
             <h3 style={{ margin: 0, fontSize: 16, marginBottom: 16 }}>
-              📝 任务日志 - {selectedQmtTask.dataset_name || selectedQmtTask.dataset_id}
+              📝 任务日志 - {formatDatasetLabel(selectedQmtTask.dataset_id, selectedQmtTask.dataset_name)}
             </h3>
             
             <div style={{ marginBottom: 16 }}>
@@ -3612,10 +3639,7 @@ function JobsTab() {
             const rangeText =
               extraParts.length > 0 ? extraParts.join(" · ") : "—";
 
-            const datasetLabel =
-              dataset && INGESTION_DATASETS[String(dataset)]
-                ? `${dataset} · ${INGESTION_DATASETS[String(dataset)]}`
-                : dataset || "—";
+            const datasetLabel = formatDatasetLabel(dataset, INGESTION_DATASETS[String(dataset)]);
 
             const typeText =
               mode === "init"
@@ -3921,7 +3945,7 @@ function JobsTab() {
                 logItems.map((it: any, idx: number) => {
                   const ts = it?.timestamp || "";
                   const level = it?.level || "";
-                  const datasetLabel = it?.dataset || "";
+                  const datasetLabel = formatDatasetLabel(it?.dataset);
                   const modeLabel = it?.mode || "";
                   const payload = it?.payload ?? {};
                   const text = JSON.stringify(payload, null, 2);
@@ -4016,6 +4040,10 @@ function DataStatsTab({
       k.startsWith("kline_") ||
       k === "kline_minute_raw" ||
       k === "stock_moneyflow_ts" ||
+      k === "vix_index" ||
+      k === "index_global" ||
+      k === "us_tradecal" ||
+      k === "stock_daily_afterhours" ||
       k === "margin_detail" ||
       k === "etf_share_size" ||
       k === "suspend_d" ||
@@ -4025,6 +4053,7 @@ function DataStatsTab({
     }
     if (
       k === "stock_basic" ||
+      EVENT_INPUT_DATASETS.includes(k) ||
       k === "stock_st" ||
       k === "stock_st_events" ||
       k === "stock_universe_pit_events" ||
@@ -4178,6 +4207,11 @@ function DataStatsTab({
           lower === "kline_minute_raw" ||
           lower === "adj_factor" ||
           lower === "daily_basic" ||
+          lower === "vix_index" ||
+          lower === "index_global" ||
+          lower === "us_tradecal" ||
+          EVENT_INPUT_DATASETS.includes(lower) ||
+          lower === "stock_daily_afterhours" ||
           lower === "stock_basic" ||
           lower === "stock_moneyflow_ts" ||
           lower === "stock_st" ||
@@ -4483,6 +4517,11 @@ function DataStatsTab({
                       "kline_minute_raw",
                       "adj_factor",
                       "daily_basic",
+                      "vix_index",
+                      "index_global",
+                      "us_tradecal",
+                      ...EVENT_INPUT_DATASETS,
+                      "stock_daily_afterhours",
                       "stock_basic",
                       "stock_moneyflow_ts",
                       "stock_st",
@@ -4504,7 +4543,7 @@ function DataStatsTab({
                     rows.push(
                       <tr key={`${catKey}-${idx}`}>
                         <td className={styles.statsCell}>
-                          {it.data_kind || it.kind || "—"}
+                          {formatDatasetLabel(kind, description)}
                         </td>
                         <td className={styles.statsCell}>
                           <div>{description}</div>
@@ -4583,7 +4622,7 @@ function DataStatsTab({
           {gapResult && (
             <div className={`${styles.cardSoft} ${styles.note}`}>
               <div className={styles.rowBetween}>
-                <span>检查结果 (Kind: {gapResult.data_kind})</span>
+                <span>检查结果：{formatDatasetLabel(gapResult.data_kind)}</span>
                 <button
                   type="button"
                   onClick={() => handleCheckGapsClick(gapResult.data_kind, true)}
@@ -4606,13 +4645,22 @@ function DataStatsTab({
                   覆盖股票数量: {gapResult.symbol_count}
                 </div>
               )}
-              <div className={styles.textSmall}>
+              {gapResult.status === "NOT_EVALUATED" ? (
+                <div className={styles.textMuted}>美国交易日完整性尚未评估；不以中国交易日历推断缺口或休市。</div>
+              ) : gapResult.coverage_basis === "completed_provider_queries_not_daily_event_count" ? (
+                <div className={styles.textSmall}>
+                  自然日查询完成 {gapResult.covered_query_days}/{gapResult.expected_calendar_dates}；
+                  待完整查询 {(gapResult.unqueried_dates || []).length} 天。
+                  无事件记录不等于数据缺失，查询完成不代表历史 PIT。
+                  {(gapResult.unqueried_dates || []).length > 0 && <div>{gapResult.unqueried_dates.join("、")}</div>}
+                </div>
+              ) : <div className={styles.textSmall}>
                 交易日总数: {gapResult.total_trading_days}，有数据天数:
                 {" "}
                 {gapResult.covered_days}，缺失交易日:
                 {" "}
                 {gapResult.missing_days}
-              </div>
+              </div>}
               {Array.isArray(gapResult.missing_ranges) &&
                 gapResult.missing_ranges.length > 0 && (
                   <details style={{ marginTop: 4 }}>
@@ -4798,7 +4846,7 @@ function IngestionLogsTable({
     rows.push({
       key,
       raw: item,
-      task: mode ? `${dataset || "—"} · ${mode}` : dataset || "—",
+      task: mode ? `${formatDatasetLabel(dataset)} · ${mode}` : formatDatasetLabel(dataset),
       run_id: item.run_id || null,
       ts: item.timestamp || null,
       level: item.level || null,
@@ -4901,7 +4949,7 @@ function IngestionLogsTable({
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
                 >
-                  {r.dataset}
+                  {formatDatasetLabel(r.dataset)}
                 </td>
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
@@ -5313,6 +5361,15 @@ const WORKER_SUPPORTED_DATASETS = new Set([
 
 // 每日定时调度快捷创建：核心目标数据集及默认执行时间
 const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string; frequency?: string; mode?: "incremental" | "init" }[] = [
+  { dataset: "stk_shock", label: "异常波动（可选）", source: "Tushare", defaultAt: "21:10" },
+  { dataset: "stk_high_shock", label: "严重异常（可选）", source: "Tushare", defaultAt: "21:15" },
+  { dataset: "stk_alert", label: "重点提示（可选）", source: "Tushare", defaultAt: "21:20" },
+  { dataset: "idx_anns", label: "指数公告（可选）", source: "Tushare", defaultAt: "21:30" },
+  { dataset: "stk_seasoned", label: "增发进程（可选）", source: "Tushare", defaultAt: "21:40" },
+  { dataset: "vix_index", label: "VIX美国日频指数（可选）", source: "Tushare", defaultAt: "08:00" },
+  { dataset: "index_global", label: "美股三大指数", source: "Tushare", defaultAt: "08:05" },
+  { dataset: "us_tradecal", label: "美股交易日历", source: "Tushare", defaultAt: "07:30" },
+  { dataset: "stock_daily_afterhours", label: "股票盘后成交量额（可选）", source: "Tushare", defaultAt: "20:35" },
   { dataset: "etf_share_size", label: "ETF 每日份额和规模", source: "Tushare", defaultAt: "20:00" },
   { dataset: "etf_basic_snapshots", label: "ETF 基础信息快照", source: "Tushare", defaultAt: "20:05", mode: "init" },
   { dataset: "kline_daily_raw", label: "日线（未复权 RAW）", source: "TDX", defaultAt: "17:00" },
@@ -5332,11 +5389,11 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   { dataset: "stock_st_events", label: "ST 风险警示事件", source: "Tushare", defaultAt: "20:40" },
   { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "17:36" },
   { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
-  { dataset: "suspend_d", label: "Daily suspend/resume info", source: "Tushare", defaultAt: "", frequency: "1h" },
+  { dataset: "suspend_d", label: "每日停复牌信息", source: "Tushare", defaultAt: "", frequency: "1h" },
   { dataset: "anns_metadata", label: "公告元数据（滚动两天）", source: "Eastmoney", defaultAt: "", frequency: "1h" },
-  { dataset: "tushare_forecast_raw", label: "Performance forecast raw", source: "Tushare", defaultAt: "20:45" },
-  { dataset: "tushare_express_raw", label: "Performance express raw", source: "Tushare", defaultAt: "20:50" },
-  { dataset: "tushare_fina_indicator_raw", label: "Financial indicator raw", source: "Tushare", defaultAt: "21:00" },
+  { dataset: "tushare_forecast_raw", label: "业绩预告原始数据", source: "Tushare", defaultAt: "20:45" },
+  { dataset: "tushare_express_raw", label: "业绩快报原始数据", source: "Tushare", defaultAt: "20:50" },
+  { dataset: "tushare_fina_indicator_raw", label: "财务指标原始数据", source: "Tushare", defaultAt: "21:00" },
 ];
 
 /** 数据健康检查报告组件 — 在 _auto_retry_stale 调度卡片内展开 */
@@ -5466,7 +5523,7 @@ function HealthCheckReport({ summary }: { summary: any }) {
                 return (
                   <tr key={d.dataset} style={{ background: rowBg }}>
                     <td style={tdStyle}>
-                      <span style={{ fontWeight: 500 }}>{d.dataset}</span>
+                      <span style={{ fontWeight: 500 }}>{formatDatasetLabel(d.dataset)}</span>
                     </td>
                     <td style={tdStyle}>{d.data_max_date || "-"}</td>
                     <td style={tdStyle}>
@@ -5507,7 +5564,7 @@ function HealthCheckReport({ summary }: { summary: any }) {
             <ul style={{ margin: "2px 0", paddingLeft: 16 }}>
               {errors.map((e, i) => (
                 <li key={`${e?.dataset || e?.name || ""}-${i}`} style={{ color: "#dc2626" }}>
-                  {e?.dataset || e?.name || "unknown"}: {e?.error || e?.message || JSON.stringify(e)}
+                  {formatDatasetLabel(e?.dataset || e?.name)}: {e?.error || e?.message || JSON.stringify(e)}
                 </li>
               ))}
             </ul>
@@ -6173,7 +6230,7 @@ function IngestionSchedulesTab() {
                   : baseLabel;
 
               const isHealthCheck = schedDataset === "_auto_retry_stale";
-              const displayName = isHealthCheck ? "数据健康检查" : schedDataset;
+              const displayName = formatDatasetLabel(schedDataset);
               const displayMode = isHealthCheck ? "check_and_retry" : mode;
 
               return (

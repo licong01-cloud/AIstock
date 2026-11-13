@@ -65,6 +65,7 @@ from .static_schema import (
 
 FACTOR_MATERIALIZATION_SCHEMA = "dataset_release_factor_materialization_v1"
 FACTOR_CHECKPOINT_SCHEMA = "dataset_release_factor_checkpoint_v1"
+STATIC_ASOF_CONTRACT = "exact_date_provider_facts_v2"
 FACTOR_H5_DATASETS: tuple[str, ...] = (
     "daily_pv",
     "daily_basic",
@@ -259,6 +260,7 @@ class FactorMaterializationSpec:
                 "static_ordered_columns": list(self.static_ordered_columns),
                 "static_schema_version": STATIC_SCHEMA_VERSION,
                 "static_schema_digest": static_schema_digest(),
+                "static_asof_contract": STATIC_ASOF_CONTRACT,
                 "factor_h5_schema_version": FACTOR_H5_SCHEMA_VERSION,
                 "factor_h5_schemas": {key: list(value) for key, value in FACTOR_H5_SCHEMAS.items()},
                 "factor_h5_dtypes": FACTOR_H5_DTYPES,
@@ -417,6 +419,7 @@ class FactorPartitionProducerSpec:
                 "static_ordered_columns": list(self.static_ordered_columns),
                 "static_schema_version": STATIC_SCHEMA_VERSION,
                 "static_schema_digest": static_schema_digest(),
+                "static_asof_contract": STATIC_ASOF_CONTRACT,
                 "factor_h5_schema_version": FACTOR_H5_SCHEMA_VERSION,
                 "factor_h5_density_contracts": FACTOR_H5_DENSITY_CONTRACTS,
                 "row_group_rows": self.row_group_rows,
@@ -1584,30 +1587,12 @@ def _static_asof_frame(
     target_index: pd.MultiIndex,
     previous_tail: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if dataset in {"moneyflow", "daily_basic", "sector_data"}:
-        # daily_basic is an exact-date provider fact, including nullable
-        # dividend yields. Carrying yesterday's yield into a source NULL
-        # silently fabricates data and makes H5/static snapshots diverge.
-        # Industry quotes/flows are also exact-date facts. Membership is
-        # resolved separately by the frozen PIT authority, not by carrying an
-        # old id or quote across a missing day, taxonomy change or suspension.
-        return current, pd.DataFrame()
-    slow_columns: list[str] = []
-    if dataset in {"bak_basic", "cyq_perf", "margin_detail"}:
-        slow_columns = list(current.columns)
-    if not slow_columns:
-        return current, _tail_by_instrument(current, 1)
-    prior = previous_tail.loc[:, slow_columns] if not previous_tail.empty else pd.DataFrame()
-    context = _combine_indexed_frames(prior, current.loc[:, slow_columns])
-    if context.empty:
-        return current, pd.DataFrame()
-    union = context.index.union(target_index).sort_values()
-    filled = context.reindex(union).groupby(level="instrument", sort=False).ffill()
-    slow = filled.reindex(target_index).loc[:, slow_columns]
-    exact = current.drop(columns=slow_columns, errors="ignore")
-    output = pd.concat([exact, slow], axis=1).sort_index()
-    tail = _tail_by_instrument(context, 1)
-    return output, tail
+    # Every auxiliary input is a dated provider fact, not a latest-known
+    # financial disclosure. Preserve both source NULLs and absent rows in the
+    # static projection, just as the corresponding H5 does. In particular,
+    # publication lag does not turn yesterday's margin/chip values into today's
+    # facts. Ignore legacy rolling tails, including across month boundaries.
+    return current, pd.DataFrame()
 
 
 def _build_static_frame(

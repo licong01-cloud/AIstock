@@ -38,10 +38,7 @@ from .industry_pit.contracts import (
     UnavailableIndustryIdentity,
 )
 from .industry_pit.resolver import IndustryPitResolver, resolve_dual_authority
-from .stock_universe_pit_service import (
-    DEFAULT_ST_PIT_UNIVERSE_KEY,
-    IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX,
-)
+from .canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
 
 
 logger = logging.getLogger(__name__)
@@ -49,6 +46,12 @@ logger = logging.getLogger(__name__)
 
 class SectorDataBuildContractError(RuntimeError):
     """Raised when sector-data source or candidate contracts are ambiguous."""
+
+
+class SectorDataSourcePending(SectorDataBuildContractError):
+    """Existing producer preflight found missing source facts, not bad PIT."""
+
+    source_pending = True
 
 
 SECTOR_DATA_ASSIGNMENT_SCHEMA = "sector_data_dual_authority_assignment_v1"
@@ -1127,23 +1130,62 @@ def read_sector_data_candidate(
     )
 
 
-_PREFLIGHT_DAY_SQL = """\
+_AUTHORITATIVE_UNIVERSES_SQL = """\
 WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
+    SELECT s.universe_key, s.rule_version
+    FROM market.stock_universe_pit_authority_pointer p
+    JOIN market.stock_universe_pit_authority_versions v
+      ON v.authority_id = p.authority_id
+     AND v.rule_version = p.current_rule_version
+     AND v.rolling_key = p.current_rolling_key
+    JOIN market.stock_universe_pit_state s
+      ON s.universe_key = p.current_rolling_key
+     AND s.rule_version = p.current_rule_version
+    WHERE p.authority_id = %(authority_id)s
+      AND v.status IN ('ACTIVE_CANONICAL', 'DEPLOYED_LEGACY_PENDING_MIGRATION', 'EMERGENCY_LEGACY_ROLLBACK')
+      AND s.status = 'ready'
+      AND s.dirty = FALSE
+      AND s.start_date <= %(trade_date)s
+      AND s.end_date >= %(trade_date)s
+      AND EXISTS (
+          SELECT 1 FROM market.stock_universe_pit_spans x
+          WHERE x.universe_key = s.universe_key AND x.rule_version = s.rule_version
       )
+      AND (v.status <> 'ACTIVE_CANONICAL' OR NOT EXISTS (
+          SELECT 1 FROM market.stock_universe_pit_spans x
+          WHERE x.universe_key = s.universe_key AND x.rule_version <> s.rule_version
+      ))
 ),
+historical_members AS (
+    -- The approved version-qualified recovery is also the monthly producer's
+    -- source. Use its actual dated SW2021 facts, never SW2014 backcasts or a
+    -- current classification carried across an uncovered historical gap.
+    SELECT h.ts_code,
+        CASE WHEN COUNT(DISTINCT (h.payload->>'l1_code',h.published_l2_code))=1
+             THEN MIN(h.payload->>'l1_code') END AS l1_code,
+        CASE WHEN COUNT(DISTINCT (h.payload->>'l1_code',h.published_l2_code))=1
+             THEN MIN(h.published_l2_code) END AS l2_code,
+        MIN(h.effective_from) AS in_date, MAX(h.effective_to) AS out_date
+    FROM market.sw_industry_classification_history_v1 h
+    WHERE h.taxonomy_version = 'SW2021'
+      AND h.effective_from <= %(trade_date)s AND h.effective_to >= %(trade_date)s
+    GROUP BY h.ts_code
+),
+dated_members AS (
+    SELECT ts_code,l1_code,l2_code,in_date,out_date FROM historical_members
+    UNION ALL
+    SELECT m.ts_code,m.l1_code,m.l2_code,m.in_date,m.out_date
+    FROM market.sw_index_member m
+    WHERE NOT EXISTS (SELECT 1 FROM historical_members h WHERE h.ts_code = m.ts_code)
+),
+"""
+
+
+_PREFLIGHT_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1154,7 +1196,7 @@ active AS (
         member.l2_code,
         member.in_date,
         MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
-    FROM market.sw_index_member AS member
+    FROM dated_members AS member
     JOIN eligible USING (ts_code)
     WHERE member.in_date <= %(trade_date)s
       AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
@@ -1245,7 +1287,8 @@ SELECT
             OR sd.pct_change IS NULL
             OR sd.vol IS NULL
             OR sd.amount IS NULL
-            OR sd.pe IS NULL
+            -- Provider PE may be NULL even when an official quote exists.
+            -- Preserve that valuation NA; never discard the quote or fill PE.
             OR sd.pb IS NULL
             OR sd.total_mv IS NULL
         )
@@ -1284,7 +1327,6 @@ SELECT
             OR sd.pct_change IS NULL
             OR sd.vol IS NULL
             OR sd.amount IS NULL
-            OR sd.pe IS NULL
             OR sd.pb IS NULL
             OR sd.total_mv IS NULL
         )
@@ -1293,23 +1335,11 @@ SELECT
 """
 
 
-_DELETE_STALE_DAY_SQL = """\
-WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
-      )
-),
+_DELETE_STALE_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1318,7 +1348,7 @@ active AS (
         member.ts_code,
         member.in_date,
         MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
-    FROM market.sw_index_member AS member
+    FROM dated_members AS member
     JOIN eligible USING (ts_code)
     WHERE member.in_date <= %(trade_date)s
       AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
@@ -1338,23 +1368,11 @@ WHERE target.trade_date = %(trade_date)s
 """
 
 
-_BUILD_DAY_SQL = """\
-WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
-      )
-),
+_BUILD_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1364,7 +1382,7 @@ active AS (
         member.l2_code,
         member.in_date,
         MAX(member.in_date) OVER (PARTITION BY member.ts_code) AS latest_in_date
-    FROM market.sw_index_member AS member
+    FROM dated_members AS member
     JOIN eligible USING (ts_code)
     WHERE member.in_date <= %(trade_date)s
       AND (member.out_date >= %(trade_date)s OR member.out_date IS NULL)
@@ -1484,6 +1502,31 @@ ORDER BY trade_date
 """
 
 
+def sector_fact_comparison_sql() -> str:
+    """Read-only projection of the SAME activated producer, not a second formula.
+
+    Reject an unexpected statement shape rather than certify rows with an
+    incomplete duplicated join. Values are trusted source constants, not input.
+    """
+    from .data_integrity.stock_scope import stock_scope_sql
+    prefix, insert = _BUILD_DAY_SQL.split("INSERT INTO market.sector_data (", 1)
+    columns, select = insert.split(")\nSELECT\n", 1)
+    projection, _update = select.split("\nON CONFLICT (trade_date, ts_code)", 1)
+    projection = projection.replace("%(trade_date)s,\n", "%(trade_date)s::date,\n", 1)
+    names = [name.strip() for name in columns.split(",")]
+    if names[:2] != ["trade_date", "ts_code"] or any(not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in names):
+        raise SectorDataBuildContractError("sector comparison producer projection changed")
+    selected = ",".join(names)
+    expected = ",".join("e."+name for name in names)
+    actual = ",".join("a."+name for name in names)
+    return (prefix + ", expected("+selected+") AS (SELECT\n"+projection+") , actual AS ("
+        "SELECT "+selected+" FROM market.sector_data WHERE trade_date=%(trade_date)s"+stock_scope_sql()+") "
+        "SELECT COALESCE(e.ts_code,a.ts_code) AS ts_code, "
+        "CASE WHEN e.ts_code IS NULL THEN 'UNEXPECTED' WHEN a.ts_code IS NULL THEN 'MISSING' "
+        "ELSE 'INVALID' END AS classification FROM expected e FULL JOIN actual a USING(trade_date,ts_code) "
+        "WHERE ROW("+expected+") IS DISTINCT FROM ROW("+actual+") ORDER BY 1")
+
+
 class SectorDataBuilder:
     """Build market.sector_data from PIT membership and source market facts."""
 
@@ -1499,8 +1542,7 @@ class SectorDataBuilder:
                 cur.execute("LOCK TABLE market.sw_index_member IN SHARE MODE", None)
                 params = {
                     "trade_date": trade_date,
-                    "live_universe_key": DEFAULT_ST_PIT_UNIVERSE_KEY,
-                    "qe_universe_pattern": f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+                    "authority_id": CANONICAL_PIT_AUTHORITY_ID,
                 }
                 cur.execute(_PREFLIGHT_DAY_SQL, params)
                 (
@@ -1520,7 +1562,9 @@ class SectorDataBuilder:
                     or missing_sector_facts
                     or missing_moneyflow_facts
                 ):
-                    raise SectorDataBuildContractError(
+                    error_type = (SectorDataBuildContractError if any((universe_not_ready,
+                        missing_mapping, ambiguous, invalid_identity)) else SectorDataSourcePending)
+                    raise error_type(
                         "SECTOR_DATA_PIT_CONTRACT_INVALID: "
                         f"trade_date={trade_date}, "
                         f"universe_not_ready={universe_not_ready}, "
@@ -1539,8 +1583,12 @@ class SectorDataBuilder:
                         unpublished_l2_exempted,
                     )
                 cur.execute(_DELETE_STALE_DAY_SQL, params)
+                deleted = cur.rowcount
                 cur.execute(_BUILD_DAY_SQL, params)
                 rows = cur.rowcount
+                if deleted or rows:
+                    from .data_integrity.repository import mark_changed
+                    mark_changed(conn, "sector_data", [trade_date], reason="derived_sector_changed", source="sector_builder")
                 from .sector_data_repair import clear_revision_date
 
                 clear_revision_date(conn, trade_date, rows)

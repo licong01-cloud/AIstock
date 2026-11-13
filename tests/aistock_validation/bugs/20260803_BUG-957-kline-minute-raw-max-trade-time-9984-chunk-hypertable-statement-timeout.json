@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-957",
-  "closed_at": null,
+  "closed_at": "2026-10-25T18:24:25.674570Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,11 +27,20 @@
   "evidence_uris": [],
   "expected": "分钟线增量同步每周期在 statement_timeout 内完成 auto-range 计算，游标正常推进；配置 refresh_audit 游标时不再触发表级 MAX 物理扫描",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260803_BUG-957-kline-minute-raw-max-trade-time-9984-chunk-hypertable-statement-timeout.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260803_BUG-957-kline-minute-raw-max-trade-time-9984-chunk-hypertable-statement-timeout.json"
     ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -76,6 +85,10 @@
       ],
       "unmatched_files": []
     },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/ingestion/tdx_scheduler.py",
@@ -106,18 +119,40 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "next scheduled kline_minute_raw incremental cycle completes auto-range without PG statement timeout; readback market.dataset_date_refresh_audit/ingestion_jobs success for kline_minute_raw",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/kline_minute_raw/status",
     "fresh_process_evidence": [
       "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range runs the refresh-audit cursor before any table scan and uses the bounded CURRENT_DATE - INTERVAL '45 days' fast path with unbounded fallback -> PASS",
       "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range audit-first cursor ordering plus bounded INTERVAL '45 days' fast path with unbounded fallback -> PASS"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-957-exact-refreshed-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-957",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b0865c04f097ba46c5cfce2db11bc15a2764c3071c4dae8db112f0908284dcfb",
+      "contract_digest": "1ae1b8613da17c44915d645188fa276d191d3fde14c85a16f40083afc6e6261e",
+      "expected_identity": "26825be3f8a46c1e84d89ea0de217be2564bd976",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T18:24:22.851186Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "32379f962823bc9138ac22c0c28a9a47e4b2d65e96edaab39c04bf3d1a1fc60f",
+      "receipt_sha256": "5703421b562892c10a4ba750867014e6dbc89557519b07f993dcf202569c35a1",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "be67b5da577a79cf639cdda4bf6c23298ac3703a68711b54280675803bcf009d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -125,9 +160,17 @@
       "backend-main"
     ]
   },
+  "runtime_contract_migration": {
+    "database_write": false,
+    "factual_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/legacy-contract-factual-readback.json",
+    "limitation": "This confirms cycle completion, not a new ingestion throughput benchmark or performance claim.",
+    "process_control": false,
+    "production_job": "7ea949d5-67cb-48fc-a4fc-c0fddd59afaa completed 5577/5577 codes, failed=0, no error samples; ready_date=2026-10-23.",
+    "scope": "Executable read-only probes replace legacy prose; no ingestion rerun or table-level maximum scan."
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -140,7 +183,8 @@
     "nox -s l0 -> passed",
     "nox -s validation_module_registry_l0 -> passed",
     "pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 44 passed",
-    "pytest backend/tests/test_local_data_management_facade.py backend/tests/mcp/test_local_data_module.py -q -> 55 passed"
+    "pytest backend/tests/test_local_data_management_facade.py backend/tests/mcp/test_local_data_module.py -q -> 55 passed",
+    "Original source CI/tests retained; exact refreshed-worktree runtime probe PASS; two metadata reviews and DESIGN-COMPLIANCE-001 preserve original scope without fake closure or new data/service actions."
   ],
   "verification_budget": {
     "budget": "standard",
