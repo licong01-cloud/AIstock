@@ -20,7 +20,22 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-23T06:45:23.572361Z",
+  "delivery_states": {
+    "dev_governance": "passed_transaction_rolled_back",
+    "new_schema": "none",
+    "production_activation": "not_executed",
+    "production_asset_write": "not_executed_not_authorized",
+    "real_asset_recovery": "blocked_LSTM_33_original_closures_missing",
+    "services_restart": "not_executed",
+    "source_fix": "PR_open"
+  },
   "description": "关联 BUG-1804/#5742：旧包 pkg_ma_8ec5e389fa2c5e484a1ac7e9 缺38个逐seed冻结绑定；新增独立版本化资产恢复路径，完整闭包才入库，不经V25重新晋升。",
+  "design_compliance_review": {
+    "no_extra_approval": "pass; only user-requested production asset/activation separation",
+    "no_partial_as_complete": "pass; real asset recovery explicitly blocked",
+    "no_semantic_drift": "pass; identity/version/seed/IC/V25 tests",
+    "no_silent_failure": "pass; 38 per-seed receipts and incomplete/no-write"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,8 +46,8 @@
     {
       "action": "resume_source_review",
       "actor": "Codex",
-      "timestamp": "2026-11-13T07:52:37.130922+00:00",
-      "note": "Resumed existing PR #6635, integrated latest main, two-pass current author review; exclusive output namespace prevents recovery evidence overwrite. True asset recovery incomplete; source review is not economic or runtime acceptance."
+      "note": "Resumed existing PR #6635, integrated latest main, two-pass current author review; exclusive output namespace prevents recovery evidence overwrite. True asset recovery incomplete; source review is not economic or runtime acceptance.",
+      "timestamp": "2026-11-13T07:52:37.130922+00:00"
     }
   ],
   "evidence_uris": [
@@ -42,6 +57,16 @@
   ],
   "expected": "保留旧冻结身份、原seed均值聚合与IC权重；全量原资产通过后生成新DRAFT。缺失逐项报告，不复制、不重训、不绕过V25。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/package_asset_backfill.py",
+      "backend/services/strategy_package/seed_asset_recovery.py",
+      "backend/tests/strategy_package/test_seed_asset_recovery.py",
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+      "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+      "scripts/recover_multi_alpha_seed_assets.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2076-alpha-seed.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/services/strategy_package/seed_asset_recovery.py",
       "scripts/recover_multi_alpha_seed_assets.py",
@@ -51,10 +76,15 @@
     ],
     "changed_files": [
       "backend/services/strategy_package/package_asset_backfill.py",
-      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/seed_asset_recovery.py",
+      "backend/tests/strategy_package/test_seed_asset_recovery.py",
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+      "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
+      "scripts/recover_multi_alpha_seed_assets.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2076-alpha-seed.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/package_asset_backfill.py",
@@ -171,6 +201,7 @@
   "first_seen_at": "2026-10-23T06:45:23.572361Z",
   "fix_branch": "bug/BUG-2076-alpha-seed-20261023",
   "fix_commit": "a80eff3af8ccbc8adc32b49adfc1cba69a0a7a8b",
+  "fix_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635",
   "fixed_at": null,
   "github_issue_number": 6634,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6634",
@@ -191,26 +222,31 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9/selection-artifacts",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/strategy_package/test_seed_asset_recovery.py -q -> 11 passed",
       "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json: DEV governance transaction passed; five original FUND models loaded in fresh WSL processes",
-      "2026-11-13 latest-main integration: python -m pytest backend/tests/strategy_package/test_seed_asset_recovery.py -q -x --disable-warnings -> 14 passed; ruff passed; validation_module_registry_l0 -> 8 passed, 14/14 mapped. Original source gaps remain 33 LSTM; no production writes, recovery execution, inference or service control."
+      "2026-11-13 latest-main integration: python -m pytest backend/tests/strategy_package/test_seed_asset_recovery.py -q -x --disable-warnings -> 14 passed; ruff passed; validation_module_registry_l0 -> 8 passed, 14/14 mapped. Original source gaps remain 33 LSTM; no production writes, recovery execution, inference or service control.",
+      "Fresh Python process loaded latest-main merged recovery/backfill/CLI source; all 14 direct contracts passed. No production write, activation, restart or real recovery execution.",
+      "Isolated fresh Python process loaded persisted latest-main recovery/backfill/CLI; 14 direct tests passed. No runtime restart or production write."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9/selection-artifacts"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope.",
+  "scope_expansion_note": "新增可移植的38项资产核验收据；仅证据文件，不增加生产操作。",
   "severity": "P1",
   "status": "in_progress",
   "suspected_modules": [
@@ -328,23 +364,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_note": "新增可移植的38项资产核验收据；仅证据文件，不增加生产操作。",
-  "delivery_states": {
-    "source_fix": "PR_open",
-    "real_asset_recovery": "blocked_LSTM_33_original_closures_missing",
-    "dev_governance": "passed_transaction_rolled_back",
-    "production_asset_write": "not_executed_not_authorized",
-    "production_activation": "not_executed",
-    "services_restart": "not_executed",
-    "new_schema": "none"
-  },
-  "design_compliance_review": {
-    "no_partial_as_complete": "pass; real asset recovery explicitly blocked",
-    "no_silent_failure": "pass; 38 per-seed receipts and incomplete/no-write",
-    "no_semantic_drift": "pass; identity/version/seed/IC/V25 tests",
-    "no_extra_approval": "pass; only user-requested production asset/activation separation"
-  },
-  "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope.",
-  "fix_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635"
+  }
 }
