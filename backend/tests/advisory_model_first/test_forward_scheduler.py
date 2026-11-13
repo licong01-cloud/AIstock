@@ -104,3 +104,45 @@ def test_scheduler_reports_concurrent_run_without_starting_duplicate_work() -> N
         release.set()
         thread.join(timeout=2)
     assert thread.is_alive() is False
+
+
+def test_notifications_do_not_change_business_result_or_get_side_effects():
+    class Notifications:
+        calls = 0
+
+        def run_once(self):
+            self.calls += 1
+            raise OSError('secret transport detail')
+
+    notify = Notifications()
+    service = _Service()
+    scheduler = AdvisoryForwardScheduler(service=service, notification_service=notify)
+    assert scheduler.status()['notifications'] is None
+    assert notify.calls == 0
+    result = scheduler.run_once()
+    assert result['schema_version'] == 'advisory_forward_run_once_v1'
+    assert scheduler.status()['last_error'] is None
+    assert scheduler.status()['notifications'] == {'status': 'FAILED', 'error_type': 'OSError'}
+    assert notify.calls == 1
+    scheduler.status()
+    assert notify.calls == 1
+
+
+def test_notification_can_report_persisted_failure_when_baseline_raises():
+    class Broken:
+        def run_once(self):
+            raise RuntimeError('baseline failed')
+
+    class Notify:
+        calls = 0
+
+        def run_once(self):
+            self.calls += 1
+            return {'status': 'PROCESSED'}
+
+    n = Notify()
+    scheduler = AdvisoryForwardScheduler(service=Broken(), notification_service=n)
+    with pytest.raises(RuntimeError, match='baseline failed'):
+        scheduler.run_once()
+    assert n.calls == 1
+    assert scheduler.status()['last_error']['error_type'] == 'RuntimeError'
