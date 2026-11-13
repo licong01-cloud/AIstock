@@ -787,6 +787,16 @@ def test_explicit_b_share_adj_factor_request_does_not_silently_skip():
         PostgresAdjFactorHistoryRepository(conn).list_symbol_scopes(end_date=DAY_1, symbols=["200011.SZ"])
 
 
+def test_ipo_scope_is_not_circularly_dependent_on_existing_prices_or_factors():
+    conn = _TransactionConnection(autocommit=False, in_transaction=False)
+    PostgresAdjFactorHistoryRepository(conn).list_symbol_scopes(end_date=DAY_1)
+    query = conn.sql[-1]
+    assert 'FROM market.stock_basic' in query
+    assert 'list_date <= %s' in query
+    assert 'NOT EXISTS (SELECT 1 FROM quoted' in query  # preserve established-history boundaries
+    assert 'stock_universe' not in query
+
+
 @pytest.mark.parametrize("initial_autocommit", [False, True])
 def test_postgres_apply_staged_respects_an_active_real_transaction(initial_autocommit: bool) -> None:
     symbol = "300506.SZ"
