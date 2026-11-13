@@ -186,7 +186,8 @@ class HumanOperationQueue:
                     and (kind is None or action.kind == kind)):
                 self.invalidate(action.action_id, reason)
 
-    def claim(self, as_of: datetime, *, in_trading_session: bool) -> HumanAction | None:
+    def peek(self, as_of: datetime, *, in_trading_session: bool) -> HumanAction | None:
+        """Advance native expiry/readiness without consuming operator capacity."""
         now = utc(as_of)
         if self.last_clock is not None and now < self.last_clock:
             raise ValueError("LOCALSIM_HUMAN_CLOCK_REVERSED")
@@ -209,15 +210,23 @@ class HumanOperationQueue:
                 priority = 0 if action.kind == "CANCEL" else 1 if action.side == "SELL" else 2
                 heapq.heappush(self._ready, (priority, action.visible_at, action.symbol, key))
         while self._ready:
-            *_, key = heapq.heappop(self._ready)
+            *_, key = self._ready[0]
             action = self.actions[key]
             if action.status != "QUEUED":
+                heapq.heappop(self._ready)
                 continue
-            self.last_action_at, self.inflight = now, key
-            action = action.model_copy(update={"status": "DISPATCHING", "dispatch_at": now})
-            self.actions[key] = action
             return action
         return None
+
+    def claim(self, as_of: datetime, *, in_trading_session: bool) -> HumanAction | None:
+        action = self.peek(as_of, in_trading_session=in_trading_session)
+        if action is None or self.inflight is not None:
+            return action
+        heapq.heappop(self._ready)
+        self.last_action_at, self.inflight = utc(as_of), action.action_id
+        action = action.model_copy(update={"status": "DISPATCHING", "dispatch_at": utc(as_of)})
+        self.actions[action.action_id] = action
+        return action
 
     def acknowledge(self, action_id: str, outcome: dict) -> None:
         action = self.actions[action_id]

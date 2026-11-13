@@ -39,8 +39,9 @@ class _Proposal:
 def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                             policy: HumanOperationPolicy, run_id: str, optimized: bool = False,
                             research_control: str | None = None, research_audit: bool = False,
-                            research_control_spec: dict | None = None) -> dict:
-    """A single account, one operator, native feedback, and an atomic day result.
+                            research_control_spec: dict | None = None,
+                            research_capacity_control: dict | None = None) -> dict:
+    """One native account and atomic day; default capacity is one operator.
 
     Full bars are only supplied to native post-interval matching. Core evaluate
     sees visible_prefix, and human dispatch never inspects its execution bar.
@@ -74,6 +75,12 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
     if not required.issubset(markets) or any(s not in initial_marks or initial_marks[s] <= 0 for s in required):
         raise ValueError("LOCALSIM_HUMAN_MARK_OR_MARKET_MISSING")
     queue = HumanOperationQueue(account_id=backend.portfolio_id, policy=policy)
+    if research_capacity_control is not None:
+        from .parent_lane_operation import ParentLaneOperationQueue
+        if research_control is not None or any(e.plan.policy_id != "BOUNDED_REVERSION_V1" for e in events):
+            raise ValueError("LOCALSIM_PARENT_LANE_PROFILE_CONFLICT")
+        queue = ParentLaneOperationQueue(account_id=backend.portfolio_id, policy=policy,
+            control=research_capacity_control, parent_plan_ids={e.plan.plan_id for e in events})
     initial, marks = _account(backend), dict(initial_marks)
     initial_nav = Decimal(str(backend._ledger.account_snapshot(
         prices={s: float(p) for s, p in marks.items()}, snapshot_time=start).nav))
@@ -236,8 +243,12 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
         if any_fill:
             views.append((clock + timedelta(seconds=65), _account(backend)))
         in_session = any(left <= clock < right for left, right in trading_sessions(day)) and clock < terminal
-        action = queue.claim(clock, in_trading_session=in_session)
-        if action is not None:
+        # Capacity topology changes only this bounded claim/ack loop. Native
+        # matching and observations advance once, above/below this loop.
+        for _ in range(queue.dispatch_limit if research_capacity_control is not None else 1):
+            action = queue.claim(clock, in_trading_session=in_session)
+            if action is None:
+                break
             proposal = proposals[action.plan_id]
             if action.kind == "CANCEL":
                 execution = next((e for e in proposal.executions if e.facade.plan.revision == action.revision), None)
@@ -328,4 +339,7 @@ def run_human_portfolio_day(*, backend, markets, events, initial_marks,
                                             "pending_cancellation_at_deadline": capacity_debt,
                                             "cancellation_races": cancellation_races,
                                             "expired_actions": sum(a.status == "INVALIDATED" for a in queue.actions.values())})
+    if research_capacity_control is not None:
+        from .parent_lane_operation import operation_envelope
+        account["operation"] = operation_envelope(policy, research_capacity_control)
     return result
