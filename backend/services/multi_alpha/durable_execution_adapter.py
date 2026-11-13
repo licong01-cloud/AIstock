@@ -20,7 +20,7 @@ from backend.services.multi_alpha.combine_backtest import (
     apply_pred_backtest_overrides,
     build_prediction_only_legs,
     combine_legs,
-    is_rank_fusion_scheme,
+    requires_panel_metrics,
     ingest_enhanced_metrics,
     is_runtime_external_data_link,
     json_mapping,
@@ -1804,7 +1804,7 @@ class QEWorkspacePredBacktestAdapter:
     ) -> tuple[pd.DataFrame, Mapping[str, Any], tuple[Mapping[str, Any], ...]]:
         child_kind = str(child["child_kind"])
         scheme = str(child.get("weighting_scheme") or "")
-        needs_panel_metrics = child_kind != "baseline" and not is_rank_fusion_scheme(scheme)
+        needs_panel_metrics = child_kind != "baseline" and requires_panel_metrics(scheme)
         if needs_panel_metrics:
             legs = self._panel_builder.build_combiner_legs(
                 legs=request.roster,

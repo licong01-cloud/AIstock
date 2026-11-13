@@ -7,12 +7,13 @@ state. Callers provide already-loaded prediction frames and optional leg metrics
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
-from backend.services.multi_alpha.orthogonality import normalize_prediction_frame
+from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 
 
 class MultiAlphaCombinerError(RuntimeError):
@@ -70,6 +71,7 @@ class MultiAlphaCombiner:
         weighting_scheme: str = "equal",
         normalize_method: str = "zscore",
         walk_forward: WalkForwardConfig | Mapping[str, Any] | None = None,
+        frozen_weights: Mapping[str, Any] | None = None,
     ) -> CombineResult:
         normalized_legs = [_coerce_leg(item) for item in legs]
         if len(normalized_legs) < 2:
@@ -80,6 +82,35 @@ class MultiAlphaCombiner:
         scheme = _normalize_scheme(weighting_scheme)
         method = _normalize_method(normalize_method)
         wf = _coerce_walk_forward(walk_forward)
+        if scheme == "frozen_weighted":
+            if method != "rank" or wf.enabled:
+                raise MultiAlphaCombinerError("frozen_weighted requires rank normalization and disabled walk_forward")
+            contract = validate_frozen_weights([leg.leg_id for leg in normalized_legs], frozen_weights)
+            frames: dict[str, pd.DataFrame] = {}
+            reference_keys: pd.DataFrame | None = None
+            for leg in normalized_legs:
+                frame = normalize_frozen_prediction_frame(leg.pred_frame, run_id=leg.leg_id)
+                keys = frame[["trade_date", "instrument"]].reset_index(drop=True)
+                if reference_keys is not None and not reference_keys.equals(keys):
+                    raise MultiAlphaCombinerError("frozen_weighted requires identical prediction keys; intersection cropping is forbidden")
+                reference_keys = keys
+                frame["norm_score"] = frame.groupby("trade_date", group_keys=False)["score"].transform(_rank_score)
+                frames[leg.leg_id] = frame[["trade_date", "instrument", "norm_score"]].rename(
+                    columns={"norm_score": f"score__{leg.leg_id}"}
+                )
+            aligned = _aligned_panel(frames)
+            dates = _sorted_dates(aligned["trade_date"].unique())
+            weights = contract["weights"]
+            combined = _combine_aligned(aligned, weights=weights, dates=dates)
+            summary = _summary(
+                combined, legs=normalized_legs, aligned=aligned, scheme=scheme,
+                normalize_method=method, walk_forward=wf, per_window=[],
+            )
+            summary["frozen_weights"] = contract
+            summary["normalization_scale"] = "per_date_average_rank_minus1_plus1"
+            return CombineResult(combined_score_frame=combined, weights=weights, summary=summary)
+        if frozen_weights:
+            raise MultiAlphaCombinerError("frozen_weights requires the explicit frozen_weighted scheme")
         normalized_frames = {
             leg.leg_id: _normalize_leg_scores(leg, method=method)
             for leg in normalized_legs
@@ -161,6 +192,59 @@ class MultiAlphaCombiner:
         leg_weights: Mapping[str, float] | None = None,
     ) -> CombineResult:
         return self.combine_rank_fusion(legs=legs, method=method, rrf_k=rrf_k, leg_weights=leg_weights)
+
+
+def normalize_frozen_prediction_frame(raw: Any, *, run_id: str) -> pd.DataFrame:
+    """Parse a frozen prediction without silently dropping or averaging rows."""
+    inspected = raw if isinstance(raw, (pd.DataFrame, pd.Series)) else pd.DataFrame(raw)
+    columns = inspected.columns if isinstance(inspected, pd.DataFrame) else [inspected.name]
+    names = {str(col).lower() for col in columns}
+    if "label" in names and not names.intersection({"score", "prediction", "pred"}):
+        raise MultiAlphaCombinerError("frozen_weighted requires predictions, not labels")
+    try:
+        frame = normalize_prediction_frame(raw, run_id=run_id)
+    except MultiAlphaOrthogonalityError as exc:
+        raise MultiAlphaCombinerError(str(exc)) from exc
+    invalid_instruments = frame["instrument"].isin(["", "None", "nan", "<NA>", "NaT"])
+    if (len(frame) != len(raw) or invalid_instruments.any()
+            or not frame["score"].abs().lt(float("inf")).all()):
+        raise MultiAlphaCombinerError(f"frozen_weighted leg {run_id} has invalid or duplicate prediction rows")
+    return frame
+
+
+def validate_frozen_weights(leg_ids: Sequence[str], value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate declared provenance and exact weights without estimating or rescaling."""
+    fields = {"schema_version", "weights", "source_ref", "source_sha256"}
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise MultiAlphaCombinerError("frozen_weights requires exactly schema_version, weights, source_ref and source_sha256")
+    if value["schema_version"] != "qe_frozen_weights_v1":
+        raise MultiAlphaCombinerError("unsupported frozen_weights schema_version")
+    source_ref, source_sha256 = value["source_ref"], value["source_sha256"]
+    if not isinstance(source_ref, str) or not source_ref.strip():
+        raise MultiAlphaCombinerError("frozen_weights source_ref must be non-empty")
+    if not isinstance(source_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+        raise MultiAlphaCombinerError("frozen_weights source_sha256 must be an explicit SHA256")
+    raw = value["weights"]
+    if len(leg_ids) < 2 or len(set(leg_ids)) != len(leg_ids):
+        raise MultiAlphaCombinerError("frozen_weights requires at least two unique leg ids")
+    if not isinstance(raw, Mapping) or set(raw) != set(leg_ids):
+        raise MultiAlphaCombinerError("frozen_weights must cover exactly all roster leg ids")
+    weights: dict[str, float] = {}
+    for leg_id in leg_ids:
+        weight = raw[leg_id]
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            raise MultiAlphaCombinerError("frozen_weights values must be finite non-negative numbers")
+        try:
+            weight = float(weight)
+        except (OverflowError, ValueError) as exc:
+            raise MultiAlphaCombinerError("frozen_weights values must be finite non-negative numbers") from exc
+        if not math.isfinite(weight) or weight < 0:
+            raise MultiAlphaCombinerError("frozen_weights values must be finite non-negative numbers")
+        weights[leg_id] = weight
+    if not math.isclose(math.fsum(weights.values()), 1.0, rel_tol=0, abs_tol=1e-12):
+        raise MultiAlphaCombinerError("frozen_weights must sum to one; automatic renormalization is forbidden")
+    return {"schema_version": value["schema_version"], "weights": weights,
+            "source_ref": source_ref, "source_sha256": source_sha256}
 
 
 def _coerce_leg(item: CombinerLeg | Mapping[str, Any]) -> CombinerLeg:
@@ -705,7 +789,7 @@ def _normalize_positive(raw: Mapping[str, float], *, fallback: Mapping[str, floa
 
 def _normalize_scheme(value: str) -> str:
     scheme = str(value or "equal").strip().lower()
-    allowed = {"equal", "ic_weighted", "risk_parity", "orthogonality_aware"}
+    allowed = {"equal", "ic_weighted", "risk_parity", "orthogonality_aware", "frozen_weighted"}
     if scheme not in allowed:
         raise MultiAlphaCombinerError(f"unsupported weighting_scheme={value!r}; expected one of {sorted(allowed)}")
     return scheme

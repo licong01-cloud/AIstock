@@ -35,7 +35,10 @@ import yaml
 from backend.db.pg_pool import get_conn
 from backend.infra.wsl_qlib_runner import win_to_wsl_path
 from backend.services.model_store import ModelStoreService, PredictionStoreError
-from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
+from backend.services.multi_alpha.combiner import (
+    CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError,
+    normalize_frozen_prediction_frame, validate_frozen_weights,
+)
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
 from backend.services.multi_alpha.qe_subprocess_env import (
@@ -49,7 +52,7 @@ COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
 COMBINE_BACKTEST_STALE_FAIL_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_STALE_FAIL"
 DEFAULT_WEIGHTING_SCHEMES = ("equal", "orthogonality_aware", "ic_weighted", "risk_parity")
 RANK_FUSION_WEIGHTING_SCHEMES = ("rank_fusion_rrf", "rank_fusion_borda")
-SUPPORTED_WEIGHTING_SCHEMES = DEFAULT_WEIGHTING_SCHEMES + RANK_FUSION_WEIGHTING_SCHEMES
+SUPPORTED_WEIGHTING_SCHEMES = DEFAULT_WEIGHTING_SCHEMES + RANK_FUSION_WEIGHTING_SCHEMES + ("frozen_weighted",)
 LOGICAL_PARTIAL_FAILED_STATUS = "partial_failed"
 # A P0-2 successor can finish with preserved unavailable children, and a
 # controlled durable run can finish cancelled.  They are terminal business
@@ -124,6 +127,7 @@ class CombineBacktestRequest:
     normalize_method: str = "zscore"
     walk_forward: Mapping[str, Any] = field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
     rank_fusion: Mapping[str, Any] = field(default_factory=dict)
+    frozen_weights: Mapping[str, Any] = field(default_factory=dict)
     backtest_config: Mapping[str, Any] = field(default_factory=dict)
     prediction_task_selection: Mapping[str, bool] | None = None
     baseline_leg_id: str | None = None
@@ -2072,7 +2076,7 @@ class MultiAlphaCombineBacktestService:
             message="loading seed ensemble panels and validating node capacity",
             progress={"node_id": node_id, "node_parallelism": node_parallelism},
         )
-        needs_panel_metrics = any(not is_rank_fusion_scheme(scheme) for scheme in request.weighting_schemes)
+        needs_panel_metrics = any(requires_panel_metrics(scheme) for scheme in request.weighting_schemes)
         if needs_panel_metrics:
             panels = self._panel_builder.build_combiner_legs(
                 legs=request.roster,
@@ -2123,7 +2127,7 @@ class MultiAlphaCombineBacktestService:
         build_failures: list[_PredictionTaskOutcome] = []
         for scheme in request.weighting_schemes:
             self._raise_if_run_timed_out(run_id=run_id, request=request, started_monotonic=run_started, phase="combining_scores")
-            combine_input = prediction_legs if is_rank_fusion_scheme(scheme) else panels
+            combine_input = panels if requires_panel_metrics(scheme) else prediction_legs
             try:
                 result = combine_legs(legs=combine_input, scheme=scheme, request=request)
             except MultiAlphaCombineBacktestError as exc:
@@ -2669,6 +2673,25 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         payload.get("prediction_task_selection")
     )
     selection = resolved_prediction_task_selection_value(prediction_task_selection)
+    frozen_weights: dict[str, Any] = {}
+    if "frozen_weighted" in schemes:
+        if (schemes != ("frozen_weighted",) or payload.get("normalize_method") != "rank"
+                or not isinstance(payload.get("walk_forward"), Mapping)
+                or payload["walk_forward"].get("enabled") is not False
+                or payload.get("rank_fusion")
+                or (len(roster) > 2 and selection["include_loo"])):
+            raise MultiAlphaCombineBacktestError(
+                "frozen_weighted requires a sole scheme, rank, explicitly disabled walk_forward, no rank_fusion, and no multi-leg LOO",
+                reason_code="frozen_weights_contract_invalid",
+            )
+        try:
+            frozen_weights = validate_frozen_weights([leg.leg_id for leg in roster], payload.get("frozen_weights"))
+        except MultiAlphaCombinerError as exc:
+            raise MultiAlphaCombineBacktestError(str(exc), reason_code="frozen_weights_contract_invalid") from exc
+    elif payload.get("frozen_weights"):
+        raise MultiAlphaCombineBacktestError(
+            "frozen_weights requires the explicit frozen_weighted scheme", reason_code="frozen_weights_contract_invalid",
+        )
     baseline_leg_id = (
         str(payload.get("baseline_leg_id") or roster[0].leg_id)
         if selection["include_baseline"]
@@ -2719,6 +2742,7 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         normalize_method=str(payload.get("normalize_method") or "zscore"),
         walk_forward=dict(payload.get("walk_forward") or {"enabled": True, "window": 60, "min_periods": 2}),
         rank_fusion=dict(payload.get("rank_fusion") or {}),
+        frozen_weights=frozen_weights,
         backtest_config=backtest_config,
         prediction_task_selection=prediction_task_selection,
         baseline_leg_id=baseline_leg_id,
@@ -2755,6 +2779,8 @@ def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
     }
     if request.prediction_task_selection is not None:
         snapshot["prediction_task_selection"] = dict(request.prediction_task_selection)
+    if request.frozen_weights:
+        snapshot["frozen_weights"] = dict(request.frozen_weights)
     return snapshot
 
 
@@ -3062,10 +3088,12 @@ def build_prediction_only_legs(
                 raw = prediction_loader(run_id) if prediction_loader is not None else pd.read_pickle(
                     store.prediction_path(run_id=run_id)
                 )
-                seed_frames.append(normalize_prediction_frame(raw, run_id=run_id))
+                normalizer = normalize_frozen_prediction_frame if request.frozen_weights else normalize_prediction_frame
+                seed_frames.append(normalizer(raw, run_id=run_id))
             except (
                 PredictionStoreError,
                 MultiAlphaOrthogonalityError,
+                MultiAlphaCombinerError,
                 OSError,
                 ValueError,
                 TypeError,
@@ -3077,6 +3105,12 @@ def build_prediction_only_legs(
                     leg_id=spec.leg_id,
                     context={"run_id": run_id},
                 ) from exc
+        if request.frozen_weights:
+            if len(set(spec.seed_run_ids)) != len(spec.seed_run_ids):
+                raise MultiAlphaCombineBacktestError("frozen seed sources must be unique", reason_code="frozen_weights_contract_invalid")
+            reference_keys = seed_frames[0][["trade_date", "instrument"]]
+            if any(not reference_keys.equals(frame[["trade_date", "instrument"]]) for frame in seed_frames[1:]):
+                raise MultiAlphaCombineBacktestError("frozen seed prediction keys differ", reason_code="frozen_weights_contract_invalid")
         ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
         ensemble = filter_prediction_window(
             ensemble,
@@ -3146,6 +3180,7 @@ def combine_legs(*, legs: Sequence[CombinerLeg], scheme: str, request: CombineBa
             weighting_scheme=scheme,
             normalize_method=request.normalize_method,
             walk_forward=request.walk_forward,
+            frozen_weights=request.frozen_weights,
         )
     except MultiAlphaCombinerError as exc:
         raise MultiAlphaCombineBacktestError(
@@ -3157,6 +3192,10 @@ def combine_legs(*, legs: Sequence[CombinerLeg], scheme: str, request: CombineBa
 
 def is_rank_fusion_scheme(scheme: str) -> bool:
     return scheme in RANK_FUSION_WEIGHTING_SCHEMES
+
+
+def requires_panel_metrics(scheme: str) -> bool:
+    return not is_rank_fusion_scheme(scheme) and scheme != "frozen_weighted"
 
 
 def rank_fusion_method_for_scheme(scheme: str) -> str:
@@ -3232,6 +3271,9 @@ def weights_payload(result: Any, *, scheme: str, request: CombineBacktestRequest
 
 
 def per_window_weights_payload(result: Any, *, scheme: str) -> list[dict[str, Any]]:
+    if scheme == "frozen_weighted":
+        return [{"weighting_scheme": scheme, "frozen_weights": dict(result.summary["frozen_weights"]),
+                 "normalization_scale": result.summary["normalization_scale"], "window_count": 0}]
     if not is_rank_fusion_scheme(scheme):
         return list(result.per_window_weights or [])
     summary = dict(getattr(result, "summary", {}) or {})
