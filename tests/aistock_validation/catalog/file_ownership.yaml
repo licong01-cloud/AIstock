@@ -151,6 +151,12 @@ rules:
     priority: 130
     include:
       - backend/services/advisory_model_first/**
+      - backend/services/advisory_forward/notifications.py
+      - backend/services/advisory_forward/notification_repository.py
+      - backend/services/advisory_forward/notification_transport.py
+      - backend/services/advisory_forward/scheduler.py
+      - backend/db/migrations/add_advisory_notifications_20261114.sql
+      - docs/architecture/advisory_notifications_f2_design_20261114.md
       - backend/tests/advisory_model_first/**
       - scripts/advisory_forward_recover.py
       - scripts/advisory_lstm_rank_value_review.py
