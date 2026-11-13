@@ -1,6 +1,6 @@
 # 申万L2固定成员相对收益：唯一非线性配对研究设计
 
-> v1.0；2026-11-13；owner：HMM；tier：F2。状态：`DESIGN_COMPLETE_CONTRACT_PROPOSED_NOT_APPROVED`。本轮用户授权方向取舍及设计长任务，未逐项批准下述L2-MEMBER-NONLINEAR-D1～D6；源码/新推断/正式fit均0。父蓝图§1.38/§7为方向权威；原C/S/W/M/VIX终态和耗尽预算不变。只交付本设计及父蓝图两份文档，不构造新的历史账本或QE任务。
+> v1.1；2026-11-13；owner：HMM；tier：F2。状态：`IMPLEMENTED_LOCAL_VERIFIED_FORMAL_RESEARCH_PENDING`。用户在本设计合入#7232后答复“批准执行”，批准L2-MEMBER-NONLINEAR-D1～D6及单包源码实施、审修交付、完整预检、6-fit和一次价值评价；源码完成两轮作者审修和最小本地验证，PR/CI及正式研究待完成，正式fit仍0。父蓝图§1.38/§7为方向权威；原C/S/W/M/VIX终态和耗尽预算不变。不构造新的历史账本或QE任务。
 
 ## 1. Background / 终极目标与一次取舍
 
@@ -37,7 +37,7 @@ TRAIN有限、全20维active，W与原S的scaler逐项相同；C的TRAIN行数/s
 
 不新增信息源、融资派生变量、估值/筹码/图网络、模型family并行、超参优化、正式QE、账户反事实、新API/UI、数据库表、环境变量记录、生产接线或日更调度。不修复/迁移已停实验链。荐股/LocalSIM及成本后账户验证仅在未来由对应owner处理。
 
-将来源码实施精确write scope建议为`backend/services/hmm_risk/risk_l2_member_nonlinear.py`、`scripts/hmm_risk/run_risk_l2_member_nonlinear.py`、`backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py`及本页/父蓝图。现有W、成员reader、margin研究及树内核只读复用，不改变它们的行为、schema或全局20维。当前write scope只有两份文档。
+已批准源码实施精确write scope为`backend/services/hmm_risk/risk_l2_member_nonlinear.py`、`scripts/hmm_risk/run_risk_l2_member_nonlinear.py`、`backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py`及本页/父蓝图。现有W、成员reader、margin研究及树内核只读复用，不改变它们的行为、schema或全局20维。
 
 ## 3. Contracts D1 / L2-MEMBER-NONLINEAR-D1：同成员目标及冻结输入
 
@@ -145,7 +145,7 @@ J_t = avoided_loss_t-missed_upside_t
 
 ## 8. Contracts D6 / L2-MEMBER-NONLINEAR-D6：Implementation Plan / Verification Plan
 
-P0和本设计审修为一个包，当前不实施/拟合。精确合同批准后，后继合并一个实现—验证—研究包：独立最小模块/CLI/直接测试→至少两轮作者审修与修复→changed-files/ownership/module最小计划、Ruff/compile/L0/F2/PR精确HEAD CI及合入→clean HEAD上完整旧载体/季度预检→6-fit/JSON恢复/双process预测与事前预算封存→一次价值评价及蓝图同步。生产授权与源码/研究状态分离，不把合入当经济验收。
+P0和本设计审修已完成，精确合同现已批准；接续合并一个实现—验证—研究包：独立最小模块/CLI/直接测试→至少两轮作者审修与修复→changed-files/ownership/module最小计划、Ruff/compile/L0/F2/PR精确HEAD CI及合入→clean HEAD上完整旧载体/季度预检→6-fit/JSON恢复/双process预测与事前预算封存→一次价值评价及蓝图同步。生产授权与源码/研究状态分离，不把合入当经济验收。
 
 Allowed APIs（已查实，调用前读对应直接函数，不发明入口）：
 
@@ -164,7 +164,7 @@ Allowed APIs（已查实，调用前读对应直接函数，不发明入口）�
 
 ## 9. Design Acceptance Index
 
-本轮验收范围仅为完整方向裁决和精确设计，源码与正式研究未实施并明确pending，不以设计PASS宣称模型可用。
+P0方向裁决和精确设计已合入并获批；本轮验收扩展至批准的完整实现和研究。下表当前验证源码交付层，不提前验证合入后才能执行的正式研究：完整clean HEAD预检、6-fit/双process封存、J及全部诊断均待执行，CI/合入待完成。上述是D6已规定的后续执行顺序，不是批准之外的实现缺口或范围缩减。不以源码/F2 PASS宣称研究完成、模型可用或经济通过；正式执行后在本表及§11更新真实结果。
 
 F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/载体与公平比较；F-003：固定模型/数值/预算/封存；F-004：机会成本后价值/NA/停止；F-005：单包实现/验证/owner及生产边界。
 
@@ -173,21 +173,23 @@ F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | 本页§1/§2；父蓝图§1.38/§7 | artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/evaluation_v1.json；旧20维树设计及原W设计§11；原始论文引用 | DESIGN_COMPLETE_ONLY | 无 |
-| F-002 | 本页D1/D2；risk_l2_member_return.within_inputs/within_training/validate_q4_control | artifact: F:/Dev/AIstock_runtime/hmm_l2_signed_member_return/20261109/prepare_v2/prepared.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_within_member_return/20261111/fit_v1/acceptance.json；本页§1.2零fit读回 | DESIGN_COMPLETE_ONLY | 无 |
-| F-003 | 本页D3/D4；l2_economic_candidates.TREE_PARAMS/tree_predict | backend/tests/hmm_risk/test_l2_economic_candidates.py；本机sklearn签名/参数只读核验及官方文档 | DESIGN_COMPLETE_ONLY | 无 |
-| F-004 | 本页D5及数学/停止定义 | backend/tests/hmm_risk/test_risk_l2_margin_information.py：现有预算/NA/J算术；本页完整目标/对照定义 | DESIGN_COMPLETE_ONLY | 无 |
-| F-005 | 本页D6/§10/§11及精确范围 | validation-receipt: 本页§11最终F2/diff结果及同一PR精确HEAD；执行scripts/aistock_feature_workflow.py validate --design本页 --tier F2 | DESIGN_COMPLETE_ONLY | 无 |
+| F-002 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：load_request/prepare/load_packet；原within_training | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：原变换/季度/身份；原冻结artifact及§1.2读回 | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-003 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：fit_packet/validate_parameters/close_fits/predict；scripts/hmm_risk/run_risk_l2_member_nonlinear.py | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：JSON/float32/全部树节点/attempt/fit poison；backend/tests/hmm_risk/test_l2_economic_candidates.py | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-004 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：freeze_groups/compare_groups/evaluate | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：事前ties/同预算/J/合法NA/封存前禁读 | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-005 | 本页D6/§10/§11；CLI独立prepare/run/evaluate与单季fit child | validation-receipt: 本页§11最小本地门禁及同一PR精确HEAD CI；F2 validator | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
 
 ## 10. Risks / Production Gates / Rollout / Rollback
 
 最大风险不是缺数据，而是同一信息集确实没有可迁移收益信号，增加函数容量可能只增加拟合内乐观和选择偏差；新N未证明能改善上涨机会成本。已消费历史、Q4极短、价格非total-return、回溯分类与旧队列选择性全部保持。旧20维树失败亦是负面先验，不因模型名不同忽略它；本候选只是6-fit的一个受控未解问题，不开启常规模型搜索。
 
-production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop；database_access=false、dataset_write=false、active_profile_write=false、runtime_activation=false、service_control=false、QE_tasks=0。无需后端重启。未来rollout仅独立研究源码及版本化文件，不改任何线上默认/资产；无生产rollback。工作树/分支清理未授权，保留其他任务修改。
+production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop；database_access=false、dataset_write=false、active_profile_write=false、runtime_activation=false、service_control=false、QE_tasks=0。canonical changed-file分类为runtime_impact=backend、target_ids=[backend-main]、catalog_error=null，不擅自降为none；本轮无线上调用方/运行激活，不声明backend运行态验收完成。离线CLI在clean source独立process运行，研究执行不依赖后端重启；后端若需加载该源码由用户操作。未来rollout仅独立研究源码及版本化文件，不改任何线上默认/资产；无生产rollback。工作树/分支清理未授权，保留其他任务修改。
 
 ## 11. 批准、审修和交付状态
 
-`L2-MEMBER-NONLINEAR-D1～D6=PROPOSED_NOT_APPROVED`。用户2026-11-13要求按建议规划并执行长任务，授权方向裁决与设计审修；前一轮建议明确P0不启动新fit，本轮不据此推定新精确模型/6-fit已获批准。设计可按既有文档交付授权审修/F2/CI后提交合入；合同、源码实施、正式fit与生产采用分别记录。当前新增源码/模型/预测/fit均0，未启动QE。
+`L2-MEMBER-NONLINEAR-D1～D6=APPROVED_BY_USER_20261113`。P0设计在#7232合入10108e4362b7dc9f03c32def6874d3cb79f5bfc3时为未批准历史快照；随后用户明确“批准执行”，现授权单包实施—审修—交付—完整文件预检—6-fit—一次J评价。当前源码完成本地验证，正式模型/预测/fit仍0；生产采用、QE及cleanup未授权，不把源码批准冒充这些动作。
+
+实施两轮作者审核（非独立第三方）已完成：第一轮检查冻结载体/训练同一性、季度只读边界、64树完整JSON恢复、float32阈值及所有节点合法性、失败attempt禁重试；补齐直接helper源码pins，防止原函数含义漂移。第二轮核对完整131及事前E_t、同预算N/C/X与J符号、未成熟日不造0、固定队列/原W统计角色适配及封存后才读outcome；旧统计函数的schema/contract/status均丢弃，外部identity为真实N。11项直接测试禁止真实fit/DB/network，联合现有树内核共38项通过；module ownership 3/3、changed-file classifier映射hmm.risk→l0+hmm_risk_pr_slice，无unmapped/unexecuted；validation_module_registry_l0（8项）/L0/Ruff/compile/diff均通过，F2两文档均PASS。完整HMM矩阵不本地重复，交CI/Nightly；实际源码commit与精确CI由同一PR固定。
 
 两轮当前作者审核已完成（非独立第三方）：第一轮核对历史去重、原始论文适用边界、三季度TRAIN/W/C身份与原叶参数，明确C不是同目标消融，补同敞口无排序X及完整价值向量，不以胜过弱W/C就称可采用；不重做已完成波动/价格/队列归因。第二轮核对只改估计器、原active/scaler到u再到identity树层的两阶段变换、float32/JSON、季度子进程隔离、6-attempt无重试、事前预算/真实NA及设计—源码—fit批准边界。F2首轮检出标题和证据格式问题，已用标准Matrix标题/既有artifact及同页回执引用修正，未改validator或门禁。最终本页F2为5 index/5 matrix、父蓝图为16 index/20 matrix，均PASS、warnings=0，diff/scope检查通过；精确提交/CI见同一PR。
 
-DESIGN-COMPLIANCE-001逐项：完整设计不冒称实现/研究；旧负结果及NA/发布时间局限公开；原合同/消费者/数据/他模块不变；不增加每行业合取、显著性/资源门或未批准审批。未批准的新模型不实施，设计validator仅验本轮设计完整性，不代表模型通过或用户已批准。新增源码/预测/fit、DB/数据集/profile/服务/QE动作均0，不为记录重启。
+P0两轮审核继续作为设计交付历史保留。当前实施DESIGN-COMPLIANCE-001四项PASS：批准的五文件范围与D1～D6实现完整，正式研究单列pending不冒称经济通过；无默认score/静默fallback，旧负结果及合法NA/时间局限公开；原合同/消费者/数据/他模块不变；无新增每行业合取、显著性/资源门或人工审批。设计validator不代表模型通过。正式预测/fit、DB/数据集/profile/服务/QE动作当前均0，不为记录重启。
