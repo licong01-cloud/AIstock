@@ -200,9 +200,9 @@
   },
   "first_seen_at": "2026-10-23T06:45:23.572361Z",
   "fix_branch": "bug/BUG-2076-alpha-seed-20261023",
-  "fix_commit": "a80eff3af8ccbc8adc32b49adfc1cba69a0a7a8b",
+  "fix_commit": "10259ee2c3fcacb54fe1a5f80f4ab96c45af5a9c",
   "fix_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635",
-  "fixed_at": null,
+  "fixed_at": "2026-11-13T08:09:22Z",
   "github_issue_number": 6634,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6634",
   "last_seen_at": "2026-10-23T06:45:23.572361Z",
@@ -210,6 +210,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -235,6 +236,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -248,7 +250,28 @@
   "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope.",
   "scope_expansion_note": "新增可移植的38项资产核验收据；仅证据文件，不增加生产操作。",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2076",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8795d60a219623d3",
+    "recorded_at": "2026-11-13T08:10:07.675275Z",
+    "runtime_contract_digest": "cfb895d2fdfdb3e089faf40906cb7c56623876e2d2e7ae3c406398a3fa2d872d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "370803a00ee49306a7911d8c20cc5d9201cc59ab",
+    "source_merge_commit": "10259ee2c3fcacb54fe1a5f80f4ab96c45af5a9c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635",
+    "validation_evidence": [
+      "Current HEAD 370803a00ee49306a7911d8c20cc5d9201cc59ab: 14 direct recovery tests passed; ruff passed; validation_module_registry_l0 passed (8 tests,14 mapped); git diff --check passed; exact-head CI verdict success. Original asset closures 33 still blocked; no production asset writes, activation or service restart."
+    ],
+    "validation_evidence_digest": "c19e70ffa85d1d86c00477e9c902186c1d3d17cb1d53da06387ed683e1b649c8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -257,6 +280,9 @@
     "fingerprint": "e332c63ef338c00349ba5775",
     "source_event_id": "FE-20261023-e332c63ef338"
   },
+  "validation_evidence": [
+    "Current HEAD 370803a00ee49306a7911d8c20cc5d9201cc59ab: 14 direct recovery tests passed; ruff passed; validation_module_registry_l0 passed (8 tests,14 mapped); git diff --check passed; exact-head CI verdict success. Original asset closures 33 still blocked; no production asset writes, activation or service restart."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
