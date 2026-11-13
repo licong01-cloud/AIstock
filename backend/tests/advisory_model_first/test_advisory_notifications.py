@@ -9,7 +9,9 @@ import pytest
 from backend.services.advisory_forward.notifications import (
     CN, AdvisoryNotificationService, configured_channels, events_for_day,
 )
-from backend.services.advisory_forward.notification_transport import AdvisoryNotificationTransport
+from backend.services.advisory_forward.notification_transport import (
+    AdvisoryNotificationTransport, ExternalNotificationDeliveryError,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +87,8 @@ def test_email_failure_is_not_ui_success(monkeypatch, transport):
     import smtplib
     monkeypatch.setattr(smtplib, 'SMTP_SSL', lambda *a, **k: (_ for _ in ()).throw(OSError('secret')))
     monkeypatch.setattr(transport, '_show_streamlit_notification', lambda *a: pytest.fail('UI fallback'))
-    assert transport.send_external_message('email', 'x', 'y') is False
+    with pytest.raises(ExternalNotificationDeliveryError, match='EMAIL_TRANSPORT_ERROR'):
+        transport.send_external_message('email', 'x', 'y')
     transport.config['email_password'] = ''
     assert transport.send_external_message('email', 'x', 'y') is False
 
@@ -125,7 +128,11 @@ def test_webhook_failure_never_becomes_sent(monkeypatch, transport, mode):
     monkeypatch.setattr(transport, '_post_webhook', send)
     if mode == 'unsupported':
         transport.config['webhook_type'] = 'unknown'
-    assert transport.send_external_message('webhook', 'x', 'y') is False
+    if mode in {'bad_json', 'network_error'}:
+        with pytest.raises(ExternalNotificationDeliveryError, match='WEBHOOK_TRANSPORT_ERROR'):
+            transport.send_external_message('webhook', 'x', 'y')
+    else:
+        assert transport.send_external_message('webhook', 'x', 'y') is False
 
 
 def test_legacy_send_notification_still_uses_original_fallback(monkeypatch, transport):

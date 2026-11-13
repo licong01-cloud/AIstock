@@ -7,6 +7,10 @@ from typing import Dict
 from notification_service import NotificationService, notification_service
 
 
+class ExternalNotificationDeliveryError(RuntimeError):
+    """Sanitized transport failure; the Advisory queue owns retry and recording."""
+
+
 class AdvisoryNotificationTransport(NotificationService):
     def __init__(self, shared=None):
         # Shared configuration is read, never changed. No second credential loader.
@@ -42,7 +46,7 @@ class AdvisoryNotificationTransport(NotificationService):
             return type(code) is int and code == 0
         except Exception:
             # A requests exception can contain the secret webhook URL.
-            return False
+            raise ExternalNotificationDeliveryError('WEBHOOK_TRANSPORT_ERROR') from None
 
     def _post_webhook(self, data: Dict):
         """Bounded strict HTTP transport; legacy transports remain inherited."""
@@ -81,4 +85,4 @@ class AdvisoryNotificationTransport(NotificationService):
             return True
 
         except Exception:
-            return False
+            raise ExternalNotificationDeliveryError('EMAIL_TRANSPORT_ERROR') from None
