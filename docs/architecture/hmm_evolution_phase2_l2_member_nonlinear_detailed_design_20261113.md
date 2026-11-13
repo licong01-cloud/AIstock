@@ -1,6 +1,6 @@
 # 申万L2固定成员相对收益：唯一非线性配对研究设计
 
-> v1.1；2026-11-13；owner：HMM；tier：F2。状态：`IMPLEMENTED_LOCAL_VERIFIED_FORMAL_RESEARCH_PENDING`。用户在本设计合入#7232后答复“批准执行”，批准L2-MEMBER-NONLINEAR-D1～D6及单包源码实施、审修交付、完整预检、6-fit和一次价值评价；源码完成两轮作者审修和最小本地验证，PR/CI及正式研究待完成，正式fit仍0。父蓝图§1.38/§7为方向权威；原C/S/W/M/VIX终态和耗尽预算不变。不构造新的历史账本或QE任务。
+> v1.2；2026-11-13；owner：HMM；tier：F2。状态：`STOP_NO_INCREMENTAL_VALUE_REFERENCE`。用户批准D1～D6后，源码#7234合入，完整文件预检PASS、6/6 fits、双process模型及18,602行预测/事前预算封存、一次原生及复权价值评价全部完成。132日主J=−22.2849551bp，未达原>0资源筛选；不交新QE、不追加fit/候选或翻转分数。父蓝图§1.39/§7为当前方向权威；原C/S/W/M/VIX终态和全部旧资产不变。结果及准确边界见§11.1。
 
 ## 1. Background / 终极目标与一次取舍
 
@@ -164,7 +164,7 @@ Allowed APIs（已查实，调用前读对应直接函数，不发明入口）�
 
 ## 9. Design Acceptance Index
 
-P0方向裁决和精确设计已合入并获批；本轮验收扩展至批准的完整实现和研究。下表当前验证源码交付层，不提前验证合入后才能执行的正式研究：完整clean HEAD预检、6-fit/双process封存、J及全部诊断均待执行，CI/合入待完成。上述是D6已规定的后续执行顺序，不是批准之外的实现缺口或范围缩减。不以源码/F2 PASS宣称研究完成、模型可用或经济通过；正式执行后在本表及§11更新真实结果。
+P0方向裁决和精确设计已合入并获批，源码及正式研究现均已完整执行。下表验证实现与研究完成，不以完整执行/F2 PASS宣称经济通过；§11.1的J终态为STOP，生产/QE采用未执行。
 
 F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/载体与公平比较；F-003：固定模型/数值/预算/封存；F-004：机会成本后价值/NA/停止；F-005：单包实现/验证/owner及生产边界。
 
@@ -172,11 +172,11 @@ F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本页§1/§2；父蓝图§1.38/§7 | artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/evaluation_v1.json；旧20维树设计及原W设计§11；原始论文引用 | DESIGN_COMPLETE_ONLY | 无 |
-| F-002 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：load_request/prepare/load_packet；原within_training | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：原变换/季度/身份；原冻结artifact及§1.2读回 | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
-| F-003 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：fit_packet/validate_parameters/close_fits/predict；scripts/hmm_risk/run_risk_l2_member_nonlinear.py | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：JSON/float32/全部树节点/attempt/fit poison；backend/tests/hmm_risk/test_l2_economic_candidates.py | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
-| F-004 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：freeze_groups/compare_groups/evaluate | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：事前ties/同预算/J/合法NA/封存前禁读 | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
-| F-005 | 本页D6/§10/§11；CLI独立prepare/run/evaluate与单季fit child | validation-receipt: 本页§11最小本地门禁及同一PR精确HEAD CI；F2 validator | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-001 | 本页§1/§2；父蓝图§1.38/§1.39/§7 | artifact: F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/evaluation_v1.json；原始论文与本页§11.1真实终态 | COMPLETE_NO_PROMOTION_SUPPORT | 无 |
+| F-002 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：load_request/prepare/load_packet；原within_training | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/prepare_v1/preflight.json | FORMAL_PREFLIGHT_VERIFIED | 无 |
+| F-003 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：fit_packet/validate_parameters/close_fits/predict；scripts/hmm_risk/run_risk_l2_member_nonlinear.py | 直接测试及树内核；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/run_v1/acceptance.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/run_v1/prediction_acceptance.json | FORMAL_6_FITS_AND_DUAL_PROCESS_VERIFIED | 无 |
+| F-004 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：freeze_groups/compare_groups/evaluate | 直接NA/J测试；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/evaluation_v1.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/arithmetic_review_v1.json | EVALUATION_COMPLETE_STOP_NO_VALUE | 无 |
+| F-005 | 本页D6/§10/§11；CLI独立prepare/run/evaluate与单季fit child | validation-receipt: 本页§11源码#7234精确HEAD CI及§11.1正式clean source与零fit复核；F2 validator | IMPLEMENTATION_AND_RESEARCH_COMPLETE | 无 |
 
 ## 10. Risks / Production Gates / Rollout / Rollback
 
@@ -186,10 +186,49 @@ production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop；da
 
 ## 11. 批准、审修和交付状态
 
-`L2-MEMBER-NONLINEAR-D1～D6=APPROVED_BY_USER_20261113`。P0设计在#7232合入10108e4362b7dc9f03c32def6874d3cb79f5bfc3时为未批准历史快照；随后用户明确“批准执行”，现授权单包实施—审修—交付—完整文件预检—6-fit—一次J评价。当前源码完成本地验证，正式模型/预测/fit仍0；生产采用、QE及cleanup未授权，不把源码批准冒充这些动作。
+`L2-MEMBER-NONLINEAR-D1～D6=APPROVED_BY_USER_20261113`。P0设计在#7232合入10108e4362b7dc9f03c32def6874d3cb79f5bfc3时为未批准历史快照；随后用户明确“批准执行”，完整单包实施—审修—交付—预检—6-fit—J评价已完成。下述本地源码审修为正式研究前快照，现正式结果以§11.1为准；生产采用、QE及cleanup未执行，不把源码/研究完成冒充这些动作。
 
 实施两轮作者审核（非独立第三方）已完成：第一轮检查冻结载体/训练同一性、季度只读边界、64树完整JSON恢复、float32阈值及所有节点合法性、失败attempt禁重试；补齐直接helper源码pins，防止原函数含义漂移。第二轮核对完整131及事前E_t、同预算N/C/X与J符号、未成熟日不造0、固定队列/原W统计角色适配及封存后才读outcome；旧统计函数的schema/contract/status均丢弃，外部identity为真实N。11项直接测试禁止真实fit/DB/network，联合现有树内核共38项通过；module ownership 3/3、changed-file classifier映射hmm.risk→l0+hmm_risk_pr_slice，无unmapped/unexecuted；validation_module_registry_l0（8项）/L0/Ruff/compile/diff均通过，F2两文档均PASS。完整HMM矩阵不本地重复，交CI/Nightly；实际源码commit与精确CI由同一PR固定。
 
 两轮当前作者审核已完成（非独立第三方）：第一轮核对历史去重、原始论文适用边界、三季度TRAIN/W/C身份与原叶参数，明确C不是同目标消融，补同敞口无排序X及完整价值向量，不以胜过弱W/C就称可采用；不重做已完成波动/价格/队列归因。第二轮核对只改估计器、原active/scaler到u再到identity树层的两阶段变换、float32/JSON、季度子进程隔离、6-attempt无重试、事前预算/真实NA及设计—源码—fit批准边界。F2首轮检出标题和证据格式问题，已用标准Matrix标题/既有artifact及同页回执引用修正，未改validator或门禁。最终本页F2为5 index/5 matrix、父蓝图为16 index/20 matrix，均PASS、warnings=0，diff/scope检查通过；精确提交/CI见同一PR。
 
-P0两轮审核继续作为设计交付历史保留。当前实施DESIGN-COMPLIANCE-001四项PASS：批准的五文件范围与D1～D6实现完整，正式研究单列pending不冒称经济通过；无默认score/静默fallback，旧负结果及合法NA/时间局限公开；原合同/消费者/数据/他模块不变；无新增每行业合取、显著性/资源门或人工审批。设计validator不代表模型通过。正式预测/fit、DB/数据集/profile/服务/QE动作当前均0，不为记录重启。
+P0两轮审核继续作为设计交付历史保留。当前DESIGN-COMPLIANCE-001四项PASS：批准的五文件范围与D1～D6实现及正式研究完整，不冒称经济通过；无默认score/静默fallback，旧负结果及合法NA/时间局限公开；原合同/消费者/数据/他模块不变；无新增每行业合取、显著性/资源门或人工审批。正式fit严格6次；DB/数据集/profile/服务/QE动作均0，不为记录重启。
+
+### 11.1 正式执行、结果及停止（2026-11-13）
+
+源码PR #7234，最终HEAD=`eff89144725c2e75ea2140066a82d56e82c6a474`，CI run43352234835全部必需项通过，merge/正式clean source=`e3920b5a0d6e551f746f9aed120ab94de10bad59`。独立fit/predict子进程均显式绑定该worktree/PYTHONPATH、固定Conda base和单线程数值环境；没有依赖安装、控制refit或额外试验。
+
+正式根为`F:/Dev/AIstock_runtime/hmm_l2_member_nonlinear/20261113/`，以下为完整canonical pin（标注file者除外）：
+
+| 载体 | 身份/结果 |
+|---|---|
+| request_v1.json file SHA | 19b356a7251f3f418662fbe739f3b204efc5c49abd6d7565da375ec04a395443 |
+| prepare_v1/preflight.json | d1789377d0ee505ccf04aeeebee707da7519aa7f6f71f99ea262f305b6a17ae4；PASS；原三季度TRAIN 88,929/89,569/89,871行，714/715/716日；原mask及u/y/w/scaler完全闭合 |
+| run_v1/acceptance.json | 94d0e3e759c85a0bba5edf8cbb14a79794b3a1e52cbc23ef2a763fc37133977c；6/6 fits；两process模型字节相同 |
+| Q2 N model parameter SHA | c61acd24ffedc339b793171a759859cd04696606a96b4de56963febdb059c77b |
+| Q3 N model parameter SHA | 05a3099598ba4aa14042543e7b7f391ee49f0b2fb2b7d6a976b66b20df3c398f |
+| Q4 N model parameter SHA | 27f8b7075ee5250642168863fb108825c76c78b6ca30bcf396d2243a737f07a0 |
+| run_v1/predictions_1.json | a2790321e3917ea4782d5a77161c4b2b011a92761553175cb3c6dca3dde45ee3；file SHA f970ea04ccf5805fd8820213b11a1b09a302f1b21736673eb2198518123b71f7；7,568,187 bytes；与process2相同 |
+| run_v1/prediction_acceptance.json | d4605e9e154135427f149a1d6ba74e7401761f2aa236f408e7a4c1908e6f507d；18,602唯一键=142日×131，全部预测available，N/C/X事前分组先封存 |
+| evaluation_v1.json | 3197354ab3a2411c4a975e2c7a2cf028158c0bfae7bc860cdbe71516836d479e；file SHA bfc345a64380119a9078369d4d1b397ff553b48392acdb62be5c85942b8d5ada |
+| arithmetic_review_v1.json | b8d4eb1b58c029f59a0d8ad732f123c3ff14878f6924e69e6b1a6d87f524d950；零fit、DB/network poison下19,599项直接算术/identity断言PASS，非独立第三方审核 |
+
+原生价格、完整131固定预算、日期等权的**重叠10日gross参考**如下，单位bp；不是组合NAV或净收益，不能年化相加：
+
+| 比较 | 可评价日 | J均值 [HAC 95%区间] | 增量避损 | 增量错过上涨 |
+|---|---:|---|---:|---:|
+| N−C（唯一主量） | 132 | −22.2849551 [−81.2961102,+36.7262001] | −47.9257538 | −25.6407987 |
+| N−X | 130 | −22.2844067 [−41.6644680,−2.9043454] | −10.3408788 | +11.9435279 |
+| C−X | 130 | +0.5485645 [−52.7968132,+53.8939421] | +38.1778425 | +37.6292780 |
+
+主量为负：N相对C虽少错过上涨约25.64bp，却多承担损失约47.93bp；相对X既少避损又多错过上涨。不是“只因显著性不足被挡”，也不是因正常停牌/弱行情/全行业AND门失败。主J区间跨零，不能推断所有非线性无效；只是本精确组合未达原>0资源筛选。N/C差权重为0使两条合法端点NA代数抵消，主量保留132日；N−X/C−X在这两日无法相消，只有130日，**不同人口均值不可直接相加**，共同逐日代数已独立代码复核。末10日1,310条outcome保持未成熟，未缩短142日预测；原17,290可用标签及2条合法端点NA均保留。
+
+季度主J：Q2 60日+27.2846280bp，Q3 65日−60.4406586bp，Q4 7日−92.8641346bp。Q4极短且重叠，窄区间不构成独立强证据；Q2相对C正也不代表有效，因为同季N−X=−30.1857138bp。相同封存分组下复权敏感性主J=−21.6972354bp，结论未翻转，不据此更换主价格基准。
+
+完整L2同日Rank IC：N=−0.0797919277、W=−0.0746598607、S=−0.0341349048、负C=+0.0681971104；N−负C=−0.1479890381，N−W=−0.0051320670。N日期内MSE=0.0036710541，相对0-score 0.0035825998的skill=−2.4690%；没有“非线性已修复线性限制”的证据。N高/低组原生S均值−2.6764651%/−0.1103525%，排序方向不支持采用，**不事后翻转score**。
+
+原固定队列仍为2,053行/1,269唯一股票日，88条未成熟保留；114可评价日N IC=+0.0571431402，相对S改善+0.0812708112，但对负C仍−0.0116702557。三seed差异仅诊断，不独立；不能挑局部提升覆盖全L2/J失败。叶日期覆盖Q2为76..714、Q3为84..715、Q4为52..716，未据此追加门禁/重训。
+
+两轮结果审修（非独立第三方）：第一轮核对参数/预测双process、6-attempt、完整事前人口、NA与主J分解，保留N/C/X可评价日不同的真实语义；第二轮复算全部每日J分解、共同日期三臂代数、session距离HAC统计、原W精确旧值及固定队列计数，检查bp/%换算及原生/复权结论一致。所有复核零fit，不重复打开旧账户或重过滤旧HMM。
+
+**最终取舍**：`STOP_NO_INCREMENTAL_VALUE_REFERENCE`，本20D/固定成员/日期内目标/季度/64浅树精确组合结束。N不进入AF重复性复核或QE，因为该后续条件未触发；不要求QE/数据窗口处理本轮结果，不追加模型/深度/树数/特征/窗口/seed，不恢复W/S/M预算。后继若另作研究，必须先有未覆盖的信息机制与场景价值问题，不以换更复杂估计器或重做旧合法性工作充当方向。数据库/数据集/profile/依赖/服务/生产/QE动作0，离线研究无需用户重启，不宣称backend运行态已验收。
