@@ -1,7 +1,7 @@
 # C2机会到派单耦合：父计划独立操作时钟机制对照
 
 日期：2026-11-13。Owner：position_timing；账户执行owner：LocalSIM。Feature tier：F1。
-状态：DESIGN_VERIFIED_IMPLEMENTATION_NOT_STARTED；本轮只交付设计，尚无新plan/CLI、producer适配、新账户或收益结果。设计验收不等于实现或经济确认。
+状态：TIMING_RESEARCH_INTERFACE_IMPLEMENTED_LOCALSIM_NOT_STARTED；设计已由#7237合入，择时侧研究plan/inspect及两臂分析适配已实现，本轮来源验收、CI和源码交付身份由末节回执记录。LocalSIM producer适配、新账户和正式收益结果仍未开始。设计或软件验收不等于账户完成或经济确认。
 
 ## Background
 
@@ -11,7 +11,7 @@
 
 ## Scope / Non-goals
 
-本轮允许写入仅为本文、日内F2蓝图、上轮P2 F1的衔接/历史归属说明；机器校验和交付回执仅在`X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/`。没有业务代码、测试或其他模块修改；不重跑账户、训练/推理、扫参、查数据库、补数据、改active/profile或控制服务。后端重启始终归用户，本轮无需重启。
+首轮设计只写本文、日内F2蓝图及P2 F1的历史衔接，证据保留在`X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/`。本轮允许写入仅为`backend/services/position_timing/intraday/dispatch_coupling_research.py`、同目录`dispatch_coupling_results.py`、`backend/tests/position_timing/test_intraday_dispatch_coupling.py`、本文及日内F2蓝图；本轮机器证据和冻结计划仅在`X:/AIstock_temp/position-timing-dispatch-capacity-20261113/`。不修改其他模块或旧实现closure，不重跑账户、训练/推理、扫参、查数据库、补数据、改active/profile或控制服务。后端重启始终归用户，本轮无需重启。
 
 后续只新增一个研究臂C2L的17账户日，原C2的17日只读复用，不扩为四规则×多延迟矩阵。B0/W15/P2、原13户、288案例及1—9月产物保留，不参与新增显著性比较。本设计不授权择时窗口修改LocalSIM；其owner按本合同做最小离线接缝，不扩展生产配置、策略包或荐股界面。
 
@@ -19,7 +19,7 @@
 
 ### 1. 权威输入与冻结人口
 
-本轮设计审计源码基线`76b050e28941d7dda27d9bc31db3c12ca042a5a4`。已有诊断交付回执`X:/AIstock_temp/position-timing-c2-w15-mechanism-20261113/source_delivery_receipt_r1.json`，完整SHA `48a3a62323382bcade17eafe641bb5b8db00d69c77d22de3ae53b14515a9d4d0`。它及其中FileRef为路径/身份权威，不从账户名或文件夹猜来源；本轮仅做设计所需的元数据内容校验，不冒称重新执行过完整11,150项经济来源preflight。
+首轮设计审计源码基线`76b050e28941d7dda27d9bc31db3c12ca042a5a4`。已有诊断交付回执`X:/AIstock_temp/position-timing-c2-w15-mechanism-20261113/source_delivery_receipt_r1.json`，完整SHA `48a3a62323382bcade17eafe641bb5b8db00d69c77d22de3ae53b14515a9d4d0`。它及其中FileRef为路径/身份权威，不从账户名或文件夹猜来源；首轮设计只核对元数据，没有重跑该诊断的11,150项来源preflight。本轮接口复用原四户完整来源预检，计划closure另加入baseline spec及producer contract引用，共11,146份；用途不同，不以与旧诊断总数相同作为完整性判据。
 
 | 冻结对象 | 完整SHA256 / 身份 |
 |---|---|
@@ -67,11 +67,25 @@ C2L从C2的真实9月末经济期初克隆：现金、持仓数量/成本/可卖
 | LocalSIM | opt-in容量overlay，旧默认仍账户单操作员；新增C2L 17日及原生账户inspect/回执 | 不重放旧C2、原四户68日、1—9月、13户、288案例，不复制账本/撮合或切生产配置 |
 | 数据owner | 仅处理实际证据化来源缺口 | 本轮无数据需求，不把未来行情/新数据版本设为前置条件 |
 
-本轮只有设计，**以下是拟实现合同，不是已有CLI或可执行request**。后续plan schema `position_timing_dispatch_capacity_plan_v1`冻结本设计版本/来源commit、上述完整FileRef closure、baseline C2映射与opening、17日期/850目标、底层policy快照/hash、base execution及capacity overlay、费用和price identity、唯一比较/统计配置；按canonical内容生成身份，自有不可变路径，不改旧registry/产物。
+plan schema `position_timing_dispatch_capacity_plan_v1`冻结本设计批准commit `59b1b7ea0edeff932d8a85fcebdb0917871d52db`/文档Git blob `3890ced18ab30a1982a6bb4c795232be7b52e5e5`、实现来源commit、完整FileRef closure、baseline C2映射与opening、17日期/850目标、底层policy快照/hash、base execution及capacity overlay、费用和price identity、唯一比较/统计配置；按canonical内容生成身份，自有不可变路径，不改旧registry/产物。进度说明以后更新不回写该已批准合同身份。
 
-拟议研究模块为`backend/services/position_timing/intraday/dispatch_coupling_research.py`，只读SDK `inspect_dispatch_capacity_plan(FileRef)`在完整来源验证后返回上述合同，无账户执行或新经济读取。LocalSIM消费入口由其owner明确后，只精确登记该文件路径及该只读成员，不开放整模块/内部辅助函数；规划名称不是已生效的SDK例外。新producer request `localsim_dispatch_capacity_request_v1`绑定plan、新producer commit/实现closure和C2L新账户；新facts `position_timing_dispatch_capacity_facts_v1`精确包含C2旧account/opening/有序17日引用及C2L新opening/17日、request、完整source inspection、artifact retry FileRef。
+研究模块为`backend/services/position_timing/intraday/dispatch_coupling_research.py`，只读SDK `inspect_dispatch_capacity_plan(FileRef)`在完整来源验证后返回上述合同，无账户执行或新经济读取。LocalSIM消费入口由其owner明确后，只精确登记该文件路径及该只读成员，不开放整模块/内部辅助函数；本轮未预置未知消费者例外。新producer request `localsim_dispatch_capacity_request_v1`绑定plan、新producer commit/实现closure和C2L新账户；新facts `position_timing_dispatch_capacity_facts_v1`精确包含C2旧account/opening/有序17日引用及C2L新opening/17日、request、完整source inspection、artifact retry FileRef。
 
 新day需明确capacity control/hash、有效lane作用域及真实队列状态身份。供旧纯统计函数消费的有界投影只映射NAV、parents、actions、费用等明确经济字段；不能将并行lane状态伪装成可被旧`HumanOperationQueue.restore`认证的账户单队列。原`natural_period_research._fixed_scope`及`NaturalFacts`固定四户，**不能直接把C2L追加给旧四户CLI**。后续用薄适配复用统计，不改旧四户解析器/implementation closure；实现前不得发出虚构消费命令。
+
+#### 4.1 本轮择时交付的最小机器接缝
+
+`dispatch_coupling_research`提供`prepare`与只读`inspect_dispatch_capacity_plan(FileRef)`；prepare spec只引用原四户analysis spec，不从目录搜索新来源。真实入口严格冻结上述17日及身份，不提供放宽范围的CLI。计划的`producer_contracts`以FileRef引用独立不可变文件，导出producer request、两臂facts、source inspection、artifact retry和analysis spec的JSON schema及opening/day/state的必要字段；不内嵌schema，避免其properties中的path/sha256被既有来源收集器误识别。LocalSIM可读取文件而不导入择时内部辅助函数。双方的开仓/逐日账户、现金与撮合仍由LocalSIM生成。
+
+LocalSIM request使用`localsim_dispatch_capacity_request_v1`，绑定plan、producer commit/source identity、同一C2 common opening、新C2L opening、candidate/inventory/价集/成本、完整base execution和新capacity envelope。source identity为非空内容SHA树，不接受无哈希的标签。source inspection使用`localsim_dispatch_capacity_source_inspection_v1`，绑定request/plan、全部新day的有序identity、来源内容FileRef和旧默认串行行为回归证据；原生账本/匹配/费用子身份及代码差异明确披露，不能只写“金额相同”或要求所有聚合源码字节不变。
+
+`legacy_serial_regression`引用生产者现有直接回归的紧凑JSON证据，至少含PASSED状态、producer commit、baseline request、baseline source identity与base execution的SHA、零旧账户重算及非空测试标识列表；不要求重演历史账户或新建测试平台。它属于producer-attested兼容性，不冒称择时独立重做账本。source inspection必须封印新request、opening和全部17日，以及day中的原生receipt/journal引用；消费方在完整来源预检后逐个确认引用均在已验证closure中。
+
+新C2L opening使用`localsim_dispatch_capacity_opening_v1`，除新schema、arm/account及clone-owned portfolio ID、新operation envelope、plan引用外，逐字段保留C2经济opening和历史anchor，不丢额外marks。新day使用`localsim_dispatch_capacity_day_v1`，保留原账户统计字段；`human_operation_state`必须为独立的`localsim_parent_lane_operation_state_v1`，显式包含account/control identity、父计划lane及其action_id集合、真实actions和state hash，不冒充旧单队列快照。旧C2 day只读原schema。两臂分析仅使用这些明确字段；任何投影都不作为旧queue.restore输入。
+
+`dispatch_coupling_results`提供`inspect/analyze`：完整source/hash和C2精确复用、共同opening、producer身份检查完成后才读取新day，随后复用`period_account_rows`、既有等待/方向诊断，新增唯一比较及冻结bootstrap。未来真实C2L结果未交付时，只验收消费者行为与真实来源prepare/inspect，不生成虚构正式收益。回执分别标识择时接口完成、LocalSIM接入/17日回放待完成和经济未确认；不将后两者作为本轮择时源码合入门槛。
+
+这是离线研究预检接口，不是逐bar或逐父计划调用的运行态接口。完整内容校验安排在研究入口和发布前，不在每个分钟poll重复执行；执行循环继续复用既有有界Reader与当前可见前缀，不因此增加第二套缓存/读取器。producer request的identity按完整规范化模型payload（包含schema默认字段、排除identity本身）计算；文件SHA仍绑定实际全部文件字节，两者不可混用。
 
 ### 5. 来源、审计与不可变重试
 
@@ -95,11 +109,11 @@ C2L从C2的真实9月末经济期初克隆：现金、持仓数量/成本/可卖
 
 ## Implementation Plan
 
-只设两个交付块：本轮完成设计、输入/代码语义核查、多轮修订和文档合入；后续一个连续研究块由择时补薄plan/inspect/两臂消费者，LocalSIM owner接容量overlay并仅运行C2L 17日，再交回择时完整分析/独立复核/exact retry。代码各归owner，不扩为模型/平台研发，不等未来自然日，不为缺少完整旧生命周期另加放行审批。
+只设两个交付块：设计块已由#7237完成；当前连续研究块先交付择时plan/inspect/两臂消费者，再由LocalSIM owner接容量overlay并仅运行C2L 17日，最后交回择时完整分析/独立复核/exact retry。本轮源码验收限于完整的择时侧接口与消费者，不将未开始的LocalSIM接入或正式新收益标为完成。代码各归owner，不扩为模型/平台研发，不等未来自然日，不为缺少完整旧生命周期另加放行审批。
 
 ## Verification Plan / 可合入标准
 
-本轮验收对象是设计：逐项核对权威FileRef/完整SHA及代码语义，验证F1/F2索引、链接/范围、`git diff --check`和正式docs CI；仅文档不重复业务模块套件。新能力尚未实现，以下为后续直接验收场景，不记为已执行测试：
+初次设计验收由#7237完成。本轮择时侧直接测试覆盖冻结输入、独立capacity/execution identity、共同opening及marks完整保留、跨revision/NO_ORDER仍消耗lane容量、全部来源先于新day解析、发布前漂移、唯一比较/完整分母/MDD及artifact retry；合成投影测试不是LocalSIM账户回放验收。真实prepare/inspect/exact retry在WSL只读消费原冻结文件，不操作旧账户。以下调度和账户场景仍由LocalSIM实现后验收，不记为本轮已执行的队列/撮合测试：
 
 - 两个不同plan同ready可同钟派单，同一plan及其新revision仍相隔至少60秒；CANCEL/SELL/BUY及同钟tie稳定，单bar不重复撮合。
 - 仍需60秒反应；机会撤回/失效/修订、未来bar、过期窗口拒绝；续期不重置ready，不把旧终态复活；包含午休/终点。
@@ -107,7 +121,7 @@ C2L从C2的真实9月末经济期初克隆：现金、持仓数量/成本/可卖
 - legacy默认串行路径逐经济字段一致；新C2L从C2 opening归一身份后经济字段相等且后续独立承接；新/旧产物namespace、source hash、前缀或baseline引用错误拒绝。
 - 新并行状态不能冒充旧全账户queue restore；crash/retry不丢lane冷却/重复派单。来源先验、发布前漂移、完整17日统计、UNKNOWN覆盖及artifact retry零重算分别验证；广泛回归交CI。
 
-本轮可重复的设计校验命令为`python scripts/aistock_feature_workflow.py validate --design docs/architecture/position_timing_dispatch_coupling_f1_20261113.md --tier F1`；另校验衔接的P2 F1和日内F2。设计语义核查、元数据SHA读回、三份文档校验及写入边界结果汇总到`X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json`，在本轮PR前完成；它是设计验收证据，不是拟议SDK/账户回放的实现测试。
+设计校验使用`python scripts/aistock_feature_workflow.py validate --design docs/architecture/position_timing_dispatch_coupling_f1_20261113.md --tier F1`及日内F2校验；直接矩阵为`python -m pytest backend/tests/position_timing/test_intraday_dispatch_coupling.py backend/tests/position_timing/test_isolation.py -q`，完整模块回归交CI。首轮设计回执保留在原design目录；本轮实际源码/输入/测试/CI身份汇总到`X:/AIstock_temp/position-timing-dispatch-capacity-20261113/source_delivery_receipt_r1.json`。原设计回执不能替代新接口实现或账户运行证据。
 
 ## Risks / 失败模式
 
@@ -115,11 +129,11 @@ C2L从C2的真实9月末经济期初克隆：现金、持仓数量/成本/可卖
 
 ## Production Gates / 不涉及运行态变更
 
-本轮仅文档，`database_read/write=false; network_market_access=false; runtime_action_performed=false; account_replay=false`；Git/CI网络与行情访问分别报告。无DDL/DML、依赖安装、active/profile切换、后端重启或运行态激活步骤，LocalSIM未来接入和C2L经济评价仍为未开始。后续纯离线设计实现不等待重启、未来交易日或经济正结果；失败的来源完整性不得放宽，但不加人工审批或功效准入门禁。
+本轮为纯离线择时研究接口，`database_read/write=false; network_market_access=false; runtime_action_performed=false; account_replay=false`；Git/CI网络与行情访问分别报告。无DDL/DML、依赖安装、active/profile切换、后端重启或运行态激活步骤，LocalSIM未来接入和C2L经济评价仍为未开始。纯离线实现不等待重启、未来交易日或经济正结果；失败的来源完整性不得放宽，但不加人工审批或功效准入门禁。
 
 ## Design Acceptance Index
 
-以下ID仅属本文。DESIGN_VERIFIED只说明设计闭合，不代表SDK、LocalSIM或账户已经工作。
+以下ID仅属本文。DESIGN_VERIFIED仍只说明设计闭合；本轮择时侧接口/消费者的实现证据单列在矩阵，不能把它解释为LocalSIM容量overlay、账户调度或17日经济研究已完成。尤其下面的合成lane审计只验证消费约束，不替代真实队列/资金/撮合测试。
 
 | design_item | 要求 |
 |---|---|
@@ -135,10 +149,20 @@ C2L从C2的真实9月末经济期初克隆：现金、持仓数量/成本/可卖
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-601 | 本文Contracts-1/5 | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；元数据FileRef/SHA及后续全来源验收定义 | DESIGN_VERIFIED | none |
-| F-602 | 本文Contracts-2；human_operation.py；timing_campaign.build_timing_plan_events | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；源码语义/Policy快照与identity核对，新容量非生产默认 | DESIGN_VERIFIED | none |
-| F-603 | 本文Contracts-3；human_portfolio.py派单前复核 | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；lane/资金/可见前缀与调度验收场景，非实现通过 | DESIGN_VERIFIED | none |
-| F-604 | 本文Contracts-4 | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；四户Literal/_fixed_scope与拟议两臂接口差异 | DESIGN_VERIFIED | none |
-| F-605 | 本文Contracts-5 | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；有界状态摘要/旧缺失不可回填/retry合同 | DESIGN_VERIFIED | none |
-| F-606 | 本文Contracts-6 | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；同经济opening、单比较/完整分母及归因边界 | DESIGN_VERIFIED | none |
-| F-607 | 本文Implementation Plan与Verification Plan | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；仅设计交付，新plan/账户/收益均未执行 | DESIGN_VERIFIED | none |
+| F-601 | dispatch_coupling_research._baseline/prepare/inspect_dispatch_capacity_plan；dispatch_coupling_results.source_preflight | backend/tests/position_timing/test_intraday_dispatch_coupling.py::test_every_day_is_checked_before_any_new_outcome_read；冻结source/身份与日序列先验 | DESIGN_VERIFIED | none |
+| F-602 | dispatch_coupling_research.frozen_policy/capacity_control/_body | backend/tests/position_timing/test_intraday_dispatch_coupling.py::test_plan_public_inspect_retry_and_frozen_scope；既有规则和新封套分开绑定 | DESIGN_VERIFIED | none |
+| F-603 | 本文Contracts-3；dispatch_coupling_results._lane_audit；LocalSIM执行待其owner实现 | backend/tests/position_timing/test_intraday_dispatch_coupling.py::test_revision_cannot_create_a_second_free_lane；同文件test_one_lane_cannot_have_two_inflight_actions；只证明消费方拒绝违约状态，不是账户执行通过 | DESIGN_VERIFIED | none |
+| F-604 | dispatch_coupling_research的公共SDK和producer_contracts FileRef；两臂CapacityFacts | backend/tests/position_timing/test_intraday_dispatch_coupling.py::test_plan_public_inspect_retry_and_frozen_scope；backend/tests/position_timing/test_isolation.py；未知LocalSIM入口未放行 | DESIGN_VERIFIED | none |
+| F-605 | dispatch_coupling_results.source_preflight/_lane_audit/analyze | backend/tests/position_timing/test_intraday_dispatch_coupling.py::test_source_clone_lane_and_publication_fail_closed；有界摘要/UNKNOWN及发布前漂移/不可变retry | DESIGN_VERIFIED | none |
+| F-606 | dispatch_coupling_results.compare/paired_uncertainty/analyze；复用period_account_rows及side_panel | backend/tests/position_timing/test_intraday_dispatch_coupling.py::test_capital_mdd_complete_denominators_and_artifact_retry；非正式新账户收益证据 | DESIGN_VERIFIED | none |
+| F-607 | 本文Implementation Plan/Verification Plan及本轮交付状态 | validation-receipt:X:/AIstock_temp/position-timing-dispatch-coupling-design-20261113/design_validation_receipt_r1.json；保留原设计证据，本轮源码/WSL/CI另绑定新交付回执，LocalSIM/经济未完成 | DESIGN_VERIFIED | none |
+
+## 2026-11-13：择时侧接口、冻结输入与交接
+
+研究接口实现commit为`30a2875e878f445df49fdab0e1e0ff5b6af77826`。研究源码在原工作树封印后执行WSL prepare/inspect/exact retry；消费者自审额外修复单lane多inflight状态接纳，使用独立delivery工作树，不改正在验收的研究源码。该修复不改变研究接口、policy/plan identity或producer合同。最终消费者/文档commit、PR/CI/合入、WSL执行证据和完整SHA由`X:/AIstock_temp/position-timing-dispatch-capacity-20261113/source_delivery_receipt_r1.json`记录；不得仅从源码commit推定交付验证通过。
+
+冻结计划Windows路径为`X:/AIstock_temp/position-timing-dispatch-capacity-20261113/artifacts/intraday_v1/dispatch_capacity_plans/6e8f088698cef36007adbb21149e91877b33a7a2baa91910d98629548d17666a.json`，完整文件SHA `6f3549b3fe92c5e30aa4b732499391246de921594055b34193f473edecc52df6`。文件名为canonical研究identity，不是文件SHA；producer contract由plan.producer_contracts的FileRef读取，不能混用两种哈希。计划根下只有择时研究产物，未创建C2L账户、订单或正式收益报告。
+
+WSL公共消费命令：`python -m backend.services.position_timing.intraday.dispatch_coupling_research inspect --input /mnt/x/AIstock_temp/position-timing-dispatch-capacity-20261113/artifacts/intraday_v1/dispatch_capacity_plans/6e8f088698cef36007adbb21149e91877b33a7a2baa91910d98629548d17666a.json --sha256 6f3549b3fe92c5e30aa4b732499391246de921594055b34193f473edecc52df6`。冻结来源使用WSL绝对路径，Windows独立回读只转换物理读路径核SHA，不改写plan引用或重绑profile。
+
+未来LocalSIM从合同文件生成`CapacityProducerRequest/CapacityFacts/CapacitySourceInspection/CapacityArtifactRetry`和`CapacityAnalysisSpec`。实际C2L事实交回后，择时使用`python -m backend.services.position_timing.intraday.dispatch_coupling_results inspect|analyze --input <analysis_spec绝对路径> --sha256 <完整SHA> --timing-root <新的独立分析根>`；inspect不需要timing-root。当前没有可执行的LocalSIM账户命令；入口由owner明确并完成opt-in适配后再交接，不能把schema或构造器当成已接入、已回放或有收益优势。

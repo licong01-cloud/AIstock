@@ -100,6 +100,8 @@ def _lane_audit(day, plan):
     terminal = utc(day["terminal_as_of"])
     for lane in lanes:
         require(lane["parent_plan_id"] in parents, "CAPACITY_LANE_PARENT")
+        require(sum(actions[key]["status"] == "DISPATCHING" for key in lane["action_ids"]) <= 1,
+                "CAPACITY_MULTIPLE_INFLIGHT")
         dispatched = []
         for key in lane["action_ids"]:
             a = actions[key]

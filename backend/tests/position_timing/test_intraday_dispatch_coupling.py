@@ -230,3 +230,18 @@ def test_revision_cannot_create_a_second_free_lane(source, tmp_path):
     state["state_sha256"] = digest({k: v for k, v in state.items() if k != "state_sha256"})
     with pytest.raises(IntradayError, match="CAPACITY_LANE_INTERVAL"):
         results._lane_audit(day, read(spec.research_plan))
+
+
+def test_one_lane_cannot_have_two_inflight_actions():
+    day = day_view("2026-10-08", "candidate", {"operation": {}, "positions": {}}, "b"*64, candidate=True)
+    state = day["human_operation_state"]
+    first = state["actions"][0]
+    first["status"] = "DISPATCHING"
+    second = deepcopy(first)
+    second.update(action_id="second_inflight", revision=2, dispatch_at="2026-10-08T09:33:00+08:00")
+    state["actions"].append(second)
+    state["lanes"][0]["action_ids"].append(second["action_id"])
+    state["lanes"][0]["last_action_at"] = second["dispatch_at"]
+    state["state_sha256"] = digest({k: v for k, v in state.items() if k != "state_sha256"})
+    with pytest.raises(IntradayError, match="CAPACITY_MULTIPLE_INFLIGHT"):
+        results._lane_audit(day, {"capacity_control_sha256": digest(study.capacity_control())})
