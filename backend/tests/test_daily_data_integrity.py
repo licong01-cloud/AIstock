@@ -132,6 +132,102 @@ def test_missing_event_query_proof_requeues_source_not_a_false_valid(monkeypatch
         assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
 
 
+@pytest.mark.parametrize("dataset,category,lag,clock,expected", [
+    ("etf_share_size", "daily_series", 1, "2026-11-13T08:30:00+08:00", True),
+    ("etf_share_size", "daily_series", 1, "2026-11-13T08:29:59+08:00", False),
+    ("margin_detail", "daily_series", 1, "2026-11-13T19:10:00+08:00", True),
+    ("stock_basic", "reference", 0, "2026-11-13T20:00:00+08:00", False),
+    ("tushare_forecast_raw", "event", 0, "2026-11-13T20:00:00+08:00", False),
+    ("not_a_registered_source", "daily_series", 0, "2026-11-13T20:00:00+08:00", False),
+])
+def test_unproven_dated_query_fetch_obeys_source_contract_and_publication_clock(
+        monkeypatch, dataset, category, lag, clock, expected):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    import backend.services.data_sync_targets as targets
+    repo = Mock()
+    monkeypatch.setattr(targets, "DataSyncTargetRepository", lambda: repo)
+    worker = DailyIntegrityWorker(repository=SimpleNamespace(transaction=lambda: nullcontext(object())))
+    day = date(2026, 11, 12)
+    ready = "19:10" if dataset == "margin_detail" else "08:30"
+    worker._repair_target(Obligation(dataset, category, ready, lag), day,
+        ValidationResult(PartitionState.UNVERIFIED, (), {}, reason="historical_source_query_unproven"),
+        calendar={day: True, date(2026, 11, 13): True}, now=datetime.fromisoformat(clock))
+    assert repo.upsert_target.called is expected
+    if expected:
+        record = repo.upsert_target.call_args.args[0]
+        assert record.dataset == dataset and record.target_date == day
+        assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
+
+
+@pytest.mark.parametrize("calendar", [None, {}, {date(2026, 11, 12): False},
+    {date(2026, 11, 12): True}])
+def test_unproven_dated_query_keeps_unknown_calendar_unresolved(monkeypatch, calendar):
+    from unittest.mock import Mock
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    import backend.services.data_sync_targets as targets
+    repo = Mock()
+    monkeypatch.setattr(targets, "DataSyncTargetRepository", lambda: repo)
+    worker = DailyIntegrityWorker(repository=Mock())
+    worker._repair_target(Obligation("etf_share_size", "daily_series", "08:30", 1),
+        date(2026, 11, 12), ValidationResult(PartitionState.UNVERIFIED, (), {},
+            reason="historical_source_query_unproven"), calendar=calendar,
+        now=datetime.fromisoformat("2026-11-13T09:00:00+08:00"))
+    assert not repo.upsert_target.called
+
+
+@pytest.mark.skipif(__import__("os").environ.get("AISTOCK_INTEGRITY_DEV_TEST") != "1",
+                    reason="explicit existing DEV opt-in")
+def test_unproven_dated_query_dev_reuses_exact_target_and_rejects_stale_revision():
+    import os
+    from pathlib import Path
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    import psycopg2
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    from scripts.prepare_canonical_pit_monthly import _load_database_config
+    cfg = _load_database_config("dev", Path(os.environ["AISTOCK_INTEGRITY_ENV_FILE"]))
+    assert cfg.dbname == "aistock_dev" and cfg.port == 5433 and cfg.host in {"127.0.0.1", "localhost"}
+    conn = psycopg2.connect(host=cfg.host, port=cfg.port, dbname=cfg.dbname,
+                           user=cfg.user, password=cfg.password, options="-c statement_timeout=10000")
+    day, next_day = date(2099, 1, 5), date(2099, 1, 6)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM market.dataset_date_refresh_audit WHERE dataset='etf_share_size' AND trade_date=%s", (day,))
+            assert cur.fetchone() is None
+            cur.execute("SELECT 1 FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            assert cur.fetchone() is None
+            cur.execute("""INSERT INTO market.dataset_date_refresh_audit(dataset,trade_date,data_source,status,
+                validation_status,data_revision) VALUES('etf_share_size',%s,'canonical_db','failed','UNVERIFIED',7)""", (day,))
+        worker = DailyIntegrityWorker(repository=SimpleNamespace(transaction=lambda: nullcontext(conn)))
+        obligation = Obligation("etf_share_size", "daily_series", "08:30", 1)
+        result = ValidationResult(PartitionState.UNVERIFIED, (), {}, reason="historical_source_query_unproven")
+        kwargs = dict(calendar={day: True, next_day: True},
+                      now=datetime(2099, 1, 6, 9, tzinfo=__import__("zoneinfo").ZoneInfo("Asia/Shanghai")))
+        worker._repair_target(obligation, day, result, revision=6, **kwargs)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            assert cur.fetchone()[0] == 0
+        worker._repair_target(obligation, day, result, revision=7, **kwargs)
+        with conn.cursor() as cur:
+            cur.execute("SELECT target_id,next_retry_at FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            original = cur.fetchone()
+        worker._repair_target(obligation, day, result, revision=7, **kwargs)
+        with conn.cursor() as cur:
+            cur.execute("SELECT target_id,next_retry_at FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            assert cur.fetchall() == [original]  # no duplicate and no retry deadline starvation
+            cur.execute("SELECT validation_status,data_revision FROM market.dataset_date_refresh_audit WHERE dataset='etf_share_size' AND trade_date=%s", (day,))
+            assert cur.fetchone() == ("UNVERIFIED", 7)
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 def test_fair_validation_query_uses_only_the_small_target_ledger():
     import ast
     import inspect

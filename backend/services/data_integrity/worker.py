@@ -7,7 +7,7 @@ import time
 
 from psycopg2.extras import RealDictCursor
 
-from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+from backend.services.tushare_dataset_specs import DATASET_REGISTRY, QueryMode
 from .catalog import CN, RULE_VERSION, SCOPE_VERSION, obligations, optional_input_contract
 from .contracts import PartitionState, ValidationResult, completion_kind
 from .repository import IntegrityRepository, IntegrityRevisionChanged, enqueue_validation, schema_installed
@@ -144,7 +144,7 @@ class DailyIntegrityWorker:
                 self.repository.publish(dataset=dataset, day=day, revision=revision,
                     scope_version=obligation.scope_version, rule_version=obligation.rule_version,
                     target_id=claim["target_id"], token=claim["metadata"]["lease_token"], result=result)
-                self._repair_target(obligation, day, result, revision=revision)
+                self._repair_target(obligation, day, result, revision=revision, calendar=calendar)
                 self.rebuild_day(day)
                 validated += 1
             except IntegrityRevisionChanged:
@@ -169,8 +169,9 @@ class DailyIntegrityWorker:
         self.rebuild_day(today)
         return {"status": "PROCESSED", "validated": validated, "stale_discarded": stale}
 
-    def _repair_target(self, obligation, day, result, *, revision=None):
+    def _repair_target(self, obligation, day, result, *, revision=None, calendar=None, now=None):
         """One existing fetch/derived target per day, not a retry per field/bar."""
+        current_time = now or datetime.now(CN)
         dependencies = result.checks.get("required_dependencies") or []
         if dependencies:
             with self.repository.transaction() as conn:
@@ -180,8 +181,21 @@ class DailyIntegrityWorker:
         from backend.services.tushare_event_inputs import EVENT_DATASETS
         event_query_missing = (obligation.dataset in EVENT_DATASETS
             and result.reason == "complete_current_event_query_required")
+        dated_query_missing = False
+        if (result.state == PartitionState.UNVERIFIED
+                and result.reason == "historical_source_query_unproven"):
+            # Missing proof of a dated query is recoverable by THAT query, not
+            # by another validation. Reference snapshots/period queries cannot
+            # be reconstructed this way. Reuse the official publication clock.
+            spec = DATASET_REGISTRY.get(obligation.dataset)
+            if (spec is not None and spec.query_mode == QueryMode.BY_DATE
+                    and obligation.category != "reference" and calendar
+                    and calendar.get(day) is True):
+                due = obligation.due_at(day, calendar)
+                dated_query_missing = due is not None and due <= current_time
         if (result.state not in {PartitionState.INCOMPLETE, PartitionState.WAIT_UPSTREAM}
                 and not event_query_missing
+                and not dated_query_missing
                 and result.reason not in {"complete_source_scan_not_bound_to_revision",
                     "row_count_seed_is_not_a_complete_source_scan", "index_quote_query_scope_incomplete"}):
             return
@@ -191,7 +205,7 @@ class DailyIntegrityWorker:
             dataset = "sw_sector"
         record = DataSyncTargetRecord(dataset=dataset, data_source="integrity_repair", target_date=day,
             target_scope={"operation": "FETCH", "scope": "exact_fact_date"}, target_status="retry",
-            next_retry_at=datetime.now(CN)+timedelta(minutes=30),
+            next_retry_at=current_time+timedelta(minutes=30),
             metadata={"schedule_dataset": dataset, "health_dataset": dataset,
                       "integrity_dataset": obligation.dataset, "failure_category": result.reason or "physical_gap"})
         with self.repository.transaction() as conn:
