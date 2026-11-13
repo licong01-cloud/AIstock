@@ -34,27 +34,27 @@
   "expected": "New listings enter shared provider scope without local-price circular dependency; catalogue changes wake only affected dated validation; real upstream gaps remain explicit.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/listing_scope.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
       "scripts/ingest_tushare_stock_basic.py",
-      "backend/services/data_integrity/listing_scope.py"
+      "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json"
     ],
     "added_files": [
       "backend/services/data_integrity/listing_scope.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/listing_scope.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
       "scripts/ingest_tushare_stock_basic.py",
-      "backend/services/data_integrity/listing_scope.py"
+      "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -195,8 +195,8 @@
   },
   "first_seen_at": "2026-11-13T07:07:59.402606Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "be84190d222943b823ad4d1493d1e357e49a3222",
+  "fixed_at": "2026-11-13T07:36:15Z",
   "github_issue_number": 7239,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7239",
   "last_seen_at": "2026-11-13T07:07:59.402606Z",
@@ -204,6 +204,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7240",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -228,6 +229,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -239,7 +241,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2220",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1df2d410c179fb6f",
+    "recorded_at": "2026-11-13T07:37:29.512187Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ef806bee765bf566d04a68894b54df429d909223",
+    "source_merge_commit": "be84190d222943b823ad4d1493d1e357e49a3222",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7240",
+    "validation_evidence": [
+      "validation-receipt: id=7450a6b68fb345b7 commit=ef806bee765bf566d04a68894b54df429d909223 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; scoped Ruff, compilation and 69 related tests passed; DEV receipt 517cf59ed429ba8cfc494ddd68fd0402e43859d25df5eb72ca9d0bbd644c8dc1`"
+    ],
+    "validation_evidence_digest": "d6ad1ca2592777ba60602368147cc93fefc9c833a190b4f266956baa424060ce"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -248,6 +271,9 @@
     "fingerprint": "6752c5531c985da09aaa21e0",
     "source_event_id": "FE-20261113-6752c5531c98"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7450a6b68fb345b7 commit=ef806bee765bf566d04a68894b54df429d909223 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; scoped Ruff, compilation and 69 related tests passed; DEV receipt 517cf59ed429ba8cfc494ddd68fd0402e43859d25df5eb72ca9d0bbd644c8dc1`"
+  ],
   "validation_notes": [
     "RED first-listing regression reproduced repair deferral. GREEN 69 targeted checks; existing DEV rollback-only catalogue/repair/SQL/idempotency proof PASS.",
     "Correctness and completeness reviews: preserve existing historical observed boundaries, real provider values and strict errors; no PIT or consumer changes; no new gate or whole-history validation.",
