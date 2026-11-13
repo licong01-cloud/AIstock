@@ -164,7 +164,7 @@ Allowed APIs（已查实，调用前读对应直接函数，不发明入口）�
 
 ## 9. Design Acceptance Index
 
-P0方向裁决和精确设计已合入并获批；本轮验收扩展至批准的完整实现和研究。源码/CI与正式fit、经济结果分开记录，不以设计PASS宣称模型可用；下表设计行保留原设计证据，实施验证完成后原位更新。
+P0方向裁决和精确设计已合入并获批；本轮验收扩展至批准的完整实现和研究。下表当前验证源码交付层，不提前验证合入后才能执行的正式研究：完整clean HEAD预检、6-fit/双process封存、J及全部诊断均待执行，CI/合入待完成。上述是D6已规定的后续执行顺序，不是批准之外的实现缺口或范围缩减。不以源码/F2 PASS宣称研究完成、模型可用或经济通过；正式执行后在本表及§11更新真实结果。
 
 F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/载体与公平比较；F-003：固定模型/数值/预算/封存；F-004：机会成本后价值/NA/停止；F-005：单包实现/验证/owner及生产边界。
 
@@ -173,10 +173,10 @@ F-001：机制/历史去重/终极目标和非目标；F-002：原身份/时间/
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | 本页§1/§2；父蓝图§1.38/§7 | artifact: F:/Dev/AIstock_runtime/hmm_l2_margin_information/20261112/evaluation_v1.json；旧20维树设计及原W设计§11；原始论文引用 | DESIGN_COMPLETE_ONLY | 无 |
-| F-002 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：load_request/prepare/load_packet；原within_training | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：原变换/季度/身份；原冻结artifact及§1.2读回 | SOURCE_VERIFIED_FORMAL_PREFLIGHT_PENDING | 无 |
-| F-003 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：fit_packet/validate_parameters/close_fits/predict；scripts/hmm_risk/run_risk_l2_member_nonlinear.py | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：JSON/float32/全部树节点/attempt/fit poison；backend/tests/hmm_risk/test_l2_economic_candidates.py | SOURCE_VERIFIED_FORMAL_6_FIT_PENDING | 无 |
-| F-004 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：freeze_groups/compare_groups/evaluate | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：事前ties/同预算/J/合法NA/封存前禁读 | SOURCE_VERIFIED_FORMAL_EVALUATION_PENDING | 无 |
-| F-005 | 本页D6/§10/§11；CLI独立prepare/run/evaluate与单季fit child | validation-receipt: 本页§11最小本地门禁及同一PR精确HEAD CI；F2 validator | SOURCE_VERIFIED_CI_MERGE_PENDING | 无 |
+| F-002 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：load_request/prepare/load_packet；原within_training | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：原变换/季度/身份；原冻结artifact及§1.2读回 | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-003 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：fit_packet/validate_parameters/close_fits/predict；scripts/hmm_risk/run_risk_l2_member_nonlinear.py | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：JSON/float32/全部树节点/attempt/fit poison；backend/tests/hmm_risk/test_l2_economic_candidates.py | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-004 | backend/services/hmm_risk/risk_l2_member_nonlinear.py：freeze_groups/compare_groups/evaluate | backend/tests/hmm_risk/test_risk_l2_member_nonlinear.py：事前ties/同预算/J/合法NA/封存前禁读 | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
+| F-005 | 本页D6/§10/§11；CLI独立prepare/run/evaluate与单季fit child | validation-receipt: 本页§11最小本地门禁及同一PR精确HEAD CI；F2 validator | SOURCE_IMPLEMENTATION_VERIFIED | 无 |
 
 ## 10. Risks / Production Gates / Rollout / Rollback
 
