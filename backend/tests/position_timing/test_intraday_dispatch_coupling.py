@@ -47,6 +47,7 @@ def source(tmp_path, monkeypatch):
     """Stub only the already-tested old four-arm preflight, not the new checks."""
     def put(name, value):
         return freeze(tmp_path/name, value)
+    monkeypatch.setattr(study, "FUNDING_EVIDENCE", payload(put("funding-evidence.json", {"fixture": "owner contract gap"})))
     refs = {k: put(k+".json", {"fixture": k}) for k in ("candidate_manifest", "selection_inventory", "cost_policy", "price_templates")}
     operation = {"schema_version": "localsim_operation_snapshot_v1", "operation_mode": "HUMAN_SIM",
         "human_policy": {"schema_version": "localsim_human_operation_policy_v1", "policy_id": "localsim_human_operation_v1",
@@ -127,6 +128,7 @@ def results_spec(source, root, *, damage=None):
     regression = put("regression.json", {"status": "PASSED", "producer_source_commit": request.producer_source_commit,
         "baseline_producer_request": plan["baseline_producer_request"], "baseline_source_identity_sha256": digest(plan["baseline_source_identity"]),
         "base_execution_contract_sha256": digest(plan["base_execution_contract"]), "account_days_recomputed": 0,
+        "funding_boundary_sha256": "0"*64 if damage == "funding" else plan["funding_boundary_sha256"],
         "checks": ["synthetic contract fixture; not real LocalSIM acceptance"]})
     inspection_pins = study.context.pins(plan_ref, request_ref, request, candidate)
     if damage == "pin":
@@ -151,12 +153,26 @@ def test_plan_public_inspect_retry_and_frozen_scope(source, tmp_path):
     first = study.prepare(spec, "2"*40, tmp_path/"plans")
     assert study.prepare(spec, "2"*40, tmp_path/"plans") == first | {"status": "ALREADY_MATERIALIZED"}
     plan = study.inspect_dispatch_capacity_plan(first["plan"])["plan"]
+    assert plan["schema_version"] == "position_timing_dispatch_capacity_plan_v2"
+    assert plan["funding_boundary_sha256"] == digest(study.funding_boundary())
+    assert plan["execution_contract"]["funding_boundary"] == plan["funding_boundary"]
+    assert study.FUNDING_EVIDENCE in plan["source_refs"]
+    assert plan["funding_boundary"]["predispatch_cash_reservation"] == "NONE"
+    assert not plan["funding_boundary"]["decision_uses_invisible_feedback"]
     assert plan["policy_sha256"] == "8e456686452cc2e53b0e922cf915b53308e1b40f17358c2fff41b656228d8e79"
     assert plan["base_execution_contract"]["human"]["capacity"] == "ACCOUNT_SINGLE_OPERATOR"
     assert plan["execution_contract"]["capacity_control"]["capacity"] == "PARENT_PLAN_INDEPENDENT_OPERATORS"
     assert set(read(plan["producer_contracts"])["models"]) == {"CapacityProducerRequest", "CapacityFacts",
         "CapacitySourceInspection", "CapacityArtifactRetry", "CapacityAnalysisSpec"}
     assert study.context.pins(plan)  # Embedded JSON schema must not masquerade as a FileRef.
+    changed = deepcopy(plan)
+    changed["funding_boundary"]["predispatch_cash_reservation"] = "NEW_RESERVATION_MODEL"
+    changed["funding_boundary_sha256"] = digest(changed["funding_boundary"])
+    changed["execution_contract"].update(funding_boundary=changed["funding_boundary"],
+        funding_boundary_sha256=changed["funding_boundary_sha256"])
+    changed["identity"] = digest({k: v for k, v in changed.items() if k != "identity"})
+    with pytest.raises(IntradayError, match="CAPACITY_PLAN_IDENTITY"):
+        study.inspect_dispatch_capacity_plan(freeze(tmp_path/"other-funding.json", changed))
     context["request"]["native_target_count"] = 849
     with pytest.raises(IntradayError, match="CAPACITY_FROZEN_POPULATION"):
         study.inspect_dispatch_capacity_plan(first["plan"])
@@ -175,11 +191,13 @@ def test_capital_mdd_complete_denominators_and_artifact_retry(source, tmp_path):
     assert all(row["side_diagnostics"]["BUY"]["parent_denominator"] == 17 for row in report["account_rows"])
     assert all(row["diagnostics"]["time_weighted_exposure"]["status"] == "UNAVAILABLE" for row in report["account_rows"])
     assert not report["economic_confirmation"] and not report["pure_timing_attribution"]
+    assert report["funding_boundary_sha256"] == digest(study.funding_boundary())
     assert all(p["capacity_audit"]["maximum_same_clock_dispatches"] == 2 for p in report["mechanism_days"] if p["arm_id"] == "C2L")
 
 
 @pytest.mark.parametrize("damage,code", [("marks", "CAPACITY_COMMON_ECONOMIC_OPENING"), ("pin", "CAPACITY_INSPECTION_MISSING_PIN"),
-    ("lane", "CAPACITY_LANE_ACTION"), ("mutated", "SOURCE_IDENTITY"), ("late", "SOURCE_IDENTITY")])
+    ("lane", "CAPACITY_LANE_ACTION"), ("mutated", "SOURCE_IDENTITY"), ("late", "SOURCE_IDENTITY"),
+    ("funding", "CAPACITY_LEGACY_REGRESSION")])
 def test_source_clone_lane_and_publication_fail_closed(source, tmp_path, monkeypatch, damage, code):
     spec = results_spec(source, tmp_path, damage=damage)
     ref = read(spec.facts)["accounts"][-1]["days"][-1]

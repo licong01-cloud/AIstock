@@ -68,6 +68,7 @@ def source_preflight(spec: research.CapacityAnalysisSpec):
         regression.get("baseline_producer_request") == plan["baseline_producer_request"] and
         regression.get("baseline_source_identity_sha256") == inspection.baseline_source_identity_sha256 and
         regression.get("base_execution_contract_sha256") == digest(plan["base_execution_contract"]) and
+        regression.get("funding_boundary_sha256") == plan["funding_boundary_sha256"] and
         regression.get("account_days_recomputed") == 0 and isinstance(checks, list) and bool(checks) and
         all(isinstance(check, str) and bool(check.strip()) for check in checks), "CAPACITY_LEGACY_REGRESSION")
     baseline = read(f.accounts[0].opening)
@@ -239,6 +240,7 @@ def analyze(spec: research.CapacityAnalysisSpec, timing_root):
     report = {"schema_version": "position_timing_dispatch_capacity_analysis_v1", "spec": spec,
         "implementation": implementation_identity(), "numpy_version": np.__version__, "research_identity": plan["identity"],
         "study_identity": facts.study_identity, "trade_dates": plan["trade_dates"], "common_opening": plan["common_opening"],
+        "funding_boundary": plan["funding_boundary"], "funding_boundary_sha256": plan["funding_boundary_sha256"],
         "account_rows": rows, "comparisons": [compare(rows)], "uncertainty": paired_uncertainty(rows, plan["uncertainty"]),
         "mechanism_days": panels, "analysis_contract": ANALYSIS_CONTRACT, "source_refs": refs,
         "source_verification_scope": "FULL_CONTENT_SHA_WITH_PRODUCER_DELEGATED_ACCOUNT_INSPECT_AND_BOUND_REGRESSION",

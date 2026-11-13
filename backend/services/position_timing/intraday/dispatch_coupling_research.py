@@ -35,6 +35,8 @@ FROZEN = {
 BASELINE_ID = "lsnatural_918ee66460fb7689bff74509891690c8c293712d"
 C2_SOURCE = "70e459c569020f09880d91c1f16d43e9e5d951f3"
 UNCERTAINTY = {"block_trading_days": 5, "draws": 2000, "seed": 20261113, "family_size": 1}
+FUNDING_EVIDENCE = {"path": "/mnt/x/AIstock_temp/localsim-dispatch-capacity-20261113/contract_gap_evidence_r1.json",
+    "sha256": "3e88e736be12a8d918e0919b2ebd237a7af6f24971aa34a7d5d83c43de146a1e"}
 Commit = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 Dates = Annotated[tuple[str, ...], Field(min_length=17, max_length=17)]
 
@@ -142,6 +144,27 @@ def frozen_policy():
         "session_version": "CN_A_CONTINUOUS_WINDOW_V1"})
 
 
+def funding_boundary():
+    """Both arms retain native cash semantics, not a new reservation engine."""
+    return {"schema_version": "position_timing_native_funding_boundary_v1",
+        "boundary_id": "NATIVE_COMMITTED_LEDGER_AT_MATCH_V1", "applies_to_arms": ["C2", "C2L"],
+        "predispatch_cash_reservation": "NONE",
+        "decision_account_authority": "VISIBLE_EXECUTION_VIEW_AND_CONFIRMED_FEEDBACK",
+        "quantity_authority": "EXISTING_NATIVE_TARGET_REMAINING_AND_LOT_RULES",
+        "matching_cash_authority": "ONE_SHARED_NATIVE_COMMITTED_LEDGER_INCLUDING_FEES",
+        "committed_sell_proceeds_before_feedback": "AVAILABLE_TO_ALREADY_SUBMITTED_BUY_AT_NATIVE_MATCH",
+        "unmatched_or_future_sell_proceeds_available": False, "leverage_allowed": False,
+        "decision_uses_invisible_feedback": False,
+        "matching_order": "NATIVE_SELL_BEFORE_BUY_THEN_SYMBOL_ORDER_ID",
+        "cash_shortfall": "EXISTING_AFFORDABLE_FILL_AND_CAPITAL_LIMITED_REMAINDER",
+        "partial_fill_and_cancel": "NATIVE_LIFECYCLE_NO_SYNTHETIC_RESERVE_OR_RELEASE",
+        "native_source_commit": "db774c64dca0973c3cd6b29cdebadc0865055913",
+        "native_source_symbols": ["localsim.runtime.LocalSimBackend._fit_buy_fills_to_available_cash",
+            "localsim.timing.TimingExecution.step", "localsim.human_portfolio.run_human_portfolio_day"],
+        "amends_design": "position_timing_dispatch_coupling_f1_20261113.md#funding-boundary",
+        "owner_gap_evidence": FUNDING_EVIDENCE}
+
+
 def implementation_identity():
     return natural.implementation_identity() | {"intraday/dispatch_coupling_research.py": hashlib.sha256(
         Path(__file__).read_bytes().replace(b"\r\n", b"\n")).hexdigest()}
@@ -186,7 +209,9 @@ def _baseline(spec):
 
 def _producer_contracts():
     models = (CapacityProducerRequest, CapacityFacts, CapacitySourceInspection, CapacityArtifactRetry, CapacityAnalysisSpec)
-    return {"schema_version": "position_timing_dispatch_capacity_producer_contracts_v1",
+    return {"schema_version": "position_timing_dispatch_capacity_producer_contracts_v2",
+        "plan_schema_version": "position_timing_dispatch_capacity_plan_v2",
+        "funding_boundary": funding_boundary(), "funding_boundary_sha256": digest(funding_boundary()),
         "models": {m.__name__: m.model_json_schema() for m in models},
         "opening": {"schema_version": "localsim_dispatch_capacity_opening_v1",
             "source": "PLAN_COMMON_OPENING", "arm_id": "C2L", "account_id": "PLAN_CANDIDATE_ACCOUNT_ID",
@@ -203,19 +228,20 @@ def _producer_contracts():
             "lane_fields": ["parent_plan_id", "action_ids", "last_action_at"],
             "state_sha256": "CANONICAL_SHA256_EXCLUDING_STATE_SHA256_FIELD"},
         "legacy_serial_regression": {"required_fields": ["status", "producer_source_commit", "baseline_producer_request",
-            "baseline_source_identity_sha256", "base_execution_contract_sha256", "account_days_recomputed", "checks"],
+            "baseline_source_identity_sha256", "base_execution_contract_sha256", "funding_boundary_sha256",
+            "account_days_recomputed", "checks"],
             "status": "PASSED", "account_days_recomputed": 0, "checks": "NONEMPTY_LIST_OF_DIRECT_TEST_IDENTIFIERS",
             "evidence_scope": "PRODUCER_ATTESTED_DIRECT_REGRESSION_NOT_INDEPENDENT_OLD_ACCOUNT_REPLAY"}}
 
 
 def _body(spec, source_commit, c, facts, account, original, request, refs, contract_ref):
     require(re.fullmatch(r"[a-f0-9]{40}", source_commit) is not None, "CAPACITY_SOURCE_COMMIT")
-    r, control = c["request"], capacity_control()
+    r, control, funding = c["request"], capacity_control(), funding_boundary()
     opening = next(a for a in c["openings"] if a["account_id"] == account.account_id)
     implementation = implementation_identity()
     new_id = "lslane_" + digest([spec, source_commit, implementation, control, account.account_id])[:40]
-    refs = context.pins(refs, contract_ref)
-    return payload({"schema_version": "position_timing_dispatch_capacity_plan_v1", "research_id": STUDY_ID,
+    refs = context.pins(refs, contract_ref, funding)
+    return payload({"schema_version": "position_timing_dispatch_capacity_plan_v2", "research_id": STUDY_ID,
         "approved_design": DESIGN, "preparation_spec": spec, "timing_source_commit": source_commit,
         "implementation": implementation, "baseline_analysis_spec": spec.baseline_analysis_spec,
         "source_delivery": original.source_delivery, "preflight": facts.preflight,
@@ -227,12 +253,14 @@ def _body(spec, source_commit, c, facts, account, original, request, refs, contr
                      {"arm_id": "C2L", "capacity": control["capacity"], "reuse": False}],
         "policy": frozen_policy(), "policy_sha256": digest(frozen_policy()),
         "capacity_control": control, "capacity_control_sha256": digest(control),
+        "funding_boundary": funding, "funding_boundary_sha256": digest(funding),
         "base_operation": opening["operation"], "base_execution_contract": r["execution_contract"],
         "operation": {"schema_version": "localsim_dispatch_capacity_operation_v1",
             "base_operation": opening["operation"], "capacity_control": control, "capacity_control_sha256": digest(control)},
         "execution_contract": {"schema_version": "localsim_dispatch_capacity_execution_contract_v1",
             "base_execution_contract": r["execution_contract"], "capacity_control": control,
-            "capacity_control_sha256": digest(control)},
+            "capacity_control_sha256": digest(control),
+            "funding_boundary": funding, "funding_boundary_sha256": digest(funding)},
         "trade_dates": TRADE_DATES, "native_target_count": 850, "package": c["package"],
         "package_id": r["package_id"], "package_manifest_sha256": r["manifest_sha256"],
         "candidate_manifest": r["candidate_manifest"], "selection_inventory": r["selection_inventory"],
@@ -265,7 +293,7 @@ def prepare(spec: CapacityPreparationSpec, source_commit: str, timing_root):
 def inspect_dispatch_capacity_plan(ref: FileRef):
     """Public read-only seam. Validate full content pins, never run an account."""
     ref = FileRef.model_validate(ref)
-    value = read(ref, "position_timing_dispatch_capacity_plan_v1")
+    value = read(ref, "position_timing_dispatch_capacity_plan_v2")
     spec = CapacityPreparationSpec.model_validate(value["preparation_spec"])
     contract_ref = FileRef.model_validate(value["producer_contracts"])
     require(read(contract_ref) == _producer_contracts(), "CAPACITY_PRODUCER_CONTRACTS")

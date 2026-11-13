@@ -33,6 +33,7 @@ def _approved_localsim_sdk_import(path: Path, module: str, names=()) -> bool:
         ("natural_period_preparation.py", sdk): set(NATURAL_READONLY_MODULES),
         ("natural_period_research.py", sdk + ".natural_period_context"): {"load_context"},
         ("natural_period_research.py", sdk + ".natural_period_prices"): {"inspect"},
+        ("dispatch_capacity_research.py", sdk + ".dispatch_coupling_research"): {"inspect_dispatch_capacity_plan"},
     }
     relative = path.relative_to(Path("backend/services/simulation_execution/localsim")).as_posix()
     if (relative, module) in period_seams:
@@ -176,3 +177,18 @@ def test_natural_replay_exception_is_exact_and_readonly():
             assert not _approved_localsim_sdk_import(consumer, module, names)
         assert not _approved_localsim_sdk_import(consumer, sdk, [suffix])
     assert not _approved_localsim_sdk_import(consumer, sdk + ".natural_period_results", ["analyze"])
+
+
+def test_dispatch_capacity_exception_is_exact_and_readonly():
+    root = Path("backend/services/simulation_execution/localsim")
+    consumer = root / "dispatch_capacity_research.py"
+    sdk = "backend.services.position_timing.intraday"
+    module, symbol = sdk + ".dispatch_coupling_research", "inspect_dispatch_capacity_plan"
+    assert _approved_localsim_sdk_import(consumer, module, [symbol])
+    for path in (root / "timing.py", root / "other" / consumer.name,
+                 Path("backend/services/advisory") / consumer.name):
+        assert not _approved_localsim_sdk_import(path, module, [symbol])
+    for names in ((), ["*"], ["prepare"], ["funding_boundary"], [symbol, "main"]):
+        assert not _approved_localsim_sdk_import(consumer, module, names)
+    assert not _approved_localsim_sdk_import(consumer, sdk, ["dispatch_coupling_research"])
+    assert not _approved_localsim_sdk_import(consumer, sdk + ".dispatch_coupling_results", ["analyze"])

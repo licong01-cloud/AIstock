@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.13；更新日期：2026-11-13；Feature tier：F2。
-> 状态：`DISPATCH_COUPLING_TIMING_INTERFACE_IMPLEMENTED_LOCALSIM_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日，期间/累计统计及其重试已完成；#7236完成C2/W15十月机制诊断、独立复算与exact retry，账户重算0。#7237冻结C2父计划独立容量对照；择时plan/inspect与两臂消费者已实现，本轮来源验收/CI及源码交付状态由F1交付回执记录，LocalSIM容量overlay及C2L账户结果未开始。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新方向见§7.10及[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)。
+> 版本：v1.14；更新日期：2026-11-14；Feature tier：F2。
+> 状态：`DISPATCH_FUNDING_CONTRACT_REVISED_LOCALSIM_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，既有用户重启后的加载身份/API核验已通过。LocalSIM离线连续账户接入、原13户1—10月分析、W15三户比较和1—9月四户724日结果及机制诊断已完成。#7187/#7191交付四户自然承接价集、消费软件与精确SDK登记后，#7192已交回10月68/68账户日，期间/累计统计及其重试已完成；#7236完成C2/W15十月机制诊断、独立复算与exact retry，账户重算0。#7237/#7242交付容量对照设计及初版择时接口；LocalSIM草稿和原生探针发现派单预留假设不成立，现由F1§3.1显式修正共同资金边界、新计划升v2并精确登记SDK。C2L回放仍0/17，最新源码/来源/CI状态由F1最新回执记录。上述不等于荐股嵌入、线上策略替换或样本外经济确认。最新方向见§7.10及[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)。
 > 本轮P2实现源码基线：`f02cf9358a463cebd3043bf4813886864360ea51`（由最新origin/main基线c5a9e01b…在独立工作树实施）；既有543日分析源码基线仍为`85c1fb73965d188bca9f607c45ed799d1580fcfa`。历史plan与验收保持各自原commit/implementation身份。
 > 新四户结果消费源码基线：`26d29a1d48bc16541182637b25b6ba75d5630e3e`；原算法、底层B0及历史分析closure保持不变。PR #7158只交付离线分析与进度文档，不激活线上P2。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
@@ -376,8 +376,8 @@ C2−W15本期净差+5,902.13元，费用差−3,040.89元，加回费用差后�
 
 权威合同为[容量机制对照F1](position_timing_dispatch_coupling_f1_20261113.md)，不复制参数/来源清单。研究只增加C2L一臂，复用旧C2 17日为基准，唯一新增比较C2L−C2；两臂从共同C2真实经济期初出发，固定17日/850目标、C2底层policy、60秒反应、90秒TTL、费用、分钟来源及交易限制。唯一机制变化为操作员容量从账户共享时钟改为父计划独立时钟；同一plan跨修订仍每60秒最多一次动作，资金/持仓仍只有一个共享账户。它是容量消融，不是真实单人能力、收益Oracle或收益上限。
 
-代码核查确认现有链路已有机会续期与派单前复核；新设计不再造“重确认系统”、队列平台或撮合账本。新capacity overlay显式绑定新execution/operation身份，不能同时声称旧ACCOUNT_SINGLE_OPERATOR整份契约不变；分钟因果、原生匹配及成本子项保持。旧四户CLI仍不兼容直接加第五臂。本轮新增`intraday/dispatch_coupling_research.py`的plan/只读inspect与`dispatch_coupling_results.py`两臂消费者，复用完整旧来源检查、period_account_rows和等待/方向诊断；不修改LocalSIM、原四户解析器或旧implementation closure。
+代码核查确认现有链路已有机会续期与派单前复核；新设计不再造“重确认系统”、队列平台或撮合账本。新capacity overlay显式绑定新execution/operation身份，不能同时声称旧ACCOUNT_SINGLE_OPERATOR整份契约不变；分钟因果、原生匹配及成本子项保持。2026-11-14原生接口探针另证实初稿“派单即时预留”假设不成立，F1§3.1现显式修正为两臂共同沿用原生成交时现金边界：不新增预留器，决策仍只读可见反馈，已提交卖出所得可为原挂单成交提供现金；不借未来资金或透支。新plan为v2并绑定资金快照/hash，旧v1仅作历史证据，不覆盖或混用。旧四户CLI仍不兼容直接加第五臂。择时plan/只读inspect与两臂消费者复用完整旧来源检查、period_account_rows和等待/方向诊断；不修改LocalSIM、原四户解析器或旧implementation closure。
 
 计划以独立FileRef交付producer JSON schema和最小opening/day/父计划lane状态合同，不内嵌schema冒充行情来源，也不伪装成旧账户单队列快照。消费者使用共同opening、完整分钟NAV及原始1000万元归一，只有C2L−C2一项比较，记录完整分母和各时间样本；真实C2L事实尚未提供，不生成正式收益报告。具体接口、固定身份、直接测试和WSL来源验收由F1及其交付回执唯一记录，不在蓝图复制。
 
-下一步由LocalSIM owner做研究专用opt-in容量适配，仅新增C2L 17日并交回完整inspect/来源封印/artifact retry，再由择时执行正式比较；新消费者路径由owner明确后精确登记SDK，不泛化放行。旧生命周期未知保留UNKNOWN，缺完整盘中现金时暴露仍UNAVAILABLE；不补造，不因盈利/功效/未来自然日新增放行门槛。旧四户、1—9月、原13户/288案例均不重算；quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。LocalSIM接入/新账户/经济有效性仍未完成，不将它们冒充本轮择时接口交付；无生产数据或服务操作，无需后端重启。
+下一步由LocalSIM owner消费资金修正后的v2计划，继续研究专用opt-in容量适配，仅新增C2L 17日并交回完整inspect/来源封印/artifact retry，再由择时执行正式比较。新入口`localsim/dispatch_capacity_research.py`仅登记对`dispatch_coupling_research.inspect_dispatch_capacity_plan`的精确只读导入，不泛化放行。LocalSIM现有草稿/原生探针不等于C2L回放，当前仍0/17。旧生命周期未知保留UNKNOWN，缺完整盘中现金时暴露仍UNAVAILABLE；不补造，不因盈利/功效/未来自然日新增放行门槛。旧四户、1—9月、原13户/288案例均不重算；quantity_matched=false、pure_timing_attribution=false、economic_confirmation=false保持。LocalSIM接入/新账户/经济有效性仍未完成，不将它们冒充择时接口交付；无生产数据或服务操作，无需后端重启。
