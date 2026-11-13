@@ -8,7 +8,6 @@
     "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
     "backend/tests/services/test_adj_factor_history_reconciler.py",
     "backend/services/data_integrity/listing_scope.py",
-    "backend/tests/test_listing_scope.py",
     "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json"
   ],
   "assigned_agent": null,
@@ -34,19 +33,30 @@
   ],
   "expected": "New listings enter shared provider scope without local-price circular dependency; catalogue changes wake only affected dated validation; real upstream gaps remain explicit.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/services/data_integrity/listing_scope.py",
-      "backend/tests/test_listing_scope.py"
-    ],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/services/tushare_sync_engine.py",
-      "scripts/ingest_tushare_stock_basic.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
-      "backend/tests/services/test_adj_factor_history_reconciler.py"
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "scripts/ingest_tushare_stock_basic.py",
+      "backend/services/data_integrity/listing_scope.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "backend/services/data_integrity/listing_scope.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261113_BUG-2220-ipo-first-session-gaps-are-excluded-from-factor-repair-and-listing-refre.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "scripts/ingest_tushare_stock_basic.py",
+      "backend/services/data_integrity/listing_scope.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -55,8 +65,7 @@
         "scripts/ingest_tushare_stock_basic.py",
         "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
         "backend/tests/services/test_adj_factor_history_reconciler.py",
-        "backend/services/data_integrity/listing_scope.py",
-        "backend/tests/test_listing_scope.py"
+        "backend/services/data_integrity/listing_scope.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -147,13 +156,6 @@
           "primary_module": "local_data",
           "risk_level": "high",
           "rule_id": "local_data_pipeline"
-        },
-        {
-          "file": "backend/tests/test_listing_scope.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
@@ -167,8 +169,7 @@
         "scripts/ingest_tushare_stock_basic.py",
         "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
         "backend/tests/services/test_adj_factor_history_reconciler.py",
-        "backend/services/data_integrity/listing_scope.py",
-        "backend/tests/test_listing_scope.py"
+        "backend/services/data_integrity/listing_scope.py"
       ],
       "unmatched_files": []
     },
@@ -179,8 +180,7 @@
       "scripts/ingest_tushare_stock_basic.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "backend/services/data_integrity/listing_scope.py",
-      "backend/tests/test_listing_scope.py"
+      "backend/services/data_integrity/listing_scope.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -190,8 +190,7 @@
       "scripts/ingest_tushare_stock_basic.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "backend/services/data_integrity/listing_scope.py",
-      "backend/tests/test_listing_scope.py"
+      "backend/services/data_integrity/listing_scope.py"
     ]
   },
   "first_seen_at": "2026-11-13T07:07:59.402606Z",
@@ -215,13 +214,22 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "Local-history-only collection and repair scope excludes IPO first sessions; stock_basic snapshot collection can be skipped by a future listing-date watermark; directory updates do not invalidate affected dated fact-scope verdicts.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Fresh process imported all five tracked producer modules from this isolated worktree. X:/AIstock_temp/DATA_PREPARATION/adj-factor-688827-20261113/BUG-2220-fresh-process.json SHA256 e180008aec434a9db8acf8ad81521652960d534b015ef1278c475f86f6be2449. No database access, services or training.",
+      "Fresh-process imports of five tracked producer modules -> passed; receipt X:/AIstock_temp/DATA_PREPARATION/adj-factor-688827-20261113/BUG-2220-fresh-process.json SHA256 e180008aec434a9db8acf8ad81521652960d534b015ef1278c475f86f6be2449; no DB/service/training.",
+      "fresh-process import -> passed five tracked producer modules; receipt e180008aec434a9db8acf8ad81521652960d534b015ef1278c475f86f6be2449"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -240,6 +248,11 @@
     "fingerprint": "6752c5531c985da09aaa21e0",
     "source_event_id": "FE-20261113-6752c5531c98"
   },
+  "validation_notes": [
+    "RED first-listing regression reproduced repair deferral. GREEN 69 targeted checks; existing DEV rollback-only catalogue/repair/SQL/idempotency proof PASS.",
+    "Correctness and completeness reviews: preserve existing historical observed boundaries, real provider values and strict errors; no PIT or consumer changes; no new gate or whole-history validation.",
+    "Prepared separate one-row production raw daily SQL; no production daily write authorized or performed. Upstream original collection-time availability remains UNKNOWN."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

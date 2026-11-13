@@ -514,6 +514,10 @@ class PostgresAdjFactorHistoryRepository:
         params.append(end_date)
         if requested:
             params.append(list(requested))
+        params.append(end_date)
+        params.append(end_date)
+        if requested:
+            params.append(list(requested))
         predicate = ""
         if requested:
             predicate = "WHERE ts_code = ANY(%s)"
@@ -521,7 +525,7 @@ class PostgresAdjFactorHistoryRepository:
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""
-                WITH observed AS (
+                WITH quoted AS (
                     SELECT upper(ts_code) AS ts_code, min(trade_date) AS first_date
                     FROM market.adj_factor
                     WHERE trade_date <= %s
@@ -534,6 +538,14 @@ class PostgresAdjFactorHistoryRepository:
                       {source_predicate}
                       AND (volume_hand > 0 OR amount_li > 0)
                     GROUP BY upper(ts_code)
+                ), observed AS (
+                    SELECT * FROM quoted
+                    UNION ALL
+                    SELECT upper(ts_code) AS ts_code, list_date AS first_date
+                    FROM market.stock_basic
+                    WHERE list_date <= %s AND (delist_date IS NULL OR delist_date > %s)
+                      {source_predicate}
+                      AND NOT EXISTS (SELECT 1 FROM quoted q WHERE q.ts_code=upper(stock_basic.ts_code))
                 ), scoped AS (
                     SELECT ts_code, min(first_date) AS expected_start
                     FROM observed
