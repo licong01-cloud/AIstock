@@ -19,6 +19,7 @@ class AdvisoryForwardScheduler:
         *,
         service: AdvisoryForwardService | Any | None = None,
         service_factory: Callable[[], AdvisoryForwardService | Any] | None = None,
+        notification_service: Any | None = None,
     ) -> None:
         self._service = service
         self._service_factory = service_factory or AdvisoryForwardService
@@ -30,6 +31,8 @@ class AdvisoryForwardScheduler:
         self._last_run_at: datetime | None = None
         self._last_result: dict[str, Any] | None = None
         self._last_error: dict[str, Any] | None = None
+        self._notification_service = notification_service
+        self._last_notification_result: dict[str, Any] | None = None
 
     def start(self, *, interval_seconds: int | None = None) -> dict[str, Any]:
         interval = _interval_seconds() if interval_seconds is None else int(interval_seconds)
@@ -82,12 +85,29 @@ class AdvisoryForwardScheduler:
                     "message": str(exc),
                 }
                 LOGGER.exception("Advisory forward scheduler run_once failed")
+                self._notify_after_baseline()
                 raise
             self._last_result = result
             self._last_error = None
+            self._notify_after_baseline()
             return result
         finally:
             self._run_lock.release()
+
+    def _notify_after_baseline(self):
+        try:
+            if self._notification_service is None:
+                from .notifications import AdvisoryNotificationService, enabled
+                if not enabled():
+                    self._last_notification_result = {'status': 'DISABLED'}
+                    return
+                self._notification_service = AdvisoryNotificationService()
+            self._last_notification_result = self._notification_service.run_once()
+        except Exception as exc:
+            # Notification failures cannot change the publication result. No exception
+            # text is retained because transport/configuration errors can contain secrets.
+            self._last_notification_result = {'status': 'FAILED', 'error_type': type(exc).__name__}
+            LOGGER.warning('Advisory notifications failed: %s', type(exc).__name__)
 
     def _ensure_service(self) -> AdvisoryForwardService | Any:
         with self._lock:
@@ -107,6 +127,7 @@ class AdvisoryForwardScheduler:
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "last_result": self._last_result,
             "last_error": self._last_error,
+            "notifications": self._last_notification_result,
         }
 
     def _run_loop(self) -> None:
