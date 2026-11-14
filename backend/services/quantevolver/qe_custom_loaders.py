@@ -405,3 +405,59 @@ class DynamicFactorsOnlyLoader:
             )
         
         return df.sort_index()
+
+
+class ReferencePanelAlpha158Loader(DynamicFactorsOnlyLoader):
+    """Opt-in Alpha158 features pinned to the already filtered custom panel.
+
+    Unlike NestedDataLoader's outer join this loader cannot restore rows excluded
+    by the reference factor. The existing dynamic loader owns PIT and labels.
+    """
+
+    def __init__(self, dataloader_l, dynamic_path, **kwargs):
+        super().__init__(dynamic_path=dynamic_path, **kwargs)
+        if (
+            not isinstance(dataloader_l, list)
+            or len(dataloader_l) != 2
+            or not all(isinstance(item, dict) for item in dataloader_l)
+            or dataloader_l[0].get('class') != 'qlib.contrib.data.loader.Alpha158DL'
+            or dataloader_l[1] != {
+                'class': 'qlib.data.dataset.loader.StaticDataLoader',
+                'kwargs': {'config': dynamic_path},
+            }
+        ):
+            raise ValueError('qe_reference_alpha158_loader_config_invalid')
+        from qlib.utils import init_instance_by_config
+
+        self.alpha_loader = init_instance_by_config(dataloader_l[0])
+
+    def load(self, instruments=None, start_time=None, end_time=None):
+        reference = super().load(instruments, start_time, end_time)
+        alpha = self.alpha_loader.load(instruments, start_time, end_time)
+        alpha = self._ensure_datetime_instrument_index(alpha)
+        for frame in (reference, alpha):
+            if (
+                not isinstance(frame, pd.DataFrame)
+                or not isinstance(frame.index, pd.MultiIndex)
+                or list(frame.index.names) != ['datetime', 'instrument']
+                or not frame.index.is_unique
+                or not isinstance(frame.columns, pd.MultiIndex)
+                or frame.columns.nlevels != 2
+                or not frame.columns.is_unique
+                or ('label', 'LABEL0') not in frame.columns
+                or set(frame.columns.get_level_values(0)) != {'feature', 'label'}
+                or sum(frame.columns.get_level_values(0) == 'label') != 1
+            ):
+                raise ValueError('qe_reference_alpha158_frame_invalid')
+        if len(reference.index.difference(alpha.index)):
+            raise ValueError('qe_reference_alpha158_missing_reference_rows')
+        aligned = alpha.reindex(reference.index)
+        if not aligned[('label', 'LABEL0')].equals(reference[('label', 'LABEL0')]):
+            raise ValueError('qe_reference_alpha158_label_mismatch')
+        features = aligned.loc[:, aligned.columns.get_level_values(0) == 'feature']
+        if features.shape[1] != 20 or len(features.columns.intersection(reference.columns)):
+            raise ValueError('qe_reference_alpha158_feature_schema_invalid')
+        # Preserve Alpha158 first, then original custom order, then label. No fill.
+        result = pd.concat([features, reference], axis=1)
+        assert result.index.equals(reference.index)
+        return result

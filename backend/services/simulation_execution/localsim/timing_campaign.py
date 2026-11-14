@@ -98,9 +98,24 @@ class CampaignPriceTemplates(Contract):
     days: tuple[PriceTemplateDay, ...] = Field(min_length=1)
 
 
-def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> dict:
+def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef, *, natural_context=None) -> dict:
     """Inspect the entire immutable source batch before any account outcomes."""
     preflight = read_json(checked_file(preflight_ref))
+    historical = set()
+    if natural_context is not None:
+        # An explicitly inspected four-arm context is a generic price-reader
+        # argument projection, never an old-13 preflight or population alias.
+        c = natural_context
+        if (preflight.get("schema_version") != "localsim_natural_period_preflight_v1"
+                or c["delivery"]["preflight"] != preflight_ref.model_dump()
+                or c["preflight"] != preflight or len(c["openings"]) != 4):
+            raise ValueError("LOCALSIM_NATURAL_PRICE_CONTEXT_CONFLICT")
+        r = c["request"]
+        preflight = {**preflight, "inputs": {"package": c["package"],
+            "candidate_manifest": r["candidate_manifest"], "cost_policy": r["cost_policy"]},
+            "manifest_sha256": r["manifest_sha256"], "package_id": r["package_id"],
+            "start_trade_date": r["trade_dates"][0], "candidate_end_trade_date": r["trade_dates"][-1]}
+        historical = set(c["historical_sell_symbols"])
     templates = CampaignPriceTemplates.model_validate_json(checked_file(templates_ref).read_text(encoding="utf-8"))
     inventory_ref = FileRef.model_validate(preflight["selection_inventory"])
     inventory = read_json(checked_file(inventory_ref))
@@ -163,8 +178,7 @@ def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> d
             if item.path not in verified:
                 checked_file(item)
                 verified[item.path] = item.sha256
-        historical = set()
-        if preflight.get("schema_version") == "localsim_period_continuation_preflight_v2":
+        if natural_context is None and preflight.get("schema_version") == "localsim_period_continuation_preflight_v2":
             from backend.services.position_timing.intraday.period_context import load_period_context
             load_period_context(preflight_ref)
             historical = set(preflight["historical_sell_symbols"])

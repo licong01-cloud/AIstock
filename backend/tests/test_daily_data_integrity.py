@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 import pytest
+from backend.services.data_integrity import stock_scope
 
 from backend.services.data_integrity.contracts import (
     CheckCounts, PartitionState, ValidationResult, aggregate_day, effective_partition,
@@ -129,6 +130,102 @@ def test_missing_event_query_proof_requeues_source_not_a_false_valid(monkeypatch
         assert record.data_source == "integrity_repair" and record.target_status == "retry"
         assert record.target_date == date(2024, 4, 1)
         assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
+
+
+@pytest.mark.parametrize("dataset,category,lag,clock,expected", [
+    ("etf_share_size", "daily_series", 1, "2026-11-13T08:30:00+08:00", True),
+    ("etf_share_size", "daily_series", 1, "2026-11-13T08:29:59+08:00", False),
+    ("margin_detail", "daily_series", 1, "2026-11-13T19:10:00+08:00", True),
+    ("stock_basic", "reference", 0, "2026-11-13T20:00:00+08:00", False),
+    ("tushare_forecast_raw", "event", 0, "2026-11-13T20:00:00+08:00", False),
+    ("not_a_registered_source", "daily_series", 0, "2026-11-13T20:00:00+08:00", False),
+])
+def test_unproven_dated_query_fetch_obeys_source_contract_and_publication_clock(
+        monkeypatch, dataset, category, lag, clock, expected):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    import backend.services.data_sync_targets as targets
+    repo = Mock()
+    monkeypatch.setattr(targets, "DataSyncTargetRepository", lambda: repo)
+    worker = DailyIntegrityWorker(repository=SimpleNamespace(transaction=lambda: nullcontext(object())))
+    day = date(2026, 11, 12)
+    ready = "19:10" if dataset == "margin_detail" else "08:30"
+    worker._repair_target(Obligation(dataset, category, ready, lag), day,
+        ValidationResult(PartitionState.UNVERIFIED, (), {}, reason="historical_source_query_unproven"),
+        calendar={day: True, date(2026, 11, 13): True}, now=datetime.fromisoformat(clock))
+    assert repo.upsert_target.called is expected
+    if expected:
+        record = repo.upsert_target.call_args.args[0]
+        assert record.dataset == dataset and record.target_date == day
+        assert record.target_scope == {"operation": "FETCH", "scope": "exact_fact_date"}
+
+
+@pytest.mark.parametrize("calendar", [None, {}, {date(2026, 11, 12): False},
+    {date(2026, 11, 12): True}])
+def test_unproven_dated_query_keeps_unknown_calendar_unresolved(monkeypatch, calendar):
+    from unittest.mock import Mock
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    import backend.services.data_sync_targets as targets
+    repo = Mock()
+    monkeypatch.setattr(targets, "DataSyncTargetRepository", lambda: repo)
+    worker = DailyIntegrityWorker(repository=Mock())
+    worker._repair_target(Obligation("etf_share_size", "daily_series", "08:30", 1),
+        date(2026, 11, 12), ValidationResult(PartitionState.UNVERIFIED, (), {},
+            reason="historical_source_query_unproven"), calendar=calendar,
+        now=datetime.fromisoformat("2026-11-13T09:00:00+08:00"))
+    assert not repo.upsert_target.called
+
+
+@pytest.mark.skipif(__import__("os").environ.get("AISTOCK_INTEGRITY_DEV_TEST") != "1",
+                    reason="explicit existing DEV opt-in")
+def test_unproven_dated_query_dev_reuses_exact_target_and_rejects_stale_revision():
+    import os
+    from pathlib import Path
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    import psycopg2
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    from scripts.prepare_canonical_pit_monthly import _load_database_config
+    cfg = _load_database_config("dev", Path(os.environ["AISTOCK_INTEGRITY_ENV_FILE"]))
+    assert cfg.dbname == "aistock_dev" and cfg.port == 5433 and cfg.host in {"127.0.0.1", "localhost"}
+    conn = psycopg2.connect(host=cfg.host, port=cfg.port, dbname=cfg.dbname,
+                           user=cfg.user, password=cfg.password, options="-c statement_timeout=10000")
+    day, next_day = date(2099, 1, 5), date(2099, 1, 6)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM market.dataset_date_refresh_audit WHERE dataset='etf_share_size' AND trade_date=%s", (day,))
+            assert cur.fetchone() is None
+            cur.execute("SELECT 1 FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            assert cur.fetchone() is None
+            cur.execute("""INSERT INTO market.dataset_date_refresh_audit(dataset,trade_date,data_source,status,
+                validation_status,data_revision) VALUES('etf_share_size',%s,'canonical_db','failed','UNVERIFIED',7)""", (day,))
+        worker = DailyIntegrityWorker(repository=SimpleNamespace(transaction=lambda: nullcontext(conn)))
+        obligation = Obligation("etf_share_size", "daily_series", "08:30", 1)
+        result = ValidationResult(PartitionState.UNVERIFIED, (), {}, reason="historical_source_query_unproven")
+        kwargs = dict(calendar={day: True, next_day: True},
+                      now=datetime(2099, 1, 6, 9, tzinfo=__import__("zoneinfo").ZoneInfo("Asia/Shanghai")))
+        worker._repair_target(obligation, day, result, revision=6, **kwargs)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            assert cur.fetchone()[0] == 0
+        worker._repair_target(obligation, day, result, revision=7, **kwargs)
+        with conn.cursor() as cur:
+            cur.execute("SELECT target_id,next_retry_at FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            original = cur.fetchone()
+        worker._repair_target(obligation, day, result, revision=7, **kwargs)
+        with conn.cursor() as cur:
+            cur.execute("SELECT target_id,next_retry_at FROM market.data_sync_targets WHERE dataset='etf_share_size' AND target_date=%s", (day,))
+            assert cur.fetchall() == [original]  # no duplicate and no retry deadline starvation
+            cur.execute("SELECT validation_status,data_revision FROM market.dataset_date_refresh_audit WHERE dataset='etf_share_size' AND trade_date=%s", (day,))
+            assert cur.fetchone() == ("UNVERIFIED", 7)
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def test_fair_validation_query_uses_only_the_small_target_ledger():
@@ -370,6 +467,7 @@ def test_dense_historical_facts_use_traded_keys_not_sparse_scan_receipts(monkeyp
     monkeypatch.setattr(validation, "rows", lambda _c, q, _p=(): [partition]
         if "dataset_date_refresh_audit" in str(q) else facts)
     monkeypatch.setattr(validator, "_traded", lambda *_a: {"000001.SZ"})
+    monkeypatch.setattr("backend.services.data_integrity.stock_scope.delisting_panel_exclusions", lambda *_a: {})
     monkeypatch.setattr(validator, "_scan_contract", lambda *_a: pytest.fail("dense facts must not require a source scan"))
     result = validator.validate(None, Obligation(dataset, "daily_series", "21:00"), date(2025, 8, 22), 0)
     expected = (PartitionState.UNVERIFIED if mutation == "dependency" else PartitionState.INCOMPLETE
@@ -548,3 +646,663 @@ def test_legacy_provider_scan_bse_keys_do_not_become_required_stock_facts():
     assert verify_scan(DAILY_BASIC, scan, []) == ([['2026-10-28', '000001.SZ']], [])
     index = provider_scan(INDEX_DAILY, facts, parameters={})
     assert len(index['entries']) == 2  # never apply an equity scope to index catalogues
+
+
+class Cursor:
+    def __init__(self, records):
+        self.records = records
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def execute(self, statement, parameters):
+        self.calls.append((statement, parameters))
+
+    def fetchall(self):
+        return self.records
+
+
+class Connection:
+    def __init__(self, records=()):
+        self.query = Cursor(records)
+
+    def cursor(self):
+        return self.query
+
+
+def _legacy_completion(day, dataset="stock_st", api="stock_st", mode="by_date", count=1):
+    source = {"dataset": dataset, "trade_date": day, "data_source": "tushare", "status": "success",
+        "quality_status": "ok" if count else "empty_valid", "row_count": count,
+        "job_id": "job-legacy", "refreshed_at": datetime(2026, 10, 19, 12, tzinfo=timezone.utc),
+        "metadata": {"mode": mode, "tushare_api": api}}
+    job = {"job_id": "job-legacy", "status": "success", "summary": {"dataset": dataset,
+        "start_date": str(day), "end_date": str(day), "stats": {"dataset": dataset,
+            "job_id": "job-legacy", "total_batches": 1, "success_batches": 1, "failed_batches": 0,
+            "error": None}}}
+    return source, job
+
+
+def test_legacy_partition_requires_real_complete_job_and_physical_validation():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    facts = [{"ts_code": "000001.SZ", "ann_date": day}]
+    result = legacy_completion_result(STOCK_ST, day, 0, source, job, facts)
+    assert result.state == PartitionState.VALID
+    assert result.checks['coverage_basis'] == 'completed_legacy_job_current_database_partition'
+    assert result.checks['historical_vintage_proven'] is False
+    assert 'provider_scan' not in source['metadata']
+    missing = legacy_completion_result(STOCK_ST, day, 0, source, job, [])
+    assert missing.state == PartitionState.INCOMPLETE and missing.counts[0].missing == 1
+    bad = legacy_completion_result(STOCK_ST, day, 0, source, job, [{"ts_code": None, "ann_date": day}])
+    assert bad.state == PartitionState.INCOMPLETE and bad.counts[-1].invalid == 1
+
+
+@pytest.mark.parametrize('mutation', ['failed_job', 'incomplete_batches', 'wrong_dataset', 'wrong_day',
+    'wrong_job_id', 'missing_job', 'seed', 'partial_query', 'query_error', 'new_revision', 'bound_other_revision'])
+def test_legacy_completion_never_relaxes_unknown_or_changed_scope(mutation):
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    revision = 0
+    if mutation == 'failed_job':
+        job['status'] = 'failed'
+    elif mutation == 'incomplete_batches':
+        job['summary']['stats']['success_batches'] = 0
+    elif mutation == 'wrong_dataset':
+        job['summary']['dataset'] = 'dividend'
+    elif mutation == 'wrong_day':
+        job['summary']['end_date'] = '2026-10-18'
+    elif mutation == 'wrong_job_id':
+        job['summary']['stats']['job_id'] = 'different-job'
+    elif mutation == 'missing_job':
+        job = None
+    elif mutation == 'seed':
+        source['metadata']['mode'] = 'physical_audit_seed'
+    elif mutation == 'partial_query':
+        source['metadata']['pagination_complete'] = False
+    elif mutation == 'query_error':
+        job['summary']['stats']['error'] = 'query failed'
+    elif mutation == 'new_revision':
+        revision = 1
+    elif mutation == 'bound_other_revision':
+        source['metadata']['integrity_observed_revision'] = 1
+    result = legacy_completion_result(STOCK_ST, day, revision, source, job,
+        [{"ts_code": '000001.SZ', "ann_date": day}])
+    assert result.state == PartitionState.UNVERIFIED
+
+
+def test_legacy_zero_events_require_complete_period_scope_not_row_count_alone():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import TUSHARE_EXPRESS_RAW
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'tushare_express_raw', 'express_vip', 'by_period', 0)
+    result = legacy_completion_result(TUSHARE_EXPRESS_RAW, day, 0, source, job, [])
+    assert result.state == PartitionState.UNVERIFIED
+    source['metadata'].update(periods=['20260930'], date_column='ann_date', sparse_event_dataset=True)
+    job['summary']['stats']['periods'] = ['20260930']
+    result = legacy_completion_result(TUSHARE_EXPRESS_RAW, day, 0, source, job, [])
+    assert result.state == PartitionState.VALID
+    assert result.checks['query_periods'] == ['20260930']
+    job['summary']['stats']['periods'] = ['20260630']
+    assert legacy_completion_result(TUSHARE_EXPRESS_RAW, day, 0, source, job, []).state == PartitionState.UNVERIFIED
+
+
+def test_legacy_reference_current_table_cannot_stand_in_for_historical_snapshot():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_BASIC
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'stock_basic', 'stock_basic', 'single_call')
+    result = legacy_completion_result(STOCK_BASIC, day, 0, source, job,
+        [{"ts_code": '000001.SZ', 'list_date': date(1991, 4, 3)}])
+    assert result.state == PartitionState.UNVERIFIED
+    assert result.reason == 'historical_reference_scope_unproven'
+
+
+def test_legacy_etf_share_validation_reuses_publication_quality():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import ETF_SHARE_SIZE
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'etf_share_size', 'etf_share_size')
+    facts = [{'ts_code': '510300.SH', 'trade_date': day, 'total_share': 10, 'total_size': None}]
+    assert legacy_completion_result(ETF_SHARE_SIZE, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
+    facts[0]['total_size'] = 20
+    assert legacy_completion_result(ETF_SHARE_SIZE, day, 0, source, job, facts).state == PartitionState.VALID
+
+
+@pytest.mark.parametrize('mutation', ['duplicate', 'wrong_date', 'missing_date', 'blank_identity', 'malformed_identity'])
+def test_legacy_physical_identity_defects_remain_explicit(mutation):
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    facts = [{'ts_code': '000001.SZ', 'ann_date': day}]
+    if mutation == 'duplicate':
+        facts.append(dict(facts[0]))
+    elif mutation == 'wrong_date':
+        facts[0]['ann_date'] = date(2026, 10, 20)
+    elif mutation == 'missing_date':
+        facts[0]['ann_date'] = None
+    elif mutation == 'blank_identity':
+        facts[0]['ts_code'] = ''
+    else:
+        facts[0]['ts_code'] = 'UNKNOWN'
+    assert legacy_completion_result(STOCK_ST, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
+
+
+def test_legacy_supported_scope_retains_old_raw_count_without_requiring_bse():
+    from copy import deepcopy
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, count=2)
+    facts = [{'ts_code': '000001.SZ', 'ann_date': day}, {'ts_code': '920296.BJ', 'ann_date': day}]
+    original = deepcopy((source, job, facts))
+    result = legacy_completion_result(STOCK_ST, day, 0, source, job, facts)
+    assert result.state == PartitionState.VALID
+    assert result.checks['physical_rows'] == 1 and result.counts[0].expected == 2
+    assert (source, job, facts) == original
+
+
+def test_dated_legacy_etf_snapshot_requires_all_official_param_sets():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import ETF_BASIC_SNAPSHOTS
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'etf_basic_snapshots', 'etf_basic', 'single_call')
+    facts = [{'snapshot_date': day, 'ts_code': '510300.SH'}]
+    assert legacy_completion_result(ETF_BASIC_SNAPSHOTS, day, 0, source, job, facts).state == PartitionState.UNVERIFIED
+    job['summary']['stats'].update(total_batches=3, success_batches=3)
+    assert legacy_completion_result(ETF_BASIC_SNAPSHOTS, day, 0, source, job, facts).state == PartitionState.VALID
+    facts[0]['snapshot_date'] = date(2026, 10, 20)
+    assert legacy_completion_result(ETF_BASIC_SNAPSHOTS, day, 0, source, job, facts).state == PartitionState.INCOMPLETE
+
+
+@pytest.mark.parametrize('variant', ['new_revision', 'old_bound_revision', 'latest_failure', 'partial_quality', 'good'])
+def test_legacy_native_scan_fallback_is_bounded_and_preserves_new_contracts(monkeypatch, variant):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    if variant == 'old_bound_revision':
+        source['metadata']['integrity_observed_revision'] = 1
+    if variant == 'latest_failure':
+        source['status'] = 'failed'
+    if variant == 'partial_quality':
+        source['quality_status'] = 'low_coverage'
+    queries = []
+    def read(_conn, query, params=()):
+        queries.append((query, params))
+        if 'dataset_date_refresh_audit' in str(query):
+            return [source]
+        if 'ingestion_jobs' in str(query):
+            return [job]
+        return [{'ts_code': '000001.SZ', 'ann_date': day}]
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('stock_st', 'event', '17:00'), day, 1 if variant == 'new_revision' else 0)
+    expected = {'new_revision': PartitionState.UNVERIFIED, 'old_bound_revision': PartitionState.UNVERIFIED,
+        'latest_failure': PartitionState.WAIT_UPSTREAM, 'partial_quality': PartitionState.INCOMPLETE,
+        'good': PartitionState.VALID}
+    assert result.state == expected[variant]
+    assert len(queries) == (3 if variant == 'good' else 1)
+
+
+def test_legacy_source_only_validation_cannot_trigger_fetches_or_false_green_without_scope():
+    from backend.services.data_integrity.legacy_validation import validate_legacy_partition
+    from backend.services.data_integrity.catalog import Obligation
+    result = validate_legacy_partition(None, Obligation('anns_metadata', 'event', '23:59'),
+        date(2026, 10, 19), 0, [], read=lambda *_: [
+            {'ts_code': '000001.SZ', 'ann_date': date(2026, 10, 19), 'title': 'real title'}])
+    assert result.state == PartitionState.UNVERIFIED
+    assert result.checks['physical_rows'] == 1
+    assert result.reason == 'historical_source_query_unproven'
+
+
+def test_legacy_unproven_history_does_not_create_repeat_fetch_target(monkeypatch):
+    from backend.services.data_integrity.worker import DailyIntegrityWorker
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import STOCK_ST
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day)
+    job['status'] = 'failed'
+    result = legacy_completion_result(STOCK_ST, day, 0, source, job,
+        [{'ts_code': '000001.SZ', 'ann_date': day}])
+    worker = DailyIntegrityWorker(repository=object())
+    worker._repair_target(Obligation('stock_st', 'event', '17:00'), day, result, revision=0)
+
+
+@pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf", "market.bak_basic"])
+def test_dated_consolidation_exclusion_is_one_bounded_shared_query(dataset):
+    day = date(2026, 10, 23)
+    conn = Connection([("002731.SZ", day)])
+    excluded = stock_scope.delisting_panel_exclusions(conn, dataset, day, {"002731.SZ", "000001.SZ"})
+    assert excluded == {"002731.SZ": day}
+    assert len(conn.query.calls) == 1
+    statement, parameters = conn.query.calls[0]
+    assert "market.stock_st_events" in statement and "ANY(" in statement
+    assert "pub_date" in statement and "imp_date" in statement
+    assert "stock_basic" in statement and "list_date" in statement
+    assert "stock_universe_pit" not in statement
+    assert parameters[0] == ["000001.SZ", "002731.SZ"]
+    assert parameters[1] == "退市整理期"
+    assert parameters[2:] == (day, day, day)
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "market.kline_minute_raw", "daily_basic", "stk_limit", "moneyflow_ts"])
+def test_consolidation_scope_never_hides_holdings_quotes_or_other_facts(dataset):
+    conn = Connection([("002731.SZ", date(2026, 10, 23))])
+    assert stock_scope.delisting_panel_exclusions(conn, dataset, date(2026, 10, 29), {"002731.SZ"}) == {}
+    assert not conn.query.calls
+
+
+def test_no_codes_means_no_extra_query():
+    conn = Connection()
+    assert stock_scope.delisting_panel_exclusions(conn, "bak_basic", date(2026, 10, 23), set()) == {}
+    assert not conn.query.calls
+
+
+def test_only_dated_rows_are_filtered_and_existing_rows_are_not_deleted(monkeypatch):
+    from backend.services.tushare_dataset_specs import BAK_BASIC
+
+    rows = [{"ts_code": "002731.SZ", "trade_date": "20261022"},
+            {"ts_code": "002731.SZ", "trade_date": "20261023"},
+            {"ts_code": "000001.SZ", "trade_date": "20261023"}]
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda _c, _ds, d, _codes:
+                        {"002731.SZ": date(2026, 10, 23)} if d >= date(2026, 10, 23) else {})
+    original = [dict(row) for row in rows]
+    assert stock_scope.filter_delisting_panel_rows(None, BAK_BASIC, rows) == [rows[0], rows[2]]
+    assert rows == original
+
+
+def test_unknown_event_remains_required_instead_of_using_current_delisted_name():
+    conn = Connection()
+    assert stock_scope.delisting_panel_exclusions(conn, "bak_basic", date(2026, 1, 1), {"000004.SZ"}) == {}
+    assert "delist_date -" not in conn.query.calls[0][0]
+
+
+@pytest.mark.parametrize("dataset", ["bak_basic", "cyq_perf"])
+@pytest.mark.parametrize("ordinary_missing", [False, True])
+def test_validator_uses_same_scope_and_keeps_real_ordinary_gaps(monkeypatch, dataset, ordinary_missing):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation, RULE_VERSION, SCOPE_VERSION
+    from backend.services.data_integrity.contracts import PartitionState
+
+    raw = {"data_revision": 1, "validated_revision": 1, "validation_id": "raw-valid",
+           "scope_version": SCOPE_VERSION, "rule_version": RULE_VERSION, "validation_status": "VALID"}
+    fact = dict(ts_code="000001.SZ", his_low=1, his_high=2, cost_15pct=1, cost_50pct=1,
+                cost_85pct=2, weight_avg=1, winner_rate=0)
+    validator = validation.PhysicalValidator()
+    monkeypatch.setattr(validator, "_traded", lambda *_: {"000001.SZ", "002731.SZ"})
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda *_: {"002731.SZ": date(2026, 10, 23)})
+    monkeypatch.setattr(validation, "rows", lambda _c, statement, *_: [raw]
+                        if "dataset_date_refresh_audit" in str(statement) else [] if ordinary_missing else [fact])
+    result = validator.validate(None, Obligation(dataset, "daily_series", "21:00"), date(2026, 10, 29), 1)
+    assert result.state == (PartitionState.INCOMPLETE if ordinary_missing else PartitionState.VALID)
+    assert result.counts[0].expected == 1
+    assert result.checks["excluded_delisting_symbols"] == ["002731.SZ"]
+    assert result.checks["applicability_policy"] == stock_scope.DELISTING_PANEL_POLICY
+    assert all("002731.SZ" not in gap.get("symbols", []) for gap in result.gaps)
+
+
+def test_dense_supplement_does_not_request_excluded_security(monkeypatch):
+    from backend.services import tushare_sync_engine as module
+    from backend.services.tushare_dataset_specs import BAK_BASIC
+
+    engine = module.TushareSyncEngine()
+    monkeypatch.setattr("backend.services.data_integrity.validation.PhysicalValidator._traded",
+                        lambda *_: {"000001.SZ", "002731.SZ"})
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda *_: {"002731.SZ": date(2026, 10, 23)})
+    monkeypatch.setattr("backend.services.data_integrity.validation.rows", lambda *_: [{"ts_code": "000001.SZ"}])
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: pytest.fail("excluded key must not be fetched"))
+    receipt, written = engine._complete_dense_panel(None, BAK_BASIC, date(2026, 10, 29))
+    assert written == 0 and receipt["missing_symbols"] == [] and receipt["expected_rows"] == 1
+    assert receipt["excluded_delisting_symbols"] == ["002731.SZ"]
+
+
+def test_real_upsert_filters_only_panels_before_writing(monkeypatch):
+    from backend.services.tushare_sync_engine import TushareSyncEngine
+    from backend.services.tushare_dataset_specs import BAK_BASIC
+
+    engine = TushareSyncEngine()
+    monkeypatch.setattr(stock_scope, "delisting_panel_exclusions", lambda *_: {"002731.SZ": date(2026, 10, 23)})
+    written = []
+    monkeypatch.setattr(engine, "_upsert_plain_batch", lambda _c, _s, rows: written.extend(rows) or len(rows))
+    rows = [{"ts_code": "002731.SZ", "trade_date": "20261029"},
+            {"ts_code": "000001.SZ", "trade_date": "20261029"}]
+    assert engine._upsert_batch(None, BAK_BASIC, rows) == 1
+    assert written == [rows[1]]
+
+
+def test_late_lifecycle_event_wakes_only_affected_old_validation_targets(monkeypatch):
+    from backend.services.data_integrity import repository
+
+    day = date(2026, 10, 29)
+    conn = Connection([('bak_basic', day)])
+    queued = []
+    monkeypatch.setattr(repository, 'schema_installed', lambda _: True)
+    monkeypatch.setattr(repository, 'enqueue_validation', lambda _c, ds, d, **kw: queued.append((ds, d, kw)))
+    assert stock_scope.wake_delisting_panel_validations(conn, [{'ts_code': '002731.SZ', 'st_type': '退市整理期'}]) == 1
+    assert queued == [('bak_basic', day, {'source_completed': True})]
+    statement, _ = conn.query.calls[0]
+    assert "p.validation_status='INCOMPLETE'" in statement
+    assert "excluded_delisting_symbols" in statement and "'{validation,gaps}'" in statement
+
+
+def test_ordinary_st_event_does_not_wake_or_exempt_panels():
+    conn = Connection()
+    assert stock_scope.wake_delisting_panel_validations(conn, [{'ts_code': '002731.SZ', 'st_type': '*ST'}]) == 0
+    assert not conn.query.calls
+
+
+def _hk_session(day=date(2026, 10, 19), is_open=0):
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    facts = {day: [{'ts_code': 'H11100.CSI', 'close': None}]}
+    return capture_index_sessions(facts, lambda _a, _b:
+        [{'cal_date': day.strftime('%Y%m%d'), 'is_open': is_open}])[day]
+
+
+def test_index_hk_holiday_placeholder_is_legal_without_manufacturing_prices():
+    from backend.services.data_integrity.validation import index_quote_result
+    row = dict(close=None, open=None, high=None, low=None, vol=0, amount=0, pre_close=2125.5917)
+    original = dict(row)
+    result = index_quote_result({'H11100.CSI'}, {'H11100.CSI': row},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert result.state == PartitionState.VALID
+    assert result.counts[0].expected == result.counts[0].legal_na == 1
+    assert result.counts[0].valid == 0 and not result.gaps
+    assert row == original and row['close'] is None
+
+
+@pytest.mark.parametrize('code', ['000300.SH', '930999.CSI', 'UNKNOWN.CSI'])
+def test_index_hk_calendar_does_not_exempt_domestic_mixed_or_unknown_indices(code):
+    from backend.services.data_integrity.validation import index_quote_result
+    result = index_quote_result({code}, {code: dict(close=None, vol=0, amount=0)},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert result.state == PartitionState.INCOMPLETE
+    assert result.counts[0].invalid == 1 and result.counts[0].legal_na == 0
+
+
+@pytest.mark.parametrize('session_kind', ['open', 'absent', 'wrong_date', 'tampered', 'unknown'])
+def test_index_hk_empty_quote_requires_correct_confirmed_closed_session(session_kind):
+    from backend.services.data_integrity.validation import index_quote_result
+    session = _hk_session(is_open=1) if session_kind == 'open' else _hk_session()
+    if session_kind == 'absent':
+        session = None
+    elif session_kind == 'wrong_date':
+        session = _hk_session(day=date(2026, 10, 20))
+    elif session_kind == 'tampered':
+        session['exchange'] = 'SSE'
+    elif session_kind == 'unknown':
+        session = {'status': 'UNAVAILABLE'}
+    result = index_quote_result({'H11100.CSI'}, {'H11100.CSI': dict(close=None, vol=0, amount=0)},
+        session=session, trade_date=date(2026, 10, 19))
+    assert result.state != PartitionState.VALID
+    assert result.counts[0].legal_na == 0
+
+
+@pytest.mark.parametrize('change', [dict(close=0), dict(close=float('nan')),
+    dict(close=-1), dict(open=1), dict(vol=1), dict(amount=1), dict(vol=float('nan'))])
+def test_index_hk_closed_day_does_not_hide_bad_or_nonplaceholder_values(change):
+    from backend.services.data_integrity.validation import index_quote_result
+    row = dict(close=None, open=None, high=None, low=None, vol=0, amount=0)
+    row.update(change)
+    result = index_quote_result({'H11100.CSI'}, {'H11100.CSI': row},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert result.state == PartitionState.INCOMPLETE
+    assert result.counts[0].legal_na == 0
+
+
+def test_index_hk_calendar_never_invents_absent_rows_or_rejects_valid_published_quotes():
+    from backend.services.data_integrity.validation import index_quote_result
+    missing = index_quote_result({'H11100.CSI'}, {}, session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert missing.state != PartitionState.VALID and missing.counts[0].missing == 1
+    present = index_quote_result({'H11100.CSI'}, {'H11100.CSI': dict(close=2125.5)},
+        session=_hk_session(), trade_date=date(2026, 10, 19))
+    assert present.state == PartitionState.VALID and present.counts[0].valid == 1
+
+
+def test_index_calendar_capture_is_bounded_and_not_needed_for_normal_quotes():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    calls = []
+    def query(a, b):
+        calls.append((a, b))
+        return [{'cal_date': '20261019', 'is_open': 0}]
+    days = {date(2026, 10, 19): [{'ts_code': 'H11100.CSI', 'close': None},
+                                {'ts_code': '930709.CSI', 'close': None}]}
+    assert capture_index_sessions(days, query)[date(2026, 10, 19)]['is_open'] is False
+    assert calls == [('20261019', '20261019')]
+    assert capture_index_sessions({date(2026, 10, 19): [{'ts_code':'000300.SH','close':None}]},
+        lambda *_: pytest.fail('do not fetch HK calendar for domestic missing quote')) == {}
+    assert capture_index_sessions({date(2026, 10, 20): [{'ts_code':'H11100.CSI','close':2096}]},
+        lambda *_: pytest.fail('positive published quotes need no extra calendar query')) == {}
+
+
+@pytest.mark.parametrize('returned', [[], [{'cal_date': '20261019', 'is_open': None}],
+    [{'cal_date': '20261019', 'is_open': float('nan')}],
+    [{'cal_date': '20261019', 'is_open': 0}, {'cal_date': '20261019', 'is_open': 1}]])
+def test_index_calendar_missing_invalid_or_conflicting_response_is_not_closed(returned):
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    result = capture_index_sessions({date(2026, 10, 19): [{'ts_code':'H11100.CSI','close':None}]},
+        lambda *_: returned)
+    assert result[date(2026, 10, 19)]['status'] == 'UNAVAILABLE'
+
+
+def test_index_calendar_unrelated_malformed_row_does_not_block_confirmed_neighbor():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    result = capture_index_sessions({date(2026, 10, 19): [{'ts_code':'H11100.CSI','close':None}],
+                                    date(2026, 10, 20): [{'ts_code':'H11100.CSI','close':None}]},
+        lambda *_: [{'cal_date':'20261019','is_open':0}, {'cal_date':'bad','is_open':0}])
+    assert result[date(2026, 10, 19)]['status'] == 'CONFIRMED'
+    assert result[date(2026, 10, 20)]['status'] == 'UNAVAILABLE'
+
+
+def test_index_calendar_transport_failure_stays_explicit_without_discarding_quotes():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    def failed(*_):
+        raise RuntimeError('upstream calendar unavailable')
+    result = capture_index_sessions({date(2026, 10, 19): [{'ts_code':'H11100.CSI','close':None}]}, failed)
+    assert result[date(2026, 10, 19)]['status'] == 'UNAVAILABLE'
+    assert result[date(2026, 10, 19)]['reason'] == 'RuntimeError'
+
+
+def test_index_native_provider_scan_receives_dated_session_contract(monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.provider import provider_scan
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    day = date(2026, 10, 19)
+    row = dict(ts_code='H11100.CSI', trade_date=day, close=None, vol=0, amount=0)
+    metadata = dict(integrity_observed_revision=7, provider_query_scope_complete=True,
+        provider_scan=provider_scan(INDEX_DAILY, [row], parameters={'trade_date': str(day)}),
+        index_market_session=_hk_session())
+    source = dict(status='success', quality_status='ok', data_source='tushare', metadata=metadata)
+    monkeypatch.setattr(validation, 'rows', lambda _c, query, *_:
+        [source] if "data_source<>" in str(query) else [row])
+    result = validation.PhysicalValidator().validate(None, Obligation('index_daily','daily_series','16:50'), day, 7)
+    assert result.state == PartitionState.VALID and result.counts[2].legal_na == 1
+    assert result.counts[0].valid == 1 and not result.gaps
+    metadata['index_market_session'] = _hk_session(is_open=1)
+    assert validation.PhysicalValidator().validate(None,
+        Obligation('index_daily','daily_series','16:50'), day, 7).state == PartitionState.INCOMPLETE
+
+
+def test_index_calendar_backfill_queries_are_year_bounded_and_reuse_each_response():
+    from backend.services.data_integrity.index_quote_calendar import capture_index_sessions
+    days = [date(2024, 1, 2), date(2024, 12, 30), date(2025, 1, 2)]
+    facts = {day: [{'ts_code':'H11100.CSI','close':None}] for day in days}
+    calls = []
+    def query(start, end):
+        calls.append((start, end))
+        return [{'cal_date': day.strftime('%Y%m%d'), 'is_open':0} for day in days
+                if start <= day.strftime('%Y%m%d') <= end]
+    sessions = capture_index_sessions(facts, query)
+    assert calls == [('20240102','20241230'), ('20250102','20250102')]
+    assert all(row['status'] == 'CONFIRMED' for row in sessions.values())
+
+
+def _reference_job(dataset='etf_basic_snapshots', count=2):
+    from datetime import datetime, timezone
+    return dict(job_id='snapshot-job', status='success',
+        created_at=datetime(2026, 10, 19, 12, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 10, 19, 12, 1, tzinfo=timezone.utc),
+        summary=dict(dataset=dataset, start_date='2026-10-19', end_date='2026-10-19',
+            stats=dict(dataset=dataset, job_id='snapshot-job', mode='init', inserted_rows=count,
+                       total_batches=3, success_batches=3, failed_batches=0)))
+
+
+def test_reference_exact_dated_snapshot_uses_retained_complete_job_without_fabricating_scan():
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    day = date(2026, 10, 19)
+    actual = [dict(snapshot_date=day, ts_code='510300.SH'), dict(snapshot_date=day, ts_code='159915.SZ')]
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], day, 0, [_reference_job()], actual)
+    assert result.state == PartitionState.VALID
+    assert result.checks['historical_vintage_proven'] is False
+    assert result.checks['source_receipt_rewritten'] is False
+    assert result.checks['provider_scan_reconstructed'] is False
+    assert result.checks['legacy_job_id'] == 'snapshot-job'
+
+
+@pytest.mark.parametrize('change', ['wrong_capture_day', 'wrong_end', 'partial', 'error', 'wrong_id',
+    'missing_finish', 'unknown_count', 'zero_count', 'wrong_start'])
+def test_reference_snapshot_does_not_accept_wrong_or_incomplete_job(change):
+    from datetime import timedelta
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    job = _reference_job(count=1)
+    if change == 'wrong_capture_day':
+        job['created_at'] += timedelta(days=1)
+        job['finished_at'] += timedelta(days=1)
+    elif change == 'wrong_end':
+        job['summary']['end_date'] = '2026-10-20'
+    elif change == 'partial':
+        job['summary']['stats']['failed_batches'] = 1
+    elif change == 'error':
+        job['summary']['stats']['error'] = 'fetch failed'
+    elif change == 'wrong_id':
+        job['summary']['stats']['job_id'] = 'another-job'
+    elif change == 'missing_finish':
+        job['finished_at'] = None
+    elif change == 'wrong_start':
+        job['summary']['start_date'] = '2026-10-18'
+    else:
+        job['summary']['stats']['inserted_rows'] = None if change == 'unknown_count' else 0
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], date(2026, 10, 19), 0,
+        [job], [dict(snapshot_date=date(2026, 10, 19), ts_code='510300.SH')])
+    assert result.state != PartitionState.VALID
+
+
+@pytest.mark.parametrize('change', ['missing', 'extra', 'duplicate', 'wrong_date', 'nan', 'new_revision'])
+def test_reference_snapshot_detects_physical_drift_and_never_rebinds_old_job(change):
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    day = date(2026, 10, 19)
+    actual = [dict(snapshot_date=day, ts_code='510300.SH', mgt_fee=0.5)]
+    if change == 'missing':
+        actual = []
+    elif change in {'extra', 'duplicate'}:
+        actual.append(dict(actual[0], ts_code='159915.SZ' if change == 'extra' else '510300.SH'))
+    elif change == 'wrong_date':
+        actual[0]['snapshot_date'] = date(2026, 10, 20)
+    elif change == 'nan':
+        actual[0]['mgt_fee'] = float('nan')
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], day,
+        1 if change == 'new_revision' else 0, [_reference_job(count=1)], actual)
+    assert result.state != PartitionState.VALID
+
+
+@pytest.mark.parametrize('dataset', ['stock_basic', 'sw_index_classify', 'sw_index_member'])
+def test_reference_mutable_master_is_not_certified_as_an_old_snapshot(dataset):
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    result = reference_result(DATASET_REGISTRY[dataset], date(2026, 10, 19), 0,
+        [_reference_job(dataset)], [])
+    assert result.state == PartitionState.UNVERIFIED
+    assert result.reason == 'historical_reference_snapshot_not_retained'
+    assert result.checks['historical_vintage_proven'] is False
+
+
+def test_reference_native_validator_routes_missing_audit_to_dated_snapshot_contract(monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    calls = []
+    day = date(2026, 10, 19)
+    def read(_conn, query, parameters=()):
+        calls.append((str(query), parameters))
+        if 'dataset_date_refresh_audit' in str(query):
+            return []
+        if 'ingestion_jobs' in str(query):
+            return [_reference_job(count=1)]
+        return [dict(snapshot_date=day, ts_code='510300.SH')]
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('etf_basic_snapshots', 'reference', '20:05'), day, 0)
+    assert result.state == PartitionState.VALID
+    assert len(calls) == 3
+
+
+def test_reference_failed_new_source_cannot_be_overridden_by_old_job(monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    source = dict(status='failed', quality_status='error', data_source='tushare', metadata={})
+    def read(_conn, query, parameters=()):
+        assert 'dataset_date_refresh_audit' in str(query), 'must not fetch old success after a source failure'
+        return [source]
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('etf_basic_snapshots', 'reference', '20:05'), date(2026, 10, 19), 0)
+    assert result.state == PartitionState.WAIT_UPSTREAM
+
+
+@pytest.mark.parametrize('status', ['failed', 'running', 'success'])
+def test_reference_later_incomplete_attempt_cannot_be_hidden_by_older_success(status):
+    from copy import deepcopy
+    from datetime import timedelta
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    earlier = _reference_job(count=1)
+    later = deepcopy(earlier)
+    later['status'] = status
+    later['created_at'] += timedelta(hours=1)
+    later['finished_at'] += timedelta(hours=1)
+    later['summary']['stats']['success_batches'] = 2
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], date(2026, 10, 19), 0,
+        [earlier, later], [dict(snapshot_date=date(2026, 10, 19), ts_code='510300.SH')])
+    assert result.state == PartitionState.UNVERIFIED
+
+
+def test_reference_job_must_be_full_capture_not_zero_delta_success():
+    from backend.services.data_integrity.reference_validation import reference_result
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    job = _reference_job(count=1)
+    job['summary']['stats']['mode'] = 'incremental'
+    result = reference_result(DATASET_REGISTRY['etf_basic_snapshots'], date(2026, 10, 19), 0,
+        [job], [dict(snapshot_date=date(2026, 10, 19), ts_code='510300.SH')])
+    assert result.state == PartitionState.UNVERIFIED
+
+
+@pytest.mark.parametrize('dataset', ['stock_basic', 'sw_index_classify', 'sw_index_member', 'etf_basic_snapshots'])
+def test_reference_current_bound_scan_keeps_existing_native_contract(dataset, monkeypatch):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    from backend.services.data_integrity.provider import provider_scan
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    day = date(2026, 10, 19)
+    spec = DATASET_REGISTRY[dataset]
+    fact = dict(ts_code='000001.SZ', l2_code='801192.SI', in_date=day,
+                snapshot_date=day, index_code='801192.SI')
+    source = dict(status='success', quality_status='ok', data_source='tushare', metadata=dict(
+        integrity_observed_revision=2, provider_scan=provider_scan(spec, [fact], parameters={})))
+    def read(_conn, query, parameters=()):
+        assert 'ingestion_jobs' not in str(query), 'bound source never queries legacy jobs'
+        return [source] if 'dataset_date_refresh_audit' in str(query) else [fact]
+    monkeypatch.setattr(validation, 'rows', read)
+    assert validation.PhysicalValidator().validate(None,
+        Obligation(dataset, 'reference', '20:05'), day, 2).state == PartitionState.VALID

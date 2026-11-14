@@ -10,7 +10,8 @@ from .repository import ReadRepository
 
 
 def segments(program_id, selected_id, versions, items, calendar, symbols):
-    versions = sorted((v for v in versions if v['version_status'] == 'PUBLISHED'),
+    selected_status = next((v['version_status'] for v in versions if v['list_version_id'] == selected_id), None)
+    versions = sorted((v for v in versions if v['version_status'] == selected_status),
                       key=lambda v: (str(v['trade_date']), v['list_version_id']))
     by_id = {v['list_version_id']: v for v in versions}
     selected = by_id.get(selected_id)
@@ -51,6 +52,9 @@ def segments(program_id, selected_id, versions, items, calendar, symbols):
                    base_price=None, end_price=None, return_bps=None, price_basis='RAW_CNY',
                    state='UNKNOWN', reason_code='CONTINUITY_UNKNOWN')
         result[symbol] = out
+        if selected_status not in {'PUBLISHED', 'REPLAY'}:
+            out['reason_code'] = 'LIST_NOT_PUBLISHED'
+            continue
         current = selected
         group = member(current, symbol)
         if group == 'UNKNOWN':
@@ -102,7 +106,9 @@ def segments(program_id, selected_id, versions, items, calendar, symbols):
             last = following
         out['known_through_date'] = str(last['trade_date'])
         if valid:
-            out.update(state='KNOWN', reason_code=None)
+            through = min(str(selected['trade_date']), str(last['trade_date']))
+            count = sum(trading is True and out['start_date'] <= day <= through for day, trading in facts.items())
+            out.update(state='KNOWN', reason_code=None, consecutive_days=count)
     return result
 
 
@@ -137,7 +143,11 @@ def value_segment(segment, quote, prices, now):
         mark, mark_source = opening(end)
         out.update(end_price=mark, end_source=mark_source, valuation_date=end)
     else:
-        mark = positive(quote.get('price')) if (quote.get('trade_date') or '') >= start else None
+        quote_date = quote.get('trade_date') or ''
+        if quote_date > out.get('known_through_date', start):
+            out.update(state='UNKNOWN', reason_code='CONTINUITY_UNKNOWN', valuation_date=None)
+            return out
+        mark = positive(quote.get('price')) if quote_date >= start else None
         out['valuation_date'] = quote.get('trade_date')
     if not base:
         out['reason_code'] = 'BASE_SUSPENDED' if source == 'SUSPENDED' else 'BASE_OPEN_MISSING'

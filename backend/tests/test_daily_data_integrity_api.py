@@ -5,9 +5,84 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend.routers.local_data import get_integrity_service, router
+from backend.routers import ingestion
+
+
 from backend.services.data_integrity.catalog import CN, IntegrityCatalogueUnavailable, obligations
 from backend.services.data_integrity.repository import IntegrityRevisionChanged
 from backend.services.data_integrity.service import DailyIntegrityService
+
+
+def test_schedule_list_reads_job_keys_once_and_preserves_response(monkeypatch):
+    queries = []
+    row = {"schedule_id": "schedule-a", "dataset": "etf_share_size", "mode": "incremental",
+           "enabled": False, "frequency": "daily", "options": {},
+           "last_job_summary": {"dataset": "etf_share_size", "inserted_rows": 25,
+                                "error": "real failure"}}
+    def fetch(query, params=()):
+        queries.append(query)
+        return [row]
+    monkeypatch.setattr(ingestion, "_fetchall", fetch)
+    result = ingestion.list_ingestion_schedules()
+    assert len(queries) == 1
+    query = queries[0]
+    assert "job_keys AS MATERIALIZED" in query
+    assert "DISTINCT ON (dataset)" in query and "DISTINCT ON (schedule_id)" in query
+    assert "VALUES" in query  # choose newest across BOTH identity matches, not coalesce
+    assert "WHERE summary->>'schedule_id'" not in query
+    assert "status IN" not in query and "interval" not in query.lower()
+    assert result["items"][0]["last_inserted_rows"] == 25
+    assert result["items"][0]["enabled"] is False
+
+
+@pytest.mark.skipif(__import__("os").environ.get("AISTOCK_INTEGRITY_DEV_TEST") != "1",
+                    reason="explicit existing DEV opt-in")
+def test_schedule_list_native_dev_preserves_or_identity_history_and_missing_jobs(monkeypatch):
+    import os
+    from pathlib import Path
+    from uuid import UUID
+    import psycopg2
+    from psycopg2.extras import Json, RealDictCursor
+    from scripts.prepare_canonical_pit_monthly import _load_database_config
+    cfg = _load_database_config("dev", Path(os.environ["AISTOCK_INTEGRITY_ENV_FILE"]))
+    assert cfg.dbname == "aistock_dev" and cfg.port == 5433 and cfg.host in {"127.0.0.1", "localhost"}
+    conn = psycopg2.connect(host=cfg.host, port=cfg.port, dbname=cfg.dbname,
+                           user=cfg.user, password=cfg.password, options="-c statement_timeout=10000")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE schedule_fixture (LIKE market.ingestion_schedules INCLUDING DEFAULTS) ON COMMIT DROP")
+            cur.execute("CREATE TEMP TABLE job_fixture (LIKE market.ingestion_jobs INCLUDING DEFAULTS) ON COMMIT DROP")
+            schedule_ids = [str(UUID(int=i)) for i in range(1, 5)]
+            for identity, dataset, mode in zip(schedule_ids, ["a", "a", "b", "empty"],
+                                              ["init", "incremental", "init", "init"]):
+                cur.execute("""INSERT INTO schedule_fixture(schedule_id,dataset,mode,enabled,frequency,options)
+                    VALUES(%s,%s,%s,false,'daily','{}')""", (identity, dataset, mode))
+            fixtures = [
+                (10, {"dataset": "a", "rows": 1}, "2024-01-01", "success"),
+                # The newest dataset match must beat an older schedule match.
+                (11, {"schedule_id": schedule_ids[0], "rows": 2}, "2024-01-02", "success"),
+                (12, {"dataset": "a", "rows": 3}, "2024-01-03", "failed"),
+                # A schedule-only match is valid even if its dataset differs.
+                (13, {"schedule_id": schedule_ids[2], "dataset": "other", "rows": 4}, "2024-01-04", "failed"),
+                (14, {"dataset": "b", "rows": 5}, "2024-01-03", "success"),
+            ]
+            for key, summary, created, status in fixtures:
+                cur.execute("INSERT INTO job_fixture(job_id,job_type,status,summary,created_at) VALUES(%s,'init',%s,%s,%s)",
+                            (str(UUID(int=key)), status, Json(summary), created))
+        def fetch(query, params=()):
+            query = query.replace("market.ingestion_schedules", "pg_temp.schedule_fixture").replace(
+                "market.ingestion_jobs", "pg_temp.job_fixture")
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(query, params)
+                return cur.fetchall()
+        monkeypatch.setattr(ingestion, "_fetchall", fetch)
+        items = ingestion.list_ingestion_schedules()["items"]
+        assert {(r["dataset"], r["mode"]): r.get("last_inserted_rows") for r in items} == {
+            ("a", "init"): 3, ("a", "incremental"): 3, ("b", "init"): 4, ("empty", "init"): None}
+        assert len(items) == 4 and all(r["enabled"] is False for r in items)
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def test_catalogue_nonempty_ignores_maintenance_and_keeps_disabled_history():

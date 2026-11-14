@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { read, type Episode } from "@/lib/api/advisoryWorkbench";
 import { bps, day, gain, number, text, time } from "./workbench/shared";
 
-type Recommendation = { segment_id: string | null; start_date: string | null; end_date: string | null; known_through_date?: string | null; base_price: number | null; end_price: number | null; return_bps: number | null; valuation_date?: string | null; state: string; reason_code: string | null };
+type Recommendation = { segment_id: string | null; start_date: string | null; end_date: string | null; consecutive_days?: number | null; known_through_date?: string | null; base_price: number | null; end_price: number | null; return_bps: number | null; valuation_date?: string | null; state: string; reason_code: string | null };
 type Quote = { symbol: string; price: number | null; kind: string; trade_date: string | null; observed_at: string; reason_code?: string | null; today_return_bps?: number | null; recommendation?: Recommendation };
 type Quotes = Record<string, Quote>;
 const Context = createContext<{ items: Quotes; register: (symbol: string) => () => void }>({ items: {}, register: () => () => undefined });
@@ -125,12 +125,13 @@ export function EpisodeReturn({ episode }: { episode?: Episode | null }) {
     : `${episode?.return_kind === "REALIZED" ? "已结束参考收益" : "浮动参考收益"} · ${day(episode?.return_kind === "REALIZED" ? episode.effective_exit_date : episode?.mark_date || episode?.metric_as_of_trade_date)}`}</small></span>;
 }
 
-const returnReasons: Record<string, string> = { CONTINUITY_UNKNOWN: "推荐连续性待核验", NOT_RECOMMENDED: "不属于本次连续推荐", OPEN_NOT_YET_AVAILABLE: "开盘基准尚未形成", BASE_OPEN_MISSING: "缺少首次生效日开盘价", BASE_SUSPENDED: "首次生效日停牌，无开盘基准", END_OPEN_MISSING: "缺少移出生效日开盘价", QUOTE_NOT_VALID_FOR_SEGMENT: "等待本段有效行情" };
-export function RecommendationValue({ symbol, field }: { symbol: string; field: "start" | "base" | "return" }) {
+const returnReasons: Record<string, string> = { LIST_NOT_PUBLISHED: "该版本尚未发布，不计算荐股期间涨跌", CONTINUITY_UNKNOWN: "推荐连续性待核验", NOT_RECOMMENDED: "不属于本次连续推荐", OPEN_NOT_YET_AVAILABLE: "开盘基准尚未形成", BASE_OPEN_MISSING: "缺少首次生效日开盘价", BASE_SUSPENDED: "首次生效日停牌，无开盘基准", END_OPEN_MISSING: "缺少移出生效日开盘价", QUOTE_NOT_VALID_FOR_SEGMENT: "等待本段有效行情" };
+export function RecommendationValue({ symbol, field }: { symbol: string; field: "start" | "base" | "return" | "days" }) {
   const { ref, quote } = useQuote(symbol);
   const r = quote?.recommendation;
   const reason = r ? returnReasons[r.reason_code || ""] || "数据待核验" : quote ? "推荐涨跌暂不可用，请刷新" : "读取推荐涨跌中…";
   const value = field === "return" ? r?.return_bps : field === "base" ? r?.base_price : null;
+  if (field === "days") return <span ref={ref} title="截至名单目标日的连续推荐天数">{r?.consecutive_days == null ? "—" : r.consecutive_days === 1 ? "首日" : `${r.consecutive_days} 日`}</span>;
   return <span ref={ref} data-testid={`advisory-recommendation-${field}`} className={field === "return" ? gain(value) : undefined} style={{ display: "inline-block", minWidth: 105 }}>
     {field === "start" ? day(r?.start_date) : field === "base" ? value == null ? "—" : `¥${number(value, 2)}` : bps(value)}
     <small style={{ display: "block" }}>{field === "start" ? r?.start_date ? "本次连续推荐" : reason : value == null ? reason : field === "base" ? "首次生效日开盘·未复权" : r?.state === "ENDED" ? `已结束·冻结于 ${day(r.end_date)} 开盘` : `未复权·价格变化 ${day(r?.valuation_date)}`}</small>

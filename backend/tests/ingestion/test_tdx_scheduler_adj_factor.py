@@ -13,6 +13,7 @@ import pytest
 
 import scripts.ingest_tushare_adj_factor as ingest_adj_factor
 from backend.ingestion.tdx_scheduler import TDXScheduler
+from backend.services.data_integrity.listing_scope import listing_change_window
 
 
 def test_known_history_conflict_cannot_be_reconciled_by_permissive_freshness(monkeypatch):
@@ -103,6 +104,29 @@ def test_factor_gap_without_local_history_is_deferred_without_launching_a_failin
     repo.mark_retry.assert_called_once()
     assert repo.mark_retry.call_args.kwargs["retry_after"] == now + dt.timedelta(days=1)
     assert repo.mark_retry.call_args.kwargs["context"]["missing_symbols"] == ["000787.SZ"]
+
+
+def test_first_listing_factor_gap_is_fetchable_without_local_prices(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduling
+    monkeypatch.setattr(scheduling, 'DataSyncTargetRepository', Mock)
+    scheduler = object.__new__(TDXScheduler)
+    queries = []
+
+    def fetch(query, params):
+        queries.append(query)
+        if "refresh_audit" in query:
+            return [{"data_revision": 1, "validated_revision": 1, "validation_status": "INCOMPLETE",
+                     "validation": {"gaps": [{"classification": "MISSING", "symbols": ["688827.SH"]}]}}]
+        # Independent listed identity is sufficient to FETCH, never to certify a factor.
+        if "stock_basic" in query and "list_date" in query:
+            return [{"ts_code": "688827.SH"}]
+        return []
+
+    scheduler._fetchall = fetch
+    target = {"target_id": "ipo", "target_date": dt.date(2026, 11, 10)}
+    assert scheduler._scope_adj_factor_repair(target)
+    assert target["metadata"]["history_reconcile_symbols"] == ["688827.SH"]
+    assert len(queries) == 2
 
 
 def test_existing_factor_job_preserves_scheduler_target_identity():
@@ -340,3 +364,89 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
     assert status == ("failed" if history_error else "success")
     if not history_error:
         assert summary["history_reconciliation"]["status"] == "unchanged"
+
+
+@pytest.mark.parametrize('old,new,today,expected', [
+    (None, '20261110', dt.date(2026, 11, 13), (dt.date(2026, 11, 10), dt.date(2026, 11, 13))),
+    (dt.date(2026, 11, 10), '20261110', dt.date(2026, 11, 13), None),
+    (None, '20261116', dt.date(2026, 11, 13), None),
+    (dt.date(2026, 11, 11), '20261110', dt.date(2026, 11, 13), (dt.date(2026, 11, 10), dt.date(2026, 11, 10))),
+    (dt.date(2026, 11, 10), '20261111', dt.date(2026, 11, 13), (dt.date(2026, 11, 10), dt.date(2026, 11, 10))),
+    (None, None, dt.date(2026, 11, 13), None),
+])
+def test_only_dates_with_changed_listing_membership_are_invalidated(old, new, today, expected):
+    assert listing_change_window(old, new, today=today) == expected
+
+
+def test_refresh_is_atomic_and_only_invalidates_existing_affected_partitions(monkeypatch):
+    import backend.services.data_integrity.listing_scope as scope
+    monkeypatch.setattr(scope, 'schema_installed', lambda _conn: True)
+    dirty = Mock()
+    monkeypatch.setattr(scope, 'mark_changed', dirty)
+    calls = []
+    results = iter([[], [('adj_factor', dt.date(2026, 11, 10)), ('kline_daily_raw', dt.date(2026, 11, 10))]])
+    cursor = SimpleNamespace(execute=lambda query, params: calls.append((query, params)),
+                             fetchall=lambda: next(results))
+    conn = SimpleNamespace(autocommit=True, cursor=lambda: nullcontext(cursor), commit=Mock(), rollback=Mock())
+
+    def write(_rows):
+        assert conn.autocommit is False
+        calls.append(('actual fact writer', ()))
+        return 1
+
+    assert scope.store_listing_refresh(conn, [{'ts_code': '688827.SH', 'list_date': '20261110'}], write) == 1
+    assert dirty.call_count == 2
+    assert all(call.args[2] == [dt.date(2026, 11, 10)] for call in dirty.call_args_list)
+    assert all('kline_daily_raw' not in query for query, _ in calls)  # no physical quote scan
+    assert calls[1][0] == 'actual fact writer'
+    conn.commit.assert_called_once()
+    conn.rollback.assert_not_called()
+    assert conn.autocommit is True
+
+
+def test_catalogue_write_failure_rolls_back_and_never_publishes_valid(monkeypatch):
+    import backend.services.data_integrity.listing_scope as scope
+    monkeypatch.setattr(scope, 'schema_installed', lambda _conn: False)
+    dirty = Mock()
+    monkeypatch.setattr(scope, 'mark_changed', dirty)
+    conn = SimpleNamespace(autocommit=True, commit=Mock(), rollback=Mock())
+    with pytest.raises(RuntimeError, match='source write failed'):
+        scope.store_listing_refresh(conn, [{'ts_code': '688827.SH', 'list_date': '20261110'}],
+            Mock(side_effect=RuntimeError('source write failed')))
+    dirty.assert_not_called()
+    conn.rollback.assert_called_once()
+    assert conn.autocommit is True
+
+
+def test_both_stock_basic_entrypoints_share_listing_scope_invalidation(monkeypatch):
+    from backend.services import tushare_sync_engine as engine
+    from backend.services.tushare_dataset_specs import DATASET_REGISTRY
+    import scripts.ingest_tushare_stock_basic as script
+    import backend.services.data_integrity.listing_scope as scope
+    seen = []
+    monkeypatch.setattr(scope, 'store_listing_refresh',
+        lambda conn, rows, write: seen.append((conn, rows)) or 7)
+    conn = object()
+    rows = [{'ts_code': '688827.SH', 'list_date': '20261110'}]
+    reader = object.__new__(engine.TushareSyncEngine)
+    assert reader._upsert_batch(conn, DATASET_REGISTRY['stock_basic'], rows) == 7
+    assert script._insert_stock_basic(conn, rows) == 7
+    assert seen == [(conn, rows), (conn, rows)]
+
+
+def test_future_max_listing_date_does_not_skip_directory_refresh(monkeypatch):
+    import scripts.ingest_tushare_stock_basic as script
+    monkeypatch.setattr(script, 'parse_args', lambda: SimpleNamespace(mode='incremental',
+        start_date=None, end_date='2026-11-10', job_id=None, bulk_session_tune=False, truncate=False))
+    conn = SimpleNamespace(autocommit=True)
+    monkeypatch.setattr(script.psycopg2, 'connect', lambda **_kwargs: nullcontext(conn))
+    monkeypatch.setattr(script, 'pro_api', Mock())
+    maximum = Mock(return_value=dt.date(2026, 11, 16))
+    monkeypatch.setattr(script, '_get_max_list_date', maximum)
+    fetch = Mock(return_value=[{'ts_code': '688827.SH', 'list_date': '20261110'}])
+    monkeypatch.setattr(script, '_fetch_stock_basic', fetch)
+    for name in ('_insert_stock_basic', '_create_job', '_log', '_update_job_progress', '_finish_job'):
+        monkeypatch.setattr(script, name, Mock(return_value=1))
+    script.main()
+    fetch.assert_called_once()
+    maximum.assert_not_called()

@@ -245,9 +245,14 @@ def _insert_stock_basic(conn, rows: List[Dict[str, Any]]) -> int:
         )
     if not values:
         return 0
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values)
+    from backend.services.data_integrity.listing_scope import store_listing_refresh
+
+    def write(_records):
+        with conn.cursor() as cur:
+            pgx.execute_values(cur, sql, values)
+        return len(values)
+
+    return store_listing_refresh(conn, rows, write)
 
 
 def _parse_ymd(val) -> dt.date | None:
@@ -306,13 +311,10 @@ def main() -> None:
                     print("[ERROR] invalid --start-date format, expected YYYY-MM-DD")
                     sys.exit(1)
             else:
-                # Get max list_date from database
-                max_date = _get_max_list_date(conn)
-                start_date = (max_date + dt.timedelta(days=1)) if max_date else end_date
-                
-            if start_date and start_date > end_date:
-                print("[INFO] stock_basic up to date; nothing to do")
-                return
+                # This is a mutable directory snapshot, not an append-only
+                # listing-date stream. A future IPO date must not suppress
+                # today's refresh or corrections to an existing listing.
+                start_date = end_date
         else:
             print(f"[ERROR] unsupported mode: {mode}")
             sys.exit(1)

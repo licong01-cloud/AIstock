@@ -1,10 +1,10 @@
 # 申万L2成员损失：新release与Q4连续交付
 
-> v1.2；2026-11-06；F2；父蓝图§1.27。用户“开始执行合并的连续任务”批准本包方向和Q4四次拟合预算；源码、预检、正式研究及QE采用分开报告。正式新增fit=4/4已完成，预算耗尽；本次只回填零fit诊断、142日交付、有界数据库实读及审计复验，不改变D1～D6。
+> v1.3；2026-11-09；F2；父蓝图§1.27/§1.29。用户批准的Q4四次拟合预算已完成且耗尽，旧8-fit不重跑。后继B0/C六账户已完成并评价，不支持当前组合晋升；研究源码、资产、当前实时技术与经济采用分开。此次只同步真实终态和后续边界，不改变D1～D6、预测或模型。
 
 ## 1. Background / 终极目标
 
-目标仍是申万二级行业信号改善真实股票选择的收益/损失权衡，不是通过合法性检查。已完成成员损失研究#7013与8/8 fits：实际新买同样本C−B日均亏损Rank IC=+0.045903，尚无新账户净收益证明。保持旧资产，下一包一次完成新release消费、Q4滚动和必要价值诊断；QE实验由QE窗口执行。
+目标仍是申万二级行业信号改善真实股票选择的收益/损失权衡，不是通过合法性检查。设计提出时，成员损失研究#7013与8/8 fits已完成，实际新买同样本C−B日均亏损Rank IC=+0.045903，但尚无新账户净收益证明；本包据此一次完成新release消费、Q4滚动和必要价值诊断，QE实验由QE窗口执行。现该包及六账户均完成，结论见§11.1当前读回；不把本段原设计动机重新执行一遍。
 
 ## 2. Scope / Architecture
 
@@ -66,7 +66,7 @@ F-011：D1/D3/D5唯一模型与价值问题；F-012：D2/D4身份、因果和载
 | F-012 | 同service及release_industry_binding.py；共享reader显式分派与读取稳定性检查；本行仅source/文件载体断言 | backend/tests/hmm_risk/test_release_industry_binding.py；backend/tests/hmm_risk/test_risk_l2_member_release.py；正式文件回执见§11.1 | VERIFIED_SOURCE_FILE_ONLY | 无 |
 | F-013 | scripts/hmm_risk/run_risk_l2_member_release.py：guard/clean_head/双process与不重试 | backend/tests/hmm_risk/test_risk_l2_member_release.py：attempt先行/两process预算/完整grid回读；生产状态见§11 | VERIFIED_SOURCE | 无 |
 
-本Index仅断言源码/文件合同，不承诺本包直接上线。§11.1后续独立接续已完成两个决策点的historical_current_revision数据库实读，不扩大为142日全量数据库、当前forward加载或生产采用。在线authority时效与QE经济采用仍未完成；F2源码/文件合同通过不能消除这些真实缺口。
+本Index仅断言源码/文件合同，不承诺本包直接上线。§11.1后续独立接续已完成两个决策点的historical_current_revision数据库实读，不扩大为142日全量数据库、当前forward加载或生产采用。六账户经济评价已完成且不支持采用；当前在线验证仍未完成，F2源码/文件合同通过不能代替它或经济价值。
 
 ## 10. Risks / Production Gates / Rollback
 
@@ -78,6 +78,8 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 
 ### 11.1 最新终态（取代下方开发过程的待运行状态）
 
+**2026-11-09当前读回**：QE `qe_20261107_123555_6217`恢复Loop7～12六账户完整完成，142信号日／141经济日保留；平均C−B0净收益−0.000653个百分点、回撤幅度多0.069837个百分点。原生两节点账本分析及准确结果pin统一见[父蓝图§1.29](hmm_evolution_and_risk_management_system_design_20260716.md#129-成员c经济终态与短期上下文取舍2026-11-09)。不支持该精确组合晋升或追加研究，无HMM待补交资产或待跑六账户。当前实时来源合法日期与事实完成另行判断，不为无价值组合自动投入生产。用户批准的VIX短期研究只做零fit现有记录分析，不改本合同或启动QE。以下11/6原研究／接续段落均为历史，原“QE净收益未完成”已被本段取代。
+
 固定研究HEAD=`25e5a8ffcf273271793fa4baf68a2bdaff2257fd`；输入manifest仍为§4冻结值。正式prepare_v4及file_preflight_v4 PASS，共同训练716日、89,871行；prepared canonical=`203e4beaf175e453953bd81d860c2af9031265d2589347fb8ba971663c8b6929`。双fresh-process正式4/4 fits字节一致、父进程封闭通过，acceptance canonical=`8342abe3b6c65b0a2e61e4a91cd1303174b04feaa62c25ddecea0f2fbaae52a6`。B/C各17日×131=2,227行，全部available。输出及唯一结果摘要位于`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/`。旧8-fit和新4-fit均不得重跑。
 
 原Q2/Q3四模型已在原生效期基于新release真实20维重新推断，四次fresh-process CLI均零fit，旧资产SHA未变。封存之后读取评价事实：4–9月125个全行业共同定义日，B/C对成员亏损Rank IC为0.186587/0.255571，C−B=+0.068984；不是原QE新买同样本99日的+0.045903口径，不能相互比较或当作收益提升。C高风险组的平均成员亏损5.8694%、上行5.1206%；低风险组为2.4902%/2.0595%。风险与机会同时增强，不能自动套禁买、降仓或1-p。
@@ -86,7 +88,7 @@ Q4仅7个成熟日，B/C Rank IC=0.664752/0.661386，C−B=−0.003366，未证�
 
 独立价格编码修复PR #7049已合入，merge=`d6d4b01a3b0784e695bfcf7c24fe57acca757c40`，关闭同步PR #7061已合入。主任务PR #7037于11/6合入`1a7ce7ce163ad28f872bb695a5acc1a0221eb75f`，实际差异为11个HMM源码、测试及设计文件；不删除正式BUG记录、扩大BUG scope或修改流水线。研究执行身份保持上面的固定HEAD，不伪造绑定到后续文档提交；本次文档不追加工作树清理，也不把源码合入称为经济价值确认。
 
-#### 同日零fit接续：价值、消费者与在线输入（当前状态）
+#### 同日零fit接续：价值、消费者与在线输入（2026-11-06历史状态）
 
 结果根仍为`F:/Dev/AIstock_runtime/hmm_l2_member_loss/20261106/`，不重新训练或覆盖旧预测。
 

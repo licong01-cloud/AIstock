@@ -2259,3 +2259,89 @@ def test_daily_basic_field_observation_includes_nullable_fields_without_new_thre
     assert receipt["source_field_observation"]["threshold_enforced"] is False
     assert receipt["ratio"] == 1.0
     assert receipt["required_ratio"] == 0.95
+
+
+@pytest.mark.parametrize('calendar_fails', [False, True])
+def test_index_query_audit_captures_one_calendar_without_changing_source_facts(monkeypatch, calendar_fails):
+    from contextlib import nullcontext
+    from datetime import date
+    from unittest.mock import Mock
+    from backend.services.data_integrity.index_quote_calendar import HK_EQUITY_INDICES
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    day = date(2026, 10, 19)
+    engine = sync_engine.TushareSyncEngine()
+    facts = [dict(ts_code=code, trade_date=day, close=None, vol=0, amount=0)
+             for code in sorted(HK_EQUITY_INDICES)]
+    original = [dict(row) for row in facts]
+    monkeypatch.setattr(sync_engine, 'get_conn', lambda: nullcontext(object()))
+    monkeypatch.setattr(engine, '_trading_dates_between', lambda *_: [day])
+    monkeypatch.setattr(engine, '_fetch_code_list', lambda *_: sorted(HK_EQUITY_INDICES))
+    monkeypatch.setattr(engine, '_tushare_token', lambda: 'unit-test-token')
+    monkeypatch.setattr(sync_engine.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(sync_engine, 'get_limiter', lambda *_: Mock())
+    audit = Mock()
+    engine._refresh_audit = audit
+    calls = []
+    def query(api, parameters, fields, **_kwargs):
+        calls.append((api, parameters, fields))
+        if calendar_fails:
+            raise RuntimeError('calendar query unavailable')
+        return [dict(cal_date='20261019', is_open=0)]
+    monkeypatch.setattr(sync_engine, '_query_tushare_dataapi', query)
+    engine._record_index_query_audit(INDEX_DAILY, day, day, None, sorted(HK_EQUITY_INDICES), {day: facts})
+    metadata = audit.record_success.call_args.kwargs['metadata']
+    assert metadata['provider_query_scope_complete'] is True
+    assert metadata['index_market_session']['status'] == ('UNAVAILABLE' if calendar_fails else 'CONFIRMED')
+    assert len(metadata['provider_scan']['entries']) == 33
+    assert len(calls) == (3 if calendar_fails else 1)
+    assert all(c[0] == 'hk_tradecal' for c in calls)
+    assert audit.record_success.call_args.kwargs['row_count'] == 33
+    assert facts == original and all(row['close'] is None for row in facts)
+
+
+def test_index_query_audit_adds_no_calendar_request_for_ordinary_published_quotes(monkeypatch):
+    from contextlib import nullcontext
+    from datetime import date
+    from unittest.mock import Mock
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    engine = sync_engine.TushareSyncEngine()
+    day = date(2026, 10, 20)
+    monkeypatch.setattr(sync_engine, 'get_conn', lambda: nullcontext(object()))
+    monkeypatch.setattr(engine, '_trading_dates_between', lambda *_: [day])
+    monkeypatch.setattr(engine, '_fetch_code_list', lambda *_: ['H11100.CSI'])
+    monkeypatch.setattr(sync_engine, '_query_tushare_dataapi', lambda *_a, **_kw:
+                        pytest.fail('no extra network query for normal quote'))
+    engine._refresh_audit = Mock()
+    engine._record_index_query_audit(INDEX_DAILY, day, day, None, ['H11100.CSI'],
+        {day: [dict(ts_code='H11100.CSI', trade_date=day, close=2096)]})
+    assert 'index_market_session' not in engine._refresh_audit.record_success.call_args.kwargs['metadata']
+
+
+@pytest.mark.parametrize('published_close', [None, 2096])
+def test_index_batched_pipeline_preserves_close_for_calendar_decision(monkeypatch, published_close):
+    from contextlib import nullcontext
+    from datetime import date
+    from unittest.mock import Mock
+    from backend.services.tushare_dataset_specs import INDEX_DAILY
+    engine = sync_engine.TushareSyncEngine()
+    day = date(2026, 10, 19)
+    monkeypatch.setattr(sync_engine, 'get_conn', lambda: nullcontext(object()))
+    monkeypatch.setattr(engine, '_fetch_code_list', lambda *_: ['H11100.CSI'])
+    monkeypatch.setattr(engine, '_trading_dates_between', lambda *_: [day])
+    monkeypatch.setattr(engine, '_fetch_from_tushare', lambda *_:
+        [dict(ts_code='H11100.CSI', trade_date='20261019', close=published_close)])
+    monkeypatch.setattr(engine, '_upsert_batch', lambda _c, _s, rows: len(rows))
+    monkeypatch.setattr(engine, '_update_progress', Mock())
+    monkeypatch.setattr(engine, '_log', Mock())
+    monkeypatch.setattr(engine, '_tushare_token', lambda: 'unit-test-token')
+    monkeypatch.setattr(sync_engine.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(sync_engine, 'get_limiter', lambda *_: Mock())
+    calls = []
+    def query(*_a, **_kw):
+        calls.append('hk_tradecal')
+        return [dict(cal_date='20261019', is_open=0)]
+    monkeypatch.setattr(sync_engine, '_query_tushare_dataapi', query)
+    engine._refresh_audit = Mock()
+    result = engine._sync_by_code_batched(INDEX_DAILY, day, day, None)
+    assert result.ok and result.inserted_rows == 1
+    assert len(calls) == (1 if published_close is None else 0)

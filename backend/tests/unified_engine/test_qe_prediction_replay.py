@@ -391,6 +391,28 @@ def test_source_resolver_does_not_fallback_from_invalid_current_recorder(recorde
     client.download_workspace_file_bytes.assert_not_awaited()
 
 
+@pytest.mark.parametrize("failed_read", [1, 2])
+def test_source_recorder_transport_failure_is_not_reported_as_invalid_content(failed_read) -> None:
+    import httpx
+    from backend.services.quantevolver.qe_workspace_client import QEWorkspaceAssetReadUnavailable
+
+    client, prediction, _ = _recorder_catalog_client()
+    error = QEWorkspaceAssetReadUnavailable(
+        task_id="qe_source", loop_id="Loop2", error=httpx.ReadTimeout("unavailable"),
+    )
+    client.get_workspace_file.side_effect = (
+        [error] if failed_read == 1 else [{"experiment_id": "1", "recorder_id": "current"}, error]
+    )
+    with pytest.raises(QEWorkspaceAssetReadUnavailable) as caught:
+        asyncio.run(AutoEvolutionScheduler._build_prediction_replay_payload(
+            None, client, "qe_source", 2, source_node_id="rdagent-node1",
+            expected_sha256=hashlib.sha256(prediction).hexdigest(),
+        ))
+    assert caught.value is error
+    if failed_read == 1:
+        client.download_workspace_file_bytes.assert_not_awaited()
+
+
 def test_source_resolver_requires_recorders_exact_catalog_path_even_with_one_other_prediction() -> None:
     client, prediction, _ = _recorder_catalog_client()
     client.list_workspace_files.return_value["files"].pop()

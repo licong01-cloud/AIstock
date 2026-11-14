@@ -4697,8 +4697,19 @@ class ConfigComposer:
             # 与 RDAgent conf_sota_factors_model.yaml 完全一致
             # 需要先执行 prepare_factors.py 生成 combined_factors_df.parquet
             lines.append("    data_loader:")
-            lines.append("        class: NestedDataLoader")
+            reference_panel = self._normalize_observation_panel_contract(
+                custom_params, [factor['factor_name'] for factor in factors_info]
+            )
+            if reference_panel.get('schema_version') == 'qe_observation_panel_v2':
+                lines.append("        class: ReferencePanelAlpha158Loader")
+                lines.append("        module_path: qe_custom_loaders")
+            else:
+                lines.append("        class: NestedDataLoader")
             lines.append("        kwargs:")
+            if reference_panel.get('schema_version') == 'qe_observation_panel_v2':
+                lines.append('            dynamic_path: "combined_factors_df.parquet"')
+                lines.append(f'            label_type: "{_label_type}"')
+                lines.append(f'            label_horizon: {_label_horizon}')
             lines.append("            dataloader_l:")
             lines.append("                - class: qlib.contrib.data.loader.Alpha158DL")
             lines.append("                  kwargs:")
@@ -5112,8 +5123,15 @@ class ConfigComposer:
         prefix = "qe_feature_processing_invalid: "
         if not isinstance(raw, dict) or set(raw) - {"exclude_from_model", "clip_outlier", "raw_state_controls"}:
             raise ValueError(prefix + "expected exclude_from_model/clip_outlier/raw_state_controls object")
-        if custom_params.get("disable_alpha158") is not True or not factor_names:
+        alpha_reference = (
+            custom_params.get('disable_alpha158') is False
+            and ConfigComposer._normalize_observation_panel_contract(custom_params, factor_names).get('schema_version')
+            == 'qe_observation_panel_v2'
+        )
+        if (custom_params.get("disable_alpha158") is not True and not alpha_reference) or not factor_names:
             raise ValueError(prefix + "requires custom factors and disable_alpha158=true")
+        if alpha_reference and 'raw_state_controls' in raw:
+            raise ValueError(prefix + "raw_state_controls requires disable_alpha158=true")
         excluded = raw.get("exclude_from_model", [])
         clip = raw.get("clip_outlier", True)
         if type(clip) is not bool:
@@ -5174,9 +5192,8 @@ class ConfigComposer:
     ) -> Dict[str, Any]:
         """Validate the opt-in matched-experiment observation panel contract.
 
-        The contract is deliberately limited to custom-factor-only experiments.
-        Alpha158 uses a separate loader/index and therefore cannot make the same
-        reference-factor intersection guarantee.
+        v1 remains custom-factor-only. v2 opts into a reference-pinned Alpha158
+        loader; the historical outer-join loader cannot honor this contract.
         """
 
         if custom_params is None or "observation_panel" not in custom_params:
@@ -5200,9 +5217,10 @@ class ConfigComposer:
                 "qe_observation_panel_unknown_keys: " + ",".join(unknown_keys)
             )
 
-        if raw_contract.get("schema_version") != "qe_observation_panel_v1":
+        schema_version = raw_contract.get("schema_version")
+        if schema_version not in {"qe_observation_panel_v1", "qe_observation_panel_v2"}:
             raise ValueError(
-                "qe_observation_panel_schema_invalid: expected qe_observation_panel_v1"
+                "qe_observation_panel_schema_invalid: expected qe_observation_panel_v1 or v2"
             )
         if raw_contract.get("mode") != "reference_factor_intersection":
             raise ValueError(
@@ -5239,13 +5257,16 @@ class ConfigComposer:
                 "qe_observation_panel_reference_factor_not_configured: "
                 + ",".join(missing_factor_names)
             )
-        if custom_params.get("disable_alpha158") is not True:
+        if schema_version == 'qe_observation_panel_v1' and custom_params.get("disable_alpha158") is not True:
             raise ValueError(
                 "qe_observation_panel_alpha158_not_supported: disable_alpha158 must be true"
             )
 
+        if schema_version == 'qe_observation_panel_v2' and custom_params.get('disable_alpha158') is not False:
+            raise ValueError('qe_observation_panel_schema_invalid: v2_requires_explicit_alpha158')
+
         return {
-            "schema_version": "qe_observation_panel_v1",
+            "schema_version": schema_version,
             "panel_id": panel_id,
             "mode": "reference_factor_intersection",
             "reference_factor_names": list(reference_factor_names),
