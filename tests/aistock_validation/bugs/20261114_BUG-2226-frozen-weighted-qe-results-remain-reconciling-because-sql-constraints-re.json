@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2226",
-  "closed_at": null,
+  "closed_at": "2026-11-14T17:13:34Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-11-14T16:55:44.865201Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9ce42bc1936a19fb69e926db22e81f9701b455fe",
+  "fixed_at": "2026-11-14T17:13:34Z",
   "github_issue_number": 7264,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7264",
   "last_seen_at": "2026-11-14T16:55:44.865201Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7265",
   "production_backend_dependency_gate": "noop",
   "production_ddl_details": {
     "backend_restart_required": false,
@@ -134,7 +135,7 @@
     ],
     "target_database": "aistock"
   },
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "Read ck_macb_scheme_supported domain and finalizer CheckViolation for original three macb_idem runs; no experiment rerun",
@@ -151,6 +152,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "database",
@@ -160,7 +162,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -169,6 +171,9 @@
     "fingerprint": "367dafd50a89de841f1ebdeb",
     "source_event_id": "FE-20261114-367dafd50a89"
   },
+  "validation_evidence": [
+    "Production exact two CHECK migration SHA98a9c2d2 applied/readback passed; original three selected attempts preserved; 3/3 archived, full565 and terminal2026-10-29 verified; receipts F:/Dev/AIstock/tmp/handoff/qe-dual-track-new-version-20261113/postrestart-20h-20261114/assets/BUG-2226/production_receipt.json and business_receipt.json; no fit/inference/backtest rerun or restart"
+  ],
   "validation_notes": [
     "35 related tests passed including cross-layer current API/domain migration regression",
     "Existing DEV: original rejection reproduced for both result and LOO; migration exact bytes applied twice, schema idempotent",
