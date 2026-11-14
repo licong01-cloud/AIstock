@@ -121,14 +121,22 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_details": {
     "backend_restart_required": false,
+    "business_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\business_receipt.json",
+    "business_receipt_sha256": "17c08ac6554a37c3328475211c460aeb692f2a112a07baa7c186d88d814ae4d5",
     "dev_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\dev_receipt.json",
     "dev_receipt_sha256": "ee43a5fc3e43b111e067cca8a44ffb66ae2ccc0be42f59f67f699660e0af211e",
     "dev_validation": "passed",
     "migration": "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
     "migration_sha256": "98a9c2d2c0303ffcb3af268d4e2fe8135531b1d3b83e03732db9a99233609d66",
-    "production_apply": "not_executed",
-    "production_authorization": "pending_exact_target_and_migration",
+    "new_fit_predict_backtest": 0,
+    "original_accounts_accepted_and_archived": "3/3 full565 through2026-10-29",
+    "production_apply": "applied_and_verified",
+    "production_authorization": "granted_by_user_20261115_授权执行",
+    "production_authorization_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\production_authorization.json",
+    "production_readback_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\production_receipt.json",
+    "production_readback_receipt_sha256": "4d212646568c4aa4ce1bfd1de46c9cd4ba9b3863db61d56bae63ff11c159eb27",
     "schema": "strategy_pkg",
+    "service_control": false,
     "tables": [
       "multi_alpha_combine_backtest_scheme_result",
       "multi_alpha_combine_backtest_loo"
@@ -179,7 +187,8 @@
     "Existing DEV: original rejection reproduced for both result and LOO; migration exact bytes applied twice, schema idempotent",
     "14 real DEV fixture insertions succeeded and rolled back;4 negative checks remain;0fixture rows left;other constraints unchanged",
     "DESIGN-COMPLIANCE-001: both persistence tables cover exact supported7 schemes; atomic and bounded DDL; no partial/placeholder/fake-success; no formula/model/policy/RBAC changes",
-    "Production remains pending; original three succeeded attempts and immutable predictions retained; no retraining, prediction or account resubmission"
+    "Pre-apply snapshot: Production remains pending; original three succeeded attempts and immutable predictions retained; no retraining, prediction or account resubmission",
+    "Production exact merged SQL authorized/applied/readback: only two CHECK domains changed, old6 preserved plus frozen_weighted; other constraints and original3 selected attempt/prediction/result hashes unchanged. Original3 full565 accounts accepted and archived; final analysis and12x354 industry-event attribution delivered. No re-fit/inference/backtest or service control."
   ],
   "verification_budget": {
     "budget": "standard",
