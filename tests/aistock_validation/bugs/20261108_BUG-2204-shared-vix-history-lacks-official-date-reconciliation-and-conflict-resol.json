@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2204",
-  "closed_at": null,
+  "closed_at": "2026-11-14T05:26:53.744052Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -152,10 +152,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2204-runtime.json",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2204-runtime-current-catalog.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2204",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
+      "expected_identity": "9eec4242638a6d85a0e407e924076a7abb58495b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-14T05:26:47.702557Z",
+      "mode": "read_only",
+      "observed_identity": "38289b56c04e0c22010e34a5d5980f3e74872265",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a9f7b918029050885cbe6eb1773a6c72c6598d1fd45997404e910fa04061077a",
+      "receipt_sha256": "60197c9cc8037adeae0eca3aa0655154ae7a331f40534e4963c29f45863b97fd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "81b4e21cbf53539194fe008528ecb6811dd9162452f2fa49530b0c6293ccc418",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -189,7 +211,7 @@
     ],
     "validation_evidence_digest": "0e3a9eacae48e8ce4f426872a1dcd3ccfc23f663d4098392d152bf4f4003fa13"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -203,7 +225,8 @@
     "validation-receipt: id=3a1bd6cd44987d27 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
     "validation-receipt: id=b092b2dae1e261a1 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
     "validation-receipt: id=7490e3fef6ab247f commit=332f66416f452551c418c06093f8bebde97f6f9b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_shared_vix_inputs.py backend/tests/test_tushare_us_market_inputs.py backend/tests/test_tushare_phase1_inputs.py -q` result=`76 passed; independent CSV/Arrow file-only readback PASS with 2112 closes and retained 2059 raw rows, receipt SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3`",
-    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged"
+    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged",
+    "Registry safely merged current origin/main; canonical current-catalog post-restart verification PASS; no repeated backend restart, production write or service action"
   ],
   "verification_budget": {
     "budget": "standard",
