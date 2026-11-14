@@ -812,6 +812,30 @@ def test_observed_authority_pr_slice_rejects_missing_direct_contract(monkeypatch
         noxfile._hmm_risk_pr_test_targets()
 
 
+@pytest.mark.parametrize("sources", [
+    ["backend/services/hmm_risk/earnings_information_input.py"],
+    ["backend/services/hmm_risk/risk_l2_earnings_information.py"],
+    ["scripts/hmm_risk/run_risk_l2_earnings_information.py"],
+    ["backend/services/hmm_risk/earnings_information_input.py",
+     "backend/services/hmm_risk/risk_l2_earnings_information.py",
+     "scripts/hmm_risk/run_risk_l2_earnings_information.py"],
+])
+def test_earnings_pr_slice_selects_one_real_contract_and_rejects_its_loss(monkeypatch, tmp_path, sources):
+    direct = "backend/tests/hmm_risk/test_earnings_information.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=sources,
+                              existing_paths=[*sources, direct])
+    assert noxfile._hmm_risk_pr_test_targets() == [*noxfile.HMM_RISK_PR_SMOKE_TESTS, direct]
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=[*sources, direct],
+                              existing_paths=[*sources, direct])
+    assert noxfile._hmm_risk_pr_test_targets() == [*noxfile.HMM_RISK_PR_SMOKE_TESTS, direct]
+    (tmp_path / direct).unlink()
+    with pytest.raises(ValueError, match="mapped direct-neighbor test is missing"):
+        noxfile._hmm_risk_pr_test_targets()
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=[direct], existing_paths=sources)
+    with pytest.raises(ValueError, match="deleted HMM direct-neighbor test still covers live source"):
+        noxfile._hmm_risk_pr_test_targets()
+
+
 def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
