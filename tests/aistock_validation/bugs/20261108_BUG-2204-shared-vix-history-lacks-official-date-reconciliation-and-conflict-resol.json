@@ -153,7 +153,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2204-runtime.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -202,7 +202,8 @@
     "validation-receipt: id=de45487f47474862 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
     "validation-receipt: id=3a1bd6cd44987d27 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
     "validation-receipt: id=b092b2dae1e261a1 commit=332f66416f452551c418c06093f8bebde97f6f9b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity` result=`passed; module and catalog 8 tests each, guardrail blocking=0`",
-    "validation-receipt: id=7490e3fef6ab247f commit=332f66416f452551c418c06093f8bebde97f6f9b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_shared_vix_inputs.py backend/tests/test_tushare_us_market_inputs.py backend/tests/test_tushare_phase1_inputs.py -q` result=`76 passed; independent CSV/Arrow file-only readback PASS with 2112 closes and retained 2059 raw rows, receipt SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3`"
+    "validation-receipt: id=7490e3fef6ab247f commit=332f66416f452551c418c06093f8bebde97f6f9b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_shared_vix_inputs.py backend/tests/test_tushare_us_market_inputs.py backend/tests/test_tushare_phase1_inputs.py -q` result=`76 passed; independent CSV/Arrow file-only readback PASS with 2112 closes and retained 2059 raw rows, receipt SHA256=498b82349033e102a75a80f68dbe43296e4942446579f249f46088cfba0875a3`",
+    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged"
   ],
   "verification_budget": {
     "budget": "standard",
