@@ -174,7 +174,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2197-runtime.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -217,7 +217,8 @@
     "source_event_id": "FE-20261106-a19e01b2753a"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -> passed; targeted 81passed; DEV two-pass native readback passed"
+    "python -m nox -s l0 -> passed; targeted 81passed; DEV two-pass native readback passed",
+    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged"
   ],
   "verification_budget": {
     "budget": "standard",
