@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2223",
-  "closed_at": null,
+  "closed_at": "2026-11-14T19:14:40.992861Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,21 +32,21 @@
   "expected": "Paginate financial VIP APIs without loss and sync financial facts by announcement date with provider-specific parameter semantics; truthful date coverage and write counts.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261113_BUG-2223-financial-raw-sync-truncates-vip-pages-and-omits-announcement-period-fac.json",
       "backend/services/event_signal/tushare_event_raw_sync.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/event_signal/test_tushare_event_raw_sync.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261113_BUG-2223-financial-raw-sync-truncates-vip-pages-and-omits-announcement-period-fac.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261113_BUG-2223-financial-raw-sync-truncates-vip-pages-and-omits-announcement-period-fac.json",
       "backend/services/event_signal/tushare_event_raw_sync.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/event_signal/test_tushare_event_raw_sync.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261113_BUG-2223-financial-raw-sync-truncates-vip-pages-and-omits-announcement-period-fac.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -137,15 +137,29 @@
   },
   "first_seen_at": "2026-11-13T18:53:28.980252Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fa88a4150165525cd2be88711fe5f275037aee7a",
+  "fixed_at": "2026-11-14T17:12:03Z",
   "github_issue_number": 7254,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7254",
+  "implementation_review": {
+    "completeness_and_regression": "PASS: 235 targeted tests; existing DEV writes/readback 1051 real source versions, idempotent repeat zero; current original payloads and capture basis retained, no production or frozen bundle writes.",
+    "correctness": "PASS: explicit report-period tools retain scope; scheduled financial sync uses actual announcement clock with future and historical report dates, offset pagination, terminal-empty proof and real failures.",
+    "design_compliance_001": [
+      "No partial delivery represented as production complete",
+      "No silent empty/partial success",
+      "No model, PIT, source field or vintage semantic changes",
+      "No new approvals, thresholds or services"
+    ],
+    "executor": "active_agent",
+    "independent_review": false,
+    "scope_extension": "noxfile.py adds the direct raw-producer tests to existing data_sync_autonomy_backend CI; no public workflow or new CI lane."
+  },
   "last_seen_at": "2026-11-13T18:53:28.980252Z",
   "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7256",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,14 +171,6 @@
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
-  "implementation_review": {
-    "executor": "active_agent",
-    "independent_review": false,
-    "correctness": "PASS: explicit report-period tools retain scope; scheduled financial sync uses actual announcement clock with future and historical report dates, offset pagination, terminal-empty proof and real failures.",
-    "completeness_and_regression": "PASS: 235 targeted tests; existing DEV writes/readback 1051 real source versions, idempotent repeat zero; current original payloads and capture basis retained, no production or frozen bundle writes.",
-    "design_compliance_001": ["No partial delivery represented as production complete", "No silent empty/partial success", "No model, PIT, source field or vintage semantic changes", "No new approvals, thresholds or services"],
-    "scope_extension": "noxfile.py adds the direct raw-producer tests to existing data_sync_autonomy_backend CI; no public workflow or new CI lane."
-  },
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
@@ -180,9 +186,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261115/BUG-2223-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2223",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "fa88a4150165525cd2be88711fe5f275037aee7a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-14T19:14:17.064756Z",
+      "mode": "read_only",
+      "observed_identity": "1137bcd8d440d1afc60936744bbcbae6b0918d20",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "aa7f2d4ca62f50a44cfc0feddec88218ea9751dcbcfa2b8949adef8cc53e2cfc",
+      "receipt_sha256": "eddcf528d0e6f59883f2bcd80594c87770b73c52f888ec2c14bd716164c2eca3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2709f6a9c6ba46f1d3f5c203541f6744133fa9ca852b6c7e3b340de80eb8d9b3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -192,7 +221,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2223",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6e50be3de6d69dfb",
+    "recorded_at": "2026-11-14T17:13:36.265221Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c88909d61aff336bd634d224dbd2d9d5d7d7d7d0",
+    "source_merge_commit": "fa88a4150165525cd2be88711fe5f275037aee7a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7256",
+    "validation_evidence": [
+      "2026-11-15 latest-main 240 direct tests and catalog integrity passed; PR7256 CI43619328110 SUCCESS; production exact authorized SQL inserted forecast25/fina_indicator1026, missing_after0, independent readbackPASS, prior payload/capture unchanged; receipt X:/AIstock_temp/DATA_PREPARATION/financial-upstream-check-20261114/BUG-2223-production-readback-20261115.json; backend-main restart remains user-owned"
+    ],
+    "validation_evidence_digest": "4bb98b0f42d8c5bbc7634a0e15ceeb1bff9188c18f5a69ec32dbbc9cd1243ce9"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -201,6 +251,10 @@
     "fingerprint": "ac9a5ab445966e8e4c422c5c",
     "source_event_id": "FE-20261113-ac9a5ab44596"
   },
+  "validation_evidence": [
+    "2026-11-15 latest-main 240 direct tests and catalog integrity passed; PR7256 CI43619328110 SUCCESS; production exact authorized SQL inserted forecast25/fina_indicator1026, missing_after0, independent readbackPASS, prior payload/capture unchanged; receipt X:/AIstock_temp/DATA_PREPARATION/financial-upstream-check-20261114/BUG-2223-production-readback-20261115.json; backend-main restart remains user-owned",
+    "2026-11-15 user restart: backend-main PID193520, runtime1137bcd8d440d1afc60936744bbcbae6b0918d20 contains source merge fa88a4150165525cd2be88711fe5f275037aee7a; canonical post-restart identity health local-data overview PASS. Authorized production raw insert readback previously PASS, no repeated writes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
