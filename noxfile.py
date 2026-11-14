@@ -1483,6 +1483,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/event_signal/test_tushare_event_raw_sync.py",
         "backend/tests/test_tushare_phase1_inputs.py",
         "backend/tests/test_tushare_us_market_inputs.py",
         "backend/tests/test_shared_vix_inputs.py",

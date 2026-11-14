@@ -506,9 +506,10 @@ def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monk
     calls = []
 
     class _FakeRawService:
-        def sync_period(self, dataset, *, period, job_id=None):
-            calls.append((dataset, period, job_id))
-            return SimpleNamespace(fetched_rows=5, written_rows=4, skipped_rows=1)
+        def sync_ann_window(self, dataset, *, start_date, end_date, job_id=None):
+            calls.append((dataset, start_date, end_date, job_id))
+            return SimpleNamespace(fetched_rows=5, written_rows=1, skipped_rows=1,
+                written_rows_by_date=(("2024-02-01", 1),))
 
     monkeypatch.setattr(raw_sync_module, "TushareEventRawSyncService", _FakeRawService)
     monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
@@ -525,9 +526,9 @@ def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monk
     )
 
     assert result.ok is True
-    assert result.periods == ["20231231"]
-    assert result.inserted_rows == 4
-    assert calls == [("forecast", "20231231", job_id)]
+    assert result.periods is None
+    assert result.inserted_rows == 1
+    assert calls == [("forecast", dt.date(2024, 2, 1), dt.date(2024, 2, 2), job_id)]
     audit_rows = [
         params
         for sql, params in conn.executed
@@ -537,10 +538,34 @@ def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monk
     assert audit_rows[0][0] == "tushare_forecast_raw"
     assert audit_rows[0][1] == dt.date(2024, 2, 1)
     assert audit_rows[0][5] == 3
+    assert audit_rows[0][9] == 1
     assert audit_rows[0][12] == "ok"
     assert audit_rows[1][1] == dt.date(2024, 2, 2)
     assert audit_rows[1][5] == 0
+    assert audit_rows[1][9] == 0
     assert audit_rows[1][12] == "empty_valid"
+
+
+def test_financial_ann_date_failure_does_not_certify_missing_date(monkeypatch):
+    calls = []
+
+    class Service:
+        def sync_ann_window(self, dataset, *, start_date, end_date, job_id=None):
+            calls.append((start_date, end_date))
+            if start_date.day == 30:
+                raise RuntimeError("source unavailable")
+            return SimpleNamespace(fetched_rows=0, written_rows=0, skipped_rows=0,
+                source_identities=(), written_rows_by_date=())
+
+    monkeypatch.setattr(raw_sync_module, "TushareEventRawSyncService", Service)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    conn = _PeriodConn()
+    result = TushareSyncEngine()._sync_by_period(conn, DATASET_REGISTRY["tushare_fina_indicator_raw"],
+        dt.date(2026, 10, 29), dt.date(2026, 10, 30), uuid.uuid4())
+    assert calls == [(dt.date(2026,10,29), dt.date(2026,10,29)), (dt.date(2026,10,30), dt.date(2026,10,30))]
+    assert not result.ok and result.success_batches == 1 and result.failed_batches == 1
+    audits = [args for query, args in conn.executed if "INSERT INTO market.dataset_date_refresh_audit" in query]
+    assert {(args[1], args[4]) for args in audits} == {(dt.date(2026,10,29), "success"), (dt.date(2026,10,30), "failed")}
 
 
 def test_stock_st_events_success_hook_preserves_published_state_and_ensures(monkeypatch):
@@ -1484,12 +1509,15 @@ def test_financial_native_http_keeps_explicit_null_and_true_empty(monkeypatch):
         {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "eps"],
                               "items": [["000001.SZ", "20261030", "20260930", None]]}},
         {"code": 0, "data": {"fields": [], "items": []}},
+        {"code": 0, "data": {"fields": [], "items": []}},
     ])
     monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(200, next(payloads)))
     config = raw_sync_module.DATASET_CONFIGS["fina_indicator"]
     _, params, rows = raw_sync_module.fetch_period_rows(None, config, period="20260930",
                                       fields=["ts_code", "ann_date", "end_date", "eps"])
-    assert params == {"period": "20260930", "fields": "ts_code,ann_date,end_date,eps"}
+    assert params["period"] == "20260930"
+    assert params["fields"] == "ts_code,ann_date,end_date,eps"
+    assert params["pagination"]["terminal_empty"] is True
     assert rows[0]["eps"] is None
     assert raw_sync_module.fetch_period_rows(None, config, period="20260930")[2] == []
 

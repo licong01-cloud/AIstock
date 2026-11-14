@@ -319,7 +319,8 @@ def _query_tushare_dataapi(
     fields: str,
     *,
     token: str,
-) -> List[Dict[str, Any]]:
+    with_page_info: bool = False,
+) -> List[Dict[str, Any]] | tuple[List[Dict[str, Any]], Optional[bool]]:
     """Query the tushare dataapi endpoint without masking HTTP errors.
 
     Returns a list of row dicts keyed by the API field names. Only a
@@ -374,7 +375,13 @@ def _query_tushare_dataapi(
         raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
     # Extra/reordered fields and explicit provider NULL remain legitimate.
     # Empty fields+items is the provider's valid zero-record response.
-    return [dict(zip(columns, item)) for item in items]
+    rows = [dict(zip(columns, item)) for item in items]
+    if with_page_info:
+        has_more = data.get("has_more")
+        if has_more is not None and type(has_more) is not bool:
+            raise TushareHttpError(f"{api_name} response has invalid has_more")
+        return rows, has_more
+    return rows
 
 
 def _parse_ymd(val) -> Optional[dt.date]:
@@ -1800,7 +1807,7 @@ class TushareSyncEngine:
         end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
-        """Sync event-style Tushare VIP APIs by report period.
+        """Sync financial raw facts by the requested announcement-date window.
 
         The financial raw tables are source-only JSON/version tables. They
         cannot use the generic typed-column upsert path; instead they reuse the
@@ -1812,43 +1819,48 @@ class TushareSyncEngine:
         if logical_dataset is None:
             raise RuntimeError(f"{spec.name}: BY_PERIOD has no financial raw dataset mapping")
 
-        from backend.services.event_signal.financial_event_backfill import (
-            generate_report_periods,
-            period_to_tushare,
-        )
         from backend.services.event_signal.tushare_event_raw_sync import TushareEventRawSyncService
 
-        periods = [period_to_tushare(period) for period in generate_report_periods(start_date, end_date)]
+        # BY_PERIOD remains the registered legacy mode, not the provider clock.
+        # Forecast/express support ann ranges. Fina start/end instead filter
+        # report dates, so exact ann_date queries are necessary (including old
+        # IPO/revised reports). Never revisit full report history for daily sync.
+        windows = ([(day, day) for day in _date_range(start_date, end_date)]
+            if logical_dataset == "fina_indicator" else [(start_date, end_date)])
         result = SyncResult(
             dataset=spec.name,
             mode="sync",
             job_id=job_id,
-            total_batches=len(periods),
-            periods=periods,
+            total_batches=len(windows),
         )
         raw_service = TushareEventRawSyncService()
         errors: list[str] = []
         period_identities = []
+        completed_dates = set()
+        written_by_date = {}
 
-        for period in periods:
+        for first, last in windows:
             try:
-                summary = raw_service.sync_period(logical_dataset, period=period, job_id=job_id)
+                summary = raw_service.sync_ann_window(logical_dataset, start_date=first, end_date=last, job_id=job_id)
                 result.inserted_rows += int(summary.written_rows or 0)
                 result.success_batches += 1
                 period_identities.extend(getattr(summary, "source_identities", ()))
+                completed_dates.update(_date_range(first, last))
+                for day, count in summary.written_rows_by_date:
+                    written_by_date[day] = written_by_date.get(day, 0) + count
                 self._log(
                     conn,
                     job_id,
                     "info",
                     (
-                        f"{spec.name} period={period} fetched={summary.fetched_rows} "
+                        f"{spec.name} ann_window={first}..{last} fetched={summary.fetched_rows} "
                         f"written={summary.written_rows} skipped={summary.skipped_rows}"
                     ),
                 )
             except Exception as exc:
                 result.failed_batches += 1
-                errors.append(f"{period}: {exc}")
-                self._log(conn, job_id, "error", f"{spec.name} period={period} failed: {exc}")
+                errors.append(f"{first}..{last}: {exc}")
+                self._log(conn, job_id, "error", f"{spec.name} ann_window={first}..{last} failed: {exc}")
 
             try:
                 self._update_progress(conn, job_id, result)
@@ -1862,13 +1874,16 @@ class TushareSyncEngine:
         metadata = {
             "tushare_api": spec.tushare_api,
             "mode": spec.query_mode.value,
-            "periods": periods,
+            "query_axis": "ann_date",
+            "announcement_window": {"start_date": str(start_date), "end_date": str(end_date)},
             "date_column": spec.date_column,
             "sparse_event_dataset": True,
         }
         if errors:
             result.error = "; ".join(errors)[:4000]
             for d in _date_range(start_date, end_date):
+                if d in completed_dates:
+                    continue
                 try:
                     self._refresh_audit.record_failure(
                         dataset=spec.name,
@@ -1883,15 +1898,18 @@ class TushareSyncEngine:
                     )
                 except Exception as audit_exc:
                     self._log(conn, job_id, "error", f"{spec.name} {d} refresh audit failed: {audit_exc}")
-            return result
 
         row_counts = self._table_row_counts_by_date(conn, spec, start_date, end_date)
+        from backend.services.data_integrity.provider import provider_scan, value_identity
+        date_identities = {}
+        for row in period_identities:
+            date_identities.setdefault(value_identity(row["ann_date"], "date"), []).append(row)
         for d in _date_range(start_date, end_date):
+            if d not in completed_dates:
+                continue
             row_count = int(row_counts.get(d, 0))
             quality_status = "ok" if row_count > 0 else "empty_valid"
-            from backend.services.data_integrity.provider import provider_scan, value_identity
-            date_rows = [row for row in period_identities if value_identity(row["ann_date"], "date") == str(d)]
-            scan = provider_scan(spec, date_rows, parameters={"periods": periods, "ann_date": str(d)})
+            scan = provider_scan(spec, date_identities.get(str(d), []), parameters={"ann_date": str(d)})
             self._refresh_audit.record_success(
                 dataset=spec.name,
                 trade_date=d,
@@ -1899,7 +1917,7 @@ class TushareSyncEngine:
                 job_id=str(job_id),
                 data_source="tushare",
                 metadata={**metadata, "provider_scan": scan},
-                written_rows=row_count,
+                written_rows=written_by_date.get(str(d), 0),
                 quality_status=quality_status,
                 conn=conn,
             )
