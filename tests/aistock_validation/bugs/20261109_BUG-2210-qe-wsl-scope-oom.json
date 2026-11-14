@@ -1,0 +1,282 @@
+{
+  "actual": "纯回放6GiB已触发一次scope OOM；全市场行情加载和模型数据驻留未被保守预算覆盖。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+    "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+    "docs/operations/qe_wsl_resource_isolation_runbook.md",
+    "tests/aistock_validation/bugs/20261109_BUG-2210-qe-wsl-scope-oom.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2210",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-09T14:03:16.572374Z",
+  "description": "纯回放6GiB已触发一次scope OOM；全市场行情加载和模型数据驻留未被保守预算覆盖。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261109-ef34fd1620be",
+      "timestamp": "2026-11-09T14:03:16.572356Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-seed-package-longrun-20261109/replay_memory_override_v1_receipt.json"
+  ],
+  "expected": "当前完整账户纯回放及CPU模型预算20GiB，GPU模型32GiB；内存准入收紧实际并行，保留节点4/2/4上限；不得把预算当实测峰值。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+        "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+        "docs/operations/qe_wsl_resource_isolation_runbook.md"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        },
+        {
+          "file": "docs/operations/qe_wsl_resource_isolation_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+        "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+        "docs/operations/qe_wsl_resource_isolation_runbook.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+    ]
+  },
+  "first_seen_at": "2026-11-09T14:03:16.572374Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7185,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7185",
+  "last_seen_at": "2026-11-09T14:03:16.572374Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh Python loaded final worktree isolation helper; original scientific command/input preserved and pure replay budget20GiB. Real accepted565-day account scope read back after explicit20GiB runtime override; original6GiB launch policy preserved. Full account success not yet claimed. tmp/issue_workflow/BUG-2210/fresh-process-evidence.json."
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE WSL完整账户内存预算低估导致隔离scope OOM",
+  "trigger_condition": {
+    "fingerprint": "ef34fd1620be5974b903d4d5",
+    "source_event_id": "FE-20261109-ef34fd1620be"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "source_validation": {
+    "direct_tests": "62 isolation/guard/coordinator tests passed",
+    "ruff": "passed",
+    "design_compliance": {
+      "complete_scope": "PASS; future GPU32/CPU20/replay20 and aggregate40 admission share canonical submit; remote source unchanged",
+      "no_silent_error": "PASS; original scope OOM retained, new budgets are conservative reservations, not measured peaks",
+      "unchanged_science": "PASS; no factor/model/prediction/window/order/fee change",
+      "no_added_approval_gate": "PASS; only existing resource admission tightened; node maximum4/2/4 retained"
+    },
+    "remaining_business_validation": "complete565-day recovery must finish and be archived; not replaced by microprobe"
+  }
+}

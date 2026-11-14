@@ -725,14 +725,26 @@ class DispatchService:
         """Perform the only automatic node request: one /health probe."""
         client = ComputeNodeClient(str(node["api_base_url"]))
         error: Optional[str] = None
+        error_type: Optional[str] = None
+        latency_ms = None
+        http_status = None
         try:
             result = await client.probe_health()
             online = bool(result.get("online"))
+            latency_ms = result.get("latency_ms")
+            http_status = result.get("http_status")
             if not online:
                 error = str(result.get("error") or "node health probe reported offline")
+                error_type = str(result.get("error_type") or "NodeHealthReportedOffline")
         except Exception as exc:
             online = False
-            error = str(exc)
+            error = str(exc) or type(exc).__name__
+            error_type = type(exc).__name__
+        if not online:
+            logger.warning(
+                "node health probe failed: node=%s error_type=%s http_status=%s latency_ms=%s error=%s",
+                node["node_id"], error_type, http_status, latency_ms, error,
+            )
         status = "busy" if online and busy else ("online" if online else "offline")
         observation = {
             "node_id": str(node["node_id"]),
@@ -740,6 +752,9 @@ class DispatchService:
             "online": online,
             "busy": bool(online and busy),
             "error": error,
+            "error_type": error_type,
+            "http_status": http_status,
+            "latency_ms": latency_ms,
             "observed_at": datetime.now(timezone.utc).isoformat(),
         }
         self.publish_node_observation(observation)

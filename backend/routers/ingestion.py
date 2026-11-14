@@ -621,6 +621,8 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "bak_basic",
         "daily_basic",
         "vix_index",
+        "index_global",
+        "us_tradecal",
         "stock_daily_afterhours",
         *EVENT_DATASETS,
         "stk_limit",
@@ -1606,6 +1608,8 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
 # 每日定时调度目标数据集
 _DAILY_PRESETS = [
     ("vix_index", "incremental"),
+    ("index_global", "incremental"),
+    ("us_tradecal", "incremental"),
     ("stock_daily_afterhours", "incremental"),
     *((name, "incremental") for name in sorted(EVENT_DATASETS)),
     ("kline_daily_raw", "incremental"),
@@ -1935,7 +1939,7 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="bak_basic init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="bak_basic init requires end_date")
-    elif dataset in {"daily_basic", "vix_index", "stock_daily_afterhours", *EVENT_DATASETS}:
+    elif dataset in {"daily_basic", "vix_index", "index_global", "us_tradecal", "stock_daily_afterhours", *EVENT_DATASETS}:
         # init: 需要 start_date/end_date；incremental: start_date 可选
         if mode == "init" and not options.get("start_date"):
             raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
@@ -2079,19 +2083,37 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
 def list_ingestion_schedules() -> Dict[str, Any]:
     rows = _fetchall(
         """
+        WITH job_keys AS MATERIALIZED (
+            -- Extract JSON identities once, not once per schedule. Keep every
+            -- status/date: a failed or old job is still the latest job.
+            SELECT job_id, created_at, summary->>'dataset' AS dataset,
+                   summary->>'schedule_id' AS schedule_id
+              FROM market.ingestion_jobs
+        ), latest_dataset AS (
+            SELECT DISTINCT ON (dataset) dataset, job_id, created_at
+              FROM job_keys WHERE dataset IS NOT NULL
+             ORDER BY dataset, created_at DESC, job_id DESC
+        ), latest_schedule AS (
+            SELECT DISTINCT ON (schedule_id) schedule_id, job_id, created_at
+              FROM job_keys WHERE schedule_id IS NOT NULL
+             ORDER BY schedule_id, created_at DESC, job_id DESC
+        )
         SELECT s.schedule_id, s.dataset, s.mode, s.enabled, s.frequency, s.options,
                s.last_run_at, s.next_run_at, s.last_status, s.last_error,
                s.created_at, s.updated_at,
                j.summary AS last_job_summary
           FROM market.ingestion_schedules s
+          LEFT JOIN latest_dataset d ON d.dataset = s.dataset
+          LEFT JOIN latest_schedule i ON i.schedule_id = s.schedule_id::text
           LEFT JOIN LATERAL (
-              SELECT summary
-                FROM market.ingestion_jobs
-               WHERE summary->>'schedule_id' = s.schedule_id::text
-                  OR summary->>'dataset' = s.dataset
-               ORDER BY created_at DESC
+              -- Preserve the original OR: newest of either matching identity.
+              SELECT job_id FROM (VALUES (d.job_id, d.created_at),
+                                        (i.job_id, i.created_at)) AS matches(job_id, created_at)
+               WHERE job_id IS NOT NULL
+               ORDER BY created_at DESC, job_id DESC
                LIMIT 1
-          ) j ON TRUE
+          ) newest ON TRUE
+          LEFT JOIN market.ingestion_jobs j ON j.job_id = newest.job_id
          ORDER BY s.dataset, s.mode
         """,
     )
@@ -2487,8 +2509,9 @@ def list_data_stats() -> Dict[str, Any]:
             "quality_blocked" if row.get("audit_quality_status") in {"error", "empty_invalid", "low_coverage", "unproven"}
             else "audit_success"
         )
-        if row.get("data_kind") == "vix_index":
-            row["session_calendar_completeness"] = "NOT_EVALUATED"
+        if row.get("data_kind") in {'vix_index', 'index_global', 'us_tradecal'}:
+            row["session_calendar_authority"] = "tushare.us_tradecal"
+            row["session_calendar_completeness"] = "NOT_EVALUATED" if row.get("audit_quality_status") == "unknown" else "SOURCE_AUDITED"
             row["query_completed_through"] = _date_iso(audit_ready_date)
             if row.get("audit_quality_status") == "unknown":
                 row["ready_date"] = None
@@ -2564,11 +2587,17 @@ def get_data_gaps(
     """
 
     # 0) 如果不强制刷新且没有指定日期范围（即查全量），尝试读缓存
-    if data_kind == "vix_index":
-        return {"data_kind": data_kind, "status": "NOT_EVALUATED",
-                "missing_days": None, "missing_ranges": [], "total_trading_days": None,
-                "session_date_timezone": "America/New_York",
-                "reason": "formal_US_session_calendar_not_registered"}
+    if data_kind in {'index_global', 'us_tradecal', 'vix_index'}:
+        from backend.services.tushare_us_market_inputs import default_end, gap_report
+        try:
+            last = dt.date.fromisoformat(end_date) if end_date else default_end(data_kind)
+            first = dt.date.fromisoformat(start_date) if start_date else last-dt.timedelta(days=6)
+            if last < first:
+                raise ValueError('inverted US range')
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail='invalid US date range') from exc
+        with get_conn() as conn:
+            return gap_report(conn, DATASET_REGISTRY[data_kind], first, last)
     if data_kind in EVENT_DATASETS:
         if bool(start_date) != bool(end_date):
             raise HTTPException(status_code=400, detail='start_date and end_date must both be provided')
@@ -2886,6 +2915,17 @@ def get_ingestion_auto_range(
     table_name = str(cfg.get("table_name") or "").strip()
     date_column = str(cfg.get("date_column") or "trade_date").strip()
     extra_info = cfg.get("extra_info")
+    if data_kind in {'index_global', 'us_tradecal', 'vix_index'}:
+        from backend.services.tushare_us_market_inputs import default_end, incremental_start
+        latest = default_end(data_kind)
+        with get_conn() as conn:
+            start, range_metadata = incremental_start(conn, DATASET_REGISTRY[data_kind], latest)
+        return {'data_kind': data_kind, 'table_name': table_name, 'start_date': str(start),
+                'latest_date': str(latest), 'latest_trading_date': str(latest),
+                'latest_date_kind': 'us_calendar' if data_kind == 'us_tradecal' else 'us_session',
+                'up_to_date': False, 'recheck_recent_publication': True,
+                'has_cursor': not range_metadata.get('bootstrap', False),
+                'cursor_source': 'us_bounded_physical_tail', 'session_date_timezone': 'America/New_York'}
     use_calendar_dates = _uses_calendar_date_sequence(extra_info)
     if data_kind == "vix_index":
         use_calendar_dates = True

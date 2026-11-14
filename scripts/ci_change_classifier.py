@@ -287,6 +287,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/advisory_lstm_frozen_specialist_stress.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_factor_information.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_factor_nonlinear.py": ("advisory_modeling_backend",),
+    "scripts/advisory_lstm_overnight_increment.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_pool_relation.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_frozen_representation.py": ("advisory_modeling_backend",),
     "scripts/advisory_lstm_linear_rank_replay.py": ("advisory_modeling_backend",),

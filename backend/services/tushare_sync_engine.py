@@ -34,6 +34,7 @@ from .data_sync_targets import (
 )
 from .tushare_rate_limiter import get_limiter
 from .tushare_event_inputs import EVENT_DATASETS
+from .tushare_us_market_inputs import US_DATASETS
 from .tushare_dataset_specs import (
     DAILY_BASIC, DatasetSpec, QueryMode, complete_stk_limit_daily_references, stk_limit_prices_valid,
 )
@@ -53,7 +54,7 @@ ZERO_ROW_VALID_DATASETS = {
     *EVENT_DATASETS,
 }
 DENSE_STOCK_PANELS = frozenset({"bak_basic", "cyq_perf"})
-NULL_PRESERVING_DATASETS = frozenset(LATE_PUBLICATION_TAIL_DAYS) | DENSE_STOCK_PANELS
+NULL_PRESERVING_DATASETS = frozenset(LATE_PUBLICATION_TAIL_DAYS) | DENSE_STOCK_PANELS | US_DATASETS
 # Bound one repair attempt, not completeness. Remaining keys retain the same
 # existing date retry target and already committed facts are reused next time.
 DENSE_PANEL_REPAIR_BATCH = 32
@@ -246,6 +247,7 @@ class SyncResult:
     canonicalized_source_revisions: int = 0
     error: Optional[str] = None
     periods: List[str] | None = None
+    quality_warnings: List[Dict[str, Any]] | None = None
 
     @property
     def ok(self) -> bool:
@@ -263,6 +265,7 @@ class SyncResult:
             "canonicalized_source_revisions": self.canonicalized_source_revisions,
             "error": self.error,
             "periods": self.periods or [],
+            **({"quality_warnings": self.quality_warnings} if self.quality_warnings else {}),
         }
 
 
@@ -726,8 +729,9 @@ class TushareSyncEngine:
         return complete_stk_limit_daily_references(rows, daily_rows, trade_date)
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, reference_fill_only_codes=()) -> int:
-        from .data_integrity.stock_scope import filter_dataset_rows
+        from .data_integrity.stock_scope import filter_dataset_rows, filter_delisting_panel_rows
         rows = filter_dataset_rows(spec, rows)
+        rows = filter_delisting_panel_rows(conn, spec, rows)
         if reference_fill_only_codes:
             if spec.name != "stk_limit":
                 raise ValueError("reference-only supplement is restricted to stk_limit")
@@ -740,14 +744,21 @@ class TushareSyncEngine:
             from .sw_industry_history_store import store_member_refresh
 
             return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
-        if spec.name in {"vix_index", "stock_daily_afterhours"}:
+        if spec.name == "stock_basic":
+            from .data_integrity.listing_scope import store_listing_refresh
+            return store_listing_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        if spec.name in {"vix_index", "stock_daily_afterhours", "index_global", "us_tradecal"}:
             from .tushare_supplemental_inputs import store_observations
             return store_observations(conn, spec, rows,
                                       lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
         if spec.name == "daily_basic":
             from .tushare_supplemental_inputs import normalize_rows
             rows = normalize_rows(spec, rows)
-        return self._upsert_plain_batch(conn, spec, rows)
+        inserted = self._upsert_plain_batch(conn, spec, rows)
+        if spec.name == "stock_st_events":
+            from .data_integrity.stock_scope import wake_delisting_panel_validations
+            wake_delisting_panel_validations(conn, rows)
+        return inserted
 
     def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]], *, fill_only_reference=False) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
@@ -831,8 +842,9 @@ class TushareSyncEngine:
             from .data_integrity.catalog import canonical_dataset
             from .data_integrity.repository import mark_changed
             changed_dates = [row[0] for row in changed or [] if row[0] is not None] if date_key else [dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()] if changed else []
-            mark_changed(conn, canonical_dataset(spec.name), changed_dates,
-                         reason="provider_upsert", source=spec.tushare_api)
+            if spec.name not in US_DATASETS:
+                mark_changed(conn, canonical_dataset(spec.name), changed_dates,
+                             reason="provider_upsert", source=spec.tushare_api)
             if sector_dependency:
                 from .sector_data_repair import mark_revision_dates
 
@@ -846,7 +858,7 @@ class TushareSyncEngine:
         finally:
             if owns_transaction:
                 conn.autocommit = True
-        return len(values)
+        return len(changed or []) if spec.name in US_DATASETS else len(values)
 
     def _replace_code_batch(
         self,
@@ -1263,6 +1275,18 @@ class TushareSyncEngine:
         end_date: dt.date,
     ) -> tuple[dt.date, Dict[str, Any]]:
         """Resolve incremental start from safe audit cursor plus physical seeding."""
+        if spec.name in US_DATASETS:
+            from .tushare_us_market_inputs import incremental_start
+            start, metadata = incremental_start(conn, spec, end_date)
+            with conn.cursor() as cur:
+                cur.execute("SELECT a.trade_date FROM market.dataset_date_refresh_audit a "
+                            "LEFT JOIN market.us_tradecal c ON c.cal_date=a.trade_date "
+                            "WHERE a.dataset=%s AND a.data_source='tushare' AND a.trade_date<%s "
+                            "AND a.quality_status NOT IN ('ok','empty_valid') "
+                            "AND (%s='us_tradecal' OR c.is_open IS DISTINCT FROM 0) "
+                            "ORDER BY a.trade_date LIMIT 7", (spec.name, start, spec.name))
+                self._late_recheck_dates[spec.name] = [row[0] for row in cur.fetchall()]
+            return start, metadata
         if spec.name in EVENT_DATASETS:
             from .tushare_event_inputs import incremental_start
             return incremental_start(self, conn, spec, end_date)
@@ -1297,6 +1321,26 @@ class TushareSyncEngine:
         # A bounded exact-date queue also repairs facts published after the tail.
         # Do not widen an old target into a contiguous full-history fetch.
         with conn.cursor() as cur:
+            if spec.name in EVENT_DATASETS:
+                # A validator waiting on an already completed source query is
+                # not another fetch obligation. Keep actual physical failures
+                # eligible, even if a provider query previously succeeded.
+                cur.execute("""SELECT DISTINCT t.target_date FROM market.data_sync_targets t
+                    LEFT JOIN market.dataset_date_refresh_audit p ON p.dataset=t.dataset
+                      AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                    LEFT JOIN market.dataset_date_refresh_audit s ON s.dataset=t.dataset
+                      AND s.trade_date=t.target_date AND s.data_source='tushare'
+                    WHERE t.dataset=%s AND t.target_date<=%s AND t.target_date IS NOT NULL
+                      AND t.data_source<>'canonical_db'
+                      AND COALESCE(t.target_scope->>'operation','')<>'VALIDATE_ONLY'
+                      AND t.target_status IN ('pending','retry','final_blocked')
+                      AND NOT COALESCE(s.status='success'
+                        AND s.metadata#>>'{event_scan,complete}'='true'
+                        AND s.metadata#>>'{event_scan,schema_version}'='tushare_event_scan_v1'
+                        AND s.metadata->'integrity_observed_revision'=to_jsonb(p.data_revision)
+                        AND p.validation_status IN ('UNVERIFIED','VALID'),false)
+                    ORDER BY t.target_date LIMIT 5""", (spec.name, end_date))
+                return [row[0] for row in cur.fetchall()]
             cur.execute(
                 "SELECT DISTINCT target_date FROM market.data_sync_targets "
                 "WHERE dataset=%s AND target_date<=%s AND target_date IS NOT NULL "
@@ -1468,6 +1512,9 @@ class TushareSyncEngine:
         """One dated SH/SZ traded scope; never PIT buy eligibility or row-count guesses."""
         from .data_integrity.validation import PhysicalValidator, rows
         expected = PhysicalValidator()._traded(conn, day, spec.target_table)
+        from .data_integrity.stock_scope import DELISTING_PANEL_POLICY, delisting_panel_exclusions
+        excluded = delisting_panel_exclusions(conn, spec.name, day, expected)
+        expected = set(expected) - excluded.keys()
         fields = DENSE_CYQ_FIELDS if spec.name == "cyq_perf" else ()
         observed = rows(conn, f"SELECT ts_code{',' if fields else ''}{','.join(fields)} "
                         f"FROM {spec.target_table} WHERE trade_date=%s", (day,))
@@ -1478,7 +1525,9 @@ class TushareSyncEngine:
         invalid = {code for code in expected & facts.keys()
                    if any(not _is_finite_number(facts[code].get(field)) for field in fields)}
         return {"expected_rows": len(expected), "valid_rows": len(expected)-len(missing)-len(invalid),
-                "missing_symbols": sorted(missing), "invalid_symbols": sorted(invalid)}
+                "missing_symbols": sorted(missing), "invalid_symbols": sorted(invalid),
+                "applicability_policy": DELISTING_PANEL_POLICY,
+                "excluded_delisting_symbols": sorted(excluded)}
 
     def _complete_dense_panel(self, conn, spec, day):
         """Only missing keys use exact provider calls; empty and HTTP failure stay distinct."""
@@ -1499,66 +1548,14 @@ class TushareSyncEngine:
         return {**observation, "attempted_keys": min(len(pending), DENSE_PANEL_REPAIR_BATCH),
                 "source_empty_symbols": empty, "provider_absence_established": False}, written
 
-    def _sync_vix_range(self, conn, spec, start_date, end_date, job_id):
-        """Query US-date facts in bounded windows, without inventing a US calendar."""
-        from .tushare_supplemental_inputs import normalize_rows, request_windows
-        from .data_integrity.provider import provider_scan
-        windows = list(request_windows(start_date, end_date))
-        windows += [(day, day) for day in self._late_recheck_dates.get(spec.name, [])
-                    if not start_date <= day <= end_date]
-        result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id, total_batches=len(windows))
-        for start, end in windows:
-            params = {"start_date": start.strftime("%Y%m%d"), "end_date": end.strftime("%Y%m%d")}
-            try:
-                rows = self._fetch_from_tushare(spec, params)
-                normalize_rows(spec, rows)
-                by_date = {}
-                for row in rows:
-                    day = _parse_ymd(row['trade_date'])
-                    if not start <= day <= end or day in by_date:
-                        raise ValueError('vix_index: duplicate or out-of-window US date')
-                    by_date[day] = row
-                for day in _date_range(start, end):
-                    facts = [by_date[day]] if day in by_date else []
-                    target = self._upsert_sync_target(spec, day, metadata={"request": params})
-                    written = self._upsert_batch(conn, spec, facts)
-                    self._refresh_audit.record_success(
-                        dataset=spec.name, trade_date=day, row_count=len(facts), written_rows=written,
-                        job_id=str(job_id), data_source="tushare", conn=conn,
-                        quality_status="ok" if facts else "unknown",
-                        metadata={"tushare_api": spec.tushare_api, "mode": "by_date_range",
-                                  "provider_query_complete": True, "request": params,
-                                  "session_date_timezone": "America/New_York",
-                                  "session_calendar_completeness": "NOT_EVALUATED",
-                                  "empty_date_meaning": "UNKNOWN_NOT_PROVEN_HOLIDAY" if not facts else None,
-                                  "publication_time_quality": "UNKNOWN", "vintage_quality": "NON_VINTAGE",
-                                  "provider_scan": provider_scan(spec, facts, parameters=params)})
-                    result.inserted_rows += written
-                    self._record_sync_attempt(target, "reconciled", job_id=job_id,
-                        rows_written=written, rows_observed=len(facts),
-                        context={"provider_query_complete": True, "session_calendar_completeness": "NOT_EVALUATED"})
-                result.success_batches += 1  # completed provider query, not proven session-calendar completeness
-            except Exception as exc:
-                result.failed_batches += 1
-                result.error = '; '.join(filter(None, (result.error, str(exc))))[:4000]
-                for day in _date_range(start, end):
-                    target = self._upsert_sync_target(spec, day, metadata={"request": params})
-                    self._refresh_audit.record_failure(
-                        dataset=spec.name, trade_date=day, error_message=str(exc), job_id=str(job_id),
-                        data_source="tushare", conn=conn, quality_status="error",
-                        failure_category="provider_or_persistence_error", metadata={"request": params})
-                    self._record_sync_attempt(target, "retry", job_id=job_id, error_message=str(exc),
-                                              rows_written=0, rows_observed=0)
-            self._update_progress(conn, job_id, result)
-            if spec.batch_sleep:
-                time.sleep(spec.batch_sleep)
-        return result
-
     def _sync_by_date(
         self, conn, spec: DatasetSpec,
         start_date: dt.date, end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
+        if spec.name in US_DATASETS:
+            from .tushare_us_market_inputs import sync_ranges
+            return sync_ranges(self, conn, spec, start_date, end_date, job_id)
         if spec.name in EVENT_DATASETS:
             from .tushare_event_inputs import sync_events
             return sync_events(self, conn, spec, start_date, end_date, job_id)
@@ -1612,12 +1609,13 @@ class TushareSyncEngine:
                 if inserted > 0:
                     audit_quality = self._audit_quality_for_rows(spec, inserted)
                 if dense_panel is not None:
-                    complete = (dense_panel["expected_rows"] > 0 and not dense_panel["missing_symbols"]
+                    complete = ((dense_panel["expected_rows"] > 0 or dense_panel.get("excluded_delisting_symbols"))
+                                and not dense_panel["missing_symbols"]
                                 and not dense_panel["invalid_symbols"])
                     audit_quality = {"quality_status": "ok" if complete else "low_coverage",
                         "expected_rows": dense_panel["expected_rows"],
                         "coverage_ratio": dense_panel["valid_rows"]/dense_panel["expected_rows"]
-                            if dense_panel["expected_rows"] else 0.0}
+                            if dense_panel["expected_rows"] else 1.0 if complete else 0.0}
                     if not complete:
                         audit_quality["failure_category"] = "independent_dated_stock_panel_incomplete"
                 audit_metadata = {
@@ -2053,10 +2051,27 @@ class TushareSyncEngine:
                         conn=conn,
                     )
 
+    def _query_index_market_calendar(self, start, end):
+        """Bounded reference query shared by current collection and dated repair."""
+        for attempt in range(3):
+            get_limiter('hk_tradecal', 200).acquire()
+            try:
+                return _query_tushare_dataapi('hk_tradecal', {'start_date': start, 'end_date': end},
+                    'cal_date,is_open,pretrade_date', token=self._tushare_token())
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+
     def _record_index_query_audit(self, spec, start_date, end_date, job_id, codes, rows_by_day):
         """Publish completed requests, not a post-hoc table-count certificate."""
         from .data_integrity.provider import provider_scan
         from .data_integrity.contracts import digest
+        from .data_integrity.index_quote_calendar import capture_index_sessions
+
+        # Capture before opening the audit transaction; no HTTP while holding
+        # DB locks, and no per-index/per-validation calendar network requests.
+        sessions = capture_index_sessions(rows_by_day, self._query_index_market_calendar)
 
         with get_conn() as conn:
             days = self._trading_dates_between(conn, start_date, end_date)
@@ -2074,6 +2089,7 @@ class TushareSyncEngine:
                     quality_status="ok" if facts else "empty_valid",
                     metadata={"mode": spec.query_mode.value, "audit_from_target_table": False,
                               "provider_query_scope_complete": complete,
+                              **({'index_market_session': sessions[day]} if day in sessions else {}),
                               "provider_scan": provider_scan(spec, facts, parameters=parameters)})
 
     def _fetch_code_list(self, conn, spec: DatasetSpec) -> List[str]:
@@ -2109,9 +2125,9 @@ class TushareSyncEngine:
         self._late_recheck_dates.pop(spec.name, None)
         if end_date is None:
             end_date = today
-            if spec.name == "vix_index":
-                from .tushare_supplemental_inputs import latest_vix_query_date
-                end_date = latest_vix_query_date()
+            if spec.name in US_DATASETS:
+                from .tushare_us_market_inputs import default_end
+                end_date = default_end(spec.name)
             if spec.name in PUBLICATION_LAG_DAYS:
                 calendar = TradingCalendarStatusService()
                 latest = calendar.latest_trading_day_on_or_before(today)
@@ -2279,6 +2295,7 @@ class TushareSyncEngine:
 
         reference_scans = []
         index_rows_by_day = {}
+        from .data_integrity.index_quote_calendar import HK_EQUITY_INDICES
 
         for batch_start in range(0, len(codes), BATCH_SIZE):
             batch = codes[batch_start:batch_start + BATCH_SIZE]
@@ -2319,7 +2336,13 @@ class TushareSyncEngine:
                                         or not isinstance(response_code, str)
                                         or response_code.upper() != code_val.upper()):
                                     raise ValueError("index provider returned an unexpected code or date")
-                                index_facts.append((day, {"ts_code": response_code, "trade_date": day}))
+                                fact = {"ts_code": response_code, "trade_date": day}
+                                if response_code in HK_EQUITY_INDICES:
+                                    # Keep only the field needed to decide whether
+                                    # a calendar query is necessary, not a second
+                                    # full quote/history panel in memory.
+                                    fact['close'] = row.get('close')
+                                index_facts.append((day, fact))
                         # All empty-response guards ask the same question for
                         # this code. Probe once and reuse; nonempty responses
                         # need no local-history query at all.

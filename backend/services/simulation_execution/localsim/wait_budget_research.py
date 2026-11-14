@@ -205,7 +205,7 @@ def _account_refs(root, request, openings, *, allow_prefix=False):
     return list(accounts.values())
 
 
-def _verify_days(root, request, openings, accounts):
+def _verify_days(root, request, openings, accounts, *, day_schema=DAY_SCHEMA):
     # Check ALL day bytes before interpreting even the first new NAV.
     for account in accounts:
         for day_ref in account["days"]:
@@ -219,7 +219,7 @@ def _verify_days(root, request, openings, accounts):
             row = read(day_ref)
             identity = dual._account_day_identity(request_identity=request["identity"], account_id=aid, trade_date=day, prior=prior)
             store = TimingFileRepository(root / "journals", "lsdm_" + identity[:48])
-            require(row["schema_version"] == DAY_SCHEMA and row["study_identity"] == request["identity"]
+            require(row["schema_version"] == day_schema and row["study_identity"] == request["identity"]
                     and row["account_id"] == aid and row["trade_date"] == day and row["day_index"] == index
                     and row["previous_day"] == previous and all(row[k] == initial[k] for k in ("rule", "operation", "delay_seconds"))
                     and row["account_receipt"] == ref(store.root / "generations/00000001.json"), "DAY_LINEAGE_CONFLICT")

@@ -22,6 +22,7 @@ from .qe_workspace_client import (
     QEWorkspaceLogEvent,
     QELoopWorkspaceCleanupUnavailable,
     QEWorkspaceResultReadUnavailable,
+    QEWorkspaceAssetReadUnavailable,
 )
 from .qe_log_broker import QELogBrokerSource, get_qe_log_broker
 from .qe_log_store import get_qe_live_log_store
@@ -1011,6 +1012,8 @@ class AutoEvolutionScheduler:
         self,
         source_task_id: str,
         source_loop_index: int,
+        *,
+        recovery=None,
     ) -> Dict[str, str]:
         """Return a completed source loop and its persisted execution node."""
 
@@ -1032,7 +1035,8 @@ class AutoEvolutionScheduler:
                 f"{source_task_id}/Loop{source_loop_index}"
             )
         status = str(row.get("status") or "").strip().lower()
-        if status != "completed":
+        expected_status = recovery.source_status if recovery is not None else "completed"
+        if status != expected_status:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_SOURCE_NOT_COMPLETED: "
                 f"{source_task_id}/Loop{source_loop_index} status={status or 'missing'}"
@@ -1053,8 +1057,17 @@ class AutoEvolutionScheduler:
         *,
         source_node_id: str,
         expected_sha256: str | None,
+        member_loss_manifest: Dict[str, Any] | None = None,
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         """Resolve and stage one immutable completed-loop prediction artifact."""
+
+        if member_loss_manifest is not None and member_loss_manifest.get("af_evidence_mode") == "saved_asset_version_bridge_v1":
+            from .l2_member_loss_consumer import saved_member_prediction_payload
+
+            return saved_member_prediction_payload(
+                member_loss_manifest, source_task_id=source_task_id, source_loop_index=source_loop_index,
+                source_node_id=source_node_id, expected_sha256=expected_sha256,
+            )
 
         source_loop = f"Loop{source_loop_index}"
         catalog = await source_client.list_workspace_files(source_task_id, source_loop)
@@ -1071,6 +1084,7 @@ class AutoEvolutionScheduler:
                 "QE_PREDICTION_REPLAY_CATALOG_INVALID: files/assets must be a list"
             )
         matches: List[tuple[str, Dict[str, Any]]] = []
+        recorder_entries: List[Dict[str, Any]] = []
         for item in rows:
             if not isinstance(item, dict):
                 continue
@@ -1078,11 +1092,47 @@ class AutoEvolutionScheduler:
             normalized_path = str(raw_path or "").replace("\\", "/")
             while normalized_path.startswith("./"):
                 normalized_path = normalized_path[2:]
+            if normalized_path == "qe_current_recorder.json":
+                recorder_entries.append(item)
             if (
                 normalized_path == "artifacts/pred.pkl"
                 or normalized_path.endswith("/artifacts/pred.pkl")
             ):
                 matches.append((normalized_path, item))
+        current_recorder = None
+        if recorder_entries:
+            # A frozen-inference workspace also contains source_model/mlruns.
+            # The root recorder identifies this run; source copies are neither
+            # alternative current predictions nor candidates for hash guessing.
+            marker = recorder_entries[0]
+            if (
+                len(recorder_entries) != 1
+                or bool(marker.get("is_symlink"))
+                or str(marker.get("file_type") or "").lower() in {"directory", "symlink", "junction"}
+            ):
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID")
+            try:
+                current_recorder = await source_client.get_workspace_file(
+                    source_task_id, source_loop, "qe_current_recorder.json",
+                )
+                if isinstance(current_recorder, str):
+                    current_recorder = json.loads(current_recorder)
+                if not isinstance(current_recorder, dict) or any(
+                    not isinstance(current_recorder.get(key), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", current_recorder[key])
+                    or current_recorder[key] in {".", ".."}
+                    for key in ("experiment_id", "recorder_id")
+                ):
+                    raise ValueError("invalid recorder identity")
+            except QEWorkspaceAssetReadUnavailable:
+                raise
+            except Exception as exc:
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_INVALID") from exc
+            current_path = (
+                f"mlruns/{current_recorder['experiment_id']}/"
+                f"{current_recorder['recorder_id']}/artifacts/pred.pkl"
+            )
+            matches = [(path, item) for path, item in matches if path == current_path]
         if len(matches) != 1:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_ARTIFACT_CARDINALITY: "
@@ -1122,6 +1172,14 @@ class AutoEvolutionScheduler:
                 "QE_PREDICTION_REPLAY_ARTIFACT_SHA256_MISMATCH: "
                 f"expected={expected_sha256} observed={observed_sha256}"
             )
+        if current_recorder is not None:
+            latest_recorder = await source_client.get_workspace_file(
+                source_task_id, source_loop, "qe_current_recorder.json",
+            )
+            if isinstance(latest_recorder, str):
+                latest_recorder = json.loads(latest_recorder)
+            if latest_recorder != current_recorder:
+                raise ValueError("QE_PREDICTION_REPLAY_RECORDER_CHANGED")
         source_ref: Dict[str, Any] = {
             "schema_version": "qe_prediction_replay_source_ref_v1",
             "mode": "prediction_replay",
@@ -8169,19 +8227,36 @@ class AutoEvolutionScheduler:
             if cfg.prediction_replay:
                 if not cfg.prediction_source_task_id or cfg.prediction_source_loop_index is None:
                     raise ValueError("QE_PREDICTION_REPLAY_SOURCE_IDENTITY_MISSING")
+                recovery_kwargs = {"recovery": cfg.prediction_recovery} if cfg.prediction_recovery else {}
                 source_runtime = self._get_prediction_replay_source_loop(
                     cfg.prediction_source_task_id,
                     cfg.prediction_source_loop_index,
+                    **recovery_kwargs,
                 )
                 source_node_id = source_runtime["node_id"]
                 source_client = self._get_workspace_client_for_node_id(source_node_id)
-                source_ref, prediction_replay_files = await self._build_prediction_replay_payload(
-                    source_client,
-                    cfg.prediction_source_task_id,
-                    cfg.prediction_source_loop_index,
-                    source_node_id=source_node_id,
-                    expected_sha256=cfg.prediction_source_sha256,
-                )
+                if cfg.prediction_recovery is not None:
+                    from .saved_prediction_recovery import verify_saved_prediction_recovery
+
+                    recovered = await verify_saved_prediction_recovery(
+                        cfg.prediction_recovery, client=source_client, task_id=task_id,
+                        loop_index=loop_index, source_task_id=cfg.prediction_source_task_id,
+                        source_loop_index=cfg.prediction_source_loop_index, cfg=cfg,
+                        target_seed=(loop_config.get("runtime_flags") or {}).get("random_seed"),
+                    )
+                    source_ref, prediction_replay_files = recovered.payload(
+                        source_task_id=cfg.prediction_source_task_id,
+                        source_loop_index=cfg.prediction_source_loop_index, source_node_id=source_node_id,
+                    )
+                else:
+                    source_ref, prediction_replay_files = await self._build_prediction_replay_payload(
+                        source_client,
+                        cfg.prediction_source_task_id,
+                        cfg.prediction_source_loop_index,
+                        source_node_id=source_node_id,
+                        expected_sha256=cfg.prediction_source_sha256,
+                        member_loss_manifest=cfg.build_custom_params().get("qe_l2_member_loss_manifest"),
+                    )
                 prediction_replay_source = PredictionReplaySource.model_validate(source_ref)
                 cfg = cfg.model_copy(
                     update={"prediction_source_sha256": prediction_replay_source.sha256}
@@ -8250,6 +8325,7 @@ class AutoEvolutionScheduler:
                 "prediction_source_task_id": cfg.prediction_source_task_id,
                 "prediction_source_loop_index": cfg.prediction_source_loop_index,
                 "prediction_source_sha256": cfg.prediction_source_sha256,
+                "prediction_recovery": cfg.prediction_recovery.model_dump(mode="json") if cfg.prediction_recovery else None,
                 "prediction_replay_source": (
                     prediction_replay_source.model_dump(mode="json")
                     if prediction_replay_source is not None

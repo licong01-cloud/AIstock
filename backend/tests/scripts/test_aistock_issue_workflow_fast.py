@@ -1396,15 +1396,14 @@ def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tamper
     assert _business_semantic(url, payload, "e" * 64)["verdict"] == "failed"
 
 
-@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation", "member"])
 def test_factor_research_provisional_backend_contract_reconciles_to_offline(name):
     result = workflow.build_runtime_contract(record={"runtime_contract": {
         "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
         "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
-    }}, changed_files=[f"backend/services/factor_research/{name}.py"])
+    }}, changed_files=["backend/services/hmm_risk/risk_l2_member_return.py" if name == "member" else f"backend/services/factor_research/{name}.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
-    assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
-    assert result["inferred_runtime_files"] == []
+    assert (result["pre_pr_ready"] is True, result["backend_restart_required"] is False, result["inferred_runtime_files"]) == (True, True, [])
 
 
 def test_runtime_task_card_bounds_source_output_without_losing_attribution():
@@ -1445,16 +1444,32 @@ def test_advisory_lstm_shadow_capture_semantic_contract(case):
     assert semantic["verdict"] == ("passed" if case in {"valid", "old_failure"} else "failed")
 
 
-def _entry_price_payload(configured=False):
-    return {
-        "ok": True,
-        "schema_version": "advisory_entry_price_status_v1",
-        "configured": configured,
-        "program_id": "advp_test",
-        "status": "QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
-        "database_written": False,
-        **({"binding_activated": False} if configured else {}),
-    }
+@pytest.mark.parametrize("patch,row,query,passed", [
+    ({}, {}, "", True), ({}, {}, "target_date=2026-11-09&snapshot_id=" + "a" * 64, True),
+    ({"status": "NO_CURRENT_LIST", "list_version_id": None, "summary": None, "items": [], "total_count": 0}, {}, "", True),
+    *[({key: value}, {}, "", False) for key, value in {"program_id": "other", "target_date": "2026-11-9",
+        "snapshot_id": "missing", "binding_version_id": None, "limit": True, "total_count": 3,
+        "schema_version": "wrong", "status": "FAILED"}.items()],
+    ({"status": "NO_CURRENT_LIST"}, {}, "", False), (None, {}, "", False),
+    *[({}, {key: "other"}, "", False) for key in ("program_id", "list_version_id", "binding_version_id", "symbol")],
+    ({}, {"symbol": "000002.SZ"}, "", False),
+    *[({}, {}, query, False) for query in ("target_date=2026-11-10", "snapshot_id=" + "b" * 64,
+        "offset=20", "target_date=2026-11-09&target_date=2026-11-09")]])
+def test_advisory_workbench_daily_semantic_contract(patch, row, query, passed):
+    payload = {"schema_version": "advisory_workbench_v1", "program_id": "advp_test",
+        "target_date": "2026-11-09", "snapshot_id": "a" * 64, "status": "PUBLISHED",
+        "list_version_id": "list-test", "binding_version_id": "binding-test", "summary": {},
+        "limit": 20, "offset": 0, "total_count": 2}
+    identity = {key: payload[key] for key in ("program_id", "list_version_id", "binding_version_id")}
+    payload["items"] = [dict(identity, symbol=symbol) for symbol in ("000001.SZ", "000002.SZ")]
+    payload["items"][0].update(row)
+    payload = dict(payload, **patch) if patch is not None else None
+    semantic = _business_semantic("http://localhost/api/v1/advisory/workbench/programs/advp_test/daily?" + query, payload, "e" * 64)
+    assert semantic["contract_id"] == "advisory_workbench_daily_snapshot"
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed:
+        assert semantic["facts"]["economic_acceptance"] == "not_evaluated"
+        assert semantic["facts"]["default_explicit_roundtrip"] == "requires_separate_readback"
 
 
 @pytest.mark.parametrize("configured,override,reason", [
@@ -1470,8 +1485,9 @@ def _entry_price_payload(configured=False):
 ])
 def test_entry_price_status_semantic_contract(configured, override, reason):
     """Shared setup retains both positive and every original negative oracle."""
-    payload = _entry_price_payload(configured)
-    payload.update(override)
+    payload = dict(ok=True, schema_version="advisory_entry_price_status_v1", configured=configured,
+        program_id="advp_test", status="QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
+        database_written=False, **({"binding_activated": False} if configured else {})) | override
     semantic = _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/entry-price/status", payload, "e" * 64)
     assert semantic["contract_id"] == "advisory_entry_price_status"
     assert semantic["verdict"] == ("passed" if reason is None else "failed")
@@ -1834,6 +1850,8 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
     ('backend/services/hmm_risk/rotation_l1_gbdt.py', []),
     ('backend/services/hmm_risk/observed_industry_authority.py', []),
     ('backend/services/hmm_risk/risk_l2_value_replay.py', []),
+    ('backend/services/hmm_risk/risk_l2_member_return_v2.py', ['backend-main']),
+    (['backend/services/hmm_risk/risk_l2_member_return.py', 'backend/services/dataset_release/worker.py'], ['worker-scheduler']),
     ('backend/services/hmm_risk/risk_l2_prediction.py', ['backend-main']),
     ('backend/routers/hmm_risk.py', ['backend-main']),
     ('backend/services/hmm_risk/unknown_consumer.py', ['backend-main']),
@@ -1843,13 +1861,13 @@ _REPRESENTATIVE_RUNTIME_ROLES = [
 ]
 
 
-@pytest.mark.parametrize("family", ["value", "industry", "advisory", "localsim"])
+@pytest.mark.parametrize("family", ["value", "industry", "advisory", "localsim", "member"])
 def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeypatch) -> None:
-    source = _LOCALSIM_DIR + "dual_mode_research.py" if family == "localsim" else "backend/services/hmm_risk/observed_industry_authority.py"
-    fixed5 = ["backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
-              "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py"]
-    expected = [source] if family in {"industry", "localsim"} else fixed5
-    rule_id = ("offline-localsim-dual-mode-study" if family == "localsim" else
+    source = ("backend/services/hmm_risk/risk_l2_member_return.py" if family == "member" else
+              _LOCALSIM_DIR + "dual_mode_research.py" if family == "localsim" else "backend/services/hmm_risk/observed_industry_authority.py")
+    fixed5 = [f"backend/services/advisory_model_first/generic_price_5td_{kind}_v2.py" for kind in ("valuation", "revaluation")]
+    expected = [source] if family in {"industry", "localsim", "member"} else fixed5
+    rule_id = ("offline-hmm-signed-member-return" if family == "member" else "offline-localsim-dual-mode-study" if family == "localsim" else
                "offline-hmm-observed-industry-authority" if family == "industry" else "offline-advisory-fixed5-valuation")
     rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
                 if rule["rule_id"] == rule_id)
@@ -1863,12 +1881,11 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeyp
                      "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md",
                      "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"],
         "localsim": [source, "backend/tests/simulation_execution/test_localsim_dual_mode_comparison.py",
-                     "backend/tests/simulation_execution/test_localsim_replay_performance.py"],
+                      "backend/tests/simulation_execution/test_localsim_replay_performance.py"],
+        "member": [source, "scripts/hmm_risk/run_risk_l2_member_return.py", "backend/tests/hmm_risk/test_risk_l2_member_return.py"],
     }[family]
     offline = workflow._classify_runtime_impact(files)
-    assert offline["runtime_impact"] == "none"
-    assert offline["runtime_files"] == offline["target_ids"] == []
-    assert offline["catalog_error"] is None
+    assert (offline["runtime_impact"], offline["runtime_files"], offline["target_ids"], offline["catalog_error"]) == ("none", [], [], None)
     contract = workflow.build_runtime_contract(record={}, changed_files=files)
     assert contract["blocking"] == [] and contract["backend_restart_required"] is False
     online_paths = ([*(path.replace("_v2.py", "_v3.py") for path in fixed5), "backend/routers/advisory_model_first.py"]
@@ -1877,14 +1894,15 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeyp
         online_paths = _LOCALSIM_ONLINE_FILES
     for online in online_paths:
         mixed = workflow._classify_runtime_impact([*files, online])
-        assert mixed["runtime_impact"] == "backend"
-        assert mixed["target_ids"] == ["backend-main"]
-        assert mixed["runtime_files"] == [online]
+        assert (mixed["runtime_impact"], mixed["target_ids"], mixed["runtime_files"]) == ("backend", ["backend-main"], [online])
         contract = workflow.build_runtime_contract(record={"runtime_contract": {
             "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}}, changed_files=[*files, online])
         assert contract["backend_restart_required"] is True
         assert any("cannot downgrade" in reason for reason in contract["blocking"])
-    if family == "localsim":
+    if family == "member":
+        refs = set(workflow._git(["grep", "-l", "-F", Path(source).stem, "--", "*.py"]).splitlines())
+        assert refs == {*files[1:], Path(__file__).relative_to(workflow.REPO_ROOT).as_posix()}
+    if family in {"localsim", "member"}:
         catalog = workflow._load_runtime_target_catalog()
         catalog["targets"]["backend-main"]["source_globs"].append(source)
         monkeypatch.setattr(workflow, "_load_runtime_target_catalog", lambda _root=None: catalog)

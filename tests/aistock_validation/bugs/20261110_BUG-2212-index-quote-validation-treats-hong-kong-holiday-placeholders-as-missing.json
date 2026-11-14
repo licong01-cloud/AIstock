@@ -1,0 +1,404 @@
+{
+  "actual": "index_daily/2026-10-19 remains INCOMPLETE with 33 INVALID close values despite complete provider scan",
+  "allowed_write_scope": [
+    "backend/services/data_integrity/validation.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_daily_data_integrity.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/services/data_integrity/index_quote_calendar.py",
+    "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2212",
+  "closed_at": "2026-11-10T17:53:22.871273Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-10T16:40:43.494552Z",
+  "description": "index_daily/2026-10-19 remains INCOMPLETE with 33 INVALID close values despite complete provider scan",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261110-25f04e678977",
+      "timestamp": "2026-11-10T16:40:43.494552Z"
+    }
+  ],
+  "evidence_uris": [
+    "market.dataset_date_refresh_audit index_daily/2026-10-19 canonical revision3274; https://www.hkex.com.hk/-/media/HKEX-Market/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/ce_SEHK_CT_075_2025.pdf"
+  ],
+  "expected": "Known Hong Kong indices on verified HKEX closed dates retain source NULLs as legal non-session observations; open-day missing/non-finite quotes and unproven market identity stay explicit; daily and monthly share contract.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/index_quote_calendar.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json"
+    ],
+    "added_files": [
+      "backend/services/data_integrity/index_quote_calendar.py"
+    ],
+    "changed_files": [
+      "backend/services/data_integrity/index_quote_calendar.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261110_BUG-2212-index-quote-validation-treats-hong-kong-holiday-placeholders-as-missing.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/data_integrity/validation.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/services/data_integrity/index_quote_calendar.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/data_integrity/validation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/data_integrity/index_quote_calendar.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/data_integrity/validation.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_daily_data_integrity.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/services/data_integrity/index_quote_calendar.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/services/data_integrity/index_quote_calendar.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_integrity/validation.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/services/data_integrity/index_quote_calendar.py"
+    ]
+  },
+  "first_seen_at": "2026-11-10T16:40:43.494552Z",
+  "fix_branch": null,
+  "fix_commit": "694a217a2f7e710dce337d48f6c7bba75899c927",
+  "fixed_at": "2026-11-10T17:08:50Z",
+  "github_issue_number": 7199,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7199",
+  "last_seen_at": "2026-11-10T16:40:43.494552Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7200",
+  "production_backend_dependency_gate": "noop",
+  "production_data_repair": {
+    "active_profile_write": false,
+    "authorization": "User confirmed backend restart and authorized exact SQL on 2026-11-11; exact SQL hash and DEV receipt rechecked before execution.",
+    "consumer_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/production-consumer-readback.json",
+    "day_overall_state": "UNVERIFIED",
+    "dev_passed": true,
+    "dev_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/dev-validation.json",
+    "invalid": 0,
+    "legal_na": 33,
+    "missing": 0,
+    "native_retry_targets_reconciled": 1,
+    "native_validation_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/production-validation-receipt.json",
+    "production_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/production-apply-receipt.json",
+    "quote_facts_unchanged": true,
+    "quote_facts_write": false,
+    "release_write": false,
+    "revision": 3274,
+    "source_other_columns_unchanged": true,
+    "sql_path": "X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/production-calendar-context.sql",
+    "sql_sha256": "6bd5f1fdcf719a064a4b270fae8ed47290694713c31f01a84763d81d71bbe5fa",
+    "status": "applied_and_independently_verified",
+    "target": "aistock.market.dataset_date_refresh_audit/index_daily/2026-10-19/tushare metadata.index_market_session only",
+    "valid": 4255,
+    "validation_id": "div_5886222bc7b56a836fc8df0d123def6ffc5f909a9f232b4a6d948e22a2e97e4a"
+  },
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "review_evidence": [
+    "Correctness review: exact HK index identities, not CSI publisher suffix or mixed-market names; verified dated HKEX closed session allows only NULL OHLC and zero/NULL volume/amount; unknown identities, wrong dates/digests and open-session missing quotes remain non-green.",
+    "Performance/completeness review: fixed identity-only batching buffer so positive HK quotes need no calendar query; retain one extra close value only for mapped HK indices, no duplicate full-history panel; one reference query per needed year, three bounded transport retries outside DB transactions; isolate malformed calendar rows without discarding valid neighboring sessions or quote facts.",
+    "Native integration review: existing DEV uses 4288 actual production snapshot rows and genuine completed provider receipt; 33 invalid become 33 legal NA, original quote hash unchanged; ordinary A-share missing close still invalid, open-session HK nulls still invalid; exact metadata-only SQL repeats unchanged. Full related matrix 354 passed,1 intentionally skipped.",
+    "DESIGN-COMPLIANCE-001: all approved fix points implemented and tested; no silent default or fabricated price; trading-day applicability only, no model/PIT/strategy change; no new approval framework, runtime service, dependency or table. Production receipt update and user-owned restart remain distinct pending actions."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python verify_existing_dev.py loaded tracked index calendar producer and native PhysicalValidator in existing DEV; genuine 4288-row index snapshot changes only classification33 INVALID to legalNA33, prices unchanged; ordinary-price and HK-open-session negative controls fail correctly; X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/dev-validation.json. Production quote/profile/release/runtime writes=false."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\index-hk-calendar-20261111\\post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2212",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "694a217a2f7e710dce337d48f6c7bba75899c927",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-10T17:49:00.723068Z",
+      "mode": "read_only",
+      "observed_identity": "c7929bf2d15e0a3e8e20debe9580f5fce407577a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7ac73ff2af4b216956df8fde5d6741ef6085d62f7c575cd743e51bc321ea040d",
+      "receipt_sha256": "838747ba53e04257e14ad96a06cf7b88308156adb841073a4c914e488e85430f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a25d2e5eaaa108a0e178e2998ec9b649c939cdccfee1be3a5775a61e3e39a8ac",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2212",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee75bf68c54951f9",
+    "recorded_at": "2026-11-10T17:09:43.971005Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7c6f7f7b753f801ac71364aefb911407a016789b",
+    "source_merge_commit": "694a217a2f7e710dce337d48f6c7bba75899c927",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7200",
+    "validation_evidence": [
+      "validation-receipt: id=e62056801785f72a commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=ef2ad62768464d11 commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py -q -x` result=`passed`"
+    ],
+    "validation_evidence_digest": "51e751229e889ef24296f55480be786a5e901a3ffb1e985556fc020bc72558e4"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Index quote validation treats Hong Kong holiday placeholders as missing prices",
+  "trigger_condition": {
+    "fingerprint": "25f04e678977848fb1dba612",
+    "source_event_id": "FE-20261110-25f04e678977"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=e62056801785f72a commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=ef2ad62768464d11 commit=7c6f7f7b753f801ac71364aefb911407a016789b kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py backend/tests/test_tushare_sync_engine.py -q -x` result=`passed`",
+    "post-restart-verify backend-main -> passed; exact authorized SQL hash 6bd5f1fdcf719a064a4b270fae8ed47290694713c31f01a84763d81d71bbe5fa applied/read back; native VALIDATE_ONLY revision3274 VALID valid4255 legalNA33 missing0 invalid0; API index_daily current=true; unchanged quotes and source provider scan; dated retry reconciled; X:/AIstock_temp/DATA_PREPARATION/index-hk-calendar-20261111/production-consumer-readback.json"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

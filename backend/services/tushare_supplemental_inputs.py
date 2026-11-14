@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg2.extras import Json, execute_values
 
-RAW_DATASETS = frozenset({'vix_index', 'stock_daily_afterhours'})
+RAW_DATASETS = frozenset({'vix_index', 'stock_daily_afterhours', 'index_global', 'us_tradecal'})
 
 
 def latest_vix_query_date(now=None):
@@ -19,6 +19,9 @@ def latest_vix_query_date(now=None):
 
 
 def normalize_rows(spec, rows):
+    if spec.name in {'index_global', 'us_tradecal'}:
+        from .tushare_us_market_inputs import normalize_us_rows
+        return normalize_us_rows(spec, rows)
     result = []
     for source in rows:
         row = dict(source)
@@ -63,8 +66,8 @@ def raw_observation(spec, source):
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'),
                          allow_nan=False, default=str)
     digest = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
-    day = dt.date.fromisoformat(str(source['trade_date'])) if '-' in str(source['trade_date']) else (
-        dt.datetime.strptime(str(source['trade_date']), '%Y%m%d').date())
+    value = str(source[spec.date_column])
+    day = dt.date.fromisoformat(value) if '-' in value else dt.datetime.strptime(value, '%Y%m%d').date()
     return spec.name, spec.tushare_api, day, source.get('ts_code'), digest, Json(json.loads(encoded))
 
 
@@ -73,18 +76,11 @@ def store_observations(conn, spec, rows, write_facts):
     if not rows:
         return 0
     normalized = normalize_rows(spec, rows)  # reject before writing any original row
-    observations = [raw_observation(spec, row) for row in rows]
     owns_transaction = conn.autocommit
     if owns_transaction:
         conn.autocommit = False
     try:
-        with conn.cursor() as cur:
-            execute_values(cur, """
-                INSERT INTO market.tushare_supplemental_raw
-                  (dataset, source_api, trade_date, ts_code, source_row_sha256, raw_payload)
-                VALUES %s ON CONFLICT (dataset, source_row_sha256) DO UPDATE
-                  SET last_observed_at=clock_timestamp()
-            """, observations)
+        store_raw_observations(conn, spec, rows)
         count = write_facts(normalized)
         if owns_transaction:
             conn.commit()
@@ -96,3 +92,19 @@ def store_observations(conn, spec, rows, write_facts):
     finally:
         if owns_transaction:
             conn.autocommit = True
+
+
+def store_raw_observations(conn, spec, rows):
+    """Preserve rejected provider originals without promoting them to valid facts."""
+    if spec.name not in RAW_DATASETS:
+        raise ValueError('unsupported supplemental raw dataset')
+    if not rows:
+        return
+    observations = [raw_observation(spec, row) for row in rows]
+    with conn.cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO market.tushare_supplemental_raw
+              (dataset, source_api, trade_date, ts_code, source_row_sha256, raw_payload)
+            VALUES %s ON CONFLICT (dataset, source_row_sha256) DO UPDATE
+              SET last_observed_at=clock_timestamp()
+        """, observations)

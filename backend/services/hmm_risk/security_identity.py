@@ -20,6 +20,7 @@ SUPPORTED_SOURCE_DATASETS = frozenset(
         "market.daily_basic",
         "market.kline_daily_raw",
         "market.moneyflow_ts",
+        "market.margin_detail",
         "market.stk_limit",
     }
 )

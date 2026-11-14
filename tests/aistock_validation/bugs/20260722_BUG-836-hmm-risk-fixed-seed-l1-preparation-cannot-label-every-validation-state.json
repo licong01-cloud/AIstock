@@ -1,0 +1,231 @@
+{
+  "actual": "The approved C-007-A full preparation at feature commit 2b8bc2b1898a1909faa3cc4f6787d8ba27ceb88e read the complete PIT stock-fact source and failed closed before publishing artifacts: 801110.SI semantic label evidence is missing for hidden state 2. The same run emitted multiple hmmlearn likelihood-decrease non-convergence warnings. No READY artifact was written. The fixed single random_seed=42, hard validation-state sample labeling, convergence acceptance, and no-fallback requirements need a user-approved exact contract that remains deterministic and does not fabricate semantic labels.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/state_model_set.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_state_model_set.py",
+    "tests/aistock_validation/bugs/20260722_BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-every-validation-state.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-836",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-22T20:36:34.926250Z",
+  "description": "The approved C-007-A full preparation at feature commit 2b8bc2b1898a1909faa3cc4f6787d8ba27ceb88e read the complete PIT stock-fact source and failed closed before publishing artifacts: 801110.SI semantic label evidence is missing for hidden state 2. The same run emitted multiple hmmlearn likelihood-decrease non-convergence warnings. No READY artifact was written. The fixed single random_seed=42, hard validation-state sample labeling, convergence acceptance, and no-fallback requirements need a user-approved exact contract that remains deterministic and does not fabricate semantic labels.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260722-928875f35623",
+      "timestamp": "2026-07-22T20:36:34.926245Z"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-D1 and C-008-B1: update the design without merge, then run full diagnostic-only soft posterior, covariance, and convergence evidence; B2/B3 remain unapproved.",
+      "timestamp": "2026-07-23T05:47:48.2012041Z"
+    },
+    {
+      "action": "record_validation_failure",
+      "actor": "codex",
+      "note": "The first full C-008-B1 run failed closed during canonical JSON serialization because covariance-invalid fits exposed non-finite monitor history. No report, model, READY artifact, database write, or runtime change occurred. The repair preserves the fact as null plus history_non_finite_count and adds a distinguishing test.",
+      "timestamp": "2026-07-23T06:39:21.9121065Z"
+    },
+    {
+      "action": "record_validation_evidence",
+      "actor": "codex",
+      "note": "C-008-B1 completed 496 diagnostic fits with canonical report SHA-256 4728e75e8c059d38688bcd969d19379d71b2ad5e9cd5e07ff69138c184462722. It selected no seed, applied no formal threshold, preserved hard semantic authority, and wrote no model or READY artifact. Evidence does not support B2; B3 remains a recommendation pending user decision.",
+      "timestamp": "2026-07-23T07:26:14.1580765Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5054376238",
+    "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5055624035"
+  ],
+  "expected": "C-008-B1 reuses the immutable C-008-A PIT input, both 31-sector L1 families and seeds 42-49 to record train/validation hard occupancy, filtered-posterior mass/ESS/utility/stability, complete convergence deltas and raw/bounded covariance evidence. It applies no formal acceptance threshold, preserves the approved hard-state semantic authority, performs no seed selection, writes no model or READY artifact, and does not implement B2/B3.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_state_model_set.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_state_model_set.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        "hmm_risk_services"
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_state_model_set.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_state_model_set.py"
+    ]
+  },
+  "first_seen_at": "2026-07-22T20:36:34.926250Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2648,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2648",
+  "last_seen_at": "2026-07-22T20:36:34.926250Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "registry_recovery": {
+    "authoritative_followup_ref": "https://github.com/licong01-cloud/AIstock/issues/2648#issuecomment-5077075454",
+    "github_issue_state": "OPEN",
+    "schema_version": "aistock_bug_registry_recovery_v1",
+    "scope": "registry_only_no_HMM_implementation_or_acceptance",
+    "source": {
+      "archive_path": "F:\\Dev\\AIstock_worktrees\\.cleanup-receipts\\metadata-cleanup-r2-20261107\\metadata-snapshots.json",
+      "archive_sha256": "c6f216cfc94f6d1f4ea6bf6472bba6b726886503a6fba3f1529a722349677c31",
+      "recovered_at": "2026-11-06T18:36:10.619030+00:00",
+      "source_branch": "bug/BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260723",
+      "source_file_sha256": "d6ee22d6e11fde7214f0687de4ade50df2bed281804654774220595ca78d01f4",
+      "source_head": "6f6b0595bf61df29633507dd438fca6c77edea67",
+      "source_path": "tests/aistock_validation/bugs/20260722_BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-every-validation-state.json",
+      "source_worktree": "F:\\Dev\\AIstock_worktrees\\BUG-836-hmm-risk-fixed-seed-l1-preparation-cannot-label-20260723"
+    }
+  },
+  "reproduce_command": "python scripts/hmm_risk/prepare_state_model_set.py --request tmp/validation/hmm_risk/state_model_set_request.json --artifact-root F:/Dev/AIstock/backend/data/hmm_models --output-root tmp/validation/hmm_risk/state_model_sets --env-file F:/Dev/AIstock/.env --db-env-prefix TDX_DB_ --c008-b1-diagnostic-output tmp/validation/hmm_risk/c008_b1_soft_evidence.json",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM Risk fixed-seed L1 preparation cannot label every validation state",
+  "trigger_condition": {
+    "fingerprint": "928875f356235ea26886e198",
+    "source_event_id": "FE-20260722-928875f35623"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "hmm_risk_backend"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "hmm_risk_backend"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

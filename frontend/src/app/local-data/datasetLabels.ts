@@ -48,6 +48,8 @@ const names: Record<string, string> = {
   idx_anns: "指数公司公告",
   stk_seasoned: "增发进程",
   vix_index: "VIX美国日频指数",
+  index_global: "美股三大指数",
+  us_tradecal: "美股交易日历",
   stock_daily_afterhours: "股票盘后成交量额",
   _auto_retry_stale: "数据同步自动重试",
   _data_freshness_check: "数据新鲜度检查",
@@ -63,6 +65,7 @@ export function datasetName(value: unknown, fallbackName?: string): string {
   const morning = /^_(.+)_morning$/.exec(lower);
   if (!name && morning && names[morning[1]]) name = `${names[morning[1]]}·晨间补采`;
   if (!name && lower === "_vix_index_midday") name = "VIX美国日频指数·午间补采";
+  if (!name && lower === "_index_global_midday") name = "美股三大指数·午间补采";
   return name || (fallbackName && /[\u3400-\u9fff]/.test(fallbackName) ? fallbackName : "未知数据集");
 }
 

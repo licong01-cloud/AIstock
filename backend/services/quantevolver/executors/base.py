@@ -18,6 +18,7 @@ class PredictionReplaySource(BaseModel):
     catalog_path: str
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: int = Field(gt=0)
+    recovery_receipt: dict[str, Any] | None = None
 
 
 class ExecutionContext(BaseModel):

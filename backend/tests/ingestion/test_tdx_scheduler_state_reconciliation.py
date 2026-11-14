@@ -69,7 +69,8 @@ def test_partition_retry_alarm_reflects_current_data_and_active_repair(monkeypat
         assert not alerts and len(reconciled) == 1
     elif state == "recovering":
         assert not reconciled and len(alerts) == 1
-        assert alerts[0].alert_type == "retry_pending" and alerts[0].severity == "warning"
+        assert alerts[0].alert_type == "gap" and alerts[0].severity == "warning"
+        assert alerts[0].details["retry_result"] == "pending"
         assert alerts[0].details["recovery_target_ids"] == ["repair"]
         assert any("data_alerts" in query and "acknowledged" in query for query, _ in updates)
     else:
@@ -86,6 +87,22 @@ def test_native_tushare_schedule_preserves_failed_result_reason(monkeypatch):
     scheduler._run_tushare_engine_sync(uuid.uuid4(), "schedule", "bak_basic", "incremental", "unit", {})
     assert updates[0]["last_status"] == "failed"
     assert updates[0]["last_error"] == "bak_basic: provider permission denied"
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_pending_gap_warning_dedup_does_not_suppress_real_gap(monkeypatch, pending):
+    from unittest.mock import Mock
+    from backend.services.data_health_alerter import DataHealthAlerter
+    alerter = DataHealthAlerter({"dbname": "unused"})
+    cursor = Mock()
+    cursor.fetchone.return_value = None
+    conn = SimpleNamespace(cursor=lambda: nullcontext(cursor))
+    monkeypatch.setattr(alerter, "_conn", lambda: nullcontext(conn))
+    assert not alerter._alert_exists_today("stk_alert", "gap", "2024-04-01",
+        retry_result="pending" if pending else None)
+    query, params = cursor.execute.call_args.args
+    assert "retry_result" in query
+    assert params[-1] == ("pending" if pending else "")
 
 
 def test_pending_warning_write_failure_keeps_old_error_visible(monkeypatch):
@@ -1642,6 +1659,88 @@ def test_expired_due_target_is_final_blocked_without_job(monkeypatch):
     assert calls[0][0:2] == ("final", "target-1")
     assert calls[1] == ("attempt", "final_blocked", "target-1", "data_sync_target_precheck")
     assert calls[2][0] == "alert"
+
+
+@pytest.mark.parametrize("source", ["tushare", "integrity_repair"])
+def test_historical_event_target_gets_real_retry_not_expired_fact_deadline(monkeypatch, source):
+    from unittest.mock import Mock
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = {"target_id": "event-history", "dataset": "stk_alert", "data_source": source,
+        "target_date": dt.date(2024, 4, 1), "created_at": dt.datetime(2026, 11, 7, tzinfo=dt.timezone.utc)}
+    repo = Mock()
+    repo.list_fillable_targets.return_value = [target]
+    repo.claim_fillable_target.return_value = True
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: dt.datetime(2026, 11, 8, tzinfo=dt.timezone.utc))
+    scheduler._defer_obsolete_integrity_fetch = lambda _: False
+    scheduler._defer_completed_event_fetch = lambda *_a: False
+    scheduler._check_dataset_recovered = lambda *_a: SimpleNamespace(status="stale", failure_category="canonical_partition_not_validated")
+    scheduler._recent_dataset_submission_exists = lambda *_a: False
+    scheduler._enqueue_target_retry = Mock(return_value=uuid.uuid4())
+    assert scheduler._reconcile_due_data_sync_targets({"stk_alert": {"mode": "incremental"}}) == ["stk_alert"]
+    repo.mark_final_blocked.assert_not_called()
+
+
+@pytest.mark.parametrize("source,status,revision,scan_revision,expected", [
+    ("tushare", "success", 0, 0, True), ("tushare", "failed", 0, 0, False),
+    ("tushare", "success", 1, 0, False), ("tushare", "success", 1, 1, True),
+    ("canonical_db", "success", 0, 0, False)])
+def test_event_source_success_waits_for_physical_validation_without_false_alarm(
+        monkeypatch, source, status, revision, scan_revision, expected):
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+    from backend.services.data_integrity import repository
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    row = {"data_revision": revision, "validation_status": "UNVERIFIED", "status": status,
+        "metadata": {"event_scan": {"complete": True, "schema_version": "tushare_event_scan_v1"},
+                     "integrity_observed_revision": scan_revision}}
+    cursor = Mock()
+    cursor.fetchone.return_value = row
+    conn = Mock()
+    conn.cursor.return_value = nullcontext(cursor)
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda **_: nullcontext(conn))
+    queued = Mock()
+    monkeypatch.setattr(repository, "enqueue_validation", queued)
+    repo = Mock()
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    result = scheduler._defer_completed_event_fetch({"target_id": "event", "dataset": "stk_alert",
+        "data_source": source, "target_date": dt.date(2024, 4, 1)})
+    assert result is expected and queued.called is expected
+    repo.mark_reconciled.assert_not_called()  # source success is not a physical VALID verdict
+    assert repo.mark_retry.called is expected
+
+
+@pytest.mark.parametrize("source_failed", [False, True])
+def test_event_retry_finalizer_separates_source_failure_from_pending_validation(monkeypatch, source_failed):
+    from concurrent.futures import Future
+    from unittest.mock import Mock
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    repo = Mock()
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: repo)
+    scheduler._check_dataset_recovered = lambda *_a: SimpleNamespace(status="stale",
+        failure_category="canonical_partition_not_validated")
+    scheduler._fetchall = Mock(return_value=[{"status": "failed", "error_message": "HTTP 502"}]
+        if source_failed else [{"status": "success", "error_message": None}])
+    scheduler._defer_completed_event_fetch = Mock(return_value=not source_failed)
+    scheduler._flush_final_data_sync_alerts = Mock()
+    future = Future()
+    future.set_result(None)  # native engine failure can be persisted, not raised
+    scheduler._finalize_data_sync_target_retry(future, target_id="history", dataset="stk_alert",
+        mode="incremental", options={"target_date": "2024-04-01", "historical_event_retry": True,
+                                     "data_sync_target_source": "tushare"})
+    repo.mark_final_blocked.assert_not_called()
+    scheduler._flush_final_data_sync_alerts.assert_not_called()
+    if source_failed:
+        assert repo.mark_retry.call_args.kwargs["reason"] == "HTTP 502"
+        assert repo.mark_retry.call_args.kwargs["context"]["failure_category"] == "event_query_incomplete"
+    else:
+        repo.mark_retry.assert_not_called()  # helper owns the validation-only wait
+
+
+def test_historical_event_retry_does_not_erase_explicit_request_deadline():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    assert not scheduler._historical_event_retry({"dataset": "stk_alert", "target_date": dt.date(2024, 4, 1),
+        "required_before": "2026-11-07T12:00:00Z", "metadata": {"retry_intent": "historical_event_backfill"}})
 
 
 def test_enqueue_target_retry_anchors_original_date_and_isolates_schedule(monkeypatch):

@@ -62,7 +62,9 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     stk_alert: "个股重点提示（参考区间；可选）",
     idx_anns: "指数公司公告（原文；可选）",
     stk_seasoned: "增发进程（原文及修订；可选）",
-    vix_index: "VIX 美国日频指数（可选；美国日历完整性未评估）",
+    vix_index: "VIX 美国日频指数（可选；美国交易日历）",
+    index_global: "美股三大指数（标普500/纳斯达克/道琼斯）",
+    us_tradecal: "美股交易日历（含开市及休市日）",
     stock_daily_afterhours: "股票盘后成交量额（手/千元；可选）",
     etf_share_size: "ETF 每日份额和规模（Tushare etf_share_size）",
     etf_basic_snapshots: "ETF 基础信息每日观察快照（Tushare etf_basic）",
@@ -362,7 +364,7 @@ export default function LocalDataPage() {
       } else if (lower === "daily_basic") {
         dataSource = "Tushare";
         dataset = "daily_basic";
-      } else if (EVENT_INPUT_DATASETS.includes(lower) || lower === "vix_index" || lower === "stock_daily_afterhours") {
+      } else if (EVENT_INPUT_DATASETS.includes(lower) || lower === "index_global" || lower === "us_tradecal" || lower === "vix_index" || lower === "stock_daily_afterhours") {
         dataSource = "Tushare";
         dataset = lower;
       } else if (lower === "stk_limit") {
@@ -634,6 +636,8 @@ function InitTab({ onCalendarSynced }: { onCalendarSynced?: () => void }) {
 
   const datasetOptionsTushare: { key: string; label: string }[] = [
     { key: "vix_index", label: "vix_index · VIX美国日频指数（可选）" },
+    { key: "index_global", label: "美股三大指数（Tushare）" },
+    { key: "us_tradecal", label: "美股交易日历（Tushare）" },
     ...EVENT_INPUT_DATASETS.map((key) => ({ key, label: INGESTION_DATASETS_BY_SOURCE.Tushare[key] })),
     { key: "stock_daily_afterhours", label: "stock_daily_afterhours · 盘后成交量额（手/千元）" },
     { key: "etf_share_size", label: "etf_share_size · ETF 每日份额和规模（Tushare）" },
@@ -959,7 +963,7 @@ function InitTab({ onCalendarSynced }: { onCalendarSynced?: () => void }) {
           opts.index_markets = indexMarkets;
         }
       }
-      if (EVENT_INPUT_DATASETS.includes(dataset) || dataset === "vix_index" || dataset === "stock_daily_afterhours" || dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || FINANCIAL_EVENT_RAW_DATASETS.includes(dataset) || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (EVENT_INPUT_DATASETS.includes(dataset) || dataset === "index_global" || dataset === "us_tradecal" || dataset === "vix_index" || dataset === "stock_daily_afterhours" || dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || FINANCIAL_EVENT_RAW_DATASETS.includes(dataset) || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -1378,6 +1382,8 @@ function IncrementalTab({
 
   const datasetOptionsTushare = [
     { key: "vix_index", label: "vix_index · VIX美国日频指数（可选）" },
+    { key: "index_global", label: "美股三大指数（Tushare）" },
+    { key: "us_tradecal", label: "美股交易日历（Tushare）" },
     ...EVENT_INPUT_DATASETS.map((key) => ({ key, label: INGESTION_DATASETS_BY_SOURCE.Tushare[key] })),
     { key: "stock_daily_afterhours", label: "stock_daily_afterhours · 盘后成交量额（手/千元）" },
     { key: "etf_share_size", label: "etf_share_size · ETF 每日份额和规模（Tushare）" },
@@ -4035,6 +4041,8 @@ function DataStatsTab({
       k === "kline_minute_raw" ||
       k === "stock_moneyflow_ts" ||
       k === "vix_index" ||
+      k === "index_global" ||
+      k === "us_tradecal" ||
       k === "stock_daily_afterhours" ||
       k === "margin_detail" ||
       k === "etf_share_size" ||
@@ -4200,6 +4208,8 @@ function DataStatsTab({
           lower === "adj_factor" ||
           lower === "daily_basic" ||
           lower === "vix_index" ||
+          lower === "index_global" ||
+          lower === "us_tradecal" ||
           EVENT_INPUT_DATASETS.includes(lower) ||
           lower === "stock_daily_afterhours" ||
           lower === "stock_basic" ||
@@ -4508,6 +4518,8 @@ function DataStatsTab({
                       "adj_factor",
                       "daily_basic",
                       "vix_index",
+                      "index_global",
+                      "us_tradecal",
                       ...EVENT_INPUT_DATASETS,
                       "stock_daily_afterhours",
                       "stock_basic",
@@ -5355,6 +5367,8 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   { dataset: "idx_anns", label: "指数公告（可选）", source: "Tushare", defaultAt: "21:30" },
   { dataset: "stk_seasoned", label: "增发进程（可选）", source: "Tushare", defaultAt: "21:40" },
   { dataset: "vix_index", label: "VIX美国日频指数（可选）", source: "Tushare", defaultAt: "08:00" },
+  { dataset: "index_global", label: "美股三大指数", source: "Tushare", defaultAt: "08:05" },
+  { dataset: "us_tradecal", label: "美股交易日历", source: "Tushare", defaultAt: "07:30" },
   { dataset: "stock_daily_afterhours", label: "股票盘后成交量额（可选）", source: "Tushare", defaultAt: "20:35" },
   { dataset: "etf_share_size", label: "ETF 每日份额和规模", source: "Tushare", defaultAt: "20:00" },
   { dataset: "etf_basic_snapshots", label: "ETF 基础信息快照", source: "Tushare", defaultAt: "20:05", mode: "init" },

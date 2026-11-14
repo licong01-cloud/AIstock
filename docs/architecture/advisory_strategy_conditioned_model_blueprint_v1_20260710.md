@@ -1,4 +1,10 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.65
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.68
+
+> 2026-11-08单信号真实实验完成：[ID1272增量F1§12](advisory_lstm_overnight_increment_v1_f1_design_20261108.md)按用户授权完成恰好3fit，真实训练KEY/目标/共同编码匹配和独立24,400分数/排名、488日日表、费用及4组区间通过，完整新进程复用0fit。相对原生Top10开发+46.714083bps、压力−75.666671bps；相对原54字段Ridge开发增量亦负，按事前规则`STOP_EXACT_OVERNIGHT_INCREMENT_CANDIDATE`，只关闭该精确候选，累计269实际fit＋1旧index、追加预算0。没有新上线模型、历史PIT或独立经济确认；保留全部原人口/26NA、Top50→Top10/5TD/费用/100bps、原生/V2和暂停方向，不自动另开模型/信号或等待新D。源码文档/CI合入与经济负面分态，最终证据入口见[接续计划](../analysis/advisory_lstm_next_research_plan_20261107.md)；下方P0/P1未执行训练段落为阶段历史。
+
+> 2026-11-08单信号P0/P1实施：沿[ID1272增量F1](advisory_lstm_overnight_increment_v1_f1_design_20261108.md)交付独立新叶/CLI及44项直接合同，原21,150行/423D、26NA和旧54字段Ridge完整来源/阶段链预检通过。随机合成三折程序验证包括不可变预测、预算和完整0fit复用，不是历史经济成果。真实标签数组/金融fit/推荐排序均0，完整真实训练目标匹配留在获准P2各折fit前；P2/P3尚未执行，原生Top50→Top10/5TD/费用/100bps、累计266＋1、旧负面终态和暂停方向保持。唯一后续为该候选明确授权后的最多3fit及一次经济评审，无需后端重启或数据等待，源码CI/合入以[接续计划](../analysis/advisory_lstm_next_research_plan_20261107.md)中的最终回执为准。
+
+> 2026-11-08单信号接续：原人口输入接收完成后，编制[ID1272单一隔夜价格坐标增量F1](advisory_lstm_overnight_increment_v1_f1_design_20261108.md)，执行与证据入口见[当前接续计划](../analysis/advisory_lstm_next_research_plan_20261107.md)。仅固定原54字段同Ridge B/B+F、未来最多3fit提案、原生Top10/5TD/100bps主目标及明确停止条件；本轮0金融fit、0收益标签读取、0新排序，三旧B只完成元数据验收，完整控制匹配须在未来fit前核验。该设计不恢复下列已结束模型搜索，不宣称历史PIT/独立经济确认或可上线模型；实施/训练/生产状态分别报告，当前金融fit授权仍0，累计266实际Advisory fit＋1旧index保持。
 
 > 2026-11-06跨期尺度审查已完成零拟合负分支：[原计划](../analysis/advisory_lstm_crosssection_scale_research_plan_20261106.md)及[结果报告](../analysis/advisory_lstm_crosssection_scale_review_20261106.md)。原21150行/423D、三旧Ridge身份和阶段链通过；68,526条统计、972,900秩坐标及162阈值独立核算PASS。开发没有满足尺度/贡献联合条件的因子；压力仅波动因子4D和既知VSTD5单日，没有两个因子达到20D且跨两个月。行支持97%以上，但开发/压力完整50股票D仅36/126、51/118，未达事前80%。终态NO_SCALE_CANDIDATE_EVIDENCE，P2/P3不执行，0新候选/金融fit/收益标签/推荐排序，累计266＋1保持；无新上线模型，不自动放宽门槛或恢复模型轮换。原生/V2、Top50→Top10/5TD/100bps及暂停方向保持；NON_VINTAGE和已消费历史不成为PIT或独立经济证明。
 

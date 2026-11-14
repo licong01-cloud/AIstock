@@ -1341,7 +1341,9 @@ class TDXScheduler:
                     OR (target_status = 'reconciled' AND EXISTS (
                         SELECT 1 FROM market.data_alerts AS a
                         WHERE a.dataset=t.dataset AND NOT a.acknowledged
-                          AND a.alert_type IN ('retry_exhausted','retry_pending')
+                          AND (a.alert_type IN ('retry_exhausted','retry_pending')
+                            OR (a.alert_type='gap' AND a.details->>'retry_result'='pending'
+                              AND a.details->>'alert_gate'='data_sync_targets_final_state'))
                           AND a.details->>'target_id'=t.target_id)))
                   AND t.data_source IN ('readiness_gate','tushare','integrity_repair')
                   AND target_date IS NOT NULL
@@ -1481,6 +1483,50 @@ class TDXScheduler:
             enqueue_validation(conn, dataset, day)
         return True
 
+    def _historical_event_retry(self, target: Dict[str, Any]) -> bool:
+        """A fact-date daily deadline is not the lifetime of a new backfill.
+
+        The creation date also recognizes durable pre-fix targets. Explicit
+        request deadlines are never silently extended by this inference.
+        """
+        from backend.services.tushare_event_inputs import EVENT_DATASETS
+        if target.get("dataset") not in EVENT_DATASETS or target.get("required_before") is not None:
+            return False
+        day = self._coerce_target_date(target.get("target_date"))
+        created = self._coerce_target_datetime(target.get("created_at"))
+        return bool(day and ((target.get("metadata") or {}).get("retry_intent") == "historical_event_backfill"
+            or (created and day < created.astimezone(_CN_TZ).date())))
+
+    def _defer_completed_event_fetch(self, target: Dict[str, Any]) -> bool:
+        """Source success queues the fenced validator, never a fabricated VALID."""
+        from backend.services.tushare_event_inputs import EVENT_DATASETS
+        from backend.services.data_integrity.repository import enqueue_validation
+        dataset, source = target.get("dataset"), target.get("data_source")
+        day = self._coerce_target_date(target.get("target_date"))
+        if dataset not in EVENT_DATASETS or source not in {"tushare", "integrity_repair"} or day is None:
+            return False
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                cur.execute("""SELECT p.data_revision,p.validation_status,s.status,s.metadata
+                    FROM market.dataset_date_refresh_audit p
+                    JOIN market.dataset_date_refresh_audit s ON s.dataset=p.dataset
+                      AND s.trade_date=p.trade_date AND s.data_source='tushare'
+                    WHERE p.dataset=%s AND p.trade_date=%s AND p.data_source='canonical_db'
+                    FOR UPDATE OF p""", (dataset, day))
+                row = cur.fetchone()
+            metadata = (row or {}).get("metadata") or {}
+            scan = metadata.get("event_scan") or {}
+            if (not row or row["validation_status"] != "UNVERIFIED" or row["status"] != "success"
+                    or scan.get("complete") is not True or scan.get("schema_version") != "tushare_event_scan_v1"
+                    or metadata.get("integrity_observed_revision") != row["data_revision"]):
+                return False
+            enqueue_validation(conn, dataset, day)
+        DataSyncTargetRepository().mark_retry(str(target["target_id"]),
+            retry_after=_now() + dt.timedelta(minutes=30),
+            reason="event_source_complete_validation_pending",
+            context={"source_query_complete": True, "physical_validation_pending": True})
+        return True
+
     def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
         """Resume persisted retry targets that survived scheduler restart."""
 
@@ -1518,7 +1564,7 @@ class TDXScheduler:
             target_date = self._coerce_target_date(target.get("target_date"))
 
             try:
-                if self._defer_obsolete_integrity_fetch(target):
+                if self._defer_completed_event_fetch(target) or self._defer_obsolete_integrity_fetch(target):
                     continue
             except Exception as exc:
                 _logger.warning("integrity repair revalidation failed for %s/%s: %s", health_dataset, target_date, exc)
@@ -1548,7 +1594,7 @@ class TDXScheduler:
             if required_before is None:
                 required_before = self._final_deadline_for_target(schedule_dataset, target_date)
             continued_upstream_retry = (health_dataset in LATE_PUBLICATION_TAIL_DAYS
-                or target.get("data_source") == "integrity_repair")
+                or target.get("data_source") == "integrity_repair" or self._historical_event_retry(target))
             if required_before is not None and now >= required_before and not continued_upstream_retry:
                 failure_category = str(
                     getattr(readiness, "failure_category", None) or "target_deadline_expired"
@@ -1668,14 +1714,18 @@ class TDXScheduler:
                 and row.get("data_revision") == row.get("validated_revision") and symbols
                 and all(gap.get("classification") in {"MISSING", "INVALID"} for gap in gaps)):
             # Match the existing reconciler's input contract before spawning
-            # it. Some long-delisted securities have no local price or factor
-            # history at all. Repeated subprocesses cannot repair that absence.
+            # it. A listed IPO is independent collection scope even when BOTH
+            # local feeds missed its first day. Ended unknown histories keep
+            # their existing bounded deferral, not failing subprocess loops.
             observed = self._fetchall("""SELECT code AS ts_code FROM unnest(%s::character(9)[]) AS code
                 WHERE EXISTS (SELECT 1 FROM market.adj_factor f
                     WHERE f.ts_code=code::text AND f.trade_date<=%s)
                    OR EXISTS (SELECT 1 FROM market.kline_daily_raw p
                     WHERE p.ts_code=code AND p.trade_date<=%s
-                      AND (p.volume_hand>0 OR p.amount_li>0))""", (symbols, day, day))
+                      AND (p.volume_hand>0 OR p.amount_li>0))
+                   OR EXISTS (SELECT 1 FROM market.stock_basic b WHERE b.ts_code=code
+                      AND b.list_date<=%s AND (b.delist_date IS NULL OR b.delist_date>%s))""",
+                (symbols, day, day, day, day))
             available = {str(item["ts_code"]).strip() for item in observed}
             missing = sorted(set(symbols)-available)
             symbols = sorted(set(symbols) & available)
@@ -2163,8 +2213,8 @@ class TDXScheduler:
     def _scheduled_ingestion_run(
         self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any], frequency: str = ""
     ) -> None:
-        if dataset == "_vix_index_midday":
-            dataset = "vix_index"  # same job/overlap owner; only the schedule clock differs
+        if dataset in {"_vix_index_midday", "_index_global_midday"}:
+            dataset = {"_vix_index_midday": "vix_index", "_index_global_midday": "index_global"}[dataset]
         event_aliases = {'_stk_shock_morning': 'stk_shock', '_stk_high_shock_morning': 'stk_high_shock',
                          '_stk_alert_morning': 'stk_alert', '_idx_anns_morning': 'idx_anns',
                          '_stk_seasoned_morning': 'stk_seasoned', '_stk_seasoned_project_review': 'stk_seasoned'}
@@ -2527,6 +2577,8 @@ class TDXScheduler:
             "data_sync_target_id": target_id,
             "data_sync_target_dataset": health_dataset,
             "integrity_repair": target.get("data_source") == "integrity_repair",
+            "historical_event_retry": self._historical_event_retry(target),
+            "data_sync_target_source": target.get("data_source"),
         }
         if health_dataset == "adj_factor" and retry_opts["integrity_repair"]:
             symbols = (target.get("metadata") or {}).get("history_reconcile_symbols")
@@ -2646,6 +2698,23 @@ class TDXScheduler:
             error_message = error_message or str(exc)
             failure_category = "readiness_check_failed"
 
+        # Engine jobs persist a failed result without necessarily throwing from
+        # their Future. Keep that actual source error instead of relabelling an
+        # HTTP failure as a generic pending canonical-validation failure.
+        from backend.services.tushare_event_inputs import EVENT_DATASETS
+        if health_dataset in EVENT_DATASETS and not recovered:
+            try:
+                source_rows = self._fetchall("""SELECT status,error_message
+                    FROM market.dataset_date_refresh_audit
+                    WHERE dataset=%s AND trade_date=%s AND data_source='tushare'""",
+                    (health_dataset, target_date))
+                if source_rows and source_rows[0].get("status") == "failed":
+                    error_message = error_message or source_rows[0].get("error_message")
+                    failure_category = "event_query_incomplete"
+            except Exception as exc:
+                error_message = error_message or str(exc)
+                failure_category = "source_outcome_read_failed"
+
         metadata = {
             "mode": mode,
             "job_id": options.get("job_id"),
@@ -2667,12 +2736,18 @@ class TDXScheduler:
                 )
                 return
 
+            if error_message is None and self._defer_completed_event_fetch({
+                    "target_id": target_id, "dataset": health_dataset,
+                    "target_date": target_date, "data_source": options.get("data_sync_target_source")}):
+                return
+
             final_deadline_at = self._coerce_target_datetime(options.get("target_required_before"))
             if final_deadline_at is None:
                 final_deadline_at = self._final_deadline_for_target(health_dataset, target_date)
             after_deadline = final_deadline_at is not None and now >= final_deadline_at
             continued_upstream_retry = (health_dataset in LATE_PUBLICATION_TAIL_DAYS
-                or options.get("integrity_repair") is True)
+                or options.get("integrity_repair") is True
+                or options.get("historical_event_retry") is True)
             if after_deadline and not continued_upstream_retry:
                 repo.mark_final_blocked(target_id, reason=error_message or failure_category, context=metadata)
                 repo.record_attempt(
@@ -2841,7 +2916,9 @@ class TDXScheduler:
                     """UPDATE market.data_alerts
                           SET acknowledged = TRUE, ack_at = NOW()
                         WHERE dataset = %s
-                          AND (alert_type = 'retry_exhausted' OR alert_type = 'retry_pending')
+                          AND (alert_type = 'retry_exhausted' OR alert_type = 'retry_pending'
+                            OR (alert_type='gap' AND details->>'retry_result'='pending'
+                              AND details->>'alert_gate'='data_sync_targets_final_state'))
                           AND acknowledged = FALSE
                           AND details->>'target_id' = ANY(%s)""",
                     (dataset_key, family_ids),
@@ -2852,7 +2929,9 @@ class TDXScheduler:
                     # when an older alarm belongs to another fetch target.
                     cur.execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
                         WHERE dataset=%s AND acknowledged=FALSE
-                          AND alert_type IN ('retry_exhausted','retry_pending')
+                          AND (alert_type IN ('retry_exhausted','retry_pending')
+                            OR (alert_type='gap' AND details->>'retry_result'='pending'
+                              AND details->>'alert_gate'='data_sync_targets_final_state'))
                           AND details->>'target_date'=%s
                           AND details->>'alert_gate'='data_sync_targets_final_state'""",
                         (dataset_key, str(target_date)))
@@ -2948,7 +3027,9 @@ class TDXScheduler:
                 # A failed source target is not exhaustion of the dated repair
                 # family. Keep the real gap visible without claiming success.
                 alerts[-1].severity = "warning"
-                alerts[-1].alert_type = "retry_pending"
+                # Keep the deployed alert vocabulary: pending is a detailed
+                # recovery state, not an unregistered database alert type.
+                alerts[-1].alert_type = "gap"
                 alerts[-1].title = f"{dataset} 数据待补齐，已安排自动修复"
                 alerts[-1].message = f"数据集 {dataset} / {target_date} 尚未通过完整性验证，已保留自动修复任务"
                 alerts[-1].details.update(retry_result="pending", recovery_target_ids=recovery_ids)

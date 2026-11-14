@@ -47,7 +47,7 @@ def key_result(expected, facts, *, required_fields=(), positive_fields=(), check
                             (counts,), {**(checks or {}), "physical_rows": len(facts)}, gaps)
 
 
-def index_quote_result(expected, facts):
+def index_quote_result(expected, facts, *, session=None, trade_date=None):
     """A published index needs close; close-only currency/return variants have no OHLC.
 
     Keep source NULLs explicit. Any provided quote must still be finite and
@@ -57,6 +57,17 @@ def index_quote_result(expected, facts):
     base = key_result(expected, facts, required_fields=("close",), positive_fields=("close",),
         checks={"required_fields": ["close"], "nullable_fields": ["open", "high", "low", "vol", "amount"],
                 "schema_version": "published_index_quote_fields_v1"})
+    from .index_quote_calendar import closed_placeholder_codes
+    closed = closed_placeholder_codes(expected, facts, session=session, trade_date=trade_date)
+    if closed:
+        before = base.counts[0]
+        counts = CheckCounts(before.unit, before.expected, before.valid, len(closed),
+                             before.missing, before.invalid-len(closed), before.unverified)
+        gaps = tuple({**gap, 'symbols': sorted(set(gap['symbols'])-closed)} for gap in base.gaps
+                     if set(gap['symbols'])-closed)
+        base = ValidationResult(PartitionState.VALID if counts.complete else PartitionState.INCOMPLETE,
+            (counts,), {**base.checks, 'closed_session_legal_na': sorted(closed),
+                       'market_session': session}, gaps)
     legal, invalid, gaps = 0, 0, list(base.gaps)
     for field in ("open", "high", "low", "vol", "amount"):
         bad = []
@@ -265,6 +276,17 @@ class PhysicalValidator:
                     self._raw_scheduler(conn, source_aliases=False)._go_provider_codes(day, day), day)
             else:
                 expected = self._traded(conn, day, table if dataset != "adj_factor" else "market.kline_daily_raw")
+            panel_checks = {}
+            if dataset in {"bak_basic", "cyq_perf"}:
+                from .stock_scope import DELISTING_PANEL_POLICY, delisting_panel_exclusions
+                excluded = delisting_panel_exclusions(conn, dataset, day, expected)
+                expected = set(expected) - excluded.keys()
+                panel_checks = {"applicability_policy": DELISTING_PANEL_POLICY,
+                    "excluded_delisting_symbols": sorted(excluded),
+                    "excluded_delisting_count": len(excluded)}
+                if not expected and excluded:
+                    return ValidationResult(PartitionState.NOT_APPLICABLE, (), panel_checks,
+                        reason="all_traded_keys_in_delisting_consolidation")
             if not expected:
                 return unverified("independent_stock_scope_empty")
             observed = rows(conn, sql.SQL("SELECT * FROM {}.{} WHERE trade_date=%s").format(
@@ -284,7 +306,7 @@ class PhysicalValidator:
                 return key_result(expected, facts,
                     required_fields=("his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate")
                         if dataset == "cyq_perf" else (),
-                    checks={"coverage_basis": "independent_dated_traded_stock_keys",
+                    checks={**panel_checks, "coverage_basis": "independent_dated_traded_stock_keys",
                             "historical_provider_scan_required": False,
                             "required_fields": ["his_low", "his_high", "cost_15pct", "cost_50pct", "cost_85pct", "weight_avg", "winner_rate"]
                                 if dataset == "cyq_perf" else []})
@@ -348,16 +370,25 @@ class PhysicalValidator:
         return self._scan_contract(conn, obligation, day, revision)
 
     def _scan_contract(self, conn, obligation, day, revision):
-        """Only a completed formal provider scan bound to R can certify sparsity.
+        """Use a bound source scan, or a proven pre-tracking producer completion.
 
-        A row-count seed, old provider success or three empty retries is NOT a
-        full-source scan. Unknown formal scopes remain explicit UNVERIFIED.
+        A row-count seed or bare old success is NOT a completed query. The
+        legacy path checks its exact finished job and current physical facts,
+        without rewriting source receipts or inventing historical key scans.
         """
         dataset = obligation.dataset
         observed = rows(conn, """SELECT * FROM market.dataset_date_refresh_audit
             WHERE dataset=%s AND trade_date=%s AND data_source<>'canonical_db' ORDER BY refreshed_at DESC""", (dataset, day))
         current = [r for r in observed if (r.get("metadata") or {}).get("integrity_observed_revision") == revision]
         if not current:
+            from .reference_validation import validate_reference_partition
+            reference = validate_reference_partition(conn, obligation, day, revision, observed, read=rows)
+            if reference is not None:
+                return reference
+            from .legacy_validation import validate_legacy_partition
+            legacy = validate_legacy_partition(conn, obligation, day, revision, observed, read=rows)
+            if legacy is not None:
+                return legacy
             return unverified("complete_source_scan_not_bound_to_revision")
         source = current[0]
         metadata = source.get("metadata") or {}
@@ -414,7 +445,8 @@ class PhysicalValidator:
                     checks["scope"] = "completed_provider_query_returned_facts_only"
             if dataset == "index_daily":
                 quotes = index_quote_result({entry["key"][0] for entry in scan["entries"]},
-                    {str(r["ts_code"]).strip(): r for r in actual})
+                    {str(r["ts_code"]).strip(): r for r in actual},
+                    session=metadata.get('index_market_session'), trade_date=day)
                 checks.update(coverage_basis="complete_query_returned_keys_not_catalogue_availability",
                               quote_field_contract=quotes.checks)
                 gaps = tuple({"classification": kind, "keys": keys} for kind, keys in

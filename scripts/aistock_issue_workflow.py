@@ -3554,6 +3554,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/advisory/workbench/programs/[^/]+/daily$"),
+     "advisory_workbench_daily_snapshot", _runtime_semantics._validate_advisory_workbench_daily),
     (re.compile(r"^/api/v1/advisory/programs/[^/]+/reranking-shadow$"),
      "advisory_lstm_shadow_capture", _runtime_semantics._validate_advisory_lstm_shadow_capture),
     (re.compile(r"^/api/v1/simulation-runtime/localsim/replays/[^/]+/recovery$"),
@@ -3753,6 +3755,7 @@ def _evaluate_business_smoke_semantics(
         "hmm_frozen_coefficient_extension",
         "advisory_entry_price_status",
         "advisory_lstm_shadow_capture",
+        "advisory_workbench_daily_snapshot",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
         "advisory_calendar_defaults_only",

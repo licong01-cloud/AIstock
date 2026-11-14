@@ -9,6 +9,9 @@ from backend.services.advisory_workbench.projection import WorkbenchError
 from backend.services.advisory_workbench.service import WorkbenchService
 from backend.services.advisory_workbench.quotes import quote_service
 from backend.services.advisory_workbench.recommendations import RecommendationReturns
+from backend.services.advisory_workbench.brief import BriefService
+from backend.services.advisory_workbench.comparison_service import ComparisonService
+from backend.services.advisory_workbench.history import HistoryService
 
 router = APIRouter(prefix="/workbench", tags=["advisory-workbench"])
 LOG = logging.getLogger(__name__)
@@ -24,6 +27,40 @@ def get_quotes():
 
 def get_returns():
     return RecommendationReturns()
+
+
+def get_comparison():
+    return ComparisonService()
+
+
+def get_history():
+    return HistoryService()
+
+
+def comparison_args(status: Literal['ENABLED', 'PAUSED', 'DRAFT', 'ARCHIVED', 'ALL'] = 'ENABLED',
+                    program_ids: str = Query('', max_length=3400),
+                    period: Literal['5', '10', '20', '60', '120', 'YTD', 'ALL', 'CUSTOM'] = '60',
+                    start: date | None = None, end: date | None = None,
+                    source: Literal['FORWARD', 'REPLAY', 'ALL', 'UNKNOWN'] = 'FORWARD',
+                    binding: Literal['CURRENT', 'ALL'] = 'CURRENT',
+                    sample: Literal['COMMON', 'OWN'] = 'COMMON',
+                    buy_bps: float = Query(.95, ge=0, le=1000),
+                    sell_bps: float = Query(5.95, ge=0, le=1000),
+                    slippage_bps: float = Query(0, ge=0, le=1000)):
+    return dict(status=status, program_ids=program_ids, period=period,
+                start=start.isoformat() if start else None, end=end.isoformat() if end else None,
+                source=source, binding=binding, sample=sample, buy_bps=buy_bps,
+                sell_bps=sell_bps, slippage_bps=slippage_bps)
+
+
+@router.get('/comparison')
+def comparison(force_refresh: bool = False, filters=Depends(comparison_args), service=Depends(get_comparison)):
+    return invoke(service.get, force_refresh=force_refresh, **filters)
+
+
+@router.get('/comparison/series')
+def comparison_series(force_refresh: bool = False, filters=Depends(comparison_args), service=Depends(get_comparison)):
+    return invoke(service.get, series=True, force_refresh=force_refresh, **filters)
 
 
 @router.get('/programs/{program_id}/returns')
@@ -62,12 +99,37 @@ def stats_args(source: Literal["ALL", "FORWARD", "REPLAY", "UNKNOWN"] = "ALL",
 
 @router.get("/overview")
 def overview(status: Literal["ENABLED", "PAUSED", "DRAFT", "ARCHIVED", "ALL"] = "ENABLED",
-             filters=Depends(stats_args), service=Depends(get_service)):
+             mode: Literal['full', 'brief'] = 'full', filters=Depends(stats_args), service=Depends(get_service)):
+    if mode == 'brief':
+        return invoke(BriefService().overview, status=status)
     return invoke(service.overview, status=status, **filters)
 
 
+@router.get('/programs/{program_id}/history')
+def history(program_id: str, start: date | None = None, end: date | None = None,
+            source: Literal['ALL', 'FORWARD', 'REPLAY', 'UNKNOWN'] = 'ALL',
+            status: str = Query('ALL', max_length=40), limit: int = Query(20, ge=20, le=100),
+            offset: int = Query(0, ge=0, le=1000000), service=Depends(get_history)):
+    if limit not in {20, 50, 100}:
+        raise HTTPException(422, detail='每页条数仅支持20、50、100。')
+    return invoke(service.versions, program_id, start=start.isoformat() if start else None,
+                  end=end.isoformat() if end else None, source=source, status=status, limit=limit, offset=offset)
+
+
+@router.get('/programs/{program_id}/history/{version_id}')
+def history_detail(program_id: str, version_id: str,
+                   group: Literal['IN_SCOPE', 'REMOVED', 'OBSERVATION', 'OUTSIDE_PENDING', 'OUTSIDE_EXIT', 'UNKNOWN', 'ALL'] = 'IN_SCOPE',
+                   change: Literal['NEW', 'CONTINUING', 'UNKNOWN'] | None = None,
+                   q: str | None = Query(None, max_length=100), paging=Depends(page_args), service=Depends(get_history)):
+    paging.pop('target_date', None)
+    return invoke(service.detail, program_id, version_id, group=group, change=change, q=q, **paging)
+
+
 @router.get("/programs/{program_id}")
-def program(program_id: str, target_date: date | None = None, filters=Depends(stats_args), service=Depends(get_service)):
+def program(program_id: str, target_date: date | None = None, mode: Literal['full', 'brief'] = 'full',
+            filters=Depends(stats_args), service=Depends(get_service)):
+    if mode == 'brief':
+        return invoke(BriefService().program, program_id, target_date=target_date.isoformat() if target_date else None)
     return invoke(service.program, program_id, target_date=target_date.isoformat() if target_date else None, **filters)
 
 

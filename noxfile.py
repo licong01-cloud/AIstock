@@ -1434,6 +1434,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "-m",
         "compileall",
         "backend/services/tushare_sync_engine.py",
+        "backend/data_service/shared_vix_inputs.py",
+        "scripts/reconcile_shared_vix_inputs.py",
         "backend/services/data_integrity",
         "backend/services/tushare_dataset_specs.py",
         "backend/services/report_rc_data.py",
@@ -1482,6 +1484,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
         "backend/tests/test_tushare_phase1_inputs.py",
+        "backend/tests/test_tushare_us_market_inputs.py",
+        "backend/tests/test_shared_vix_inputs.py",
         "backend/tests/test_tushare_event_inputs.py",
         "backend/tests/test_report_rc_data.py",
         "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
@@ -1916,6 +1920,8 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
     targets = [
+        "backend/tests/test_compute_node_client_direct_transport.py",
+        "backend/tests/test_dispatch_observer_quiet.py",
         "backend/tests/quantevolver/test_qe_l2_risk_consumer.py",
         "backend/tests/unified_engine/test_qe_l2_risk_strategy.py",
         "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
@@ -1983,10 +1989,14 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/tests/quantevolver/test_*.py",
             "backend/tests/unified_engine/test_*.py",
             "backend/tests/test_multi_alpha*.py",
+            "backend/tests/test_compute_node_client_direct_transport.py",
+            "backend/tests/test_dispatch_observer_quiet.py",
             "backend/tests/test_dispatch_service_env.py",
             "backend/tests/test_correlation_compute_independence.py",
         ),
         overrides={
+            "backend/infra/compute_node_client.py": "backend/tests/test_compute_node_client_direct_transport.py",
+            "backend/services/dispatch_service.py": "backend/tests/test_dispatch_observer_quiet.py",
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
         },
     )
@@ -4135,11 +4145,14 @@ HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
     "backend/db/init_hmm_risk_schema.py": "backend/tests/hmm_risk/test_schema.py",
     "backend/routers/hmm_risk.py": "backend/tests/hmm_risk/test_rotation_l1_api.py",
     "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
+    "backend/services/hmm_risk/earnings_information_input.py": "backend/tests/hmm_risk/test_earnings_information.py",
+    "backend/services/hmm_risk/risk_l2_earnings_information.py": "backend/tests/hmm_risk/test_earnings_information.py",
     "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
     "scripts/hmm_risk/build_observed_industry_authority.py": "backend/tests/hmm_risk/test_observed_industry_authority.py",
     "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "scripts/hmm_risk/prepare_state_model_set.py": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "scripts/hmm_risk/repair_b3_stock_fact_gaps.py": "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+    "scripts/hmm_risk/run_risk_l2_earnings_information.py": "backend/tests/hmm_risk/test_earnings_information.py",
     "scripts/hmm_risk/run_rotation_l1_g2a.py": "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
     "scripts/hmm_risk/run_rotation_l1_product.py": "backend/tests/hmm_risk/test_run_rotation_l1_product.py",
 }

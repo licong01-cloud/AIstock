@@ -1401,6 +1401,31 @@ class QEWorkspaceSubmissionCoordinator:
         reservation: Mapping[str, Any],
         token: QEExecutionReservationToken,
     ) -> QEWorkspaceSubmissionOutcome:
+        if self._capacity_service.is_wsl_node(source.node_id):
+            from .qe_wsl_workload_isolation import isolate_payload
+
+            try:
+                compute_kind = None
+                if not source.backtest_only and payload.config.get("model_id"):
+                    from .config_composer import ConfigComposer
+                    from .qe_batch_execution_policy import loop_compute_kind
+
+                    compute_kind = loop_compute_kind(
+                        payload.config, ConfigComposer()._get_model_info(payload.config["model_id"]),
+                    )
+                payload = isolate_payload(payload, source=source, compute_kind=compute_kind)
+            except (ValueError, OSError) as exc:
+                self._repository.transition_execution_reservation(
+                    spec.reservation_id, token=token,
+                    expected_statuses=tuple(ACTIVE_RESERVATION_STATUSES),
+                    next_status="failed", remote_status="isolation_pretransport_rejected",
+                    release_reason_code="qe_wsl_isolation_payload_invalid",
+                )
+                raise QEWorkspaceSubmissionCoordinatorError(
+                    "WSL runtime isolation could not be prepared; no remote POST was sent",
+                    reason_code="qe_wsl_isolation_payload_invalid",
+                    context={"error": str(exc), "task_id": payload.task_id, "loop_id": payload.loop_id},
+                ) from exc
         try:
             receipt = await client.submit_loop(
                 payload.task_id,
