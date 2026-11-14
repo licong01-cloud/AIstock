@@ -1,10 +1,10 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**：v3.24
+> **版本**：v3.25
 > **初始日期**：2026-07-16
 > **修订日期**：2026-11-14
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
-> **2026-11-14当前执行权威**：通用财务raw包bbdaa354…已交付，221,498条/11成员文件及HMM来源业务核验完成；不再等待数据窗口重导。已形成唯一盈利增长E21/匹配C20详细设计（L2-EARNINGS-INFORMATION-D1～D6，`PROPOSED_NOT_APPROVED`），只改一个信息块，原季度/10D成员损失/Ridge不变，最多12 fits仍未执行。明确ann<a回溯时钟、最早本地时间并列歧义NA、正式证券身份去重、单条报告期异常隔离与NON_VINTAGE局限；来源资格不是完整TRAIN通过或严格历史as-known。当前以§1.41/§7及直接设计为准；旧N/C/S/W/M/VIX全部终态保留，无新增源码/fit/推理/QE/DB/数据集/profile/服务/依赖/生产动作。
+> **2026-11-14当前执行权威**：用户“批准执行”批准盈利增长E21/匹配C20完整L2-EARNINGS-INFORMATION-D1～D6；现处`CONTRACT_APPROVED_IMPLEMENTATION_IN_REVIEW`。原季度/10D成员损失/Ridge不变，最多12 fits尚未执行；源码reader/唯一特征/共同TRAIN/离线执行器及直接测试正在审核交付，随后同包完整预检、研究和价值分析。通用raw包及NON_VINTAGE局限不变，不再等待数据owner重导。当前以§1.41/§7及直接设计为准；旧N/C/S/W/M/VIX全部终态保留，无QE/DB/数据集/profile/服务/依赖/生产动作；源码完成不等于模型可用。
 > **2026-11-13来源资格历史状态**：按用户批准的后继连续任务，L2经营业绩披露新信息P0已完成，状态`P0_COMPLETE_RESEARCH_INPUT_NOT_READY`；当时43项文件/时钟核验通过，但release没有原始财务事件，旧source-only投影仅至2026-02-02生效且缺原始盈利数值/逐版本捕获信息。当时最小后继为通用raw财务事件共享包，HMM自行验证后再形成唯一设计；不fit/推理、不启动QE。此为当时输入未准备，不是新信息已被证伪；§1.40保留历史，不覆盖11/14当前状态。
 > **2026-11-13 N正式终态（历史保留）**：唯一N按批准的L2-MEMBER-NONLINEAR-D1～D6完整完成，终态`STOP_NO_INCREMENTAL_VALUE_REFERENCE`。源码#7234合入e3920b5a…、完整文件预检PASS、6/6 fits、双process模型/142×131预测及事前分组封存、原生/复权J评价均完成。132日同预算主J=−22.2849551bp；N对无排序同敞口X也负，未修复原20D/目标变换的价值不足。按原>0规则停止该精确组合，不追加fit/候选、翻转score或交新QE；原C/S/W/M/VIX终态及全部资产保持。结果以§1.39及N设计§11.1为准；canonical backend-main分类保留，不宣称线上运行态验收。
 > **2026-11-12融资研究终态（历史保留）**：单一融资余额信息M已按L2-MARGIN-INFORMATION-D1～D6完整完成，终态`STOP_NO_INCREMENTAL_VALUE_REFERENCE`。源码#7228已合入133cf8bbc…，正式clean HEAD=3899adf305be588e56438cfebee7f08b1f12e644；完整文件/共同TRAIN预检PASS、12/12 fits、双process模型及142×131预测/事前分组封存均完成。132成熟日同预算增量避损减错过上涨J=−0.2023829bp/10日参考，HAC 95%区间[−1.2636535,+0.8588877]bp；M−C20损失IC=−0.0003537，复权敏感性J仍负。区间跨零，不等于严格证伪所有融资信息，但本轮J点估计未达>0，按原合同停止，不追加fit/字段/lag/候选或新QE，不以合法性/资产/正loss IC冒充经济增量。原C/S/W/VIX、旧消费者、candidate/active均保持；精确结果见§1.37及融资设计§11，无DB/数据集/profile/服务动作，无需重启。
@@ -545,13 +545,13 @@ P0设计合入#7232时为`DESIGN_COMPLETE_CONTRACT_PROPOSED_NOT_APPROVED`历史�
 
 用户交付通用包后，HMM已完成逐行原文/版本/日期核验和目标PIT的C-013/L2投影复核；221,498条来自forecast32,604/express6,509/fina_indicator182,385，manifest文件SHA=`bbdaa3542d89fbbf8558a446da574914860babaa1e7e59dd62589257965d6f1c`，全部11个成员size/hash匹配。当前source资格为`VERIFIED_WITH_DECLARED_SOURCE_LIMITATIONS`，不再把数据owner原始导出列为待办。旧§1.40及其NOT_READY原回执保留，不篡改当时事实或重建candidate。
 
-只新增[盈利披露信息详细设计](hmm_evolution_phase2_l2_earnings_information_detailed_design_20261114.md)。唯一E21在原20D外加入`netprofit_yoy`相对rank的L2加权均值，与同一事前共同TRAIN上的C20比较；不将forecast/express/多字段/多horizon并行搜索。新信息块不同于旧价格/资金流，仍未证明有增量。原季度/10D成员C目标/Ridge固定，只改信息以隔离归因；最大12-fit预算、252-session报告状态、ann<a回溯时钟及版本/证券消费规则均是**待批准精确合同**。本轮只设计，无模型/生产授权推导。
+已新增[盈利披露信息详细设计](hmm_evolution_phase2_l2_earnings_information_detailed_design_20261114.md)。唯一E21在原20D外加入`netprofit_yoy`相对rank的L2加权均值，与同一事前共同TRAIN上的C20比较；不将forecast/express/多字段/多horizon并行搜索。新信息块不同于旧价格/资金流，仍未证明有增量。原季度/10D成员C目标/Ridge固定，只改信息以隔离归因；最大12-fit预算、252-session报告状态、ann<a回溯时钟及版本/证券消费规则于设计#7253合入后由用户2026-11-14“批准执行”整包批准，进入同包源码/预检/研究；不是从文档合入推导模型或生产授权。
 
 HMM源语义复核发现：netprofit_yoy的747个原key有内容变化，192个最早first_seen平手key字段冲突；300114/302132存在同一公司公告重叠；603400.SH/2026-04-22一条fina报告期为2026-06-30。这些不靠取latest/完整值、hash排序或改日期解决；设计分别定义并列歧义NA、正式身份事件去重和该类非法报表时序隔离。数字只用于来源审计，不冒称完整特征/TRAIN mask已闭合，不将全部字段的2,488个冲突误写成本次单字段冲突。forecast事前预告报告期在未来可合法，不套用fina规则。原文/单位/非有限/未知仍明示，不制造每日公告、行情或默认安全值。
 
 11/14纯文件回读为`F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json`，文件SHA=`43ee5e93514c9f60f6581e2d923a528dfb22dc9bcb298fecde4cd61b7da72d9d`；16项纯算术例证只核对设计定义，不查询数据库、不读收益选择字段。数据owner仅在将来需要纠正精确异常源键时定向核验，不重导整包；HMM自己完成财务source投影、时钟/版本/行业状态、21维特征及共同TRAIN预检，不能再交回数据窗口。发布时间未知/NON_VINTAGE仍使研究限于backcast exploratory，lag/最早本地观察不能证明严格历史可得。
 
-当前设计状态`DESIGN_COMPLETE_CONTRACT_PROPOSED_NOT_APPROVED`；文档通过/合入不等于新模型数值获批、源码完成、12 fits已运行或经济可用。后续收敛为一个实施—研究—价值分析连续包，J≤0按合同停止，>0也先复核修订偏差和AF信息重合再考虑QE；不自动交荐股/LocalSIM。旧N等STOP、资产及完整历史不变；本轮source/code/DB/runtime无变更、不需要后端重启。
+设计初版状态`DESIGN_COMPLETE_CONTRACT_PROPOSED_NOT_APPROVED`作为历史保留；当前为`CONTRACT_APPROVED_IMPLEMENTATION_IN_REVIEW`，新增两个HMM service、一个离线CLI、直接测试及两份设计状态；旧业务源码/数据零修改。真实财务reader检查182,385行通过，沪深代码域107,349个有效时序事件，117个并列字段歧义事件局部NA；不同于原全源192个key的口径。完整原C源/共同TRAIN预检及12 fits仍未运行。后续为一个实施—研究—价值分析连续包，J≤0按合同停止，>0也先复核修订偏差和AF信息重合再考虑QE；不自动交荐股/LocalSIM。旧N等STOP、资产及完整历史不变，无DB/runtime动作。
 
 ## 2. 总体架构
 
@@ -850,14 +850,14 @@ L2资金流基线/HMM/R1/两特征及四特征Ridge均已有终态，不重跑�
 
 L2是当前业务目标而非可选的样本扩容手段：它可能减轻L1内部细分行业相互抵消，同时可能增加小行业集中度、噪声和覆盖变化。不能断言L1绝无价值或L2必然更准；L2行业数更多也不意味着独立日期更多、HAC功效按行业数等比提高。L2主指标、horizon、成熟日期和效果量在新合同中明确，不机械继承L1 Rank IC=0.02、risk阈值或窗口；无需新增“先证明信息集可学习”门。
 
-## 7. 后续优先级：财务来源已闭合、唯一设计已形成，旧N保持停止
+## 7. 后续优先级：唯一E21已批准，同包实施与研究，旧N保持停止
 
-截至2026-11-14，原C/QE、S/W、经济口径、M及唯一N均有真实终态。N已按批准合同完整执行并停止，不再追加函数容量或反复整理旧合法性。后继财务raw包已回收，HMM来源预检和唯一详细设计已完成；不再等数据窗口补数/重导。精确模型合同尚待批准，不是旧candidate行情待修或已证实新信息无效，没有新QE任务：
+截至2026-11-14，原C/QE、S/W、经济口径、M及唯一N均有真实终态。N已按批准合同完整执行并停止，不再追加函数容量或反复整理旧合法性。后继财务raw包及唯一设计已完成，精确合同已由用户批准；HMM自行同包完成源码、完整预检、固定12-fit及价值分析，不再等数据窗口补数/重导，也没有新QE任务：
 
 | 当前优先级 | 合并业务包 | 结束条件/边界 |
 |---|---|---|
-| 当前P0：来源回收与唯一设计已完成 | §1.41/直接设计明确E21盈利增长信息、匹配C20、版本/时钟/证券身份和固定预算；源包221,498条保留UNKNOWN/NON_VINTAGE | DESIGN_COMPLETE_CONTRACT_PROPOSED_NOT_APPROVED；不要求重建/激活数据集，不把来源通过当完整TRAIN或模型批准 |
-| 条件式P1：同包实施—完整预检—研究—价值分析，尚未启动 | 精确D1～D6获批后只做一个信息块；HMM实现和预检、12-fit上限/双process封存、J主量及成本/修订局限分析 | 当前新增源码/fit均0；保持原季度/目标/算法以隔离信息，不重开旧N/M，不要求零fit证明必有效；不为长任务强行开训 |
+| 当前P0：来源回收与唯一设计已完成并批准 | §1.41/直接设计明确E21盈利增长信息、匹配C20、版本/时钟/证券身份和固定预算；源包221,498条保留UNKNOWN/NON_VINTAGE | CONTRACT_APPROVED；不要求重建/激活数据集，不把来源通过当完整TRAIN或经济成果 |
+| 当前P1：同包实施—完整预检—研究—价值分析，正在实施 | D1～D6已批准；HMM reader/唯一特征/共同TRAIN及离线执行器正在审修；随后完整预检、12-fit上限/双process封存、J主量及费用/修订局限分析 | 当前fit=0、完整TRAIN预检待执行；保持原季度/目标/算法以隔离信息，不重开旧N/M；预检失败停止，不为长任务强行开训 |
 | 条件式P2：值得继续才交QE，当前不启动 | HMM先评价同预算参考、避损/错过上涨及成本敏感性，足以支持才交QE owner定实际账户对照；荐股/LocalSIM更后置 | 不拼NAV、不声称净收益已证实，不修改其他业务模块；新信息准备不是生产采用 |
 
 以下为历史包及其原停止边界，不是新增待办或额外小阶段：

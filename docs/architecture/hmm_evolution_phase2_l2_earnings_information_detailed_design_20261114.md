@@ -1,7 +1,7 @@
 # HMM Phase 2：L2盈利披露信息单候选详细设计
 
-> 版本：v1.0；日期：2026-11-14；tier：F2；owner：HMM。
-> 状态：`DESIGN_COMPLETE_CONTRACT_PROPOSED_NOT_APPROVED`。本轮只交付设计与父蓝图同步；源码、完整TRAIN预检、拟合和效果评价均未执行。文档合入不等于以下精确合同已获批准。
+> 版本：v1.1；日期：2026-11-14；tier：F2；owner：HMM。
+> 状态：`CONTRACT_APPROVED_IMPLEMENTATION_IN_REVIEW`。用户2026-11-14“批准执行”批准§10.1完整合同及连续实施/研究任务。正式reader、配对TRAIN、离线执行器和直接测试已实施，正在审修交付；完整TRAIN预检、正式拟合及效果评价尚未执行，不以源码完成代替研究成果。
 > 父权威：[HMM总体蓝图](hmm_evolution_and_risk_management_system_design_20260716.md)§1.41/§7。原N/C/S/W/M/VIX终态、正式资产及消费者全部保留。
 
 ## 1. Background / Purpose / Scope / 非目标
@@ -124,7 +124,7 @@ E21正也只支持进一步核对，**不能消除回溯财务修订/分类与�
 
 ## 8. Contracts D6 / L2-EARNINGS-INFORMATION-D6：Implementation Plan / Verification Plan
 
-一个连续业务包完成：正式财务reader/身份与版本状态→唯一特征及matched TRAIN→最小直接测试/作者审修/CI交付→完整预检与固定预算研究→一次价值分析和父蓝图同步。不将这些拆为多个独立小阶段或为完成历史证据另开任务。当前只完成设计，不借本页运行任何fit。
+一个连续业务包完成：正式财务reader/身份与版本状态→唯一特征及matched TRAIN→最小直接测试/作者审修/CI交付→完整预检与固定预算研究→一次价值分析和父蓝图同步。不将这些拆为多个独立小阶段或为完成历史证据另开任务。精确合同现已批准；源码交付后先完整预检，PASS后才运行既定fit，不扩预算。
 
 未来允许源码范围：新增`backend/services/hmm_risk/earnings_information_input.py`、`risk_l2_earnings_information.py`、`scripts/hmm_risk/run_risk_l2_earnings_information.py`、`backend/tests/hmm_risk/test_earnings_information.py`及本两份设计状态；必要时仅在现有`risk_l2_loss_severity.py`抽取可复用的Ridge/scaler纯函数并保持旧行为，不复制整套margin研究、不新增通用研究框架。新增脚本须位于现有catalog覆盖路径，实际ownership/计划由实现diff核定，不修改全局CI/nox/test plan。范围外改动先说明，不改其他业务来迁就本模型。
 
@@ -140,27 +140,37 @@ F-011：唯一新信息/经济目标；F-012：D2完整输入与身份；F-013�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本页§1/§3/§7；父蓝图§1.41/§7 | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；单一字段/合同状态 | DESIGN_COMPLETE_ONLY | 无 |
-| F-012 | 本页§2/§4.1；将来earnings_information_input | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；共享manifest/原source request | DESIGN_COMPLETE_ONLY | 无 |
-| F-013 | 本页§4.2/§5/§9 | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；源歧义统计/公告时钟例证及D6计划 | DESIGN_COMPLETE_ONLY | 无 |
-| F-014 | 本页§5；将来risk_l2_earnings_information | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；rank/权重/TTL算术例证 | DESIGN_COMPLETE_ONLY | 无 |
-| F-015 | 本页§3/§6 | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；季度日历/12预算/完整grid例证 | DESIGN_COMPLETE_ONLY | 无 |
-| F-016 | 本页§7 | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；机会成本J代数例证及NA/HAC计划 | DESIGN_COMPLETE_ONLY | 无 |
-| F-017 | 本页§8/§9/§10 | artifact: F:/Dev/AIstock_runtime/hmm_l2_earnings_information/20261114/source_qualification_v2.json；无fit/生产动作及实施范围 | DESIGN_COMPLETE_ONLY | 无 |
+| F-011 | risk_l2_earnings_information.CONTRACT/evaluate；父蓝图§1.41/§7 | backend/tests/hmm_risk/test_earnings_information.py；J代数/固定预算 | SOURCE_VERIFIED | 无 |
+| F-012 | earnings_information_input.load；risk_l2_earnings_information.load_source | backend/tests/hmm_risk/test_earnings_information.py；root/SHA/schema/namespace及真实财务文件读取 | SOURCE_VERIFIED | 无 |
+| F-013 | earnings_information_input.choose_version/Disclosures/canonical_symbol | backend/tests/hmm_risk/test_earnings_information.py；并列/未来版本/别名/报告期/lag/TTL | SOURCE_VERIFIED | 无 |
+| F-014 | risk_l2_earnings_information.aggregate/design | backend/tests/hmm_risk/test_earnings_information.py；负值/0/ties/单成员/无观察/权重 | SOURCE_VERIFIED | 无 |
+| F-015 | risk_l2_earnings_information.design/fit_packet；scripts/hmm_risk/run_risk_l2_earnings_information.py | backend/tests/hmm_risk/test_earnings_information.py；scaler/日期权重/成熟边界/失败计数/双process | SOURCE_VERIFIED | 无 |
+| F-016 | risk_l2_earnings_information.freeze_groups/paired/evaluate/statistics | backend/tests/hmm_risk/test_earnings_information.py；完整grid/先封存/未知抵消/J/HAC | SOURCE_VERIFIED | 无 |
+| F-017 | 本页§8/§9/§10；单一离线CLI | backend/tests/hmm_risk/test_earnings_information.py；DB/network/fit poison/禁止覆盖；F2及scope | SOURCE_VERIFIED | 无 |
 
-本次验收对象限于详细设计。回执的16项纯算术例证核对日历/时钟/TTL/rank/预算/J定义；生产代码测试、全部源业务预检、特征生成及经济评价均未执行，后续必须以各自真实回执验收。
+初版验收对象限于详细设计，16项纯算术例证不替代代码测试。当前源码验收以新增直接测试及两轮作者审修为据；全部源业务预检、特征生成及经济评价后续必须以各自真实回执验收。
 
 ## 9. Risks / Production Gates / Rollout / Rollback
 
 盈利增长可能已被价格/QE因子反映，也可能只反映行业结构或幸存者/修订偏差；历史负基数、累计报告季节性、观察子集和大成员权重影响解释。rank仅降低幅度极端影响，不证明信号。NON_VINTAGE的历史版本风险无法靠first_seen排序/lag消除；本轮只能是明示限制下的**backcast exploratory**，不是历史可交易证据、未消费holdout或实盘验证。旧研究负结果不证明本信息无效，来源完整也不保证它有效。
 
-production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；database_access=false；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false；QE_tasks=0；本轮fits=0。Rollout仅设计；未来研究独立资产/namespace，不替换旧C或其他消费者。无生产回滚、清理或backend重启；未来源码runtime分类按实际changed-files，不预先降为none，也不把离线训练绑到后台重启。
+production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；database_access=false；dataset_write=false；active_profile_write=false；runtime_activation=false；service_control=false；QE_tasks=0；当前fits=0。Rollout为独立离线源码/namespace与获批研究，不替换旧C或其他消费者；正式研究/运行态/经济验收分开。无生产回滚、清理或backend重启；runtime分类按实际changed-files，不预先降为none，也不把离线训练绑到后台重启。
 
 ## 10. 精确批准与作者审核
 
-### 10.1 待批准的一次性整包
+### 10.1 已批准的一次性整包
 
-以下均为`PROPOSED_NOT_APPROVED`：L2-EARNINGS-INFORMATION-D1～D6；单一netprofit_yoy/rank/252-session状态；ann<a回溯时钟；财务源显式证券投影；最早本地时间并列冲突NA及post-cutoff规则；E21/匹配C20、原季度/C目标/Ridge、最多12 fits；J筛选和失败停止。设计审核/提交/CI/合入不代表用户批准这些模型数值，也不授权训练/生产。后继仅在精确合同获批准后实施与完整预检；本轮到文档交付结束。
+用户2026-11-14回复“批准执行”，批准L2-EARNINGS-INFORMATION-D1～D6：单一netprofit_yoy/rank/252-session状态；ann<a回溯时钟；财务源显式证券投影；最早本地时间并列冲突NA及post-cutoff规则；E21/匹配C20、原季度/C目标/Ridge、最多12 fits；J筛选和失败停止。此次批准独立于#7253文档合入，允许同包源码、完整预检及固定预算研究；不授权生产、QE、数据改写、依赖安装或服务控制。原v1.0提案/两轮设计审核作为历史保留，不把它们改称当时已获批准。
+
+### 10.3 源码实施与审修
+
+实施：`backend/services/hmm_risk/earnings_information_input.py`负责共享包/原文hash、独立财务namespace、并列版本和报告状态；`risk_l2_earnings_information.py`负责唯一增长rank、共同TRAIN、固定Ridge及事前分组/J；`scripts/hmm_risk/run_risk_l2_earnings_information.py`固定request级12项预算、双fresh-process、模型/完整预测/分组封存后再评价；直接测试为`backend/tests/hmm_risk/test_earnings_information.py`。原业务源码零修改，只复用原20D/C载体和现成纯数值/文件核验函数。
+
+首轮真实财务file-only读取182,385条PASS；25,882条BJ/非正式沪深A股代码属于原C人口之外，按范围保留审计，不错误升级为全局身份故障；进入沪深代码域后107,349个有效时序事件、117个并列字段歧义事件（不同于全源192原key），只按批准规则局部NA。未增加覆盖阈值/字段或模型。尚未运行完整原C源/共同TRAIN预检，fit=0。
+
+第一轮当前作者审核：修复源范围、分组重新核验和C/U/B合成夹具不自洽，原文hash保持默认空格算法；新旧别名只在独立财务namespace解析。第二轮完整性审核：固定request级12项attempt ledger，失败attempt不可重试或换输出目录清零；补充显式availability、真实session HAC及单一可估日仍报告点均值（HAC不能变相增加显著性门）。两轮不冒充独立审核；最终源码门禁/CI绑定实际HEAD，正式输入与效果另由回执验收。
+
+DESIGN-COMPLIANCE-001源码四项：完整正式reader/配对训练/执行/评价而非简化POC；未知版本/缺失/自然NA不静默填值；原20D、模型/窗口/seed/阈值/旧资产及其他模块行为不变；不增加coverage、显著性、资源或人工审批门。未执行项明确保留，不提前声明研究完成。
 
 ### 10.2 当前作者审修
 
