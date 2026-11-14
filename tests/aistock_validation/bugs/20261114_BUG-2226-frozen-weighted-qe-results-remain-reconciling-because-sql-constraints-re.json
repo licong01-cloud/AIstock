@@ -1,0 +1,303 @@
+{
+  "actual": "Three succeeded attempts, three reconciling children, zero archived accounts; CHECK rejects frozen_weighted.",
+  "allowed_write_scope": [
+    "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+    "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py",
+    "tests/aistock_validation/bugs/20261114_BUG-2226-frozen-weighted-qe-results-remain-reconciling-because-sql-constraints-re.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2226",
+  "closed_at": "2026-11-14T17:13:34Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-14T16:55:44.865201Z",
+  "description": "Three succeeded attempts, three reconciling children, zero archived accounts; CHECK rejects frozen_weighted.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261114-367dafd50a89",
+      "timestamp": "2026-11-14T16:55:44.865185Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\dev_receipt.json"
+  ],
+  "expected": "Supported frozen_weighted results can finish and archive under original identities; existing schemes remain supported.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py",
+      "tests/aistock_validation/bugs/20261114_BUG-2226-frozen-weighted-qe-results-remain-reconciling-because-sql-constraints-re.json"
+    ],
+    "added_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py"
+    ],
+    "changed_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py",
+      "tests/aistock_validation/bugs/20261114_BUG-2226-frozen-weighted-qe-results-remain-reconciling-because-sql-constraints-re.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+        "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py"
+      ],
+      "impacted_modules": [
+        "platform.db",
+        "qe.archive",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "validation.center",
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+        "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py"
+    ]
+  },
+  "first_seen_at": "2026-11-14T16:55:44.865201Z",
+  "fix_branch": null,
+  "fix_commit": "9ce42bc1936a19fb69e926db22e81f9701b455fe",
+  "fixed_at": "2026-11-14T17:13:34Z",
+  "github_issue_number": 7264,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7264",
+  "last_seen_at": "2026-11-14T16:55:44.865201Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7265",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_details": {
+    "backend_restart_required": false,
+    "business_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\business_receipt.json",
+    "business_receipt_sha256": "17c08ac6554a37c3328475211c460aeb692f2a112a07baa7c186d88d814ae4d5",
+    "dev_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\dev_receipt.json",
+    "dev_receipt_sha256": "ee43a5fc3e43b111e067cca8a44ffb66ae2ccc0be42f59f67f699660e0af211e",
+    "dev_validation": "passed",
+    "migration": "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+    "migration_sha256": "98a9c2d2c0303ffcb3af268d4e2fe8135531b1d3b83e03732db9a99233609d66",
+    "new_fit_predict_backtest": 0,
+    "original_accounts_accepted_and_archived": "3/3 full565 through2026-10-29",
+    "production_apply": "applied_and_verified",
+    "production_authorization": "granted_by_user_20261115_授权执行",
+    "production_authorization_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\production_authorization.json",
+    "production_readback_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\production_receipt.json",
+    "production_readback_receipt_sha256": "4d212646568c4aa4ce1bfd1de46c9cd4ba9b3863db61d56bae63ff11c159eb27",
+    "schema": "strategy_pkg",
+    "service_control": false,
+    "tables": [
+      "multi_alpha_combine_backtest_scheme_result",
+      "multi_alpha_combine_backtest_loo"
+    ],
+    "target_database": "aistock"
+  },
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Read ck_macb_scheme_supported domain and finalizer CheckViolation for original three macb_idem runs; no experiment rerun",
+  "required_verification": [
+    "l0",
+    "validation_catalog_integrity",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "database",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "Frozen-weighted QE results remain reconciling because SQL constraints reject the supported scheme",
+  "trigger_condition": {
+    "fingerprint": "367dafd50a89de841f1ebdeb",
+    "source_event_id": "FE-20261114-367dafd50a89"
+  },
+  "validation_evidence": [
+    "Production exact two CHECK migration SHA98a9c2d2 applied/readback passed; original three selected attempts preserved; 3/3 archived, full565 and terminal2026-10-29 verified; receipts F:/Dev/AIstock/tmp/handoff/qe-dual-track-new-version-20261113/postrestart-20h-20261114/assets/BUG-2226/production_receipt.json and business_receipt.json; no fit/inference/backtest rerun or restart"
+  ],
+  "validation_notes": [
+    "35 related tests passed including cross-layer current API/domain migration regression",
+    "Existing DEV: original rejection reproduced for both result and LOO; migration exact bytes applied twice, schema idempotent",
+    "14 real DEV fixture insertions succeeded and rolled back;4 negative checks remain;0fixture rows left;other constraints unchanged",
+    "DESIGN-COMPLIANCE-001: both persistence tables cover exact supported7 schemes; atomic and bounded DDL; no partial/placeholder/fake-success; no formula/model/policy/RBAC changes",
+    "Pre-apply snapshot: Production remains pending; original three succeeded attempts and immutable predictions retained; no retraining, prediction or account resubmission",
+    "Production exact merged SQL authorized/applied/readback: only two CHECK domains changed, old6 preserved plus frozen_weighted; other constraints and original3 selected attempt/prediction/result hashes unchanged. Original3 full565 accounts accepted and archived; final analysis and12x354 industry-event attribution delivered. No re-fit/inference/backtest or service control."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
