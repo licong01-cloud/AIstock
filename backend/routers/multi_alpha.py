@@ -54,6 +54,7 @@ class CombinePreviewRequest(BaseModel):
     weighting_scheme: str = "equal"
     normalize_method: str = "zscore"
     walk_forward: dict[str, Any] | None = None
+    frozen_weights: dict[str, Any] = Field(default_factory=dict)
     head: int = Field(default=20, ge=0, le=1000)
 
 
@@ -66,6 +67,7 @@ class CombineBacktestRunRequest(BaseModel):
     normalize_method: str = "zscore"
     walk_forward: dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
     rank_fusion: dict[str, Any] = Field(default_factory=dict)
+    frozen_weights: dict[str, Any] = Field(default_factory=dict)
     backtest_config: dict[str, Any] = Field(default_factory=dict)
     prediction_task_selection: dict[str, StrictBool] | None = None
     baseline_leg_id: str | None = None
@@ -304,6 +306,7 @@ def preview_multi_alpha_combination(request: CombinePreviewRequest) -> dict:
             weighting_scheme=request.weighting_scheme,
             normalize_method=request.normalize_method,
             walk_forward=request.walk_forward,
+            frozen_weights=request.frozen_weights,
         ).to_payload(head=request.head)
     except MultiAlphaCombinerError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
