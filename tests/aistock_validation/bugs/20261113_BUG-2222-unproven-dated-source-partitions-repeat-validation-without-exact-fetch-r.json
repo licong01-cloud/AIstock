@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2222",
-  "closed_at": null,
+  "closed_at": "2026-11-14T05:24:19.434746Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -127,10 +127,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/daily_data_integrity_calendar_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2222-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2222",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ddbaf05345a9a3005fa81a62fb6ea823acdb7c7d7a66697936079ff9abba3dd1",
+      "expected_identity": "8da5341ccbae6ada0cd9a7acadb476b957570305",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-14T05:20:31.327408Z",
+      "mode": "read_only",
+      "observed_identity": "38289b56c04e0c22010e34a5d5980f3e74872265",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1b6f2433d053f0be80194d158c569c241c956400fac1ea3feac8e7b6cdc25bdd",
+      "receipt_sha256": "594a16fbf3cca572255884331914cb58016623026136063bb030dc12cc36fdcc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "33e8b2e3c724dda86aa6941a4883166757f89ebc12f3843f35b97d79abb3a05c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -163,7 +185,7 @@
     ],
     "validation_evidence_digest": "fd9718294ab69ad1ee1fb9d7b9e25df4dea071392662e624a87bd49cb28ef617"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -175,7 +197,8 @@
   "validation_evidence": [
     "validation-receipt: id=a7e4ed5704480379 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity.py -q` result=`passed 214, 2 skipped; DEV exact-target/fence test passed`",
     "validation-receipt: id=f62d6ea67fdbd016 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
-    "validation-receipt: id=f8fd4128f63d4961 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=ruff plan=direct status=passed command=`rtk ruff check and py_compile` result=`passed; correctness and completeness review passed; DESIGN-COMPLIANCE-001 four items passed`"
+    "validation-receipt: id=f8fd4128f63d4961 commit=ff835f85abb287153bf7c34b84e0448d5667a066 kind=ruff plan=direct status=passed command=`rtk ruff check and py_compile` result=`passed; correctness and completeness review passed; DESIGN-COMPLIANCE-001 four items passed`",
+    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged"
   ],
   "verification_budget": {
     "budget": "standard",
