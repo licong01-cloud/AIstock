@@ -28,12 +28,21 @@
   ],
   "expected": "Supported frozen_weighted results can finish and archive under original identities; existing schemes remain supported.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py",
+      "tests/aistock_validation/bugs/20261114_BUG-2226-frozen-weighted-qe-results-remain-reconciling-because-sql-constraints-re.json"
+    ],
     "added_files": [
       "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
       "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py"
     ],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+      "backend/tests/multi_alpha/test_frozen_weighted_schema_migration.py",
+      "tests/aistock_validation/bugs/20261114_BUG-2226-frozen-weighted-qe-results-remain-reconciling-because-sql-constraints-re.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
@@ -109,6 +118,22 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
+  "production_ddl_details": {
+    "backend_restart_required": false,
+    "dev_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\dev_receipt.json",
+    "dev_receipt_sha256": "ee43a5fc3e43b111e067cca8a44ffb66ae2ccc0be42f59f67f699660e0af211e",
+    "dev_validation": "passed",
+    "migration": "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
+    "migration_sha256": "98a9c2d2c0303ffcb3af268d4e2fe8135531b1d3b83e03732db9a99233609d66",
+    "production_apply": "not_executed",
+    "production_authorization": "pending_exact_target_and_migration",
+    "schema": "strategy_pkg",
+    "tables": [
+      "multi_alpha_combine_backtest_scheme_result",
+      "multi_alpha_combine_backtest_loo"
+    ],
+    "target_database": "aistock"
+  },
   "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
@@ -122,10 +147,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "database",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -142,6 +169,13 @@
     "fingerprint": "367dafd50a89de841f1ebdeb",
     "source_event_id": "FE-20261114-367dafd50a89"
   },
+  "validation_notes": [
+    "35 related tests passed including cross-layer current API/domain migration regression",
+    "Existing DEV: original rejection reproduced for both result and LOO; migration exact bytes applied twice, schema idempotent",
+    "14 real DEV fixture insertions succeeded and rolled back;4 negative checks remain;0fixture rows left;other constraints unchanged",
+    "DESIGN-COMPLIANCE-001: both persistence tables cover exact supported7 schemes; atomic and bounded DDL; no partial/placeholder/fake-success; no formula/model/policy/RBAC changes",
+    "Production remains pending; original three succeeded attempts and immutable predictions retained; no retraining, prediction or account resubmission"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -251,28 +285,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "production_ddl_details": {
-    "target_database": "aistock",
-    "schema": "strategy_pkg",
-    "tables": [
-      "multi_alpha_combine_backtest_scheme_result",
-      "multi_alpha_combine_backtest_loo"
-    ],
-    "migration": "backend/migrations/multi_alpha_frozen_weighted_schemes_20261115.sql",
-    "migration_sha256": "98a9c2d2c0303ffcb3af268d4e2fe8135531b1d3b83e03732db9a99233609d66",
-    "dev_receipt": "F:\\Dev\\AIstock\\tmp\\handoff\\qe-dual-track-new-version-20261113\\postrestart-20h-20261114\\assets\\BUG-2226\\dev_receipt.json",
-    "dev_receipt_sha256": "ee43a5fc3e43b111e067cca8a44ffb66ae2ccc0be42f59f67f699660e0af211e",
-    "dev_validation": "passed",
-    "production_authorization": "pending_exact_target_and_migration",
-    "production_apply": "not_executed",
-    "backend_restart_required": false
-  },
-  "validation_notes": [
-    "35 related tests passed including cross-layer current API/domain migration regression",
-    "Existing DEV: original rejection reproduced for both result and LOO; migration exact bytes applied twice, schema idempotent",
-    "14 real DEV fixture insertions succeeded and rolled back;4 negative checks remain;0fixture rows left;other constraints unchanged",
-    "DESIGN-COMPLIANCE-001: both persistence tables cover exact supported7 schemes; atomic and bounded DDL; no partial/placeholder/fake-success; no formula/model/policy/RBAC changes",
-    "Production remains pending; original three succeeded attempts and immutable predictions retained; no retraining, prediction or account resubmission"
-  ]
+  }
 }
