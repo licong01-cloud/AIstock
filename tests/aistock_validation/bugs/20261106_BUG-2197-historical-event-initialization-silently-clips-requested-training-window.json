@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2197",
-  "closed_at": null,
+  "closed_at": "2026-11-14T05:26:54.625428Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -173,10 +173,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2197-runtime.json",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/DATA_PREPARATION/postrestart-aftercare-20261114/BUG-2197-runtime-current-catalog.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2197",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "cb10a62343cb374f66f71179605dcf6a89f62e8f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-14T05:26:47.116152Z",
+      "mode": "read_only",
+      "observed_identity": "38289b56c04e0c22010e34a5d5980f3e74872265",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "149094551ad835831bb3be8515a67759445f7e10e0561c6c4bf82f0bd2133b58",
+      "receipt_sha256": "b99e9414263fcdec92af97c0a601171be35baec68844b24ff47aa794bc9b6725",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2bf3c60247298468c439685ec977af3a721eb87e7ae64077362876a88592265c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -207,7 +229,7 @@
     ],
     "validation_evidence_digest": "8e8ecc11f327afdd73f6ee65d0c94acef61b78ede466057229beeef83e4cfea9"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -218,7 +240,8 @@
   },
   "validation_evidence": [
     "python -m nox -s l0 -> passed; targeted 81passed; DEV two-pass native readback passed",
-    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged"
+    "User restart followed by canonical read-only post-restart verification PASS; merged-source descendant identity and native business smoke bound to receipt; production and services unchanged",
+    "Registry safely merged current origin/main; canonical current-catalog post-restart verification PASS; no repeated backend restart, production write or service action"
   ],
   "verification_budget": {
     "budget": "standard",
