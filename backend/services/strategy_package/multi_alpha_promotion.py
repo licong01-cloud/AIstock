@@ -18,6 +18,7 @@ from backend.services.trading_core.errors import DataUnavailableError, StrategyP
 
 from .components import StrategyPackageComponentService
 from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService, attach_runtime_asset_admission
+from .frozen_multi_alpha_contract import combined_prediction_contract, durable_prediction_ref, freeze_source_contract, prediction_contract
 from .manifest import freeze_manifest
 from .models import (
     AlphaCombinationPolicy,
@@ -46,6 +47,7 @@ MULTI_ALPHA_PROMOTION_PROVIDER_VERSION = "multi_alpha_package_promotion_v1"
 MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA = "multi_alpha_signal_admission_v1"
 MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA = "multi_alpha_parent_combined_signal_smoke_v1"
 SUPPORTED_P0_WEIGHTING_SCHEME = "ic_weighted"
+SUPPORTED_WEIGHTING_SCHEMES = (SUPPORTED_P0_WEIGHTING_SCHEME, "frozen_weighted")
 
 
 @dataclass(frozen=True)
@@ -149,12 +151,12 @@ class MultiAlphaPackagePromotionService:
                 confirmation=confirmation,
                 expected_confirmation=MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
             )
-        if scheme != SUPPORTED_P0_WEIGHTING_SCHEME:
+        if scheme not in SUPPORTED_WEIGHTING_SCHEMES:
             _fail(
-                "P0 multi-alpha package promotion only supports ic_weighted",
+                "multi-alpha package promotion supports ic_weighted and explicit frozen_weighted",
                 reason_code="multi_alpha_scheme_not_succeeded",
                 weighting_scheme=scheme,
-                supported_weighting_schemes=[SUPPORTED_P0_WEIGHTING_SCHEME],
+                supported_weighting_schemes=list(SUPPORTED_WEIGHTING_SCHEMES),
             )
         try:
             topk_value = int(topk)
@@ -223,17 +225,31 @@ class MultiAlphaPackagePromotionService:
                 roster_leg_ids=[item["leg_id"] for item in roster],
                 requested_leg_ids=sorted(requested_component_ids),
             )
-        prediction_ref = _extract_prediction_ref(
-            scheme_result,
-            run=run,
-            workspace_roots=self.prediction_ref_roots,
-        )
-        weights = _extract_terminal_weights(
-            scheme_result.get("weights_json"),
-            expected_leg_ids=[item["leg_id"] for item in roster],
-            run_id=run_id,
-            weighting_scheme=scheme,
-        )
+        try:
+            prediction_ref = _extract_prediction_ref(
+                scheme_result,
+                run=run,
+                workspace_roots=self.prediction_ref_roots,
+            )
+        except StrategyPackageValidationError as exc:
+            if scheme != "frozen_weighted" or exc.context.get("reason_code") != "multi_alpha_prediction_ref_missing":
+                raise
+            prediction_ref = durable_prediction_ref(run_id, self.prediction_ref_roots)
+        frozen_contract = None
+        if scheme == "frozen_weighted":
+            frozen_contract = freeze_source_contract(run, scheme_result, roster)
+            frozen_contract.update(combined_prediction_contract(prediction_ref))
+            if topk_value != frozen_contract["source_topk"] or any(value != topk_value for value in secondary_topk_values):
+                _fail_manifest_incomplete("frozen export TopK must match the actual source account", run_id=run_id, source_topk=frozen_contract["source_topk"])
+            weights = dict(frozen_contract["positive_weights"])
+            _validate_weight_policy(weight_policy, run_id=run_id, weighting_scheme=scheme)
+        else:
+            weights = _extract_terminal_weights(
+                scheme_result.get("weights_json"),
+                expected_leg_ids=[item["leg_id"] for item in roster],
+                run_id=run_id,
+                weighting_scheme=scheme,
+            )
 
         leg_evidence = [
             self._prepare_parent_leg_asset_plan(
@@ -241,8 +257,11 @@ class MultiAlphaPackagePromotionService:
                 seed_run_ids=tuple(item["seed_run_ids"]),
                 terminal_weight=weights[item["leg_id"]],
                 run_id=run_id,
+                freeze_prediction_dtype=scheme == "frozen_weighted",
+                expected_prediction_hashes=frozen_contract["source_prediction_sha256"] if frozen_contract else None,
             )
             for item in roster
+            if item["leg_id"] in weights
         ]
         _assert_unique_parent_leg_model_ids(leg_evidence, run_id=run_id)
         normalized_weight_policy = _validate_weight_policy(weight_policy, run_id=run_id, weighting_scheme=scheme)
@@ -270,6 +289,7 @@ class MultiAlphaPackagePromotionService:
             prediction_ref=prediction_ref,
             weight_policy=normalized_weight_policy,
             strategy_snapshot=strategy_snapshot,
+            frozen_contract=frozen_contract,
         )
         frozen = freeze_manifest(manifest)
         self.validator.validate_manifest(frozen)
@@ -303,6 +323,8 @@ class MultiAlphaPackagePromotionService:
         seed_run_ids: tuple[str, ...],
         terminal_weight: float,
         run_id: str,
+        freeze_prediction_dtype: bool = False,
+        expected_prediction_hashes: Mapping[str, str] | None = None,
     ) -> _ParentLegAssetPlan:
         if terminal_weight <= 0 or not math.isfinite(terminal_weight):
             _fail_manifest_incomplete(
@@ -315,6 +337,9 @@ class MultiAlphaPackagePromotionService:
         seed_manifests: list[StrategyPackageManifest] = []
         seed_assets: list[dict[str, Any]] = []
         for index, (seed_ref, provenance) in enumerate(zip(seed_run_ids, seed_sources, strict=True)):
+            score_contract = prediction_contract(seed_ref) if freeze_prediction_dtype else {}
+            if freeze_prediction_dtype and score_contract["source_prediction_sha256"] != (expected_prediction_hashes or {}).get(seed_ref):
+                _fail_manifest_incomplete("original seed prediction differs from frozen execution identity", leg_id=leg_id, seed_ref=seed_ref)
             manifest = self._build_parent_leg_asset_manifest(
                 leg_id=leg_id, seed_run_ids=(seed_ref,), seed_sources=(provenance,), run_id=run_id,
             )
@@ -338,6 +363,7 @@ class MultiAlphaPackagePromotionService:
                 "sha256": model.sha256,
                 "factor_artifact_refs": list(seed_manifest.alpha_components[0].lineage.factor_artifact_refs),
                 "runtime_assets": (seed_manifest.runtime_assets or RuntimeAssetManifest()).model_dump(mode="json"),
+                **score_contract,
             })
         primary = seed_manifests[0]
         source_evidence = dict(primary.source_evidence or {})
@@ -616,6 +642,7 @@ class MultiAlphaPackagePromotionService:
         prediction_ref: Mapping[str, str],
         weight_policy: Mapping[str, Any],
         strategy_snapshot: Mapping[str, Any],
+        frozen_contract: Mapping[str, Any] | None = None,
     ) -> StrategyPackageManifest:
         factor_set = _merge_factor_assets([leg.manifest for leg in leg_evidence])
         model_assets = _merge_model_assets([leg.manifest for leg in leg_evidence])
@@ -647,7 +674,7 @@ class MultiAlphaPackagePromotionService:
                     {
                         "leg_id": leg.leg_id,
                         "seed_run_ids": list(leg.seed_run_ids),
-                        **({"seed_assets": list(leg.seed_assets)} if len(leg.seed_assets) > 1 else {}),
+                        **({"seed_assets": list(leg.seed_assets)} if len(leg.seed_assets) > 1 or frozen_contract is not None else {}),
                         "ensemble_method": "mean_by_trade_date_instrument",
                         "terminal_weight": leg.terminal_weight,
                         "model_id": leg.manifest.alpha_components[0].model_id,
@@ -689,6 +716,9 @@ class MultiAlphaPackagePromotionService:
             "runtime_provider_version": MULTI_ALPHA_PROMOTION_PROVIDER_VERSION,
             "raw_backtest_config": _jsonable(run.get("backtest_config_json") or {}),
         }
+        if frozen_contract is not None:
+            source_evidence["multi_alpha"]["frozen_weight_contract"] = _jsonable(frozen_contract)
+            backtest_context["normalize_method"] = "rank"
         return StrategyPackageManifest(
             manifest_version="alpha_core_v1",
             package_id=package_id,
