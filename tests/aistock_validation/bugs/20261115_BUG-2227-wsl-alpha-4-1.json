@@ -68,15 +68,19 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261115_BUG-2227-wsl-alpha-4-1.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-11-15T07:55:23.900217Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "27817502f65dfc1aeca2e92556bf0617af145e13",
   "fix_plan": "保持确定性意图和节点身份检查；对完整已绑定身份继续精确比对，对尚未绑定的queued初始/恢复来源采用可核验的完整来源身份，混合/部分绑定/冲突/非纯回放保持fail closed。新增真实初始排队及恢复来源回归和DEV SELECT语义验证；不改生产DB，不控服务。",
-  "fixed_at": null,
+  "fixed_at": "2026-11-15T08:45:41Z",
   "github_issue_number": 7268,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7268",
   "last_seen_at": "2026-11-15T07:55:23.900217Z",
@@ -84,6 +88,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7269",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,6 +122,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -128,7 +134,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2227",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3229b8c606f88db3",
+    "recorded_at": "2026-11-15T08:46:38.507802Z",
+    "runtime_contract_digest": "871cf48733f170d661c0e4a1ff63882c135296af190f42b77ede1b462a7f1f4d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "92c3aad2e499cecac3e29a370105ec1643db0d84",
+    "source_merge_commit": "27817502f65dfc1aeca2e92556bf0617af145e13",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7269",
+    "validation_evidence": [
+      "validation-receipt: id=fd1c4bb22a1c588e commit=92c3aad2e499cecac3e29a370105ec1643db0d84 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_execution_reservation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py tests/aistock_validation/bugs/20261115_BUG-2227-wsl-alpha-4-1.json` result=`passed, zero findings`",
+      "validation-receipt: id=fe14df0670d76a12 commit=92c3aad2e499cecac3e29a370105ec1643db0d84 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/multi_alpha/test_durable_capacity.py -q` result=`80 passed, 28 skipped; final affected23 passed after SQL compatibility refinement`",
+      "validation-receipt: id=9a26bfbaee91e8be commit=92c3aad2e499cecac3e29a370105ec1643db0d84 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_queued_replay_identity_sql_on_existing_dev_readonly -q` result=`18 passed with explicit existing DEV opt-in,0DDL/DML`"
+    ],
+    "validation_evidence_digest": "7d0d47ef4a1454705cb4a183a927f4a832060aefd9ee8f1eb255bf0d01b81419"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -137,6 +166,11 @@
     "fingerprint": "1dc14419e6c147766daa0ff5",
     "source_event_id": "FE-20261115-1dc14419e6c1"
   },
+  "validation_evidence": [
+    "validation-receipt: id=fd1c4bb22a1c588e commit=92c3aad2e499cecac3e29a370105ec1643db0d84 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/qe_execution_reservation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py tests/aistock_validation/bugs/20261115_BUG-2227-wsl-alpha-4-1.json` result=`passed, zero findings`",
+    "validation-receipt: id=fe14df0670d76a12 commit=92c3aad2e499cecac3e29a370105ec1643db0d84 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/multi_alpha/test_durable_capacity.py -q` result=`80 passed, 28 skipped; final affected23 passed after SQL compatibility refinement`",
+    "validation-receipt: id=9a26bfbaee91e8be commit=92c3aad2e499cecac3e29a370105ec1643db0d84 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py::test_queued_replay_identity_sql_on_existing_dev_readonly -q` result=`18 passed with explicit existing DEV opt-in,0DDL/DML`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
