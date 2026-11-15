@@ -15,9 +15,11 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
 
+from backend.services.multi_alpha.combiner import normalize_frozen_prediction_frame
 from backend.services.multi_alpha.orthogonality import normalize_prediction_frame
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, win_to_wsl_path
+from backend.services.strategy_package.frozen_multi_alpha_contract import exact_runtime_weights
 from backend.services.strategy_package.models import (
     AlphaComponent,
     AlphaMode,
@@ -91,6 +93,7 @@ class ParentSeedRuntimeSlice:
     factor_set: tuple[FactorAsset, ...]
     runtime_assets: RuntimeAssetManifest
     factor_artifact_refs: tuple[str, ...] = ()
+    score_dtype: str | None = None
 
 
 @dataclass(frozen=True)
@@ -192,11 +195,14 @@ class MultiAlphaWeightService:
         policy = _weight_policy(manifest)
         mode = str(policy.get("mode") or "").strip()
         if mode == "frozen_backtest_terminal_weights":
-            weights = _normalize_positive_weights(
-                _terminal_weights(evidence, expected_leg_ids=leg_ids),
-                reason_code=REASON_WEIGHT_UNAVAILABLE,
-                context={"package_id": manifest.package_id, "mode": mode},
-            )
+            if manifest.alpha_combination_policy.method == "frozen_weighted":
+                weights = exact_runtime_weights(manifest, leg_ids)
+            else:
+                weights = _normalize_positive_weights(
+                    _terminal_weights(evidence, expected_leg_ids=leg_ids),
+                    reason_code=REASON_WEIGHT_UNAVAILABLE,
+                    context={"package_id": manifest.package_id, "mode": mode},
+                )
             return self._artifact(
                 manifest=manifest,
                 apply_date=apply_date,
@@ -504,6 +510,7 @@ class MultiAlphaLivePredictionProvider:
                     package_id=package_id,
                     trade_date=score_trade_date,
                     allow_empty=True,
+                    strict=manifest.alpha_combination_policy.method == "frozen_weighted",
                 )
                 normalized = _normalize_leg_frame(
                     ensemble,
@@ -531,7 +538,8 @@ class MultiAlphaLivePredictionProvider:
                     "seed_run_ids": list(leg_slice.seed_run_ids),
                     "seed_count": len(seed_frames),
                     "ensemble_method": leg_slice.ensemble_method,
-                    "seed_runtime_mode": "frozen_representative_model_replayed_for_legacy_seed_metadata",
+                    "seed_runtime_mode": ("per_seed_frozen_asset" if manifest.alpha_combination_policy.method == "frozen_weighted"
+                                          else "frozen_representative_model_replayed_for_legacy_seed_metadata"),
                     "legacy_child_ref_ignored": leg_slice.legacy_child_ref_ignored,
                     "candidate_count": int(len(normalized)),
                     "inference_universe_count": leg_execution.live_result.universe_count,
@@ -539,7 +547,7 @@ class MultiAlphaLivePredictionProvider:
                     "input_context": dict(leg_execution.live_result.input_context or {}),
                 }
 
-            aligned = _align_component_frames(leg_frames, allow_empty=True)
+            aligned = _align_component_frames(leg_frames, allow_empty=True, strict=manifest.alpha_combination_policy.method == "frozen_weighted")
             component_candidate_universe_size = int(len(aligned))
             raw_empty = component_candidate_universe_size == 0
             if not raw_empty and component_candidate_universe_size < coverage_threshold:
@@ -561,7 +569,9 @@ class MultiAlphaLivePredictionProvider:
                 runtime_config=config,
             )
             combined = (
-                _combine_aligned(aligned, weights=weight_artifact.weights, leg_ids=leg_ids)
+                _combine_aligned(aligned, weights=weight_artifact.weights, leg_ids=leg_ids,
+                    score_dtype=(evidence.get("frozen_weight_contract") or {}).get("combined_score_dtype")
+                    if manifest.alpha_combination_policy.method == "frozen_weighted" else None)
                 if not raw_empty
                 else pd.DataFrame(columns=[*aligned.columns, "combined_score"])
             )
@@ -693,7 +703,8 @@ class MultiAlphaLivePredictionProvider:
                 "runtime_source": "parent_package_asset",
                 "runtime_package_id": package_id,
                 "model_params_origin": "package_asset",
-                "seed_runtime_mode": "frozen_representative_model_replayed_for_legacy_seed_metadata",
+                "seed_runtime_mode": ("per_seed_frozen_asset" if manifest.alpha_combination_policy.method == "frozen_weighted"
+                                      else "frozen_representative_model_replayed_for_legacy_seed_metadata"),
                 "legacy_child_ref_ignored": {
                     leg_slice.leg_id: leg_slice.legacy_child_ref_ignored for leg_slice in leg_slices
                 },
@@ -859,6 +870,7 @@ class MultiAlphaLivePredictionProvider:
         combined = _ensemble_seed_frames(
             frames, leg_id=leg_slice.leg_id, model_id=leg_slice.model_asset.model_id,
             package_id=leg_slice.parent_package_id, trade_date=cutoff_date or trade_date, allow_empty=True,
+            strict=manifest.alpha_combination_policy.method == "frozen_weighted",
         )
         return ParentLegLiveInferenceResult(
             seed_frames=frames,
@@ -963,6 +975,8 @@ class MultiAlphaLivePredictionProvider:
             seed_run_id=representative_seed,
             trade_date=cutoff_date or trade_date,
             allow_empty=True,
+            strict=manifest.alpha_combination_policy.method == "frozen_weighted",
+            score_dtype=leg_slice.seed_assets[0].score_dtype if leg_slice.seed_assets else None,
         )
         if representative.empty and not _has_positive_actual_universe_count(result):
             _raise(
@@ -1267,6 +1281,9 @@ def _parent_leg_runtime_slices(
         seed_assets: list[ParentSeedRuntimeSlice] = []
         seed_ids = tuple(leg["seed_run_ids"])
         raw_seeds = leg.get("seed_assets")
+        strict = manifest.alpha_combination_policy.method == "frozen_weighted"
+        if strict and raw_seeds is None:
+            _raise("frozen_weighted requires explicit bindings and source precision for every seed", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
         if raw_seeds is None and len(seed_ids) == 1:
             seed_assets.append(ParentSeedRuntimeSlice(seed_ids[0], model_asset, factors, runtime_assets))
         else:
@@ -1290,7 +1307,12 @@ def _parent_leg_runtime_slices(
                     _raise("MULTI_ALPHA seed runtime schema is required", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
                 seed_runtime = _leg_runtime_assets(seed, parent_runtime_assets=parent_runtime_assets, package_id=package_id, leg_id=leg_id, model_id=seed_model.model_id)
                 _ensure_leg_runtime_assets_complete(package_id=package_id, leg_id=leg_id, model_id=seed_model.model_id, model_asset=seed_model, factors=seed_factors, runtime_assets=seed_runtime)
-                seed_assets.append(ParentSeedRuntimeSlice(seed["seed_run_id"], seed_model, seed_factors, seed_runtime, tuple(refs)))
+                score_dtype = seed.get("score_dtype")
+                prediction_sha = str(seed.get("source_prediction_sha256") or "")
+                if strict and (score_dtype not in {"float32", "float64"} or len(prediction_sha) != 64
+                               or any(char not in "0123456789abcdef" for char in prediction_sha)):
+                    _raise("frozen seed requires original prediction precision and SHA", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id, seed_run_id=seed["seed_run_id"])
+                seed_assets.append(ParentSeedRuntimeSlice(seed["seed_run_id"], seed_model, seed_factors, seed_runtime, tuple(refs), score_dtype))
             first_seed = seed_assets[0]
             if first_seed.model_asset.model_id != model_id or first_seed.factor_set != factors or first_seed.runtime_assets != runtime_assets:
                 _raise("MULTI_ALPHA primary component differs from its first seed", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
@@ -1640,6 +1662,8 @@ def _live_result_to_frame(
     seed_run_id: str,
     trade_date: date,
     allow_empty: bool = False,
+    strict: bool = False,
+    score_dtype: str | None = None,
 ) -> pd.DataFrame:
     if not rows:
         if allow_empty:
@@ -1657,7 +1681,9 @@ def _live_result_to_frame(
     for row in rows:
         symbol = row.get("symbol") or row.get("instrument")
         score = _finite_float(row.get("score"))
-        if symbol is None or score is None:
+        if symbol is None or score is None or (strict and isinstance(row.get("score"), bool)):
+            if strict:
+                _raise("frozen seed returned an invalid score or symbol", REASON_SEED_PREDICTION_MISSING, package_id=package_id, leg_id=leg_id, seed_run_id=seed_run_id)
             continue
         normalized.append({"trade_date": trade_date, "instrument": str(symbol), "score": score})
     if not normalized:
@@ -1670,7 +1696,17 @@ def _live_result_to_frame(
             seed_run_id=seed_run_id,
             trade_date=trade_date.isoformat(),
         )
-    return normalize_prediction_frame(pd.DataFrame(normalized), run_id=f"{leg_id}:{seed_run_id}")
+    frame = pd.DataFrame(normalized)
+    if strict:
+        if score_dtype not in {"float32", "float64"}:
+            _raise("frozen seed source precision is unavailable", REASON_SEED_PREDICTION_MISSING, package_id=package_id, leg_id=leg_id, seed_run_id=seed_run_id)
+        frame["score"] = frame["score"].astype(score_dtype)
+        try:
+            return normalize_frozen_prediction_frame(frame, run_id=f"{leg_id}:{seed_run_id}")
+        except ValueError as exc:
+            _raise("frozen seed contains invalid or duplicate prediction keys", REASON_SEED_PREDICTION_MISSING,
+                   package_id=package_id, leg_id=leg_id, seed_run_id=seed_run_id, upstream_error=str(exc))
+    return normalize_prediction_frame(frame, run_id=f"{leg_id}:{seed_run_id}")
 
 
 def _ensemble_seed_frames(
@@ -1681,7 +1717,19 @@ def _ensemble_seed_frames(
     package_id: str,
     trade_date: date,
     allow_empty: bool = False,
+    strict: bool = False,
 ) -> pd.DataFrame:
+    if strict:
+        try:
+            verified = {seed: normalize_frozen_prediction_frame(frame, run_id=f"{leg_id}:{seed}")
+                        for seed, frame in seed_frames.items()}
+        except ValueError as exc:
+            _raise("frozen seed contains invalid or duplicate prediction keys", REASON_SEED_PREDICTION_MISSING,
+                   package_id=package_id, leg_id=leg_id, upstream_error=str(exc))
+        reference = next(iter(verified.values()), pd.DataFrame(columns=["trade_date", "instrument", "score"]))
+        if any(not reference[["trade_date", "instrument"]].equals(frame[["trade_date", "instrument"]]) for frame in verified.values()):
+            _raise("frozen seed prediction keys differ; sample repair is forbidden", REASON_SEED_PREDICTION_MISSING, package_id=package_id, leg_id=leg_id)
+        seed_frames = verified
     merged: pd.DataFrame | None = None
     for seed_run_id, frame in seed_frames.items():
         selected = frame[["trade_date", "instrument", "score"]].rename(columns={"score": f"score__{seed_run_id}"})
@@ -1699,7 +1747,7 @@ def _ensemble_seed_frames(
             seed_run_ids=list(seed_frames),
         )
     score_cols = [col for col in merged.columns if str(col).startswith("score__")]
-    merged["score"] = merged[score_cols].mean(axis=1)
+    merged["score"] = merged[score_cols].mean(axis=1, skipna=not strict)
     return merged[["trade_date", "instrument", "score"]].sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
 
@@ -1743,7 +1791,15 @@ def _align_component_frames(
     frames: Mapping[str, pd.DataFrame],
     *,
     allow_empty: bool = False,
+    strict: bool = False,
 ) -> pd.DataFrame:
+    if strict and frames:
+        if any(frame.duplicated(["trade_date", "instrument"]).any()
+               or not frame["normalized_score"].abs().lt(float("inf")).all() for frame in frames.values()):
+            _raise("frozen leg contains invalid or duplicate prediction keys", REASON_COMPONENT_COVERAGE_LOW)
+        reference = next(iter(frames.values()))[["trade_date", "instrument"]]
+        if any(not reference.equals(frame[["trade_date", "instrument"]]) for frame in frames.values()):
+            _raise("frozen leg prediction keys differ; intersection is forbidden", REASON_COMPONENT_COVERAGE_LOW)
     merged: pd.DataFrame | None = None
     for leg_id, frame in frames.items():
         selected = frame[["trade_date", "instrument", "raw_score", "normalized_score", "leg_rank"]].rename(
@@ -1764,13 +1820,17 @@ def _align_component_frames(
     return merged.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
 
-def _combine_aligned(aligned: pd.DataFrame, *, weights: Mapping[str, float], leg_ids: Sequence[str]) -> pd.DataFrame:
+def _combine_aligned(aligned: pd.DataFrame, *, weights: Mapping[str, float], leg_ids: Sequence[str], score_dtype: str | None = None) -> pd.DataFrame:
     result = aligned.copy()
     result["combined_score"] = 0.0
     for leg_id in leg_ids:
         if leg_id not in weights:
             _raise("MULTI_ALPHA weights are missing a leg", REASON_WEIGHT_UNAVAILABLE, leg_id=leg_id)
         result["combined_score"] += float(weights[leg_id]) * result[f"norm__{leg_id}"]
+    if score_dtype is not None:
+        if score_dtype not in {"float32", "float64"}:
+            _raise("frozen combined prediction precision is invalid", REASON_WEIGHT_UNAVAILABLE)
+        result["combined_score"] = result["combined_score"].astype(score_dtype)
     return result
 
 
@@ -1792,6 +1852,10 @@ def _rank_score(series: pd.Series) -> pd.Series:
 
 def _normalization_method(manifest: StrategyPackageManifest) -> str:
     context = manifest.backtest_context or {}
+    if manifest.alpha_combination_policy.method == "frozen_weighted":
+        if context.get("normalize_method") != "rank":
+            _raise("frozen_weighted requires explicit original rank normalization", REASON_COMPONENT_COVERAGE_LOW, package_id=manifest.package_id)
+        return "rank"
     raw_config = context.get("raw_backtest_config") if isinstance(context, Mapping) else {}
     candidates = [
         context.get("normalize_method") if isinstance(context, Mapping) else None,
