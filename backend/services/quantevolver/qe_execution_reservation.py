@@ -1193,16 +1193,24 @@ class QEExecutionReservationRepository:
                 return 1
             cur.execute(
                 """
-                SELECT COUNT(*) AS eligible_count
+                SELECT attempt.attempt_id, child.run_id, attempt.child_id,
+                       attempt.attempt_no, attempt.retry_mode,
+                       attempt.retry_of_attempt_id, attempt.execution_kind,
+                       attempt.status, attempt.qe_task_id, attempt.qe_loop_id,
+                       attempt.submission_intent_hash, child.input_manifest_json,
+                       child.input_manifest_hash,
+                       run.execution_identity_json AS run_execution_identity_json,
+                       run.execution_identity_hash AS run_execution_identity_hash
                 FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+                  ON child.child_id = attempt.child_id
+                JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
+                  ON run.id = child.run_id
                 WHERE attempt.attempt_id = %s AND attempt.node_id = %s
-                  AND attempt.qe_task_id = %s AND attempt.qe_loop_id = %s
-                  AND attempt.submission_intent_hash = %s
                 """,
-                (spec.source_execution_id, spec.node_id, spec.qe_task_id,
-                 spec.qe_loop_id, spec.submission_intent_hash),
+                (spec.source_execution_id, spec.node_id),
             )
-            if int(cur.fetchone()["eligible_count"]) != 1:
+            if not QEExecutionReservationRepository._durable_replay_source_matches(cur.fetchone(), spec):
                 return 1
             cur.execute(
                 """
@@ -1330,6 +1338,61 @@ class QEExecutionReservationRepository:
         if int(cur.fetchone()["incompatible_count"]) > 0:
             return 1
         return requested_node_capacity
+
+    @staticmethod
+    def _durable_replay_source_matches(
+        attempt: Mapping[str, Any] | None, spec: QEExecutionReservationSpec,
+    ) -> bool:
+        """Prove a queued intent before the source-claim transaction binds its IDs.
+
+        Already-bound attempts retain exact identity matching. An unbound queued
+        attempt must reconstruct the existing adapter's deterministic task/Loop
+        and intent from its canonical frozen execution identity. Partial or
+        conflicting bindings never grant extra capacity.
+        """
+        if attempt is None:
+            return False
+        bound = tuple(attempt.get(key) for key in ("qe_task_id", "qe_loop_id", "submission_intent_hash"))
+        expected = (spec.qe_task_id, spec.qe_loop_id, spec.submission_intent_hash)
+        if bound == expected:
+            return True
+        if bound != (None, None, None):
+            return False
+        if attempt.get("status") != "queued" or attempt.get("execution_kind") != "remote_execution":
+            return False
+        from backend.services.multi_alpha.durable_identity import validate_execution_identity
+        from backend.services.multi_alpha.durable_models import (
+            artifact_manifest_hash_for, make_attempt_id, make_remote_task_id, submission_intent_hash_for,
+        )
+        try:
+            child_id = str(attempt["child_id"])
+            attempt_no = int(attempt["attempt_no"])
+            if make_attempt_id(child_id, attempt_no) != spec.source_execution_id:
+                return False
+            manifest = attempt["input_manifest_json"]
+            if artifact_manifest_hash_for(manifest) != attempt["input_manifest_hash"]:
+                return False
+            identity = validate_execution_identity(
+                payload=manifest["execution_identity"],
+                identity_hash=manifest["execution_identity_hash"],
+            )
+            if identity.payload["dataset"]["resolved_node_id"] != spec.node_id:
+                return False
+            if (attempt["run_execution_identity_hash"] != identity.identity_hash
+                    or attempt["run_execution_identity_json"] != identity.payload):
+                return False
+            task_id = make_remote_task_id(str(attempt["run_id"]), child_id, attempt_no)
+            # Same contract as QEWorkspacePredBacktestAdapter.prepare_submission_intent.
+            intent_hash = submission_intent_hash_for(
+                child_id=child_id, attempt_no=attempt_no,
+                retry_mode=str(attempt["retry_mode"]),
+                retry_of_attempt_id=attempt.get("retry_of_attempt_id"),
+                execution_identity_hash=identity.identity_hash,
+                node_id=spec.node_id, qe_task_id=task_id, qe_loop_id="Loop1",
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        return expected == (task_id, "Loop1", intent_hash)
 
     @staticmethod
     def _assert_reservation_identity(

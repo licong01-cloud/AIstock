@@ -4,6 +4,8 @@ from dataclasses import replace
 import asyncio
 from typing import Any
 from unittest.mock import Mock
+import json
+import os
 
 import pytest
 
@@ -192,7 +194,9 @@ def test_durable_replay_cohort_proof_preserves_global_capacity_and_training_excl
     eligible: int, incompatible: int, capacity: int,
 ) -> None:
     spec = _spec()
-    steps = [Step("AS eligible_count", one={"eligible_count": eligible})]
+    source = {"qe_task_id": spec.qe_task_id, "qe_loop_id": spec.qe_loop_id,
+              "submission_intent_hash": spec.submission_intent_hash} if eligible else None
+    steps = [Step("FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt", one=source)]
     if eligible:
         steps.append(Step("AS incompatible_count", one={"incompatible_count": incompatible}))
     cursor = ScriptedCursor(steps)
@@ -204,9 +208,8 @@ def test_durable_replay_cohort_proof_preserves_global_capacity_and_training_excl
     )
     assert result == capacity
     sql, params = cursor.executions[0]
-    assert "attempt.submission_intent_hash = %s" in sql
-    assert params == (spec.source_execution_id, spec.node_id, spec.qe_task_id,
-                      spec.qe_loop_id, spec.submission_intent_hash)
+    assert "child.input_manifest_json" in sql
+    assert params == (spec.source_execution_id, spec.node_id)
     if eligible:
         cohort_sql, _ = cursor.executions[1]
         assert "attempt.submission_intent_hash = reservation.submission_intent_hash" in cohort_sql
@@ -227,6 +230,160 @@ def test_durable_replay_capacity_proof_cannot_be_used_for_unrelated_training_sou
     assert not cursor.executions
 
 
+def _queued_replay_source(retry_mode: str = "initial", attempt_no: int = 1):
+    from backend.services.multi_alpha.durable_models import (
+        artifact_manifest_hash_for, make_attempt_id, sha256_identity,
+    )
+    from backend.tests.multi_alpha.test_durable_control import _identity
+
+    payload = _identity()
+    manifest = {"execution_identity": payload, "execution_identity_hash": sha256_identity(payload)}
+    row = {
+        "run_id": "macb_capacity_queued", "child_id": "macbc_capacity_queued",
+        "attempt_no": attempt_no, "retry_mode": retry_mode, "execution_kind": "remote_execution",
+        "retry_of_attempt_id": make_attempt_id("macbc_capacity_queued", attempt_no - 1) if attempt_no > 1 else None,
+        "status": "queued", "node_id": "wsl2-5080", "qe_task_id": None,
+        "qe_loop_id": None, "submission_intent_hash": None,
+        "input_manifest_json": manifest, "input_manifest_hash": artifact_manifest_hash_for(manifest),
+        "run_execution_identity_json": payload, "run_execution_identity_hash": sha256_identity(payload),
+    }
+    row["attempt_id"] = make_attempt_id(row["child_id"], attempt_no)
+    # The expected intent comes from the actual adapter, not a second test formula.
+    intent = QEWorkspacePredBacktestAdapter(repository=Mock()).prepare_submission_intent(
+        run={"id": row["run_id"], "execution_identity_json": payload, "execution_identity_hash": sha256_identity(payload)},
+        child={"child_id": row["child_id"], "input_manifest_json": manifest},
+        attempt=row, node_id=row["node_id"],
+    )
+    spec = QEExecutionReservationSpec(row["node_id"], "multi_alpha_durable_attempt",
+        row["attempt_id"], intent.qe_task_id, intent.qe_loop_id, intent.submission_intent_hash)
+    return row, spec
+
+
+def _replay_capacity_case(case: str):
+    from backend.services.multi_alpha.durable_models import artifact_manifest_hash_for
+    mode, number = ("backtest_only", 2) if case == "retry" else (
+        ("rematerialize_and_backtest", 2) if case == "rematerialize" else ("initial", 1))
+    row, spec = _queued_replay_source(mode, number)
+    expected = 4
+    if case == "partial":
+        row["qe_task_id"] = spec.qe_task_id
+    elif case == "empty":
+        row.update(qe_task_id="", qe_loop_id="", submission_intent_hash="")
+    elif case == "conflict":
+        row.update(qe_task_id="other", qe_loop_id="Loop1", submission_intent_hash="f" * 64)
+    elif case == "bound":
+        row.update(qe_task_id=spec.qe_task_id, qe_loop_id=spec.qe_loop_id,
+                   submission_intent_hash=spec.submission_intent_hash)
+    elif case == "wrong_hash":
+        spec = replace(spec, submission_intent_hash="f" * 64)
+    elif case == "wrong_task":
+        spec = replace(spec, qe_task_id="different_task")
+    elif case == "wrong_loop":
+        spec = replace(spec, qe_loop_id="Loop2")
+    elif case == "wrong_attempt":
+        spec = replace(spec, source_execution_id="another_attempt")
+    elif case == "wrong_node":
+        spec = replace(spec, node_id="rdagent-node1")
+    elif case == "manifest_hash":
+        row["input_manifest_hash"] = "f" * 64
+    elif case == "identity_hash":
+        row["input_manifest_json"]["execution_identity_hash"] = "f" * 64
+        row["input_manifest_hash"] = artifact_manifest_hash_for(row["input_manifest_json"])
+    elif case == "parent_identity":
+        row["run_execution_identity_hash"] = "f" * 64
+    elif case == "terminal":
+        row["status"] = "cancelled"
+    elif case == "reference":
+        row["execution_kind"] = "reference_result"
+    elif case == "mixed_training":
+        pass
+    elif case not in {"initial", "retry", "rematerialize"}:
+        raise AssertionError(case)
+    if case not in {"initial", "retry", "rematerialize", "bound"}:
+        expected = 1
+    return row, spec, expected
+
+
+REPLAY_QUEUED_CASES = ["initial", "retry", "rematerialize", "bound", "partial", "empty", "conflict",
+    "wrong_hash", "wrong_task", "wrong_loop", "wrong_attempt", "wrong_node", "manifest_hash",
+    "identity_hash", "parent_identity", "terminal", "reference", "mixed_training"]
+
+
+@pytest.mark.parametrize("case", REPLAY_QUEUED_CASES)
+def test_queued_durable_replay_uses_frozen_adapter_identity_before_source_claim(case: str) -> None:
+    row, spec, expected = _replay_capacity_case(case)
+    if case == "wrong_node":
+        # This is a helper-level check; the SQL WHERE already excludes another node.
+        assert not QEExecutionReservationRepository._durable_replay_source_matches(row, spec)
+        return
+    steps = [Step("FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt", one=row)]
+    if expected == 4 or case == "mixed_training":
+        steps.append(Step("AS incompatible_count", one={"incompatible_count": int(case == "mixed_training")}))
+    cur = ScriptedCursor(steps)
+    actual = QEExecutionReservationRepository._effective_node_capacity_for_source(cur, spec,
+        requested_node_capacity=4, allow_same_task_backtest_parallelism=False,
+        allow_same_task_parallel_training=False, allow_durable_prediction_replay_parallelism=True)
+    assert actual == expected
+    assert not cur.steps
+
+
+@pytest.mark.parametrize("case", REPLAY_QUEUED_CASES)
+def test_queued_replay_identity_sql_on_existing_dev_readonly(case: str) -> None:
+    """Execute the real repository SELECTs against typed CTE rows in existing DEV.
+
+    This opt-in test changes no tables, schema, persistent rows, or runtime status.
+    It exercises PostgreSQL NULL/join semantics that scripted count fixtures missed.
+    """
+    if os.getenv("AISTOCK_QE_REPLAY_QUEUED_DEV_VERIFY") != "1":
+        pytest.skip("explicit existing DEV SELECT verification not requested")
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    from dotenv import dotenv_values
+
+    cfg = dotenv_values("F:/Dev/AIstock/.env")
+    credentials = {"host": cfg["TDX_DB_DEV_HOST"], "port": int(cfg["TDX_DB_DEV_PORT"]),
+        "dbname": cfg["TDX_DB_DEV_NAME"], "user": cfg["TDX_DB_DEV_USER"], "password": cfg["TDX_DB_DEV_PASSWORD"]}
+    assert credentials["port"] == 5433 and "dev" in credentials["dbname"].lower()
+    row, spec, expected = _replay_capacity_case(case)
+    columns = ["attempt_id", "child_id", "attempt_no", "retry_mode", "retry_of_attempt_id",
+        "execution_kind", "status", "node_id", "qe_task_id", "qe_loop_id", "submission_intent_hash"]
+    selected = ",".join("%s::" + ("integer" if c == "attempt_no" else "text") + " AS " + c for c in columns)
+    prefix = ("WITH bug2227_attempt AS (SELECT " + selected + "),"
+        " bug2227_child AS (SELECT %s::text AS child_id,%s::text AS run_id,%s::jsonb AS input_manifest_json,%s::text AS input_manifest_hash),"
+        " bug2227_run AS (SELECT %s::text AS id,%s::jsonb AS execution_identity_json,%s::text AS execution_identity_hash),"
+        " bug2227_reservation AS (SELECT 'wsl2-5080'::text AS node_id,'running'::text AS status,"
+        " 'qe_evolution_loop'::text AS source_kind,'other'::text AS source_execution_id,'other'::text AS qe_task_id,"
+        " 'Loop1'::text AS qe_loop_id,repeat('a',64)::text AS submission_intent_hash WHERE %s::boolean) ")
+    fixture_params = tuple(row[c] for c in columns) + (row["child_id"], row["run_id"],
+        json.dumps(row["input_manifest_json"]), row["input_manifest_hash"], row["run_id"],
+        json.dumps(row["run_execution_identity_json"]), row["run_execution_identity_hash"], case == "mixed_training")
+    conn = psycopg2.connect(**credentials, connect_timeout=5)
+    conn.set_session(readonly=True, autocommit=False)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as real:
+            class ReadOnlyFixtureCursor:
+                def execute(self, query, params):
+                    # Also resolve the untouched SQL against the actual DEV schema.
+                    real.execute("EXPLAIN (FORMAT JSON) " + query, params)
+                    real.fetchall()
+                    query = query.replace("strategy_pkg.multi_alpha_combine_backtest_child_attempt", "bug2227_attempt")
+                    query = query.replace("strategy_pkg.multi_alpha_combine_backtest_child", "bug2227_child")
+                    query = query.replace("strategy_pkg.multi_alpha_combine_backtest_run", "bug2227_run")
+                    query = query.replace("infra.qe_execution_reservation", "bug2227_reservation")
+                    assert query.lstrip().startswith("SELECT")
+                    real.execute(prefix + query, fixture_params + tuple(params))
+
+                def fetchone(self): return real.fetchone()
+
+            actual = QEExecutionReservationRepository._effective_node_capacity_for_source(ReadOnlyFixtureCursor(), spec,
+                requested_node_capacity=4, allow_same_task_backtest_parallelism=False,
+                allow_same_task_parallel_training=False, allow_durable_prediction_replay_parallelism=True)
+            assert actual == expected
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 @pytest.mark.parametrize("active,accepted", [(3, True), (4, False)])
 def test_durable_replay_admission_keeps_node_lock_and_once_only_transaction(
     active: int, accepted: bool,
@@ -235,7 +392,10 @@ def test_durable_replay_admission_keeps_node_lock_and_once_only_transaction(
     steps = [
         Step("pg_advisory_xact_lock"), Step("pg_advisory_xact_lock"),
         Step("SELECT node_id FROM infra.compute_nodes", one={"node_id": spec.node_id}),
-        Step("AS eligible_count", one={"eligible_count": 1}),
+        Step("FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt", one={
+            "qe_task_id": spec.qe_task_id, "qe_loop_id": spec.qe_loop_id,
+            "submission_intent_hash": spec.submission_intent_hash,
+        }),
         Step("AS incompatible_count", one={"incompatible_count": 0}),
         Step("WHERE source_kind = %s AND source_execution_id = %s", one=None),
         Step("WHERE node_id = %s AND qe_task_id = %s", one=None),
