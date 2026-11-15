@@ -6,6 +6,7 @@
     "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
   ],
   "assigned_agent": null,
+  "backend_restart_required": true,
   "bug_id": "BUG-2227",
   "closed_at": null,
   "closure_requirements": [
@@ -24,11 +25,41 @@
     }
   ],
   "evidence_uris": [],
+  "execution_review": {
+    "actual_runtime_not_yet_accepted": true,
+    "completeness_and_regression": "保留节点锁、source claim、全局4槽上限、跨来源训练排除及已有bound精确比对；初始/回测恢复/rematerialize和负例齐全。无需迁移或依赖。",
+    "correctness": "通过同一正式adapter的确定性任务/Loop/意图、attempt ID及完整frozen child/run身份重建，修复合法queued NULL来源；partial/conflict/非remote/取消/身份不匹配保持1槽。",
+    "design_compliance_001": {
+      "no_new_manual_gate_RBAC_or_service_control": true,
+      "no_partial_or_placeholder": true,
+      "no_silent_error_or_fake_success": true,
+      "no_unapproved_business_semantics": true
+    },
+    "review_by": "active_agent_two_perspectives_not_independent",
+    "source_sha256": "08724142967f378ed313e0dbf37e67834097e28eadeef75b9c3e40da11215258",
+    "status": "passed_source_runtime_pending_user_restart",
+    "validation": [
+      "final fix-point23 passed",
+      "related matrix80 passed/28 skipped before query-compatibility refinement; final affected23+DEV18 rechecked",
+      "DEV real-schema EXPLAIN and18 read-only typed-CTE PostgreSQL NULL/join cases passed, rollback,0 DDL/DML",
+      "actual production queued data fresh-process reconstruction passed without writes",
+      "Ruff/AST/diff-check pass"
+    ]
+  },
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261115_BUG-2227-wsl-alpha-4-1.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261115_BUG-2227-wsl-alpha-4-1.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -44,6 +75,7 @@
   "first_seen_at": "2026-11-15T07:55:23.900217Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_plan": "保持确定性意图和节点身份检查；对完整已绑定身份继续精确比对，对尚未绑定的queued初始/恢复来源采用可核验的完整来源身份，混合/部分绑定/冲突/非纯回放保持fail closed。新增真实初始排队及恢复来源回归和DEV SELECT语义验证；不改生产DB，不控服务。",
   "fixed_at": null,
   "github_issue_number": 7268,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7268",
@@ -61,28 +93,38 @@
     "l0"
   ],
   "risk_area": "bug",
+  "root_cause": "WSL durable纯预测回放在source claim之前以尚未写入的远端任务/Loop/意图HASH证明eligible，首个后续queued attempt恒降为1槽。",
+  "runtime_acceptance_requirements": [
+    "用户仅重启backend-main/8001并加载合入SHA，健康和identity及业务readback均通过",
+    "沿原幂等run/attempt验证WSL合法纯回放有效容量4且不会超过4，混入训练及未知身份保留fail-closed；不以HTTP200或requested4冒充实际4",
+    "继续同一原任务，不重训、不重复回测，不重启WSL/远端执行API或容器"
+  ],
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
-    "provisional": false,
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ],
-    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "expected_identity_ref": "merged_commit",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "qe_batch_execution_policy",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
-    "persistence_basis": "git_tracked_source",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "expected_identity_ref": "merged_commit",
     "fresh_process_evidence": [
       "python -B -X utf8 tmp/issue_workflow/BUG-2227/fresh_source_proof.py -> PASS real persisted queued unbound source; sourceSHA=08724142967f378ed313e0dbf37e67834097e28eadeef75b9c3e40da11215258; receiptSHA=dededec761685243d54206134c744132d098f4adfbd2b76e8f67146cb5256467; 0 POST/DDL/DML/service control"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
     "runtime_identity_match": "pending",
-    "business_smoke_contract_id": "qe_batch_execution_policy"
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -137,6 +179,11 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "verification_plan": [
+    "direct queued-null identity regression and existing node/cohort/conflict/capacity matrix",
+    "DEV read-only PostgreSQL null identity semantics",
+    "fresh-process source import and capacity business smoke; post-restart actual queued WSL4 is user-owned activation gate"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -193,39 +240,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
-  "root_cause": "WSL durable纯预测回放在source claim之前以尚未写入的远端任务/Loop/意图HASH证明eligible，首个后续queued attempt恒降为1槽。",
-  "fix_plan": "保持确定性意图和节点身份检查；对完整已绑定身份继续精确比对，对尚未绑定的queued初始/恢复来源采用可核验的完整来源身份，混合/部分绑定/冲突/非纯回放保持fail closed。新增真实初始排队及恢复来源回归和DEV SELECT语义验证；不改生产DB，不控服务。",
-  "backend_restart_required": true,
-  "verification_plan": [
-    "direct queued-null identity regression and existing node/cohort/conflict/capacity matrix",
-    "DEV read-only PostgreSQL null identity semantics",
-    "fresh-process source import and capacity business smoke; post-restart actual queued WSL4 is user-owned activation gate"
-  ],
-  "execution_review": {
-    "status": "passed_source_runtime_pending_user_restart",
-    "source_sha256": "08724142967f378ed313e0dbf37e67834097e28eadeef75b9c3e40da11215258",
-    "correctness": "通过同一正式adapter的确定性任务/Loop/意图、attempt ID及完整frozen child/run身份重建，修复合法queued NULL来源；partial/conflict/非remote/取消/身份不匹配保持1槽。",
-    "completeness_and_regression": "保留节点锁、source claim、全局4槽上限、跨来源训练排除及已有bound精确比对；初始/回测恢复/rematerialize和负例齐全。无需迁移或依赖。",
-    "design_compliance_001": {
-      "no_partial_or_placeholder": true,
-      "no_silent_error_or_fake_success": true,
-      "no_unapproved_business_semantics": true,
-      "no_new_manual_gate_RBAC_or_service_control": true
-    },
-    "validation": [
-      "final fix-point23 passed",
-      "related matrix80 passed/28 skipped before query-compatibility refinement; final affected23+DEV18 rechecked",
-      "DEV real-schema EXPLAIN and18 read-only typed-CTE PostgreSQL NULL/join cases passed, rollback,0 DDL/DML",
-      "actual production queued data fresh-process reconstruction passed without writes",
-      "Ruff/AST/diff-check pass"
-    ],
-    "actual_runtime_not_yet_accepted": true,
-    "review_by": "active_agent_two_perspectives_not_independent"
-  },
-  "runtime_acceptance_requirements": [
-    "用户仅重启backend-main/8001并加载合入SHA，健康和identity及业务readback均通过",
-    "沿原幂等run/attempt验证WSL合法纯回放有效容量4且不会超过4，混入训练及未知身份保留fail-closed；不以HTTP200或requested4冒充实际4",
-    "继续同一原任务，不重训、不重复回测，不重启WSL/远端执行API或容器"
-  ]
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
