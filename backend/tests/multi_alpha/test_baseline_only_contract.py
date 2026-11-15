@@ -89,35 +89,53 @@ def test_rest_snapshot_recovery_and_child_identity_preserve_exact_single_account
 @pytest.mark.parametrize("mutation", ["second_leg", "no_leg", "scheme", "implicit_schemes", "baseline_off", "loo_on", "rolling", "implicit_rolling", "wrong_baseline", "rank_fusion", "frozen_weights"])
 def test_ambiguous_or_mixed_baseline_only_contract_is_rejected(mutation):
     value = payload()
-    if mutation == "second_leg": value["roster"].append({"leg_id": "other", "seed_run_ids": ["other"]})
-    elif mutation == "no_leg": value["roster"] = []
-    elif mutation == "scheme": value["weighting_schemes"] = ["equal"]
-    elif mutation == "implicit_schemes": value.pop("weighting_schemes")
-    elif mutation == "baseline_off": value["prediction_task_selection"]["include_baseline"] = False
-    elif mutation == "loo_on": value["prediction_task_selection"]["include_loo"] = True
-    elif mutation == "rolling": value["walk_forward"]["enabled"] = True
-    elif mutation == "implicit_rolling": value.pop("walk_forward")
-    elif mutation == "wrong_baseline": value["baseline_leg_id"] = "other"
-    elif mutation == "rank_fusion": value["rank_fusion"] = {"rrf_k": 60}
-    elif mutation == "frozen_weights": value["frozen_weights"] = {"weights": {"AF": 1}}
+    if mutation == "second_leg":
+        value["roster"].append({"leg_id": "other", "seed_run_ids": ["other"]})
+    elif mutation == "no_leg":
+        value["roster"] = []
+    elif mutation == "scheme":
+        value["weighting_schemes"] = ["equal"]
+    elif mutation == "implicit_schemes":
+        value.pop("weighting_schemes")
+    elif mutation == "baseline_off":
+        value["prediction_task_selection"]["include_baseline"] = False
+    elif mutation == "loo_on":
+        value["prediction_task_selection"]["include_loo"] = True
+    elif mutation == "rolling":
+        value["walk_forward"]["enabled"] = True
+    elif mutation == "implicit_rolling":
+        value.pop("walk_forward")
+    elif mutation == "wrong_baseline":
+        value["baseline_leg_id"] = "other"
+    elif mutation == "rank_fusion":
+        value["rank_fusion"] = {"rrf_k": 60}
+    elif mutation == "frozen_weights":
+        value["frozen_weights"] = {"weights": {"AF": 1}}
     with pytest.raises(MultiAlphaCombineBacktestError, match="baseline_only requires"):
         parse_request(value)
 
 
 @pytest.mark.parametrize("failure", ["missing_key", "duplicate_key", "nan", "inf", "label_only", "duplicate_seed"])
 def test_raw_seed_mean_never_repairs_invalid_samples(failure):
-    value = payload(); sources = frames()
-    if failure == "missing_key": sources["seed2024"] = sources["seed2024"].iloc[1:]
-    elif failure == "duplicate_key": sources["seed2024"] = pd.concat([sources["seed2024"], sources["seed2024"].iloc[:1]])
-    elif failure in {"nan", "inf"}: sources["seed2024"].iloc[0, 0] = float(failure)
-    elif failure == "label_only": sources["seed2024"] = sources["seed2024"].rename(columns={"score": "label"})
-    elif failure == "duplicate_seed": value["roster"][0]["seed_run_ids"].append("seed42")
+    value = payload()
+    sources = frames()
+    if failure == "missing_key":
+        sources["seed2024"] = sources["seed2024"].iloc[1:]
+    elif failure == "duplicate_key":
+        sources["seed2024"] = pd.concat([sources["seed2024"], sources["seed2024"].iloc[:1]])
+    elif failure in {"nan", "inf"}:
+        sources["seed2024"].iloc[0, 0] = float(failure)
+    elif failure == "label_only":
+        sources["seed2024"] = sources["seed2024"].rename(columns={"score": "label"})
+    elif failure == "duplicate_seed":
+        value["roster"][0]["seed_run_ids"].append("seed42")
     with pytest.raises(MultiAlphaCombineBacktestError):
         build_prediction_only_legs(parse_request(value), prediction_loader=sources.__getitem__)
 
 
 def test_old_default_request_shape_and_failed_missing_scheme_still_hold():
-    old = payload(); old["roster"].append({"leg_id": "other", "seed_run_ids": ["other"]})
+    old = payload()
+    old["roster"].append({"leg_id": "other", "seed_run_ids": ["other"]})
     old["prediction_task_selection"] = {"include_baseline": True, "include_loo": False}
     request = parse_request(old)
     assert request.weighting_schemes == DEFAULT_WEIGHTING_SCHEMES
