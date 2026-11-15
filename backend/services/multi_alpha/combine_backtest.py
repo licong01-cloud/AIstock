@@ -2249,7 +2249,7 @@ class MultiAlphaCombineBacktestService:
                 "failed_count": sum(1 for outcome in outcomes if not outcome.succeeded),
             },
         )
-        payload = self._persist_task_outcomes(run_id=run_id, outcomes=outcomes)
+        payload = self._persist_task_outcomes(run_id=run_id, outcomes=outcomes, baseline_only=is_baseline_only(request))
         self._heartbeat_run(
             run_id,
             request,
@@ -2513,7 +2513,7 @@ class MultiAlphaCombineBacktestService:
             pool.shutdown(wait=False, cancel_futures=True)
         return [outcomes_by_name[task.name] for task in tasks]
 
-    def _persist_task_outcomes(self, *, run_id: str, outcomes: Sequence[_PredictionTaskOutcome]) -> dict[str, Any]:
+    def _persist_task_outcomes(self, *, run_id: str, outcomes: Sequence[_PredictionTaskOutcome], baseline_only: bool = False) -> dict[str, Any]:
         baseline_metrics = next(
             (dict(outcome.metrics or {}) for outcome in outcomes if outcome.task.kind == "baseline" and outcome.succeeded),
             None,
@@ -2582,7 +2582,10 @@ class MultiAlphaCombineBacktestService:
 
         critical_failures = [outcome for outcome in failed if outcome.task.critical or outcome.task.kind == "baseline"]
         successful_scheme_count = sum(1 for outcome in outcomes if outcome.task.kind == "scheme" and outcome.succeeded)
-        if critical_failures or successful_scheme_count == 0:
+        sole_baseline_succeeded = (
+            baseline_only and len(outcomes) == 1 and outcomes[0].task.kind == "baseline" and outcomes[0].succeeded
+        )
+        if critical_failures or (successful_scheme_count == 0 and not sole_baseline_succeeded):
             status = "failed"
         elif failed_by_name:
             status = LOGICAL_PARTIAL_FAILED_STATUS
@@ -2664,15 +2667,28 @@ CallableUtc = Any
 
 def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
     roster = tuple(_coerce_panel_spec(item) for item in payload.get("roster") or [])
-    if len(roster) < 2:
-        raise MultiAlphaCombineBacktestError("roster requires at least two legs", reason_code="roster_too_small")
-    schemes = tuple(_normalize_scheme(item) for item in (payload.get("weighting_schemes") or DEFAULT_WEIGHTING_SCHEMES))
-    if not schemes:
-        raise MultiAlphaCombineBacktestError("weighting_schemes cannot be empty", reason_code="scheme_missing")
     prediction_task_selection = _parse_prediction_task_selection(
         payload.get("prediction_task_selection")
     )
     selection = resolved_prediction_task_selection_value(prediction_task_selection)
+    if selection.get("baseline_only") is True:
+        if (len(roster) != 1 or not selection["include_baseline"] or selection["include_loo"]
+                or payload.get("weighting_schemes") != []
+                or not isinstance(payload.get("walk_forward"), Mapping)
+                or payload["walk_forward"].get("enabled") is not False
+                or payload.get("rank_fusion") or payload.get("frozen_weights")
+                or str(payload.get("baseline_leg_id") or roster[0].leg_id) != roster[0].leg_id):
+            raise MultiAlphaCombineBacktestError(
+                "baseline_only requires one leg, baseline enabled, LOO disabled, explicit empty schemes and disabled walk_forward, no fusion or weights",
+                reason_code="baseline_only_contract_invalid",
+            )
+        schemes = ()
+    else:
+        if len(roster) < 2:
+            raise MultiAlphaCombineBacktestError("roster requires at least two legs", reason_code="roster_too_small")
+        schemes = tuple(_normalize_scheme(item) for item in (payload.get("weighting_schemes") or DEFAULT_WEIGHTING_SCHEMES))
+        if not schemes:
+            raise MultiAlphaCombineBacktestError("weighting_schemes cannot be empty", reason_code="scheme_missing")
     frozen_weights: dict[str, Any] = {}
     if "frozen_weighted" in schemes:
         if (schemes != ("frozen_weighted",) or payload.get("normalize_method") != "rank"
@@ -2758,6 +2774,10 @@ def _replace_request(request: CombineBacktestRequest, **updates: Any) -> Combine
     return replace(request, **updates)
 
 
+def is_baseline_only(request: CombineBacktestRequest) -> bool:
+    return (request.prediction_task_selection or {}).get("baseline_only") is True
+
+
 def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
     backtest_config = dict(request.backtest_config)
     backtest_config.pop(REQUEST_SNAPSHOT_KEY, None)
@@ -2808,7 +2828,7 @@ def _parse_prediction_task_selection(value: Any) -> dict[str, bool] | None:
             reason_code="prediction_task_selection_invalid",
             context={"value_type": type(value).__name__},
         )
-    supported = {"include_baseline", "include_loo"}
+    supported = {"include_baseline", "include_loo", "baseline_only"}
     unknown = sorted(str(key) for key in value if key not in supported)
     if unknown:
         raise MultiAlphaCombineBacktestError(
@@ -2818,6 +2838,10 @@ def _parse_prediction_task_selection(value: Any) -> dict[str, bool] | None:
         )
     result: dict[str, bool] = {}
     for key in sorted(supported):
+        # Preserve the exact legacy snapshot and identity when the new field
+        # was not requested. No additional default key is persisted.
+        if key == "baseline_only" and key not in value:
+            continue
         raw = value.get(key, True)
         if not isinstance(raw, bool):
             raise MultiAlphaCombineBacktestError(
@@ -3080,6 +3104,7 @@ def build_prediction_only_legs(
     model_store: ModelStoreService | None = None,
 ) -> list[CombinerLeg]:
     store = model_store or ModelStoreService()
+    strict_baseline = is_baseline_only(request)
     legs: list[CombinerLeg] = []
     for spec in request.roster:
         seed_frames: list[pd.DataFrame] = []
@@ -3088,7 +3113,7 @@ def build_prediction_only_legs(
                 raw = prediction_loader(run_id) if prediction_loader is not None else pd.read_pickle(
                     store.prediction_path(run_id=run_id)
                 )
-                normalizer = normalize_frozen_prediction_frame if request.frozen_weights else normalize_prediction_frame
+                normalizer = normalize_frozen_prediction_frame if request.frozen_weights or strict_baseline else normalize_prediction_frame
                 seed_frames.append(normalizer(raw, run_id=run_id))
             except (
                 PredictionStoreError,
@@ -3105,12 +3130,13 @@ def build_prediction_only_legs(
                     leg_id=spec.leg_id,
                     context={"run_id": run_id},
                 ) from exc
-        if request.frozen_weights:
+        if request.frozen_weights or strict_baseline:
+            reason = "baseline_only_contract_invalid" if strict_baseline else "frozen_weights_contract_invalid"
             if len(set(spec.seed_run_ids)) != len(spec.seed_run_ids):
-                raise MultiAlphaCombineBacktestError("frozen seed sources must be unique", reason_code="frozen_weights_contract_invalid")
+                raise MultiAlphaCombineBacktestError("frozen seed sources must be unique", reason_code=reason)
             reference_keys = seed_frames[0][["trade_date", "instrument"]]
             if any(not reference_keys.equals(frame[["trade_date", "instrument"]]) for frame in seed_frames[1:]):
-                raise MultiAlphaCombineBacktestError("frozen seed prediction keys differ", reason_code="frozen_weights_contract_invalid")
+                raise MultiAlphaCombineBacktestError("frozen seed prediction keys differ", reason_code=reason)
         ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
         ensemble = filter_prediction_window(
             ensemble,
