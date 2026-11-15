@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence
 
-from backend.services.multi_alpha.combine_backtest import delta, metric_columns
+from backend.services.multi_alpha.combine_backtest import (
+    REQUEST_SNAPSHOT_KEY, delta, is_baseline_only, metric_columns, parse_request,
+)
 from backend.services.multi_alpha.durable_execution_adapter import (
     DurableChildNotComputable,
     DurablePublishedArtifacts,
@@ -2906,6 +2908,16 @@ def _parent_status(
     )
     schemes = [child for child in children if child["child_kind"] == "scheme"]
     successful_scheme_count = sum(1 for child in schemes if child["status"] == "succeeded")
+    snapshot = _mapping(run.get("backtest_config_json")).get(REQUEST_SNAPSHOT_KEY)
+    sole_baseline_succeeded = False
+    if isinstance(snapshot, Mapping) and _mapping(snapshot.get("prediction_task_selection")).get("baseline_only") is True:
+        request = parse_request(snapshot)
+        sole_baseline_succeeded = (
+            is_baseline_only(request) and len(children) == 1 and baseline is not None
+            and baseline["status"] == "succeeded"
+            and run.get("baseline_leg_id") == request.baseline_leg_id
+            and baseline["child_key"] == f"baseline:{request.baseline_leg_id}"
+        )
     if run_status in {"cancel_requested", "cancelling"}:
         if children and all(str(child["status"]) == "succeeded" for child in children):
             return "succeeded", {
@@ -2973,7 +2985,7 @@ def _parent_status(
     if run.get("baseline_leg_id") and (baseline is None or baseline["status"] != "succeeded"):
         status = "failed"
         reason_code = "multi_alpha_baseline_failed"
-    elif successful_scheme_count == 0:
+    elif successful_scheme_count == 0 and not sole_baseline_succeeded:
         status = "failed"
         reason_code = "multi_alpha_no_successful_scheme"
     elif failures:
