@@ -1,0 +1,254 @@
+{
+  "actual": "frontend: starting_or_stopping did not settle; close its service window and wait. No duplicate started",
+  "allowed_write_scope": [
+    "scripts/start_ai_stock.py",
+    "backend/tests/platform_api/test_windows_launcher.py",
+    "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2229",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-16T09:51:48.421836Z",
+  "description": "frontend: starting_or_stopping did not settle; close its service window and wait. No duplicate started",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261116-262cc5c23b5c",
+      "timestamp": "2026-11-16T09:51:48.421821Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime/startup/20261116-174132-c187bc0a/summary.json"
+  ],
+  "expected": "3100实例不会阻止启动3000；已有3000不重复启动；未知进程占用3000仍阻断。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json",
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "scripts/start_ai_stock.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json",
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "scripts/start_ai_stock.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/start_ai_stock.py",
+        "backend/tests/platform_api/test_windows_launcher.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/start_ai_stock.py",
+          "impact_modules": [
+            "platform.config"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "aistock_windows_runtime_orchestration"
+        },
+        {
+          "file": "backend/tests/platform_api/test_windows_launcher.py",
+          "impact_modules": [],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/start_ai_stock.py",
+        "backend/tests/platform_api/test_windows_launcher.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/start_ai_stock.py",
+      "backend/tests/platform_api/test_windows_launcher.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/start_ai_stock.py",
+      "backend/tests/platform_api/test_windows_launcher.py"
+    ]
+  },
+  "first_seen_at": "2026-11-16T09:51:48.421836Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7276,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7276",
+  "last_seen_at": "2026-11-16T09:51:48.421836Z",
+  "module": "platform.api",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python scripts/start_ai_stock.py --help -> passed in a fresh CLI process; an isolated import and live read-only inventory observed frontend 3000 absent and the existing 3100 PID172464 outside the target instance. Backend restart and post-restart acceptance remain pending user execution."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "platform.api"
+  ],
+  "title": "前端启动器将3100开发实例误判为3000启动中并超时",
+  "trigger_condition": {
+    "fingerprint": "262cc5c23b5c43268b6f0505",
+    "source_event_id": "FE-20261116-262cc5c23b5c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "platform.api",
+        "platform_api"
+      ],
+      "plans": [
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "platform.api",
+          "platform_api"
+        ],
+        "plans": [
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

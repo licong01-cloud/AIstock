@@ -165,6 +165,60 @@ def test_old_worker_and_dev_tdx_are_not_duplicate_candidates():
     assert launcher.state("tdx", dev) == "absent"
 
 
+@pytest.mark.parametrize("flag", ['--port 3100', '--port=3100', '-p 3100', '-p3100', '-p=3100', '--port "3100"'])
+@pytest.mark.parametrize("listening", [False, True])
+def test_other_frontend_port_is_not_a_pending_3000_instance(flag, listening):
+    data = snapshot("frontend", False, f'node "{launcher.ROOT}/frontend/node_modules/next/dist/bin/next" dev {flag}')
+    if listening:
+        data["listeners"] = [{"LocalPort": 3100, "OwningProcess": 10}]
+    assert launcher.state("frontend", data) == "absent"
+    data["listeners"].append({"LocalPort": 3000, "OwningProcess": 999})
+    with pytest.raises(RuntimeError, match="unknown process"):
+        launcher.state("frontend", data)
+
+
+@pytest.mark.parametrize("port", [3000, 3100])
+@pytest.mark.parametrize("parent_present", [False, True])
+def test_next_worker_uses_parent_port_or_its_own_listener(port, parent_present):
+    worker = f'node "{launcher.ROOT}/frontend/node_modules/next/dist/server/lib/start-server.js"'
+    data = snapshot("frontend", False, worker)
+    data["processes"][0]["ParentProcessId"] = 11
+    data["listeners"] = [{"LocalPort": port, "OwningProcess": 10}]
+    if parent_present:
+        data["processes"].append({"ProcessId": 11, "ParentProcessId": 0,
+                                  "CommandLine": f'node node_modules/next/dist/bin/next dev -p {port}'})
+    assert launcher.state("frontend", data) == ("listening" if port == 3000 else "absent")
+    if parent_present:
+        data["listeners"] = []
+        assert launcher.state("frontend", data) == ("starting_or_stopping" if port == 3000 else "absent")
+
+
+@pytest.mark.parametrize("flags", ['', '--port 3000', '--inspect'])
+def test_target_or_ambiguous_pending_frontend_still_blocks_duplicates(flags):
+    data = snapshot("frontend", False, f'node "{launcher.ROOT}/frontend/node_modules/next/dist/bin/next" dev {flags}')
+    if flags == '--inspect':
+        data["listeners"] = [{"LocalPort": 9229, "OwningProcess": 10}]
+    assert launcher.state("frontend", data) == "starting_or_stopping"
+
+
+@pytest.mark.parametrize("target_listening", [False, True])
+def test_parallel_3100_does_not_hide_or_replace_the_3000_instance(target_listening):
+    data = snapshot("frontend", False, f'node "{launcher.ROOT}/frontend/node_modules/next/dist/bin/next" dev -p 3100')
+    data["listeners"] = [{"LocalPort": 3100, "OwningProcess": 10}]
+    data["processes"].append({"ProcessId": 20, "ParentProcessId": 0,
+                              "CommandLine": f'node "{launcher.ROOT}/frontend/node_modules/next/dist/bin/next" dev -p 3000'})
+    if target_listening:
+        data["listeners"].append({"LocalPort": 3000, "OwningProcess": 20})
+    assert launcher.state("frontend", data) == ("listening" if target_listening else "starting_or_stopping")
+
+
+@pytest.mark.parametrize("flags", ['--port', '--port bad', '--port 0', '--port 65536', '--port 3000 -p 3100'])
+def test_invalid_frontend_port_evidence_fails_closed(flags):
+    data = snapshot("frontend", False, f'node "{launcher.ROOT}/frontend/node_modules/next/dist/bin/next" dev {flags}')
+    with pytest.raises(ValueError, match="frontend port evidence"):
+        launcher.state("frontend", data)
+
+
 def test_backend_identity_and_tdx_cached_revision_are_checked(monkeypatch):
     payloads = {"/api/v1/health": {"status": "ok"}, "/api/v1/runtime-identity": {"status": "ready", "merge_commit": SHA},
                 "/api/health": {"metadata_ready": True}, "/api/runtime-identity": {"data": {
