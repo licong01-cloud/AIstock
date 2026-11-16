@@ -2185,6 +2185,7 @@ def qe_archive_backend(session: nox.Session) -> None:
         "scripts/aistock_qe_archive_mcp_server.py",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
+        "scripts/reconcile_qe_multi_alpha_archive.py",
     ]
     handlers_dir = ROOT / "backend" / "services" / "qe_archive" / "handlers"
     if handlers_dir.exists():
@@ -2202,6 +2203,8 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/tests/test_qe_archive_repository_static.py",
         "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
         "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+        "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
         "backend/tests/qe_templates/test_template_validator.py",
         "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",

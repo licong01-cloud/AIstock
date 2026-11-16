@@ -7,7 +7,12 @@
     "scripts/reconcile_qe_multi_alpha_archive.py",
     "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
     "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
-    "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json"
+    "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
+    "backend/services/qe_archive/repository.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/aistock_runtime_semantics.py",
+    "scripts/aistock_issue_workflow.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2228",
@@ -25,13 +30,33 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261116-3428ecaa33f3",
       "timestamp": "2026-11-16T07:01:57.160363Z"
+    },
+    {
+      "action": "author_review_two_rounds_complete",
+      "actor": "Codex",
+      "timestamp": "2026-11-16T07:35:46.372496+00:00",
+      "note": "第一轮：真实remote manifest仅有哈希，修复正式baseline结果读取；原始内容、选定attempt、metrics和窗口逐项核验。第二轮：保留SKIP/smoke、负值/零值及旧多方案；补原子完成已入仓事件，拒绝活跃/错源事件；新增有真实账户语义的runtime只读probe和CI映射。当前79项直接测试、Ruff、diff-check及两项必需Nox目录检查通过。四项DESIGN-COMPLIANCE-001通过：完整交付、无吞错或默认值、原经济/冻结合同不变、无新审批。此为作者自审，非独立外审。"
     }
   ],
   "evidence_uris": [
-    "tmp/handoff/qe-parallel-next-plan-20261116/execution/derived/A_OLD_AF3_H20_K20/archive_response.json"
+    "tmp/handoff/qe-parallel-next-plan-20261116/execution/derived/A_OLD_AF3_H20_K20/archive_response.json",
+    "tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json"
   ],
   "expected": "成功的明确单基准账户以核验后的原始结果正常入仓，缺失/坏哈希仍拒绝；接续明确归档阻断并支持原run恢复。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/services/qe_archive/repository.py",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py"
+    ],
     "added_files": [
       "backend/services/qe_archive/multi_alpha_result_evidence.py",
       "scripts/reconcile_qe_multi_alpha_archive.py",
@@ -39,10 +64,19 @@
       "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
       "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
-      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+      "backend/services/qe_archive/repository.py",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
@@ -178,11 +212,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1/archive-status",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1/archive-detail",
+    "fresh_process_evidence": [
+      "独立Python进程从持久化工作树加载修复，原两个run的原始内容及metrics哈希一致；aistock_dev真实入仓、幂等回读及CAS拒绝无仓和活跃事件通过，事务已回滚。receipt=tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json。无训练、推理、回测、服务控制。"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -306,5 +350,27 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "dev_validation_summary": {
+    "schema_version": "bug_existing_dev_result_recovery_v1",
+    "database": "aistock_dev",
+    "status": "PASS_EXISTING_DEV_DML_AND_READBACK_ROLLED_BACK",
+    "receipt_sha256": "74fb91abb5992802ad8f942b24ef9738bcd85017b3e35d740ca46bd1730a7155",
+    "run_ids": [
+      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
+      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
+    ],
+    "rollback_verified": true,
+    "production_writes": 0,
+    "new_fit_predict_backtest": 0
+  },
+  "production_recovery_scope": {
+    "authorization_reference": "用户：立刻执行修复并完成后续任务；承接已明确补入仓的原两个run",
+    "database": "aistock",
+    "run_ids": [
+      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
+      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
+    ],
+    "action": "仅经DEV验证的正式归档器与条件事件完成；不修改原任务、attempt、预测或清单；无DDL/训练/服务操作"
   }
 }

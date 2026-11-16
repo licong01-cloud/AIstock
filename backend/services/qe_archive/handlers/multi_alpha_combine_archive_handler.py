@@ -13,6 +13,7 @@ from ..models import sha256_json
 from ..policy import resolve_archive_policy
 from ..repository import QEArchiveRepository
 from ..multi_alpha_provenance import MultiAlphaProvenanceResolver
+from ..multi_alpha_result_evidence import baseline_only_requested, load_selected_baseline_evidence
 from .contract import ArchiveHandler, ArchiveResult, HandlerStatus, PayloadValidationError
 
 
@@ -53,10 +54,12 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
         *,
         repository: QEArchiveRepository | None = None,
         provenance_resolver: MultiAlphaProvenanceResolver | None = None,
+        baseline_evidence_loader: Any | None = None,
         clock: Any | None = None,
     ) -> None:
         self._repository = repository or QEArchiveRepository()
         self._resolver = provenance_resolver or MultiAlphaProvenanceResolver(self._repository)
+        self._baseline_evidence_loader = baseline_evidence_loader or load_selected_baseline_evidence
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def validate_payload(self, payload: Mapping[str, Any]) -> None:
@@ -105,6 +108,9 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
         skipped_reason = None
         if policy.archive_policy == "SKIP" or (automatic and policy.archive_policy != "AUTO"):
             skipped_reason = f"policy_{policy.archive_policy.lower()}"
+        # A strict baseline-only run has no scheme row. Its remote manifest
+        # freezes metric hashes, not inline metrics: read its sealed result.
+        baseline_evidence = None
         metrics = {
             str(index): {key: row.get(key) for key in ("cagr", "sharpe", "max_drawdown", "calmar")}
             for index, item in enumerate(source.get("scheme_results") or ())
@@ -121,12 +127,19 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
                 metrics[str(attempt["attempt_id"])] = _ensure_mapping(
                     _ensure_mapping(attempt.get("result_manifest_json")).get("metrics")
                 )
-        decision = classify_qe_result({
+        classification = {
             # Partial terminal parents retain any evaluable child result, but
             # a partial marker alone is not evidence of an evaluable result.
             "source_id": run_id, "status": "failed" if status.startswith("partial_") else status, "config": config,
             "purpose": config.get("purpose"), "metrics": metrics,
-        })
+        }
+        decision = classify_qe_result(classification)
+        if (not skipped_reason and status == "succeeded" and baseline_only_requested(source)
+                and (decision.value_class != QEValueClass.X
+                     or decision.reason_code == "qe_lifecycle_no_evaluable_result")):
+            baseline_evidence = self._baseline_evidence_loader(source)
+            metrics[str(baseline_evidence["attempt_id"])] = baseline_evidence["metrics"]
+            decision = classify_qe_result(classification)
         # Reuse only the existing X exclusions. Multi-alpha provenance and
         # recovery identity retain their own build_bundle contract below.
         if decision.value_class == QEValueClass.X:
@@ -135,6 +148,8 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
             return {"run_id": run_id, "dry_run": dry_run, "written": False,
                     "rows_upserted": 0, "skipped_reason": skipped_reason}
         bundle = self.build_bundle(source)
+        if baseline_evidence is not None:
+            bundle.run_source["metadata"]["selected_baseline_result"] = baseline_evidence
         stats = dict(bundle.stats)
         stats["dry_run"] = dry_run
         if dry_run:
