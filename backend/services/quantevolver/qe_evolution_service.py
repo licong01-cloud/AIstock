@@ -3679,7 +3679,12 @@ class AutoEvolutionScheduler:
                                 for _ in range(int(count_row.get("count") or 0))
                             ]
                             task.update(self._custom_evo_start_state_from_rows(task, loop_rows))
-        return rows if detail == "full" else [compact_task_row(row) for row in rows]
+        items = rows if detail == "full" else [compact_task_row(row) for row in rows]
+        for raw, item in zip(rows, items):
+            task_cfg = raw.get("strategy_evo_config") or {}
+            if isinstance(task_cfg, dict) and task_cfg.get("label_status") == "NOT_APPLICABLE":
+                item.update(label_horizon=None, label_status="NOT_APPLICABLE")
+        return items
 
     async def resume_task(self, task_id: str, additional_loops: int = 0, force_full_train: bool = False) -> dict:
         """
@@ -3713,7 +3718,7 @@ class AutoEvolutionScheduler:
             source_reuse_loops = [
                 loop.get("loop_index")
                 for loop in strategy_evo_config.get("loops", [])
-                if loop.get("backtest_only") or loop.get("prediction_replay")
+                if loop.get("backtest_only") or loop.get("prediction_replay") or loop.get("absolute_target_replay") is not None
             ]
             if source_reuse_loops:
                 raise ValueError(
@@ -3970,7 +3975,9 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
-                               status, base_experiment_id, node_id, label_horizon,
+                               status, base_experiment_id, node_id,
+                               CASE WHEN strategy_evo_config->>'label_status' = 'NOT_APPLICABLE'
+                                    THEN NULL ELSE label_horizon END AS label_horizon,
                                long_trend_profile_id,
                                task_type, source_type, strategy_id, strategy_params,
                                execution_algo, execution_algo_params, unfilled_handler,
@@ -4097,6 +4104,9 @@ class AutoEvolutionScheduler:
                 loops = cur.fetchall()
 
                 result = dict(task)
+                task_cfg = task.get("strategy_evo_config") or {}
+                if isinstance(task_cfg, dict) and task_cfg.get("label_status") == "NOT_APPLICABLE":
+                    result.update(label_horizon=None, label_status="NOT_APPLICABLE")
                 result['loops'] = [dict(loop_row) for loop_row in loops]
 
         # GET is a persisted-state projection only.  Remote readback and state
@@ -4394,6 +4404,13 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         try:
+            if config.get("absolute_target_replay") is not None:
+                from .absolute_target_consumer import recover_absolute_target_results
+
+                return await recover_absolute_target_results(
+                    self, task_id=task_id, loop_index=loop_index, task=task, client=client,
+                    effective_node_id=effective_node_id, config=config,
+                )
             replay_result = None
             failed_upload = False
             if config.get("prediction_replay"):
@@ -4742,6 +4759,11 @@ class AutoEvolutionScheduler:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
                 "prediction-replay loop instead of inferring model or training fallback"
+            )
+        if config.get("absolute_target_replay") is not None and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
+            raise ValueError(
+                "QE_ABSOLUTE_TARGET_GENERIC_RETRY_FORBIDDEN: use results_only for completed accounts; "
+                "reconcile the original custom-evo rerun intent before another account attempt, never training fallback"
             )
         retry_submission = self._retry_submission_metadata(config)
         if _capacity_resume:
@@ -6358,6 +6380,14 @@ class AutoEvolutionScheduler:
             config = loop_row['config_json']
             if isinstance(config, str):
                 config = json.loads(config)
+            if config.get("absolute_target_replay") is not None:
+                from .absolute_target_consumer import validate_absolute_result
+
+                metrics["absolute_target_result"] = validate_absolute_result(
+                    await client.get_workspace_file(task_id, loop_id, "qe_absolute_target_result.json"),
+                    config["absolute_target_replay"],
+                )
+                metrics.update(IC=None, Rank_IC=None, label_status="NOT_APPLICABLE")
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
@@ -6569,7 +6599,7 @@ class AutoEvolutionScheduler:
                     cfg["model_source_task_id"],
                     int(cfg["model_source_loop_index"]),
                 )
-            label_horizon = normalize_label_horizon(
+            label_horizon = None if cfg.get("absolute_target_replay") is not None else normalize_label_horizon(
                 cfg.get("label_horizon"),
                 field_name=f"custom_evo.loops[{idx}].label_horizon",
             )
@@ -6593,6 +6623,7 @@ class AutoEvolutionScheduler:
         new_task_id = f"qe_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{suffix}"
 
         # 用第一个 Loop 的配置创建 base experiment 记录
+        absolute_target_task = all(c.get("absolute_target_replay") is not None for c in loops_config)
         first_loop = loops_config[0]
         factor_names = [k.split("||")[0] for k in first_loop.get("factor_keys", [])]
         base_exp_id = f"{new_task_id}_base"
@@ -6616,12 +6647,18 @@ class AutoEvolutionScheduler:
         # normalized Loop config. Strategy params extend rather than replace it.
         first_custom_params = dict(first_loop.get("custom_params") or {})
         first_custom_params.update(dict(first_loop.get("strategy_params") or {}))
+        if absolute_target_task:
+            first_custom_params.update(
+                absolute_target_replay=first_loop["absolute_target_replay"],
+                label_status="NOT_APPLICABLE", account_input_kind="absolute_target_replay",
+            )
         if first_loop.get("label_type"):
             first_custom_params["label_type"] = first_loop["label_type"]
         if bool(first_loop.get("disable_alpha158", False)):
             first_custom_params["disable_alpha158"] = True
-        first_label_horizon = normalize_label_horizon(first_loop.get("label_horizon"))
-        if first_label_horizon != DEFAULT_LABEL_HORIZON:
+        first_label_horizon = (None if first_loop.get("absolute_target_replay") is not None
+                               else normalize_label_horizon(first_loop.get("label_horizon")))
+        if first_label_horizon not in (None, DEFAULT_LABEL_HORIZON):
             first_custom_params["label_horizon"] = first_label_horizon
         first_custom_params = merge_qe_minute_runtime_contract(
             first_custom_params,
@@ -6671,8 +6708,12 @@ class AutoEvolutionScheduler:
                         "node_resolution_policy": QE_BATCH_EXECUTION_POLICY,
                         "execution_policy": loops_config[0][POLICY_KEY],
                         "clone_from_task_id": clone_from_task_id,
+                        **({"account_input_kind": "absolute_target_replay", "label_status": "NOT_APPLICABLE"}
+                           if absolute_target_task else {}),
                     }),
-                    first_label_horizon,
+                    # Existing NOT NULL task column is a storage compatibility
+                    # value only. The target loop/API/runtime horizon stays NA.
+                    first_label_horizon if first_label_horizon is not None else DEFAULT_LABEL_HORIZON,
                     effective_long_trend_profile_id,
                 ))
             conn.commit()
@@ -7015,7 +7056,7 @@ class AutoEvolutionScheduler:
                                 cfg["model_source_task_id"],
                                 int(cfg["model_source_loop_index"]),
                             )
-                        label_horizon = normalize_label_horizon(
+                        label_horizon = None if cfg.get("absolute_target_replay") is not None else normalize_label_horizon(
                             cfg.get("label_horizon"),
                             field_name=f"custom_evo.update[{idx}].label_horizon",
                         )
@@ -7066,6 +7107,8 @@ class AutoEvolutionScheduler:
                             task.get("strategy_evo_config") or {}
                         ).get("clone_from_task_id") if isinstance(task.get("strategy_evo_config"), dict) else None,
                     }
+                    if all(cfg.get("absolute_target_replay") is not None for cfg in resolved_loops):
+                        strategy_config.update(account_input_kind="absolute_target_replay", label_status="NOT_APPLICABLE")
                     batch_policy = next((cfg[POLICY_KEY] for cfg in resolved_loops if cfg.get(POLICY_KEY)), None)
                     if batch_policy:
                         strategy_config["node_resolution_policy"] = QE_BATCH_EXECUTION_POLICY
@@ -8093,7 +8136,7 @@ class AutoEvolutionScheduler:
             raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
         if force_full_train and loop_config.get("frozen_inference") is not None:
             raise ValueError("QE_FROZEN_FORCE_FULL_TRAIN_FORBIDDEN")
-        if force_full_train and bool(loop_config.get("prediction_replay")):
+        if force_full_train and (loop_config.get("prediction_replay") or loop_config.get("absolute_target_replay") is not None):
             raise ValueError(
                 "QE_PREDICTION_REPLAY_FORCE_FULL_TRAIN_FORBIDDEN: "
                 "immutable prediction replay cannot be converted into model training"
@@ -8186,6 +8229,7 @@ class AutoEvolutionScheduler:
         requested_phase_pipeline = bool(strategy_config.get("phase_pipeline_enabled", False))
         full_train_requested = not (
             bool(loop_config.get("prediction_replay"))
+            or loop_config.get("absolute_target_replay") is not None
             or (bool(loop_config.get("backtest_only")) and not force_full_train)
         )
         phase_pipeline_enabled = False
@@ -8301,7 +8345,7 @@ class AutoEvolutionScheduler:
                     raise ValueError("QE_FROZEN_INPUT_IDENTITY_MISMATCH")
             runtime_flags = cfg.build_runtime_flags()
             requested_seed = runtime_flags.get("random_seed")
-            if requested_seed is None and not (cfg.backtest_only or cfg.prediction_replay):
+            if requested_seed is None and not (cfg.backtest_only or cfg.prediction_replay or cfg.absolute_target_replay is not None):
                 raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
             seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
             action_type = "ensemble_config" if seed_ensemble else "custom_config"
@@ -8350,6 +8394,8 @@ class AutoEvolutionScheduler:
                 "parallel_training_eligible": parallel_training_eligible,
                 "resource_session_id": resource_session.session_id if resource_session else None,
             }
+            if cfg.absolute_target_replay is not None:
+                config_record["absolute_target_replay"] = cfg.absolute_target_replay
             rerun_submission = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
             if isinstance(rerun_submission, dict):
                 config_record[_QE_RERUN_SUBMISSION_KEY] = dict(rerun_submission)
@@ -8462,7 +8508,11 @@ class AutoEvolutionScheduler:
                     planned_registration
                 ),
             )
-            if cfg.prediction_replay:
+            if cfg.absolute_target_replay is not None:
+                if force_full_train:
+                    raise ValueError("QE_ABSOLUTE_TARGET_FORCE_TRAIN_FORBIDDEN")
+                mode = BacktestMode.ABSOLUTE_TARGET_REPLAY
+            elif cfg.prediction_replay:
                 if prediction_replay_source is None or prediction_replay_files is None:
                     raise ValueError("QE_PREDICTION_REPLAY_RESOLVED_PAYLOAD_MISSING")
                 ctx = ExecutionContext(

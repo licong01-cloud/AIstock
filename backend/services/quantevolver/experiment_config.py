@@ -391,7 +391,7 @@ class ExperimentConfig(BaseModel):
 
     # ── Core identity ──────────────────────────────────────────────────────────
     factor_names: list[str]
-    model_id: str
+    model_id: str | None
     strategy_id: str | None = None
 
     # ── Training / backtest window ─────────────────────────────────────────────
@@ -464,6 +464,7 @@ class ExperimentConfig(BaseModel):
     prediction_source_loop_index: int | None = None
     prediction_source_sha256: str | None = None
     prediction_recovery: SavedPredictionRecovery | None = None
+    absolute_target_replay: dict[str, Any] | None = None
 
     # ── Metadata (not passed to compose) ──────────────────────────────────────
     node_id: str | None = None
@@ -476,8 +477,13 @@ class ExperimentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_factor_names(self) -> "ExperimentConfig":
+        from backend.services.quantevolver.qe_absolute_targets import validate_mode
+
+        targets = validate_mode(self.model_dump())
+        if targets is None and self.model_id is None:
+            raise ValueError("model_id is required outside absolute target replay")
         validate_frozen_inference_mode(self.model_dump(), allow_extra_params=True)
-        if self.alpha_mode == "single" and not self.factor_names:
+        if targets is None and self.alpha_mode == "single" and not self.factor_names:
             raise ValueError("factor_names cannot be empty in single-alpha mode")
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
             raise ValueError("multi_alpha_config required when alpha_mode='multi'")
@@ -489,7 +495,7 @@ class ExperimentConfig(BaseModel):
             and self.long_trend_evaluation.profile_id != self.long_trend_profile_id
         ):
             raise ValueError("long_trend_profile_id conflicts with the resolved long_trend_evaluation profile")
-        self.label_horizon = normalize_label_horizon(self.label_horizon)
+        self.label_horizon = None if targets is not None else normalize_label_horizon(self.label_horizon)
         if self.canonical_pit_dataset is not None:
             self.canonical_pit_dataset = require_qe_formal_dataset_request(self.canonical_pit_dataset)
         replay = normalize_prediction_replay_contract(
@@ -618,6 +624,9 @@ class ExperimentConfig(BaseModel):
             ).as_dict()
 
         # 12. initial_cash must NOT flow into custom_params
+        if self.absolute_target_replay is not None:
+            params["absolute_target_replay"] = self.absolute_target_replay
+            params.pop("label_horizon", None)
         params.pop("initial_cash", None)
         for runtime_key in QE_RUNTIME_METADATA_KEYS:
             params.pop(runtime_key, None)

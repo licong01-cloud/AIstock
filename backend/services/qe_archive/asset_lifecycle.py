@@ -452,6 +452,16 @@ def _identity_complete(payload: Mapping[str, Any], identity: Mapping[str, Any]) 
         or payload.get("model_type")
         or _first_recursive((config,), "model_id", "model_type")
     )
+    target_contract = _first_recursive((config,), "absolute_target_replay")
+    if isinstance(target_contract, dict):
+        from backend.services.quantevolver.qe_absolute_targets import normalize_contract
+
+        try:
+            normalize_contract(target_contract)
+        except (ValueError, TypeError, KeyError):
+            pass  # Invalid target identities remain incomplete; never invent a model.
+        else:
+            factors_or_model = True  # A real model-free target asset is the source identity.
     dataset_identity = bool(identity.get("dataset_release_id") or identity.get("dataset_manifest_sha256"))
     registration = _registration(payload)
     formal_registration = str(registration.get("purpose") or "").strip().lower() in FORMAL_PURPOSES

@@ -71,6 +71,7 @@ class BacktestMode(str, Enum):
     FULL_TRAIN = "full_train"        # 完整训练 + 回测（Path 1/2/4）
     BACKTEST_ONLY = "backtest_only"  # 复用已训练模型，仅回测（Path 3）
     PREDICTION_REPLAY = "prediction_replay"
+    ABSOLUTE_TARGET_REPLAY = "absolute_target_replay"
 
 
 class BacktestExecutor(BaseExecutor):
@@ -116,6 +117,11 @@ class BacktestExecutor(BaseExecutor):
             ctx:    执行上下文（task_id, loop_index 等）
             mode:   FULL_TRAIN 或 BACKTEST_ONLY
         """
+        if config.absolute_target_replay is not None:
+            if mode != BacktestMode.ABSOLUTE_TARGET_REPLAY or ctx.model_source or ctx.prediction_replay_source:
+                raise ValueError("QE_ABSOLUTE_TARGET_REQUIRES_MODEL_FREE_MODE")
+        elif mode == BacktestMode.ABSOLUTE_TARGET_REPLAY:
+            raise ValueError("QE_ABSOLUTE_TARGET_CONTRACT_REQUIRED")
         if config.frozen_inference is not None:
             if mode != BacktestMode.BACKTEST_ONLY or not ctx.model_source:
                 raise ValueError("QE_FROZEN_REQUIRES_BACKTEST_ONLY_SOURCE")
@@ -464,6 +470,7 @@ class BacktestExecutor(BaseExecutor):
             backtest_only=mode in {
                 BacktestMode.BACKTEST_ONLY,
                 BacktestMode.PREDICTION_REPLAY,
+                BacktestMode.ABSOLUTE_TARGET_REPLAY,
             },
         )
         submission_outcome = await self.submission_coordinator.submit(

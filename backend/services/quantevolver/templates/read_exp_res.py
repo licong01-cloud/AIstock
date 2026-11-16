@@ -2090,6 +2090,9 @@ if latest_recorder is not None:
                 print(f"Warning: excess_return fallback failed: {_fb_e}")
 
         _enhanced = {"summary": _summary_dict}
+        _absolute_target_path = Path.cwd() / "qe_absolute_target_result.json"
+        if _absolute_target_path.is_file():
+            _enhanced["absolute_target_result"] = json.loads(_absolute_target_path.read_text(encoding="utf-8"))
         _long_trend_registration = _load_long_trend_registration_observation()
         _enhanced["long_trend_registration"] = _long_trend_registration
         _summary_dict["long_trend_registration_status"] = _long_trend_registration["status"]

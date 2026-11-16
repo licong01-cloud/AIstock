@@ -760,12 +760,12 @@ def build_config_from_custom_evo_loop(
 
     return ExperimentConfig(
         factor_names=factor_names,
-        model_id=loop_config.get("model_id") or "",
+        model_id=loop_config.get("model_id") if loop_config.get("absolute_target_replay") is not None else loop_config.get("model_id") or "",
         strategy_id=loop_config.get("strategy_id"),
         data_split=data_split,
         stock_pool=stock_pool,
         label_type=label_type,
-        label_horizon=label_horizon,
+        label_horizon=None if loop_config.get("absolute_target_replay") is not None else label_horizon,
         sector_blacklist=sector_blacklist,
         hmm=hmm,
         execution_algo=execution_algo,
@@ -788,6 +788,7 @@ def build_config_from_custom_evo_loop(
         prediction_source_loop_index=prediction_source_loop_index,
         prediction_source_sha256=prediction_source_sha256,
         prediction_recovery=loop_config.get("prediction_recovery"),
+        absolute_target_replay=loop_config.get("absolute_target_replay"),
         node_id=loop_config.get("node_id") or task.get("node_id"),
         experiment_name=experiment_name,
         extra_params={

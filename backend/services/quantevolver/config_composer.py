@@ -2352,6 +2352,18 @@ class ConfigComposer:
         """
         import uuid as _uuid
 
+        if (custom_params or {}).get("absolute_target_replay") is not None:
+            from .absolute_target_consumer import compose_absolute_targets
+
+            return compose_absolute_targets(
+                self, custom_params=custom_params, factor_names=factor_names, model_id=model_id,
+                strategy_id=strategy_id, data_split=data_split, experiment_name=experiment_name,
+                execution_algo=execution_algo, execution_algo_params=execution_algo_params,
+                strategy_params=strategy_params, node_id=node_id, task_id=task_id, loop_index=loop_index,
+                train_only=train_only,
+                skip_db_save=skip_db_save,
+            )
+
         from .l2_risk_consumer import apply_study, extract_study
         from .l2_continuous_consumer import apply_continuous, extract_continuous
         from .stock_probability_consumer import apply_stock_probability, extract_stock_probability
