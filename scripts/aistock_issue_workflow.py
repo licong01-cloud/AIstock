@@ -2406,6 +2406,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
             continue
         if (
             path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes)
+            or lower == "frontend/scripts/next-config-3100.test.mjs"
             or (lower.startswith("tdx-api-main/") and lower.endswith("_test.go"))
         ):
             impacts.add("none")
@@ -2475,7 +2476,9 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
                 impacts.add("backend")
                 target_ids.add("backend-main")
             runtime_files.append(path)
-        elif lower.startswith(("frontend/src/", "frontend/app/", "frontend/pages/", "frontend/components/", "frontend/lib/")):
+        elif lower == "frontend/next.config.mjs" or lower.startswith((
+            "frontend/src/", "frontend/app/", "frontend/pages/", "frontend/components/", "frontend/lib/",
+        )):
             impacts.add("frontend")
         elif lower.startswith(("migrations/", "backend/migrations/")) or lower.endswith(".sql"):
             impacts.add("database")

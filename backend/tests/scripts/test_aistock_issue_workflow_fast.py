@@ -2092,6 +2092,42 @@ def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
     return message
 
 
+@pytest.mark.parametrize("paths,expected,targets", [
+    (["frontend/next.config.mjs"], "frontend", []),
+    (["frontend/scripts/next-config-3100.test.mjs"], "none", []),
+    (["frontend/next.config.mjs", "frontend/scripts/next-config-3100.test.mjs"], "frontend", []),
+    (["./frontend\\next.config.mjs"], "frontend", []),
+    (["frontend/next.config.other.mjs"], "unknown", []),
+    (["frontend/scripts/other.test.mjs"], "unknown", []),
+    (["frontend/scripts/next-config-3100.mjs"], "unknown", []),
+    (["frontend/next.config.mjs", "frontend/scripts/other.mjs"], "unknown", []),
+    (["frontend/next.config.mjs", "backend/routers/health.py"], "backend", ["backend-main"]),
+])
+def test_next_config_runtime_classification_is_exact_and_preserves_backend(paths, expected, targets):
+    result = workflow._classify_runtime_impact(paths)
+    assert result["runtime_impact"] == expected
+    assert result["target_ids"] == targets
+    assert result["catalog_error"] is None
+
+
+def test_next_config_requires_frontend_activation_without_backend_restart_or_fake_acceptance():
+    contract = workflow.build_runtime_contract(
+        record={}, changed_files=["frontend/next.config.mjs", "frontend/scripts/next-config-3100.test.mjs"],
+    )
+    assert contract["runtime_impact"] == "frontend"
+    assert contract["activation_states"]["frontend_activation"] == "required"
+    assert contract["activation_states"]["backend_restart"] == "not_required"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+
+
+def test_next_config_frontend_classification_cannot_override_an_invalid_catalog(invalid_runtime_catalog):
+    result = workflow._classify_runtime_impact(["frontend/next.config.mjs"])
+    assert result["runtime_impact"] == "unknown"
+    assert result["catalog_error"] == invalid_runtime_catalog
+
+
 def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_catalog: str) -> None:
     paths = ["backend/services/hmm_risk/contracts.py"]
     payload = workflow._classify_runtime_impact(paths)

@@ -6,6 +6,11 @@
     "tests/aistock_validation/bugs/20261116_BUG-2232-next-configuration-and-direct-node-test-runtime-classification.json"
   ],
   "assigned_agent": null,
+  "agent_review": {
+    "correctness": "passed: exact Next configuration remains frontend runtime; only the actual direct Node test is non-runtime.",
+    "completeness_regression": "passed: 777 workflow tests preserve unknown-neighbor, catalog-failure, mixed-backend and activation contracts.",
+    "runtime_actions": "none; source delivery does not activate the pending BUG-2231 frontend change."
+  },
   "bug_id": "BUG-2232",
   "closed_at": null,
   "closure_requirements": [
