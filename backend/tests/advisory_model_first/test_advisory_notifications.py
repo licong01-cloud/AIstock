@@ -7,8 +7,9 @@ from uuid import uuid4
 import pytest
 
 from backend.services.advisory_forward.notifications import (
-    CN, AdvisoryNotificationService, configured_channels, events_for_day,
+    CN, AdvisoryNotificationService, completion_events_for_day, configured_channels, events_for_day,
 )
+from backend.services.advisory_forward.notification_repository import FEISHU_COMPLETION_ROUTE
 from backend.services.advisory_forward.notification_transport import (
     AdvisoryNotificationTransport, ExternalNotificationDeliveryError,
 )
@@ -17,7 +18,12 @@ from backend.services.advisory_forward.notification_transport import (
 @pytest.fixture(autouse=True)
 def no_external_network(monkeypatch):
     import socket
+    import requests
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **k: pytest.fail('real network forbidden'))
+    monkeypatch.setattr(requests.sessions.Session, 'request', lambda *a, **k: pytest.fail('real HTTP forbidden'))
+    for key in ('AISTOCK_ADVISORY_FEISHU_ENABLED', 'AISTOCK_ADVISORY_FEISHU_WEBHOOK_URL',
+                'AISTOCK_ADVISORY_FEISHU_SIGNING_SECRET'):
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture
@@ -215,3 +221,200 @@ def test_service_bounded_dispatch_and_explicit_failure(monkeypatch, transport):
     assert all(r['error_code'] == 'EXTERNAL_DELIVERY_EXCEPTION' for r in repo.finished)
     assert result['queued'] == 4  # Two events, two separately tracked channels.
     assert 'secret' not in str(result)
+
+
+def test_completion_notice_is_brief_daily_and_tracks_original_publications():
+    now = datetime(2026, 11, 13, 21, 30, tzinfo=CN)
+    rows = [published(), {**published(), 'program_id': 'p2', 'list_version_id': 'v2'}]
+    event = completion_events_for_day(now, date(2026, 11, 16), rows)[0]
+    assert event['kind'] == 'SUMMARY'
+    assert event['payload']['message'] == '2026-11-13 荐股任务已完成。'
+    assert event['payload']['subject'] == 'AIstock'
+    assert event['payload']['delivery_route'] == FEISHU_COMPLETION_ROUTE
+    assert event['expires_at'] == datetime(2026, 11, 16, 9, 30, tzinfo=CN)
+    later = completion_events_for_day(now.replace(hour=23), date(2026, 11, 16), list(reversed(rows)))[0]
+    assert later['event_key'] == event['event_key']
+    assert later['payload'] == event['payload']
+    changed = completion_events_for_day(now, date(2026, 11, 16), [{**rows[0], 'list_version_id': 'v3'}, rows[1]])[0]
+    assert changed['event_key'] == event['event_key']  # No second completion notice that day.
+    assert changed['payload']['completion_roster_sha256'] != event['payload']['completion_roster_sha256']
+    assert set(event['payload']) == {
+        'schema_version', 'delivery_route', 'completion_roster_sha256', 'subject', 'message',
+    }
+
+
+@pytest.mark.parametrize('state', [None, 'UNKNOWN', 'WAITING_DATA', 'FAILED', 'NOT_STARTED'])
+def test_partial_completion_never_becomes_success(state):
+    rows = [published(), {'program_id': 'p2', 'publication_status': state}]
+    assert not completion_events_for_day(datetime(2026, 11, 13, 23, tzinfo=CN), date(2026, 11, 16), rows)
+
+
+def test_completion_has_no_empty_or_nontrading_day_notice():
+    now = datetime(2026, 11, 13, 22, tzinfo=CN)
+    assert not completion_events_for_day(now, date(2026, 11, 16), [])
+    assert not completion_events_for_day(now, None, [])
+    with pytest.raises(ValueError, match='timezone-aware'):
+        completion_events_for_day(now.replace(tzinfo=None), date(2026, 11, 16), [published()])
+    with pytest.raises(ValueError, match='TARGET_ORDER'):
+        completion_events_for_day(now, now.date(), [published()])
+
+
+@pytest.mark.parametrize('change', [
+    {'program_id': None}, {'binding_version_id': None}, {'list_version_id': None},
+    {'published_at': None}, {'published_at': datetime(2026, 11, 13, 21)},
+    {'published_at': datetime(2026, 11, 13, 23, tzinfo=CN)},
+    {'published_at': datetime(2026, 11, 12, 21, tzinfo=CN)},
+    {'target_trade_date': date(2026, 11, 17)},
+])
+def test_completion_requires_real_same_day_publication_identity(change):
+    with pytest.raises(ValueError, match='IDENTITY_INVALID'):
+        completion_events_for_day(datetime(2026, 11, 13, 22, tzinfo=CN), date(2026, 11, 16), [{**published(), **change}])
+
+
+def test_completion_roster_cannot_double_count_programs_or_exceed_source_bound():
+    now = datetime(2026, 11, 13, 22, tzinfo=CN)
+    with pytest.raises(ValueError, match='ROSTER_INVALID'):
+        completion_events_for_day(now, date(2026, 11, 16), [published(), published()])
+    with pytest.raises(ValueError, match='ROSTER_INVALID'):
+        completion_events_for_day(now, date(2026, 11, 16), [{**published(), 'program_id': str(i)} for i in range(101)])
+
+
+def test_dedicated_feishu_configuration_and_signed_wire_contract(monkeypatch, transport):
+    from backend.services.advisory_forward import notification_transport
+    original = dict(transport.config)
+    monkeypatch.setenv('AISTOCK_ADVISORY_FEISHU_ENABLED', 'true')
+    monkeypatch.setenv('AISTOCK_ADVISORY_FEISHU_WEBHOOK_URL', 'https://open.feishu.cn/open-apis/bot/v2/hook/test-only')
+    monkeypatch.setenv('AISTOCK_ADVISORY_FEISHU_SIGNING_SECRET', 'demo')
+    sender = AdvisoryNotificationTransport(shared=transport)
+    assert transport.config == original
+    assert sender.config is not transport.config
+    assert sender.config['email_enabled'] == original['email_enabled']
+    assert sender.config['webhook_type'] == 'feishu'
+    assert sender.config['advisory_feishu_completion_only'] is True
+    monkeypatch.setattr(notification_transport.time, 'time', lambda: 1599360473)
+    payloads = []
+    monkeypatch.setattr(sender, '_post_webhook', lambda payload: (
+        payloads.append(payload) or SimpleNamespace(status_code=200, json=lambda: {'code': 0})))
+    assert sender.send_external_message('webhook', 'AIstock', '2026-11-13 荐股任务已完成。') is True
+    assert payloads == [{
+        'msg_type': 'text', 'content': {'text': 'AIstock\n2026-11-13 荐股任务已完成。'},
+        'timestamp': '1599360473', 'sign': 'l1N0gAcBjdwBvGm1xMjOF0XSyaLRpR7tuO5dHfhAYc8=',
+    }]
+    assert 'demo' not in str(payloads)
+
+
+def test_dedicated_feishu_off_keeps_shared_legacy_configuration(transport):
+    sender = AdvisoryNotificationTransport(shared=transport)
+    assert sender.config is transport.config
+    assert sender.config['webhook_type'] == 'dingtalk'
+
+
+def test_global_feishu_cannot_enable_advisory_details_without_dedicated_switch(transport):
+    transport.config['webhook_type'] = 'feishu'
+    assert configured_channels(transport.config) == ['email']
+    transport.config['advisory_feishu_completion_only'] = True
+    assert configured_channels(transport.config) == ['email', 'webhook']
+
+
+def test_hundred_completed_programs_still_produce_one_constant_size_message():
+    now = datetime(2026, 11, 13, 22, tzinfo=CN)
+    rows = [{**published(), 'program_id': str(i)} for i in range(100)]
+    events = completion_events_for_day(now, date(2026, 11, 16), rows)
+    assert len(events) == 1
+    assert events[0]['payload']['message'] == '2026-11-13 荐股任务已完成。'
+
+
+@pytest.mark.parametrize('url', [
+    '', 'https://invalid.test/hook', 'http://open.feishu.cn/open-apis/bot/v2/hook/test',
+    'https://open.feishu.cn/open-apis/bot/v2/hook/',
+    'https://user:password@open.feishu.cn/open-apis/bot/v2/hook/test',
+    'https://open.feishu.cn/open-apis/bot/v2/hook/test?secret=hidden',
+    'https://open.feishu.cn:bad/open-apis/bot/v2/hook/test',
+])
+def test_missing_or_invalid_dedicated_endpoint_never_falls_back(monkeypatch, transport, url):
+    monkeypatch.setenv('AISTOCK_ADVISORY_FEISHU_ENABLED', 'true')
+    monkeypatch.setenv('AISTOCK_ADVISORY_FEISHU_WEBHOOK_URL', url)
+    sender = AdvisoryNotificationTransport(shared=transport)
+    sender.config['email_enabled'] = False
+    monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
+    result = AdvisoryNotificationService(repository=object(), transport=sender).run_once()
+    assert result['status'] == 'NOT_CONFIGURED'
+    assert result['feishu_completion']['status'] == 'NOT_CONFIGURED'
+    assert result['feishu_completion']['reason_code'].startswith('FEISHU_WEBHOOK_URL_')
+    assert transport.config['webhook_type'] == 'dingtalk'
+
+
+def test_unsigned_feishu_and_encoded_payload_bound(monkeypatch, transport):
+    transport.config['webhook_type'] = 'feishu'
+    calls = []
+    monkeypatch.setattr(transport, '_post_webhook', lambda payload: (
+        calls.append(payload) or SimpleNamespace(status_code=200, json=lambda: {'code': 0})))
+    assert transport.send_external_message('webhook', 'AIstock', 'completed')
+    assert 'sign' not in calls[0] and 'timestamp' not in calls[0]
+    with pytest.raises(ExternalNotificationDeliveryError, match='FEISHU_MESSAGE_TOO_LARGE'):
+        transport.send_external_message('webhook', 'AIstock', '测'*10000)
+    assert len(calls) == 1
+
+
+def test_completion_dispatch_is_daily_brief_and_does_not_change_email(monkeypatch, transport):
+    monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
+    transport.config.update(webhook_type='feishu', advisory_feishu_completion_only=True)
+    now = datetime(2026, 11, 13, 22, tzinfo=CN)
+
+    class Repository:
+        def __init__(self):
+            self.events, self.sent, self.claim_routes = {}, set(), []
+
+        def snapshot(self, day):
+            return date(2026, 11, 16), [published()]
+
+        def enqueue(self, event, channel, observed):
+            key = (event['event_key'], channel)
+            if key in self.events:
+                return False
+            self.events[key] = dict(event, channel=channel)
+            return True
+
+        def claim(self, observed, channels, *, webhook_route):
+            self.claim_routes.append(webhook_route)
+            return next((e for key, e in self.events.items() if key not in self.sent), None)
+
+        def finish(self, row, *, accepted, **kwargs):
+            assert accepted
+            self.sent.add((row['event_key'], row['channel']))
+            return 'SENT'
+
+    repo, calls = Repository(), []
+    monkeypatch.setattr(transport, 'send_external_message', lambda *args: calls.append(args) or True)
+    service = AdvisoryNotificationService(repo, transport, lambda: now)
+    first = service.run_once()
+    assert first['feishu_completion']['status'] == 'EVENT_READY'
+    assert first['queued'] == 3  # Original two email events, one brief Feishu event.
+    assert len([row for row in calls if row[0] == 'webhook']) == 1
+    assert ('webhook', 'AIstock', '2026-11-13 荐股任务已完成。') in calls
+    assert any(row[0] == 'email' and 'LSTM' in row[2] for row in calls)
+    assert set(repo.claim_routes) == {FEISHU_COMPLETION_ROUTE}
+    assert service.run_once()['queued'] == 0
+    assert len(calls) == 3
+
+
+def test_partial_programs_leave_feishu_waiting_even_after_overdue_hour(monkeypatch, transport):
+    monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
+    transport.config.update(email_enabled=False, webhook_type='feishu', advisory_feishu_completion_only=True)
+
+    class Repository:
+        def snapshot(self, day):
+            return date(2026, 11, 16), [published(), {'program_id': 'p2', 'publication_status': 'WAITING_DATA'}]
+
+        def enqueue(self, *args):
+            pytest.fail('incomplete daily programs must not notify Feishu')
+
+        def claim(self, *args, **kwargs):
+            assert kwargs['webhook_route'] == FEISHU_COMPLETION_ROUTE
+            return None
+
+    result = AdvisoryNotificationService(
+        Repository(), transport, lambda: datetime(2026, 11, 13, 23, tzinfo=CN),
+    ).run_once()
+    assert result['feishu_completion']['status'] == 'WAITING_COMPLETION'
+    assert result['queued'] == 0 and result['deliveries'] == []

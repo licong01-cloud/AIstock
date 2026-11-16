@@ -8,7 +8,9 @@ from uuid import uuid4
 import psycopg2
 import pytest
 
-from backend.services.advisory_forward.notification_repository import AdvisoryNotificationRepository
+from backend.services.advisory_forward.notification_repository import (
+    AdvisoryNotificationRepository, FEISHU_COMPLETION_ROUTE,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv('AISTOCK_NOTIFICATION_DEV_TEST') != '1', reason='explicit existing DEV integration only'
@@ -139,3 +141,29 @@ def test_real_source_snapshot_calendar_and_same_day_filter(dev):
     assert len(rows) <= 100
     assert all(r['target_trade_date'] in {None, target} for r in rows)
     assert repo_on(conn).snapshot(date(2026, 11, 14)) == (None, [])
+
+
+def test_real_completion_route_isolates_both_switch_directions_and_preserves_retry(dev):
+    conn, _ = dev
+    repo, now = repo_on(conn), datetime.now(timezone.utc)
+    legacy, completed, email = event(now), event(now), event(now)
+    completed['payload'].update(delivery_route=FEISHU_COMPLETION_ROUTE)
+    assert repo.enqueue(legacy, 'webhook', now)
+    assert repo.enqueue(completed, 'webhook', now)
+    assert repo.enqueue(email, 'email', now)
+    # Completion mode cannot leak an older detailed webhook event to Feishu.
+    first = repo.claim(now, ['webhook'], webhook_route=FEISHU_COMPLETION_ROUTE)
+    assert first['event_key'] == completed['event_key']
+    assert repo.finish(first, accepted=False, now=now, error_code='NOT_ACCEPTED') == 'PENDING'
+    assert repo.claim(now+timedelta(seconds=59), ['webhook'], webhook_route=FEISHU_COMPLETION_ROUTE) is None
+    # Disabling completion mode cannot send its pending notice to a legacy robot.
+    old = repo.claim(now, ['webhook'])
+    assert old['event_key'] == legacy['event_key']
+    assert repo.finish(old, accepted=True, now=now) == 'SENT'
+    assert repo.claim(now+timedelta(seconds=60), ['webhook']) is None
+    retried = repo.claim(now+timedelta(seconds=60), ['webhook'], webhook_route=FEISHU_COMPLETION_ROUTE)
+    assert retried['event_key'] == completed['event_key'] and retried['attempts'] == 2
+    assert repo.finish(retried, accepted=True, now=now+timedelta(seconds=60)) == 'SENT'
+    assert not repo.enqueue(completed, 'webhook', now)
+    # Email is still claimable regardless of the webhook route setting.
+    assert repo.claim(now, ['email'], webhook_route=FEISHU_COMPLETION_ROUTE)['event_key'] == email['event_key']

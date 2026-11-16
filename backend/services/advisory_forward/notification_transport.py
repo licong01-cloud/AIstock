@@ -1,8 +1,15 @@
 """Strict Advisory adapter reusing the existing notification configuration and legacy API."""
+import base64
+import hashlib
+import hmac
+import json
+import os
 import smtplib
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Dict
+from urllib.parse import urlsplit
 
 from notification_service import NotificationService, notification_service
 
@@ -15,6 +22,23 @@ class AdvisoryNotificationTransport(NotificationService):
     def __init__(self, shared=None):
         # Shared configuration is read, never changed. No second credential loader.
         self.config = (shared or notification_service).config
+        if os.getenv('AISTOCK_ADVISORY_FEISHU_ENABLED', '').strip().lower() in {
+            '1', 'true', 'yes', 'on'
+        }:
+            self.config = dict(self.config)
+            url = os.getenv('AISTOCK_ADVISORY_FEISHU_WEBHOOK_URL', '').strip()
+            valid = _valid_feishu_webhook(url)
+            self.config.update(
+                advisory_feishu_completion_only=True,
+                advisory_feishu_configuration_error=(
+                    None if valid else 'FEISHU_WEBHOOK_URL_INVALID' if url
+                    else 'FEISHU_WEBHOOK_URL_MISSING'
+                ),
+                webhook_enabled=True,
+                webhook_type='feishu',
+                webhook_url=url if valid else '',
+                webhook_signing_secret=os.getenv('AISTOCK_ADVISORY_FEISHU_SIGNING_SECRET', ''),
+            )
 
     def send_external_message(self, channel: str, subject: str, message: str) -> bool:
         """Explicit external acceptance; never use the legacy UI fallback."""
@@ -37,6 +61,14 @@ class AdvisoryNotificationTransport(NotificationService):
             success_key = 'errcode'
         elif webhook_type == 'feishu':
             data = {'msg_type': 'text', 'content': {'text': f'{subject}\n{message}'}}
+            secret = self.config.get('webhook_signing_secret')
+            if secret:
+                timestamp = str(int(time.time()))
+                key = (timestamp+'\n'+secret).encode('utf-8')
+                signature = base64.b64encode(hmac.new(key, digestmod=hashlib.sha256).digest()).decode('ascii')
+                data.update(timestamp=timestamp, sign=signature)
+            if len(json.dumps(data, allow_nan=False).encode('utf-8')) > 20 * 1024:
+                raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_TOO_LARGE')
             success_key = 'code'
         else:
             return False
@@ -86,3 +118,20 @@ class AdvisoryNotificationTransport(NotificationService):
 
         except Exception:
             raise ExternalNotificationDeliveryError('EMAIL_TRANSPORT_ERROR') from None
+
+
+def _valid_feishu_webhook(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        prefix = '/open-apis/bot/v2/hook/'
+        token = parts.path.removeprefix(prefix)
+        return bool(
+            parts.scheme == 'https'
+            and parts.hostname in {'open.feishu.cn', 'open.larksuite.com'}
+            and parts.port in {None, 443}
+            and not parts.username and not parts.password
+            and not parts.query and not parts.fragment
+            and parts.path.startswith(prefix) and token and '/' not in token
+        )
+    except ValueError:
+        return False

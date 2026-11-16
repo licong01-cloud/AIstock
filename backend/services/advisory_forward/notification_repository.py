@@ -9,6 +9,8 @@ from psycopg2.extras import Json, RealDictCursor
 
 from backend.db.pg_pool import get_conn
 
+FEISHU_COMPLETION_ROUTE = 'advisory_feishu_completion_v1'
+
 
 class AdvisoryNotificationRepository:
     def __init__(self, connection_factory=None):
@@ -58,7 +60,9 @@ class AdvisoryNotificationRepository:
                  Json(event['payload']), now, event['expires_at']))
             return cur.rowcount == 1
 
-    def claim(self, now, channels):
+    def claim(self, now, channels, *, webhook_route='legacy'):
+        if webhook_route not in {'legacy', FEISHU_COMPLETION_ROUTE}:
+            raise ValueError('ADVISORY_NOTIFICATION_WEBHOOK_ROUTE_INVALID')
         if not channels:
             return None
         with self.cursor() as cur:
@@ -72,14 +76,16 @@ class AdvisoryNotificationRepository:
                 WHERE status='SENDING' AND lease_until<=%s AND attempts>=6""", (now, now))
             cur.execute("""WITH candidate AS (
                 SELECT event_key,channel FROM app.advisory_notification_delivery
-                WHERE channel=ANY(%s::text[]) AND expires_at>%s AND attempts<6
+                WHERE channel=ANY(%s::text[])
+                  AND (channel<>'webhook' OR COALESCE(payload->>'delivery_route','legacy')=%s)
+                  AND expires_at>%s AND attempts<6
                   AND ((status='PENDING' AND available_at<=%s)
                     OR (status='SENDING' AND lease_until<=%s))
                 ORDER BY created_at,event_key,channel FOR UPDATE SKIP LOCKED LIMIT 1
                 ) UPDATE app.advisory_notification_delivery d SET
                 status='SENDING',attempts=d.attempts+1,lease_until=%s,lease_token=%s,updated_at=%s
                 FROM candidate c WHERE d.event_key=c.event_key AND d.channel=c.channel RETURNING d.*""",
-                (list(channels), now, now, now, now+timedelta(seconds=120), uuid4().hex, now))
+                (list(channels), webhook_route, now, now, now, now+timedelta(seconds=120), uuid4().hex, now))
             row = cur.fetchone()
             return dict(row) if row else None
 
