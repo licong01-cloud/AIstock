@@ -25,7 +25,9 @@
     }
   ],
   "evidence_uris": [
-    "tmp/handoff/qe-trend-parent-longtask-20261116/remote_T_runlog_tail_v1.txt"
+    "tmp/handoff/qe-trend-parent-longtask-20261116/remote_T_runlog_tail_v1.txt",
+    "tmp/handoff/qe-trend-parent-longtask-20261116/native_consumer_fresh_process_v1.json",
+    "tmp/handoff/qe-trend-parent-longtask-20261116/native_quotes_real_qlib_v1.json"
   ],
   "expected": "按绑定数据集原生股票代码消费；完整账户和目标消费收据持久化；无订单指标保留NA，不把错误空仓包装成功；失败原件与恢复映射保留。",
   "file_scope_contract": {
@@ -133,17 +135,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Independent process loads committed consumer 8c9dec62bd108c19b3f9bb3dca00bd4bf8ab2bc7; both real full Composer submissions captured before POST; real Qlib frozen772 native daily/minute quotes at first/last account dates and actual indicator_analysis pass; zero account/fit/predict/transport/service calls. receipt=tmp/handoff/qe-trend-parent-longtask-20261116/native_consumer_fresh_process_v1.json;sha256=05e6f5bd94822d924a4363b558340128cd1c393359e4c47b7083baf64d26fd6d"
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -263,5 +272,30 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "author_review": {
+    "correctness": {
+      "status": "PASS",
+      "findings_repaired": [
+        "Native suffix keys retained exactly; actual frozen quotes reproduce old prefix failure.",
+        "Empty indicator frames retain absence; nonempty malformed indicators fail.",
+        "Raw reports/positions/indicators saved before derived analysis; failure never emits completion."
+      ]
+    },
+    "completeness_regression": {
+      "status": "PASS",
+      "checks": [
+        "Both full source Composer/coordinator paths captured with no POST; WSL replay20GiB guard and bash syntax pass.",
+        "107 directly related tests pass, changed-file Ruff and L0 pass.",
+        "Frozen targets, active772 pins, daily/minute execution reference, fixed564day window, model-free/label NA semantics unchanged."
+      ]
+    },
+    "reviewer": "author_two_perspectives_not_independent"
+  },
+  "design_compliance_review": {
+    "no_partial_or_placeholder": "PASS_full_defect_closure_and_real_input_contract",
+    "no_silent_error_or_fake_success": "PASS_malformed_nonempty_fail_no_completion_raw_retained",
+    "no_unapproved_semantic_change": "PASS_only_key_alignment_and_missing_indicator_export_unchanged_weights_fees_window",
+    "no_unapproved_gate_rbac_or_control": "PASS_no_service_control_DB_schema_or_new_arms"
   }
 }
