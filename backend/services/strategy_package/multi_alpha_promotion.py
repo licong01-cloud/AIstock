@@ -107,6 +107,7 @@ class MultiAlphaPackagePromotionService:
         asset_freezer: PackageAssetFreezeService | None = None,
         frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
         prediction_ref_roots: Sequence[str | Path] | None = None,
+        original_context_resolver: Any | None = None,
     ) -> None:
         self.combine_repository = combine_repository or MultiAlphaCombineBacktestRepository()
         if component_service is not None:
@@ -128,6 +129,7 @@ class MultiAlphaPackagePromotionService:
                 frozen_runtime_self_check=self.frozen_runtime_self_check,
             )
         self.prediction_ref_roots = tuple(Path(root) for root in (prediction_ref_roots or ()))
+        self.original_context_resolver = original_context_resolver
 
     def promote_from_combine_run(
         self,
@@ -142,6 +144,7 @@ class MultiAlphaPackagePromotionService:
         secondary_topk: Sequence[int] | None = None,
         package_name: str | None = None,
         promotion_gate: Mapping[str, Any] | None = None,
+        original_context_bridge: bool = False,
     ) -> MultiAlphaPackagePromotionResult:
         run_id = _required_text(combine_backtest_run_id, "combine_backtest_run_id")
         scheme = _required_text(weighting_scheme, "weighting_scheme")
@@ -204,6 +207,14 @@ class MultiAlphaPackagePromotionService:
         _validate_promotion_gate(scheme_result, promotion_gate or {}, run_id=run_id, weighting_scheme=scheme)
 
         backtest_config = _as_mapping(run.get("backtest_config_json") or {}, field_name="backtest_config_json")
+        context_bridge = None
+        if original_context_bridge:
+            from .original_context_bridge import OriginalContextResolver
+
+            resolver = self.original_context_resolver or OriginalContextResolver(roots=self.prediction_ref_roots)
+            backtest_config, context_bridge = resolver.resolve(
+                run_id=run_id, scheme=scheme, topk=topk_value, original_config=backtest_config,
+            )
         strategy_snapshot = _build_strategy_snapshot(
             topk=topk_value,
             secondary_topk=secondary_topk_values,
@@ -275,6 +286,11 @@ class MultiAlphaPackagePromotionService:
             weight_policy=normalized_weight_policy,
             scheme_result_id=scheme_result_key,
         )
+        if context_bridge is not None:
+            # New evidence forms a new identity; never overwrite an older package.
+            package_id = "pkg_ma_" + hashlib.sha256(
+                (package_id + context_bridge["bridge_sha256"]).encode()
+            ).hexdigest()[:24]
         manifest = self._build_manifest(
             package_id=package_id,
             package_name=package_name or _default_package_name(leg_evidence, scheme, topk_value, package_id),
@@ -291,6 +307,12 @@ class MultiAlphaPackagePromotionService:
             strategy_snapshot=strategy_snapshot,
             frozen_contract=frozen_contract,
         )
+        if context_bridge is not None:
+            manifest = manifest.model_copy(update={
+                "package_version": "1.0.1",
+                "source_evidence": {**manifest.source_evidence, "original_context_bridge": context_bridge},
+                "backtest_context": {**manifest.backtest_context, "original_context_bridge": context_bridge},
+            })
         frozen = freeze_manifest(manifest)
         self.validator.validate_manifest(frozen)
         frozen_assets = self.asset_freezer.freeze_manifest_assets(frozen)

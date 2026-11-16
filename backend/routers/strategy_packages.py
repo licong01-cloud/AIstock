@@ -73,6 +73,7 @@ class CreateFromMultiAlphaCombineRunRequest(BaseModel):
     component_package_ids: dict[str, str] | None = None
     weight_policy: dict[str, Any] = Field(default_factory=dict)
     promotion_gate: dict[str, Any] = Field(default_factory=dict)
+    original_context_bridge: bool = False
     confirmation: str = Field(min_length=1)
 
 
@@ -402,6 +403,7 @@ def create_package_from_multi_alpha_combine_run(req: CreateFromMultiAlphaCombine
             component_package_ids=req.component_package_ids,
             weight_policy=req.weight_policy,
             promotion_gate=req.promotion_gate,
+            original_context_bridge=req.original_context_bridge,
             confirmation=req.confirmation,
         )
         return result.to_response()
