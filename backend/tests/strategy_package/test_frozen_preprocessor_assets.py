@@ -92,6 +92,32 @@ def test_legacy_manifest_hash_remains_unchanged_without_processor_asset():
     assert freeze_manifest(manifest).manifest_sha256 == compute_manifest_json_sha256(old)
 
 
+def test_parent_refreeze_keeps_fitted_processor_module_without_original_workspace(tmp_path, monkeypatch):
+    from backend.services.strategy_package.models import ModelCodeAsset
+    from backend.services.strategy_package import package_asset_freeze as module
+
+    store = LocalPackageAssetStore(tmp_path / "assets")
+    assets = []
+    for name in ("model", "qe_custom_loaders"):
+        raw = b"class RuntimeClass:\n    pass\n"
+        blob = store.put(raw, kind="model_code")
+        assets.append(ModelCodeAsset(module_name=name, relative_path=name + ".py", asset_ref=blob.uri,
+                                     sha256=blob.sha256, size_bytes=len(raw), source_uri="unit://original/" + name))
+    manifest = make_manifest()
+    model = manifest.model_asset.model_copy(update={"model_code_required": True, "model_code_assets": assets})
+    def missing_conf(_):
+        raise DataUnavailableError("original training workspace is deliberately unavailable")
+    freezer = PackageAssetFreezeService(asset_store=store, conf_yaml_reader=missing_conf)
+    monkeypatch.setattr(freezer, "_workspace_model_module_exists", lambda *a: False)
+    monkeypatch.setattr(module, "pickled_model_code_references_from_params_bytes",
+                        lambda raw, **kw: [SimpleNamespace(module_name="model" if raw == b"weight" else "qe_custom_loaders")])
+    required, kept, rows = freezer._freeze_model_code_assets(
+        model, manifest, model_weight_data=b"weight", processor_data=b"processor")
+    assert required is True
+    assert {a.module_name for a in kept} == {"model", "qe_custom_loaders"}
+    assert len(rows) == 2 and all(row.protected_asset for row in rows)
+
+
 class OrderedProcessor:
     def __init__(self, names):
         self.cols = [("feature", name) for name in names]
