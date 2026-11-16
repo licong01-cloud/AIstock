@@ -1259,11 +1259,13 @@ class PackageAssetFreezeService:
         )
         if processor_data is not None:
             pickle_refs.extend(pickled_model_code_references_from_params_bytes(processor_data, include_all_modules=True))
+        existing_modules = {asset.module_name for asset in existing}
         for ref in pickle_refs:
             if (
                 ref.module_name not in module_names
                 and (
                     ref.module_name in _LOCAL_PICKLED_MODEL_MODULES
+                    or ref.module_name in existing_modules
                     or self._workspace_model_module_exists(manifest, ref.module_name)
                 )
             ):

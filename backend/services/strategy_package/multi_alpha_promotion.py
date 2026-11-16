@@ -107,6 +107,7 @@ class MultiAlphaPackagePromotionService:
         asset_freezer: PackageAssetFreezeService | None = None,
         frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
         prediction_ref_roots: Sequence[str | Path] | None = None,
+        original_context_resolver: Any | None = None,
     ) -> None:
         self.combine_repository = combine_repository or MultiAlphaCombineBacktestRepository()
         if component_service is not None:
@@ -128,6 +129,7 @@ class MultiAlphaPackagePromotionService:
                 frozen_runtime_self_check=self.frozen_runtime_self_check,
             )
         self.prediction_ref_roots = tuple(Path(root) for root in (prediction_ref_roots or ()))
+        self.original_context_resolver = original_context_resolver
 
     def promote_from_combine_run(
         self,
@@ -142,6 +144,7 @@ class MultiAlphaPackagePromotionService:
         secondary_topk: Sequence[int] | None = None,
         package_name: str | None = None,
         promotion_gate: Mapping[str, Any] | None = None,
+        original_context_bridge: bool = False,
     ) -> MultiAlphaPackagePromotionResult:
         run_id = _required_text(combine_backtest_run_id, "combine_backtest_run_id")
         scheme = _required_text(weighting_scheme, "weighting_scheme")
@@ -204,6 +207,14 @@ class MultiAlphaPackagePromotionService:
         _validate_promotion_gate(scheme_result, promotion_gate or {}, run_id=run_id, weighting_scheme=scheme)
 
         backtest_config = _as_mapping(run.get("backtest_config_json") or {}, field_name="backtest_config_json")
+        context_bridge = None
+        if original_context_bridge:
+            from .original_context_bridge import OriginalContextResolver
+
+            resolver = self.original_context_resolver or OriginalContextResolver(roots=self.prediction_ref_roots)
+            backtest_config, context_bridge = resolver.resolve(
+                run_id=run_id, scheme=scheme, topk=topk_value, original_config=backtest_config,
+            )
         strategy_snapshot = _build_strategy_snapshot(
             topk=topk_value,
             secondary_topk=secondary_topk_values,
@@ -259,6 +270,7 @@ class MultiAlphaPackagePromotionService:
                 run_id=run_id,
                 freeze_prediction_dtype=scheme == "frozen_weighted",
                 expected_prediction_hashes=frozen_contract["source_prediction_sha256"] if frozen_contract else None,
+                freeze_input_projection=original_context_bridge,
             )
             for item in roster
             if item["leg_id"] in weights
@@ -275,6 +287,11 @@ class MultiAlphaPackagePromotionService:
             weight_policy=normalized_weight_policy,
             scheme_result_id=scheme_result_key,
         )
+        if context_bridge is not None:
+            # New evidence forms a new identity; never overwrite an older package.
+            package_id = "pkg_ma_" + hashlib.sha256(
+                (package_id + context_bridge["bridge_sha256"]).encode()
+            ).hexdigest()[:24]
         manifest = self._build_manifest(
             package_id=package_id,
             package_name=package_name or _default_package_name(leg_evidence, scheme, topk_value, package_id),
@@ -291,6 +308,16 @@ class MultiAlphaPackagePromotionService:
             strategy_snapshot=strategy_snapshot,
             frozen_contract=frozen_contract,
         )
+        if original_context_bridge:
+            from .original_input_projection import retain_raw_projection_assets
+
+            manifest = retain_raw_projection_assets(manifest, leg_evidence)
+        if context_bridge is not None:
+            manifest = manifest.model_copy(update={
+                "package_version": "1.0.1",
+                "source_evidence": {**manifest.source_evidence, "original_context_bridge": context_bridge},
+                "backtest_context": {**manifest.backtest_context, "original_context_bridge": context_bridge},
+            })
         frozen = freeze_manifest(manifest)
         self.validator.validate_manifest(frozen)
         frozen_assets = self.asset_freezer.freeze_manifest_assets(frozen)
@@ -325,6 +352,7 @@ class MultiAlphaPackagePromotionService:
         run_id: str,
         freeze_prediction_dtype: bool = False,
         expected_prediction_hashes: Mapping[str, str] | None = None,
+        freeze_input_projection: bool = False,
     ) -> _ParentLegAssetPlan:
         if terminal_weight <= 0 or not math.isfinite(terminal_weight):
             _fail_manifest_incomplete(
@@ -344,8 +372,12 @@ class MultiAlphaPackagePromotionService:
                 leg_id=leg_id, seed_run_ids=(seed_ref,), seed_sources=(provenance,), run_id=run_id,
             )
             frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
-            self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
             seed_manifest = frozen_assets.manifest
+            if freeze_input_projection:
+                from .original_input_projection import project_original_inputs
+
+                seed_manifest = project_original_inputs(seed_manifest)
+            self.frozen_runtime_self_check.assert_manifest_self_contained(seed_manifest)
             models = seed_manifest.model_asset if isinstance(seed_manifest.model_asset, list) else [seed_manifest.model_asset]
             if len(models) != 1:
                 _fail_manifest_incomplete("each seed requires exactly one fitted model", leg_id=leg_id, seed_ref=seed_ref)
@@ -364,6 +396,8 @@ class MultiAlphaPackagePromotionService:
                 "factor_artifact_refs": list(seed_manifest.alpha_components[0].lineage.factor_artifact_refs),
                 "runtime_assets": (seed_manifest.runtime_assets or RuntimeAssetManifest()).model_dump(mode="json"),
                 **score_contract,
+                **({"original_model_input_projection": seed_manifest.source_evidence["original_model_input_projection"]}
+                   if "original_model_input_projection" in seed_manifest.source_evidence else {}),
             })
         primary = seed_manifests[0]
         source_evidence = dict(primary.source_evidence or {})
