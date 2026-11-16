@@ -27,10 +27,18 @@ def run_absolute_account(config, recorder):
             and len(set(days)) == len(days), "QE_ABSOLUTE_TARGET_ACCOUNT_BOUNDARY")
     actions = [json.loads(line) for line in Path("qe_absolute_target_actions.jsonl").read_text(encoding="utf-8").splitlines()]
     require([r["trade_date"] for r in actions] == days, "QE_ABSOLUTE_TARGET_CONSUMPTION_BOUNDARY")
-    artifacts = {}
+    # Persist actual account observations before derived analysis. A later
+    # analysis error must not discard a completed, potentially costly replay.
+    raw = {}
     for freq, (frame, held) in portfolios.items():
-        artifacts[f"report_normal_{freq}.pkl"] = frame
-        artifacts[f"positions_normal_{freq}.pkl"] = held
+        raw[f"report_normal_{freq}.pkl"] = frame
+        raw[f"positions_normal_{freq}.pkl"] = held
+    for freq, (frame, obj) in indicators.items():
+        raw[f"indicators_normal_{freq}.pkl"] = frame
+        raw[f"indicators_normal_{freq}_obj.pkl"] = obj
+    recorder.save_objects(artifact_path="portfolio_analysis", **raw)
+    artifacts, indicator_availability = {}, {}
+    for freq, (frame, held) in portfolios.items():
         analysis = pd.concat({
             "excess_return_without_cost": risk_analysis(frame["return"] - frame["bench"], freq=freq),
             "excess_return_with_cost": risk_analysis(frame["return"] - frame["bench"] - frame["cost"], freq=freq),
@@ -38,9 +46,16 @@ def run_absolute_account(config, recorder):
         artifacts[f"port_analysis_{freq}.pkl"] = analysis
         recorder.log_metrics(**{f"{freq}.{k}": v for k, v in flatten_dict(analysis["risk"].unstack().T.to_dict()).items()})
     for freq, (frame, obj) in indicators.items():
-        artifacts[f"indicators_normal_{freq}.pkl"] = frame
-        artifacts[f"indicators_normal_{freq}_obj.pkl"] = obj
+        if frame.empty:
+            # Disabled inner metrics and genuine no-order periods have no
+            # observations. Preserve missingness; never fabricate count/rates.
+            artifacts[f"indicator_analysis_{freq}.pkl"] = pd.DataFrame({"value": pd.Series(dtype=float)})
+            indicator_availability[freq] = {"available": False, "reason": "NO_ORDER_OBSERVATIONS"}
+            continue
+        require({"count", "deal_amount", "value", "ffr", "pa", "pos"} <= set(frame.columns),
+                "QE_ABSOLUTE_TARGET_INDICATOR_COLUMNS")
         analysis = indicator_analysis(frame)
+        indicator_availability[freq] = {"available": True, "reason": "OBSERVED_ORDER_INDICATORS"}
         artifacts[f"indicator_analysis_{freq}.pkl"] = analysis
         recorder.log_metrics(**{f"{freq}.{k}": v for k, v in analysis["value"].to_dict().items()})
     recorder.save_objects(artifact_path="portfolio_analysis", **artifacts)
@@ -50,6 +65,7 @@ def run_absolute_account(config, recorder):
               "target_days_consumed": len(actions), "new_fit_calls": 0, "new_predict_calls": 0,
               "IC": None, "RankIC": None, "label_status": "NOT_APPLICABLE",
               "actions_sha256": file_sha256("qe_absolute_target_actions.jsonl"),
+              "indicator_availability": indicator_availability,
               "actual_exposure_equals_target": "NOT_ASSUMED", "known_at": "UNVERIFIED"}
     require(result["targets_sha256"] == contract["targets"]["sha256"], "QE_ABSOLUTE_TARGET_POSTRUN_HASH")
     Path(RESULT_FILE).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
