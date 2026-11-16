@@ -184,7 +184,9 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
     "fresh_process_evidence": [
-      "独立Python进程从已提交修复31463ecaa3590da475cd9aced979d4ecdcfbfd53加载完整Composer，使用原B臂和772冻结身份，原异常可复现；真实WSL协调器到传输前捕获及Bash语法通过，kind=replay、原交易core与资产不变。transport_posts=0，训练/推理/账户/服务控制=0。receipt=tmp/handoff/qe-trend-parent-longtask-20261116/isolation_submission_smoke_v1.json;sha256=698aa741abf2358d0c8f31905a6a783fd1dfdd367123aeb3929e478a4cf96043"
+      "独立Python进程从已提交修复31463ecaa3590da475cd9aced979d4ecdcfbfd53加载完整Composer，使用原B臂和772冻结身份，原异常可复现；真实WSL协调器到传输前捕获及Bash语法通过，kind=replay、原交易core与资产不变。transport_posts=0，训练/推理/账户/服务控制=0。receipt=tmp/handoff/qe-trend-parent-longtask-20261116/isolation_submission_smoke_v1.json;sha256=698aa741abf2358d0c8f31905a6a783fd1dfdd367123aeb3929e478a4cf96043",
+      "tmp/handoff/qe-trend-parent-longtask-20261116/isolation_submission_smoke_v1.json: real full Composer into WSL submission coordinator; 0transport POST/fit/predict/account calls, source commit31463ec and module SHA256 recorded, old rejection reproduced and corrected replay guard accepted.",
+      "Independent source process31463ec loaded persistent Composer and isolation fix. Frozen original B and772 identity unchanged; original pretransport error reproduced, corrected envelope plus bash syntax passed. receipt=tmp/handoff/qe-trend-parent-longtask-20261116/isolation_submission_smoke_v1.json."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
