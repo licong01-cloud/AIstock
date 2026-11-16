@@ -138,7 +138,10 @@ class MultiAlphaCombineArchiveHandler(ArchiveHandler):
                 and (decision.value_class != QEValueClass.X
                      or decision.reason_code == "qe_lifecycle_no_evaluable_result")):
             baseline_evidence = self._baseline_evidence_loader(source)
-            metrics[str(baseline_evidence["attempt_id"])] = baseline_evidence["metrics"]
+            metrics[str(baseline_evidence["attempt_id"])] = {
+                key: baseline_evidence["metrics"].get(key)
+                for key in ("cagr", "sharpe", "max_drawdown", "calmar")
+            }
             decision = classify_qe_result(classification)
         # Reuse only the existing X exclusions. Multi-alpha provenance and
         # recovery identity retain their own build_bundle contract below.

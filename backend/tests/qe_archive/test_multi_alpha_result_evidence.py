@@ -164,6 +164,15 @@ def test_zero_returns_remain_evaluable(sealed_baseline):
     assert classify_qe_result({"status": "succeeded", "metrics": evidence["metrics"]}).value_class != QEValueClass.X
 
 
+def test_prediction_metadata_numbers_do_not_make_empty_financial_metrics_evaluable(sealed_baseline):
+    source, _, _ = sealed_baseline
+    repository = SimpleNamespace(fetch_multi_alpha_combine_run=lambda _: source)
+    handler = MultiAlphaCombineArchiveHandler(repository=repository, baseline_evidence_loader=lambda _: {
+        "attempt_id": "a1", "metrics": {"cagr": None, "sharpe": None, "max_drawdown": None,
+            "calmar": None, "prediction_store_manifest": {"row_count": 10000}}})
+    assert handler.archive_run("macb_1")["skipped_reason"] == "qe_lifecycle_no_evaluable_result"
+
+
 @pytest.mark.parametrize("policy", ["SKIP", "smoke"])
 def test_existing_exclusion_does_not_read_baseline_artifacts(sealed_baseline, policy):
     source, _, _ = sealed_baseline
