@@ -95,7 +95,7 @@ def _requested_manifest(config: ExperimentConfig, ctx: ExecutionContext, mode: s
         "strategy_audit_subset": _strategy_subset({**custom_params, **strategy_params}),
         "custom_params": custom_params,
         "data_split": config.data_split or {},
-        "label_horizon": normalize_label_horizon(config.label_horizon),
+        "label_horizon": None if config.absolute_target_replay is not None else normalize_label_horizon(config.label_horizon),
         "execution_algo": config.execution_algo,
         "execution_algo_params": config.execution_algo_params or {},
         "runtime_flags": runtime_flags,
@@ -106,6 +106,8 @@ def _requested_manifest(config: ExperimentConfig, ctx: ExecutionContext, mode: s
     }
     if ctx.prediction_replay_source is not None:
         manifest["prediction_replay_source"] = ctx.prediction_replay_source.model_dump(mode="json")
+    if config.absolute_target_replay is not None:
+        manifest["absolute_target_replay"] = config.absolute_target_replay
     if config.frozen_inference is not None:
         manifest["frozen_inference"] = config.frozen_inference.model_dump(mode="json")
     return manifest
@@ -192,7 +194,7 @@ def _compare_manifest(requested: Mapping[str, Any], artifact: Mapping[str, Any])
     _append_mismatch(
         mismatches,
         "label_horizon",
-        normalize_label_horizon(requested.get("label_horizon")),
+        None if requested.get("absolute_target_replay") is not None else normalize_label_horizon(requested.get("label_horizon")),
         _as_dict(artifact.get("dataset")).get("label_horizon"),
     )
     _append_mismatch(mismatches, "frozen_inference", requested.get("frozen_inference"), artifact.get("frozen_inference"))

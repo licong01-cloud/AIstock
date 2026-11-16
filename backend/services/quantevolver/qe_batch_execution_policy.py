@@ -44,6 +44,8 @@ def loop_compute_kind(loop: Mapping[str, Any], model_info: Mapping[str, Any] | N
     is_pure_backtest(loop)  # Reject ambiguous reuse modes.
     if loop.get("prediction_replay"):
         return "prediction_replay"
+    if loop.get("absolute_target_replay") is not None:
+        return "absolute_target_replay"
     if not model_info:
         raise ValueError("QE_BATCH_MODEL_METADATA_REQUIRED: " + str(loop.get("model_id")))
     model_type = str(model_info.get("model_type") or "").upper()
@@ -92,7 +94,7 @@ def bind_batch_model_nodes(
     cache: dict[str, Any] = {}
     for loop in result:
         model_id = str(loop.get("model_id") or "")
-        if not loop.get("prediction_replay") and model_id not in cache:
+        if not loop.get("prediction_replay") and loop.get("absolute_target_replay") is None and model_id not in cache:
             cache[model_id] = model_lookup(model_id)
         kind = loop_compute_kind(loop, cache.get(model_id))
         required = GPU_NODE if kind == "gpu" else None
@@ -107,7 +109,8 @@ def bind_batch_model_nodes(
             raise ValueError("QE_BATCH_CPU_NODE_NOT_CAPABLE: " + str(requested))
         if required and required not in available_nodes:
             raise ValueError("QE_BATCH_MODEL_NODE_NOT_BOUND: " + required)
-        binding = {"model_id": model_id, "compute_kind": kind}
+        binding = {"model_id": loop.get("model_id") if kind == "absolute_target_replay" else model_id,
+                   "compute_kind": kind}
         previous = loop.get(MODEL_BINDING_KEY)
         if previous is not None and dict(previous) != binding:
             raise ValueError("QE_BATCH_MODEL_BINDING_CHANGED: " + model_id)
@@ -124,6 +127,11 @@ def bind_batch_model_nodes(
 
 
 def is_pure_backtest(loop: Mapping[str, Any]) -> bool:
+    if loop.get("absolute_target_replay") is not None:
+        from backend.services.quantevolver.qe_absolute_targets import validate_mode
+
+        validate_mode(loop)
+        return True
     if loop.get("backtest_only") and loop.get("prediction_replay"):
         raise ValueError("QE_BATCH_WORKLOAD_AMBIGUOUS: choose one reuse mode")
     if loop.get("frozen_inference") is not None:
@@ -267,7 +275,7 @@ def strategy_node_parallelism(
             binding = loop.get(MODEL_BINDING_KEY) or {}
             kind = binding.get("compute_kind")
             required = GPU_NODE if kind == "gpu" else None
-            if binding.get("model_id") != loop.get("model_id") or kind not in {"cpu", "gpu", "prediction_replay"}:
+            if binding.get("model_id") != loop.get("model_id") or kind not in {"cpu", "gpu", "prediction_replay", "absolute_target_replay"}:
                 raise ValueError("QE_BATCH_MODEL_BINDING_REQUIRED")
             if required and loop.get("node_id") != required:
                 raise ValueError("QE_BATCH_MODEL_NODE_MISMATCH")

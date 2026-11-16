@@ -1501,9 +1501,9 @@ class CustomEvoLoopConfig(BaseModel):
     """单个自定义演进 Loop 的完整配置"""
     label: Optional[str] = Field(None, description="Loop 标签/描述")
     loop_index: Optional[int] = Field(None, description="Loop 索引（自动填充）")
-    factor_keys: List[str] = Field(..., description="因子 key 列表 ['name||source', ...]")
+    factor_keys: List[str] = Field(default_factory=list, description="因子 key 列表 ['name||source', ...]")
     disable_alpha158: bool = Field(False, description="Disable QE bundled Alpha158 20-factor baseline for this loop")
-    model_id: str = Field(..., description="模型 ID")
+    model_id: Optional[str] = Field(None, description="模型 ID")
     model_params: Optional[Dict[str, Any]] = Field(None, description="模型训练参数，如 ltr_loss_mode/topk_train_k 等")
     feature_processing: Optional[Dict[str, Any]] = Field(
         None, description="Request-local input exclusions, clip_outlier and raw_state_controls v1 diagnostics before normalization; not model hyperparameters",
@@ -1540,10 +1540,14 @@ class CustomEvoLoopConfig(BaseModel):
     prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
     prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
     prediction_recovery: Optional[SavedPredictionRecovery] = Field(None, description="Explicit saved-prediction recovery from an interrupted source; no fit or inference")
+    absolute_target_replay: Optional[Dict[str, Any]] = None
     node_id: Optional[str] = Field(None, description="CPU model: remote; GPU model: WSL; explicit placement must match model device; frozen prediction replay may use either node")
 
     @model_validator(mode="after")
     def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
+        from backend.services.quantevolver.qe_absolute_targets import validate_mode
+
+        validate_mode(self.model_dump())
         from ..services.quantevolver.frozen_inference_contract import validate_mode
 
         frozen = validate_mode(self.model_dump())
@@ -1744,9 +1748,9 @@ async def _prepare_custom_evo_loop_configs(
             loop_label_horizon = normalize_label_horizon(loop_cfg.label_horizon)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: {e}") from e
-        if not loop_cfg.factor_keys:
+        if loop_cfg.absolute_target_replay is None and not loop_cfg.factor_keys:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: factor_keys is required")
-        if not loop_cfg.model_id:
+        if loop_cfg.absolute_target_replay is None and not loop_cfg.model_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
         if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
@@ -1848,7 +1852,7 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict.get("execution_algo"),
             f"custom_loop[{pos}].execution_algo",
         )
-        cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
+        cfg_dict["label_horizon"] = None if loop_cfg.absolute_target_replay is not None else normalize_label_horizon(loop_cfg.label_horizon)
         if (loop_cfg.backtest_only or loop_cfg.prediction_replay) and pos in loop_source_horizons:
             cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
         loops_config.append(cfg_dict)
@@ -2021,6 +2025,20 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict["resolved_dataset"] = summary
 
     for pos, cfg_dict in enumerate(loops_config, start=1):
+        if cfg_dict.get("absolute_target_replay") is not None:
+            from ..services.quantevolver.absolute_target_consumer import require_bound_contract
+            try:
+                target = require_bound_contract(
+                    cfg_dict["absolute_target_replay"],
+                    (cfg_dict.get("custom_params") or {}).get("_qe_active_dataset_summary"),
+                )
+                split = cfg_dict.get("data_split") or {}
+                if (split.get("test_start"), split.get("backtest_end")) != (
+                    target["window"]["account_start"], target["window"]["account_end"],
+                ):
+                    raise ValueError("QE_ABSOLUTE_TARGET_SPLIT_MISMATCH")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
         try:
             cfg_dict["strategy_params"] = enforce_qe_universe_topk(
                 cfg_dict.get("strategy_params"),
@@ -2436,7 +2454,7 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
             replay_loops = [
                 loop.get("loop_index")
                 for loop in config.get("loops") or []
-                if loop.get("prediction_replay")
+                if loop.get("prediction_replay") or loop.get("absolute_target_replay") is not None
             ]
             if replay_loops:
                 raise HTTPException(

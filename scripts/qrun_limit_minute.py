@@ -2219,6 +2219,8 @@ def main():
                             help="train and generate pred.pkl without portfolio backtest")
     mode_group.add_argument("--pred-backtest", type=str, metavar="PRED_PKL",
                             help="run IC analysis and portfolio backtest from an existing prediction pkl")
+    mode_group.add_argument("--absolute-target-replay", action="store_true",
+                            help="run one hash-pinned absolute-target account without a model or prediction")
     args = parser.parse_args()
 
     start_phase_publisher()
@@ -2237,6 +2239,10 @@ def _run_main(args):
     rendered = render_yaml_template(args.yaml_path)
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
+    absolute_target_mode = bool(getattr(args, "absolute_target_replay", False))
+    if config.get("absolute_target_replay") is not None or absolute_target_mode:
+        if not absolute_target_mode or config.get("absolute_target_replay") is None:
+            raise ValueError("QE_ABSOLUTE_TARGET_EXPLICIT_MODE_REQUIRED")
     if config.get("qe_frozen_inference") is not None or Path("qe_frozen_inference_manifest.json").exists():
         from qe_frozen_inference import validate_mode as validate_frozen_mode
         validate_frozen_mode(config, backtest_only=bool(args.backtest_only))
@@ -2325,6 +2331,17 @@ def _run_main(args):
             _run_seed_portfolio_ensemble(config, experiment_name, seed_ensemble)
         else:
             raise ValueError(f"unsupported seed ensemble level: {seed_ensemble['level']}")
+    elif absolute_target_mode:
+        from qlib.workflow import R
+        from qe_absolute_target_record import run_absolute_account
+
+        runner_mode = "absolute_target_replay"
+        transition_runtime_phase("backtest", metadata={"runner_mode": runner_mode})
+        with R.start(experiment_name=experiment_name):
+            recorder = R.get_recorder()
+            _write_qe_current_recorder(recorder, runner_mode, experiment_name)
+            run_absolute_account(config, recorder)
+            save_minute_trades_from_recorder(recorder, output_dir=os.getcwd())
     elif args.pred_backtest:
         runner_mode = "pred_backtest"
         # Pred-backtest mode: use an externally supplied prediction file.
