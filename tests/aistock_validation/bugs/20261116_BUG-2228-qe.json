@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2228",
-  "closed_at": null,
+  "closed_at": "2026-11-16T09:55:29.835870Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -60,8 +60,8 @@
     {
       "action": "production_original_run_recovery_and_final15_verified",
       "actor": "Codex",
-      "timestamp": "2026-11-16T08:50:03.393284+00:00",
-      "note": "合入源码独立进程经正式归档器恢复原两run，15/15实时仓库记录valid，原任务/attempt/冻结清单不变；原只读finalizer完成15账户分析。后续临时接续器发现controller同名模块冲突，按绝对文件名加载正确函数，冷消费与两份缺失统计已完成；旧PID212604因用户AGENTS禁止进程控制，单独待授权收尾，未伪装观察器已恢复。常驻API仍4307，运行态gate保留pending_user_restart。"
+      "note": "合入源码独立进程经正式归档器恢复原两run，15/15实时仓库记录valid，原任务/attempt/冻结清单不变；原只读finalizer完成15账户分析。后续临时接续器发现controller同名模块冲突，按绝对文件名加载正确函数，冷消费与两份缺失统计已完成；旧PID212604因用户AGENTS禁止进程控制，单独待授权收尾，未伪装观察器已恢复。常驻API仍4307，运行态gate保留pending_user_restart。",
+      "timestamp": "2026-11-16T08:50:03.393284+00:00"
     }
   ],
   "evidence_uris": [
@@ -244,6 +244,24 @@
       "macb_idem_93dafb868654c6249011ded2269c523bede22714"
     ]
   },
+  "production_recovery_summary": {
+    "API_process_control": false,
+    "all_original_sources_unchanged": true,
+    "final_analysis_sha256": "f65eabd0179cf2accd4a9fe2103c549e8915db7cb9deeecfceb1e31c914296de",
+    "live_warehouse_account_count": 15,
+    "new_fit_predict_backtest": 0,
+    "post_restart_effective_gate": "pending_user_restart",
+    "receipt_path": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2228\\production-recovery-v1.json",
+    "receipt_sha256": "ae876df813e22ac839ea79771b17f196cf6ac57c2c5de22c305f1ee52f94860c",
+    "run_ids": [
+      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
+      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
+    ],
+    "runtime_loaded_commit": "4307ef4884b1edf33f36e6d64d2296940a9b64d9",
+    "schema_version": "qe_baseline_archive_recovery_receipt_v1",
+    "source_merge_commit": "6ea365bf6fbef30693bf43329879253918700b8f",
+    "warehouse_readback_sha256": "50e948ff80204f8f01d31d244cc89fa1d0aa70f1f78c93d475d79a8f406efe1e"
+  },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -266,10 +284,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2228/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2228",
+      "business_smoke_semantic": {
+        "contract_id": "qe_multi_alpha_archive_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "bd02c3ab2e4d0531874211bb35dac7c9b6d592ce859c20013ba42d138c3c14c2",
+      "expected_identity": "6ea365bf6fbef30693bf43329879253918700b8f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-16T09:53:45.595383Z",
+      "mode": "read_only",
+      "observed_identity": "6ea365bf6fbef30693bf43329879253918700b8f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ef860ba6cf036bcfb81fc4d0fc28c77c49b9f55f6f0792c983306c1848bb321c",
+      "receipt_sha256": "e146187e942481972703baba2dbb0aa8b03f30388656b954d8ad7eaf7b44147d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "baa8fbac6b8c922560e194f0ae655bf4c762c561ae9c75b7948aa5924b74bfb0",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -302,7 +342,7 @@
     ],
     "validation_evidence_digest": "eee5cb5c8d81fc751d037ca882c250deb9412bbdc223bdc865b4308c22e0d0ef"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -421,23 +461,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "production_recovery_summary": {
-    "schema_version": "qe_baseline_archive_recovery_receipt_v1",
-    "source_merge_commit": "6ea365bf6fbef30693bf43329879253918700b8f",
-    "receipt_path": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2228\\production-recovery-v1.json",
-    "receipt_sha256": "ae876df813e22ac839ea79771b17f196cf6ac57c2c5de22c305f1ee52f94860c",
-    "run_ids": [
-      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
-      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
-    ],
-    "all_original_sources_unchanged": true,
-    "live_warehouse_account_count": 15,
-    "warehouse_readback_sha256": "50e948ff80204f8f01d31d244cc89fa1d0aa70f1f78c93d475d79a8f406efe1e",
-    "final_analysis_sha256": "f65eabd0179cf2accd4a9fe2103c549e8915db7cb9deeecfceb1e31c914296de",
-    "new_fit_predict_backtest": 0,
-    "API_process_control": false,
-    "runtime_loaded_commit": "4307ef4884b1edf33f36e6d64d2296940a9b64d9",
-    "post_restart_effective_gate": "pending_user_restart"
   }
 }
