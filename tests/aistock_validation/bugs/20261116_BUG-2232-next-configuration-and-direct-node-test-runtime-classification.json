@@ -1,16 +1,16 @@
 {
   "actual": "BUG-2231 canonical finish rejects inferred runtime_impact=unknown.",
+  "agent_review": {
+    "completeness_regression": "passed: 777 workflow tests preserve unknown-neighbor, catalog-failure, mixed-backend and activation contracts.",
+    "correctness": "passed: exact Next configuration remains frontend runtime; only the actual direct Node test is non-runtime.",
+    "runtime_actions": "none; source delivery does not activate the pending BUG-2231 frontend change."
+  },
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20261116_BUG-2232-next-configuration-and-direct-node-test-runtime-classification.json"
   ],
   "assigned_agent": null,
-  "agent_review": {
-    "correctness": "passed: exact Next configuration remains frontend runtime; only the actual direct Node test is non-runtime.",
-    "completeness_regression": "passed: 777 workflow tests preserve unknown-neighbor, catalog-failure, mixed-backend and activation contracts.",
-    "runtime_actions": "none; source delivery does not activate the pending BUG-2231 frontend change."
-  },
   "bug_id": "BUG-2232",
   "closed_at": null,
   "closure_requirements": [
@@ -31,12 +31,18 @@
   "evidence_uris": [],
   "expected": "Exact Next config => frontend activation required, backend restart not required; exact Node test => non-runtime; unknown neighbors remain unknown.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2232-next-configuration-and-direct-node-test-runtime-classification.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20261116_BUG-2232-next-configuration-and-direct-node-test-runtime-classification.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -112,10 +118,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
