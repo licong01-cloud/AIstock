@@ -1905,14 +1905,10 @@ def test_exact_offline_roles_cannot_downgrade_mixed_online_scope(family, monkeyp
         # Keep exact equality: an unreviewed caller must still fail this audit.
         assert refs == {
             *files[1:], Path(__file__).relative_to(workflow.REPO_ROOT).as_posix(),
-            "backend/services/hmm_risk/risk_l2_member_nonlinear.py",
-            "backend/services/hmm_risk/risk_l2_margin_information.py",
-            "backend/services/hmm_risk/risk_l2_earnings_information.py",
-            "backend/tests/hmm_risk/test_risk_l2_member_within.py",
-            "scripts/hmm_risk/run_risk_l2_member_nonlinear.py",
-            "scripts/hmm_risk/run_risk_l2_member_within.py",
-            "scripts/hmm_risk/run_risk_l2_margin_information.py",
-            "scripts/hmm_risk/run_risk_l2_earnings_information.py",
+            "backend/services/hmm_risk/risk_l2_member_nonlinear.py", "backend/services/hmm_risk/risk_l2_margin_information.py",
+            "backend/services/hmm_risk/risk_l2_earnings_information.py", "backend/tests/hmm_risk/test_risk_l2_member_within.py",
+            "scripts/hmm_risk/run_risk_l2_member_nonlinear.py", "scripts/hmm_risk/run_risk_l2_member_within.py",
+            "scripts/hmm_risk/run_risk_l2_margin_information.py", "scripts/hmm_risk/run_risk_l2_earnings_information.py",
         }
     if family in {"localsim", "member"}:
         catalog = workflow._load_runtime_target_catalog()
