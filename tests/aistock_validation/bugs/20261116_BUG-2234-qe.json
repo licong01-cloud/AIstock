@@ -1,0 +1,301 @@
+{
+  "actual": "节点failed，KeyError count，QLib取价None；新消费者代码转换与冻结数据集不一致，单位测试未覆盖真实输入接口。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_absolute_targets.py",
+    "backend/services/quantevolver/qe_absolute_target_record.py",
+    "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
+    "tests/aistock_validation/bugs/20261116_BUG-2234-qe.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2234",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-16T17:55:24.314826Z",
+  "description": "节点failed，KeyError count，QLib取价None；新消费者代码转换与冻结数据集不一致，单位测试未覆盖真实输入接口。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261116-4b1d7b7a7905",
+      "timestamp": "2026-11-16T17:55:24.314812Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-trend-parent-longtask-20261116/remote_T_runlog_tail_v1.txt",
+    "tmp/handoff/qe-trend-parent-longtask-20261116/native_consumer_fresh_process_v1.json",
+    "tmp/handoff/qe-trend-parent-longtask-20261116/native_quotes_real_qlib_v1.json"
+  ],
+  "expected": "按绑定数据集原生股票代码消费；完整账户和目标消费收据持久化；无订单指标保留NA，不把错误空仓包装成功；失败原件与恢复映射保留。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_absolute_targets.py",
+      "backend/services/quantevolver/qe_absolute_target_record.py",
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_absolute_targets.py",
+        "backend/services/quantevolver/qe_absolute_target_record.py",
+        "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_absolute_targets.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_absolute_target_record.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_absolute_targets.py",
+        "backend/services/quantevolver/qe_absolute_target_record.py",
+        "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_absolute_targets.py",
+      "backend/services/quantevolver/qe_absolute_target_record.py",
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_absolute_targets.py",
+      "backend/services/quantevolver/qe_absolute_target_record.py",
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+    ]
+  },
+  "first_seen_at": "2026-11-16T17:55:24.314826Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7292,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7292",
+  "last_seen_at": "2026-11-16T17:55:24.314826Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Independent process loads committed consumer 8c9dec62bd108c19b3f9bb3dca00bd4bf8ab2bc7; both real full Composer submissions captured before POST; real Qlib frozen772 native daily/minute quotes at first/last account dates and actual indicator_analysis pass; zero account/fit/predict/transport/service calls. receipt=tmp/handoff/qe-trend-parent-longtask-20261116/native_consumer_fresh_process_v1.json;sha256=05e6f5bd94822d924a4363b558340128cd1c393359e4c47b7083baf64d26fd6d"
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
+    "runtime_identity_match": "pending"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "QE绝对目标消费者股票代码误转换导致行情缺失且空指标导出失败",
+  "trigger_condition": {
+    "fingerprint": "4b1d7b7a7905ccd2af3b3617",
+    "source_event_id": "FE-20261116-4b1d7b7a7905"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "author_review": {
+    "correctness": {
+      "status": "PASS",
+      "findings_repaired": [
+        "Native suffix keys retained exactly; actual frozen quotes reproduce old prefix failure.",
+        "Empty indicator frames retain absence; nonempty malformed indicators fail.",
+        "Raw reports/positions/indicators saved before derived analysis; failure never emits completion."
+      ]
+    },
+    "completeness_regression": {
+      "status": "PASS",
+      "checks": [
+        "Both full source Composer/coordinator paths captured with no POST; WSL replay20GiB guard and bash syntax pass.",
+        "107 directly related tests pass, changed-file Ruff and L0 pass.",
+        "Frozen targets, active772 pins, daily/minute execution reference, fixed564day window, model-free/label NA semantics unchanged."
+      ]
+    },
+    "reviewer": "author_two_perspectives_not_independent"
+  },
+  "design_compliance_review": {
+    "no_partial_or_placeholder": "PASS_full_defect_closure_and_real_input_contract",
+    "no_silent_error_or_fake_success": "PASS_malformed_nonempty_fail_no_completion_raw_retained",
+    "no_unapproved_semantic_change": "PASS_only_key_alignment_and_missing_indicator_export_unchanged_weights_fees_window",
+    "no_unapproved_gate_rbac_or_control": "PASS_no_service_control_DB_schema_or_new_arms"
+  }
+}

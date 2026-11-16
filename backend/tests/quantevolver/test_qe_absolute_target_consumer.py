@@ -47,7 +47,7 @@ def test_full_window_absolute_values_unknown_and_no_second_lag(targets):
     contract, calendar, _ = targets
     reader = AbsoluteTargets(contract, calendar=calendar)
     target, receipt = reader.day("2026-04-02")
-    assert target == {"SZ000001": .1}
+    assert target == {"000001.SZ": .1}
     assert receipt["signal_date"] == "2026-04-01"
     assert len(receipt["sectors"]) == 4
     assert receipt["sectors"][2]["reason"] == "SOURCE_UNKNOWN"
@@ -229,3 +229,84 @@ def test_public_request_is_explicitly_model_free(targets):
     assert request.model_id is None and request.factor_keys == []
     with pytest.raises(ValueError, match="SEED_NOT_APPLICABLE"):
         CustomEvoLoopConfig(absolute_target_replay=contract, runtime_flags={"random_seed": 42})
+
+
+def record_case(targets, monkeypatch, tmp_path, indicator_frame, fail_analysis=False):
+    """Exercise the recorder boundary, including a disabled inner executor."""
+    from types import ModuleType
+    from qe_absolute_target_record import run_absolute_account
+
+    contract, calendar, _ = targets
+    monkeypatch.chdir(tmp_path)
+    Path("absolute_targets.parquet").write_bytes(Path(contract["targets"]["path"]).read_bytes())
+    Path("qe_absolute_target_manifest.json").write_text(json.dumps(contract), encoding="utf-8")
+    actions = "".join(json.dumps({"trade_date": day}) + "\n" for day in calendar[1:])
+    Path("qe_absolute_target_actions.jsonl").write_text(actions, encoding="utf-8")
+    report = pd.DataFrame({"return": [.01, -.01], "bench": [.001, -.001], "cost": [.0001, .0001]},
+                          index=pd.to_datetime(calendar[1:]))
+    saved, calls = [], []
+
+    def analyze(frame):
+        calls.append(frame)
+        if fail_analysis:
+            raise ValueError("observed indicator failure")
+        assert not frame.empty
+        return pd.DataFrame({"value": [.8]}, index=["ffr"])
+
+    def flatten(value):
+        return {f"{key}.{name}": metric for key, row in value.items() for name, metric in row.items()}
+
+    modules = {name: ModuleType(name) for name in [
+        "qlib", "qlib.backtest", "qlib.contrib", "qlib.contrib.evaluate", "qlib.utils"]}
+    modules["qlib.backtest"].backtest = lambda **kwargs: (
+        {"1day": (report, {})}, {"1day": (indicator_frame, {}), "1min": (pd.DataFrame(), {})})
+    modules["qlib.contrib.evaluate"].indicator_analysis = analyze
+    modules["qlib.contrib.evaluate"].risk_analysis = lambda values, freq: pd.DataFrame(
+        {"risk": [float(values.sum())]}, index=["mean"])
+    modules["qlib.utils"].flatten_dict = flatten
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    recorder = SimpleNamespace(save_objects=lambda **values: saved.append(values), log_metrics=lambda **values: None)
+    config = {"absolute_target_replay": contract, "task": {},
+              "port_analysis_config": {"executor": {}, "strategy": {}, "backtest": {}}}
+    return lambda: run_absolute_account(config, recorder), saved, calls, report
+
+
+def test_recorder_preserves_empty_inner_indicators_as_unavailable(targets, monkeypatch, tmp_path):
+    frame = pd.DataFrame({"count": [1], "deal_amount": [100.], "value": [1000.],
+                          "ffr": [.8], "pa": [.01], "pos": [1.]})
+    run, saved, calls, report = record_case(targets, monkeypatch, tmp_path, frame)
+    result = run()
+    assert len(calls) == 1 and calls[0] is frame
+    assert saved[0]["report_normal_1day.pkl"] is report
+    assert saved[0]["indicators_normal_1min.pkl"].empty
+    assert result["indicator_availability"]["1min"] == {
+        "available": False, "reason": "NO_ORDER_OBSERVATIONS"}
+    assert result["indicator_availability"]["1day"]["available"] is True
+    assert result["account_days"] == 2 and result["new_predict_calls"] == 0
+
+
+def test_recorder_saves_raw_account_before_analysis_failure(targets, monkeypatch, tmp_path):
+    frame = pd.DataFrame({"count": [1], "deal_amount": [100.], "value": [1000.],
+                          "ffr": [.8], "pa": [.01], "pos": [1.]})
+    run, saved, _, report = record_case(targets, monkeypatch, tmp_path, frame, fail_analysis=True)
+    with pytest.raises(ValueError, match="observed indicator failure"):
+        run()
+    assert saved[0]["report_normal_1day.pkl"] is report
+    assert not Path("qe_absolute_target_result.json").exists()
+
+
+def test_recorder_retains_empty_daily_indicator_na_without_fake_count(targets, monkeypatch, tmp_path):
+    run, saved, calls, _ = record_case(targets, monkeypatch, tmp_path, pd.DataFrame())
+    result = run()
+    assert calls == []
+    assert result["indicator_availability"]["1day"]["available"] is False
+    assert saved[0]["indicators_normal_1day.pkl"].empty
+
+
+def test_recorder_nonempty_malformed_indicators_fail_without_fake_success(targets, monkeypatch, tmp_path):
+    run, saved, _, _ = record_case(targets, monkeypatch, tmp_path, pd.DataFrame({"ffr": [.8]}))
+    with pytest.raises(ValueError, match="QE_ABSOLUTE_TARGET_INDICATOR_COLUMNS"):
+        run()
+    assert "report_normal_1day.pkl" in saved[0]
+    assert not Path("qe_absolute_target_result.json").exists()

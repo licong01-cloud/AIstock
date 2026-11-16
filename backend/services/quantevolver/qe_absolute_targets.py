@@ -167,6 +167,7 @@ class AbsoluteTargets:
     def day(self, day):
         frame, summary = self._day(day)
         weights = frame["weight_" + self.contract["arm"]]
-        # Convert only the identifier; weights retain their original exact values.
-        target = {str(s)[7:] + str(s)[:6]: float(w) for s, w in zip(frame.instrument, weights) if w > 0}
+        # This release's instruments and feature directories use the same native
+        # six-digit exchange-suffix keys as the frozen target asset.
+        target = {str(s): float(w) for s, w in zip(frame.instrument, weights) if w > 0}
         return target, summary
