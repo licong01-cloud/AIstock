@@ -16,7 +16,31 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-16T16:31:51.406079Z",
-  "description": "Loop1远端运行；Loop2未投递，原异常及DB/节点回执已保存。",
+  "description": "独立可选absolute_target_replay的Composer将set置于cd之前，违反既有WSL隔离提交合同，Loop2在发往节点POST之前即拒绝；另遗漏纯目标回放的资源分类。修复仅调整命令封装及明确的模型自由模式分类，原交易core、资产、数据、目标权重与两账户预算不变。",
+  "design_compliance_review": {
+    "items": [
+      {
+        "item": "approved_scope_complete",
+        "note": "原T/B目标、窗口、费用及两账户预算保持；模块接线全部闭合",
+        "status": "passed"
+      },
+      {
+        "item": "no_placeholder_or_silent_success",
+        "note": "原失败回执保留，节点未收到POST已核对；不把schema健康当作账户运行",
+        "status": "passed"
+      },
+      {
+        "item": "no_unapproved_semantics",
+        "note": "只调整cd封装及明确纯回放资源分类，命令core逐字不变",
+        "status": "passed"
+      },
+      {
+        "item": "verification_and_runtime_separate",
+        "note": "直接RED/GREEN及相关111通过18跳过，真实提交协调器fresh-process通过；常驻API加载门禁单独保留",
+        "status": "passed"
+      }
+    ]
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,14 +54,20 @@
   ],
   "expected": "正式Composer输出先定位工作目录；模型自由目标账户经原WSL guard按纯回测消费，不改变交易命令、数据、权重、公式或预算。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/absolute_target_consumer.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2233-qe-wsl.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/absolute_target_consumer.py",
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
-      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
-      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py"
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2233-qe-wsl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/absolute_target_consumer.py",
@@ -129,6 +159,7 @@
   "first_seen_at": "2026-11-16T16:31:51.406079Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "先cd --进入规范工作目录再启用严格shell选项，原交易core保持；仅匹配明确无模型目标消费合同及完整CLI标识时使用原纯回放资源包络，非法标识、模型消费和旧模型复用仍保留保守分类。",
   "fixed_at": null,
   "github_issue_number": 7287,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7287",
@@ -147,13 +178,24 @@
     "qe_read_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "新consumer的命令前缀未经过原WSL提交协调器集成验收；仅Composer和原生reader/strategy检查未覆盖提交前隔离阶段。",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
+    "fresh_process_evidence": [
+      "独立Python进程从已提交修复31463ecaa3590da475cd9aced979d4ecdcfbfd53加载完整Composer，使用原B臂和772冻结身份，原异常可复现；真实WSL协调器到传输前捕获及Bash语法通过，kind=replay、原交易core与资产不变。transport_posts=0，训练/推理/账户/服务控制=0。receipt=tmp/handoff/qe-trend-parent-longtask-20261116/isolation_submission_smoke_v1.json;sha256=698aa741abf2358d0c8f31905a6a783fd1dfdd367123aeb3929e478a4cf96043"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
