@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -38,8 +39,7 @@ def inventory() -> dict:
     $ErrorActionPreference='Stop'
     [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
     $p=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,ExecutablePath)
-    $l=@(Get-NetTCPConnection -State Listen |
-      Where-Object LocalPort -in @(8001,19080,3000) | Select-Object LocalPort,OwningProcess)
+    $l=@(Get-NetTCPConnection -State Listen | Select-Object LocalPort,OwningProcess)
     @{processes=$p;listeners=$l} | ConvertTo-Json -Depth 4 -Compress
     """
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -52,7 +52,37 @@ def inventory() -> dict:
     return data
 
 
+def frontend_port_matches(pid: int, chain: list[str], data: dict) -> bool:
+    declared = set()
+    inspecting = False
+    for command in chain:
+        if "next" not in command:
+            continue
+        args = [arg.strip('"') for arg in shlex.split(command, posix=False)]
+        inspecting |= any(arg.startswith("--inspect") for arg in args)
+        for index, arg in enumerate(args):
+            value = None
+            if arg in ("--port", "-p"):
+                value = args[index + 1] if index + 1 < len(args) else ""
+            elif arg.startswith("--port="):
+                value = arg.partition("=")[2]
+            elif arg.startswith("-p") and arg != "-p":
+                value = arg[2:].removeprefix("=")
+            if value is not None:
+                if not value.isdecimal() or not 0 < int(value) < 65536:
+                    raise ValueError("Invalid frontend port evidence; refusing duplicate startup")
+                declared.add(int(value))
+    if len(declared) > 1:
+        raise ValueError("Conflicting frontend port evidence; refusing duplicate startup")
+    if declared:
+        return declared == {PORTS["frontend"]}
+    listening = {row["LocalPort"] for row in data["listeners"] if row["OwningProcess"] == pid}
+    # An inspector socket alone does not establish the web server's port.
+    return inspecting or not listening or PORTS["frontend"] in listening
+
+
 def owned(service: str, pid: int, data: dict) -> bool:
+    original_pid = pid
     processes = {p["ProcessId"]: p for p in data["processes"]}
     leaf = processes.get(pid, {})
     chain, seen = [], set()
@@ -75,7 +105,8 @@ def owned(service: str, pid: int, data: dict) -> bool:
     if service == "tdx":
         return (("start_tdx_go_backend.py" in text and "--database-target production" in text)
                 or "\\production\\tdx-backend.exe" in text) and "--database-target dev" not in text
-    return "node" in text and ("next" in text or "next-dev-isolated" in text)
+    return ("node" in text and ("next" in text or "next-dev-isolated" in text)
+            and frontend_port_matches(original_pid, chain, data))
 
 
 def state(service: str, data: dict) -> str:
