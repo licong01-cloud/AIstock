@@ -29,7 +29,7 @@
     "database": "aistock_dev",
     "new_fit_predict_backtest": 0,
     "production_writes": 0,
-    "receipt_sha256": "74fb91abb5992802ad8f942b24ef9738bcd85017b3e35d740ca46bd1730a7155",
+    "receipt_sha256": "dfbef1d29d41e485fe4a0284d2cd2f17bfc2cde15d26b42cc471f72df34a91d8",
     "rollback_verified": true,
     "run_ids": [
       "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
@@ -56,11 +56,20 @@
       "actor": "Codex",
       "note": "CI43825698645归档后端263项通过，工作流旧member引用集合断言失败；在未修改的main同node重现。已核对新增研究引用及其调用方仅研究CLI/测试/编排清单，未发现API/router消费者。仅更新该精确测试并保持线上混入必须重启/禁止降级和任意新增调用方失败；不改HMM模型或runtime catalog。",
       "timestamp": "2026-11-16T07:58:35.303907+00:00"
+    },
+    {
+      "action": "production_original_run_recovery_and_final15_verified",
+      "actor": "Codex",
+      "timestamp": "2026-11-16T08:50:03.393284+00:00",
+      "note": "合入源码独立进程经正式归档器恢复原两run，15/15实时仓库记录valid，原任务/attempt/冻结清单不变；原只读finalizer完成15账户分析。后续临时接续器发现controller同名模块冲突，按绝对文件名加载正确函数，冷消费与两份缺失统计已完成；旧PID212604因用户AGENTS禁止进程控制，单独待授权收尾，未伪装观察器已恢复。常驻API仍4307，运行态gate保留pending_user_restart。"
     }
   ],
   "evidence_uris": [
     "tmp/handoff/qe-parallel-next-plan-20261116/execution/derived/A_OLD_AF3_H20_K20/archive_response.json",
-    "tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json"
+    "tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json",
+    "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2228\\production-recovery-v1.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parallel-next-plan-20261116\\execution\\analysis\\final_15_account_review.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parallel-next-plan-20261116\\execution\\analysis\\warehouse_15_readback_v1.json"
   ],
   "expected": "成功的明确单基准账户以核验后的原始结果正常入仓，缺失/坏哈希仍拒绝；接续明确归档阻断并支持原run恢复。",
   "file_scope_contract": {
@@ -412,5 +421,23 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "production_recovery_summary": {
+    "schema_version": "qe_baseline_archive_recovery_receipt_v1",
+    "source_merge_commit": "6ea365bf6fbef30693bf43329879253918700b8f",
+    "receipt_path": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2228\\production-recovery-v1.json",
+    "receipt_sha256": "ae876df813e22ac839ea79771b17f196cf6ac57c2c5de22c305f1ee52f94860c",
+    "run_ids": [
+      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
+      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
+    ],
+    "all_original_sources_unchanged": true,
+    "live_warehouse_account_count": 15,
+    "warehouse_readback_sha256": "50e948ff80204f8f01d31d244cc89fa1d0aa70f1f78c93d475d79a8f406efe1e",
+    "final_analysis_sha256": "f65eabd0179cf2accd4a9fe2103c549e8915db7cb9deeecfceb1e31c914296de",
+    "new_fit_predict_backtest": 0,
+    "API_process_control": false,
+    "runtime_loaded_commit": "4307ef4884b1edf33f36e6d64d2296940a9b64d9",
+    "post_restart_effective_gate": "pending_user_restart"
   }
 }
