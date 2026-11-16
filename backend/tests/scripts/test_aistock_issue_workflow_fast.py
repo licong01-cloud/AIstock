@@ -2063,6 +2063,7 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     ("tdx-api-main/protocol/model_kline.go", ["tdx-go-backend"]), ("tdx-api-main/web/server.go", ["tdx-go-backend"]),
     ("tdx-api-main/go.mod", ["tdx-go-backend"]), ("tdx-api-main/web/go.sum", ["tdx-go-backend"]),
     ("scripts/start_tdx_go_backend.py", ["tdx-go-backend"]), ("backend/data_service/tdx_adapter.py", ["backend-main"]),
+    ("frontend/next.config.mjs", []), ("frontend/scripts/next-config-3100.test.mjs", []), (["frontend/next.config.mjs", "backend/routers/health.py"], ["backend-main"]),
     ("backend/services/advisory_model_first/generic_daily_price_input_v1.py", []),
     ("backend/services/hmm_risk/b3_d1_inactive_dimension.py", ["backend-main"]),
     ("backend/services/hmm_risk/b3_mixed_dimension.py", ["backend-main"]),
@@ -2076,9 +2077,10 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     ("backend/services/advisory_model_first/generic_unregistered_input_v1.py", ["backend-main"])])
 def test_catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets(path, targets):
     result = workflow._classify_runtime_impact([path] if isinstance(path, str) else path)
-    assert result["target_ids"] == targets
-    assert result["runtime_impact"] == ("worker_scheduler" if targets == ["worker-scheduler"] else "backend" if targets else "none")
-    assert result["catalog_error"] is None
+    contract = workflow.build_runtime_contract(record={}, changed_files=[path] if isinstance(path, str) else path)
+    assert (result["runtime_impact"], result["target_ids"]) == ("frontend" if path == "frontend/next.config.mjs" else "worker_scheduler" if targets == ["worker-scheduler"] else "backend" if targets else "none", targets)
+    assert (result["catalog_error"], contract["backend_restart_required"], contract["activation_states"]["frontend_activation"]) == (None, bool(targets), "required" if path == "frontend/next.config.mjs" else "not_required")
+    assert all(workflow._classify_runtime_impact([neighbor])["runtime_impact"] == "unknown" for neighbor in ["frontend/next.config.other.mjs", "frontend/scripts/other.test.mjs", "frontend/scripts/next-config-3100.mjs"])
 
 
 @pytest.fixture
@@ -2092,15 +2094,15 @@ def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
     return message
 
 
-def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_catalog: str) -> None:
-    paths = ["backend/services/hmm_risk/contracts.py"]
+@pytest.mark.parametrize("paths", [["backend/services/hmm_risk/contracts.py"], ["frontend/next.config.mjs"], ["frontend/scripts/next-config-3100.test.mjs"]])
+def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_catalog: str, paths) -> None:
     payload = workflow._classify_runtime_impact(paths)
     record = {"runtime_contract": dict(
         schema_version=workflow.RUNTIME_CONTRACT_SCHEMA, runtime_impact="none", target_ids=[]
     )}
     contract = workflow.build_runtime_contract(record=record, changed_files=paths)
     assert payload["runtime_impact"] == contract["runtime_impact"] == "unknown"
-    assert payload["target_ids"] == ["backend-main"]
+    assert payload["target_ids"] == (["backend-main"] if paths[0].startswith("backend/") else [])
     assert payload["catalog_error"] == contract["catalog_validation_error"] == invalid_runtime_catalog
     assert f"runtime target catalog validation failed: {invalid_runtime_catalog}" in contract["blocking"]
     assert contract["pre_pr_ready"] is False
