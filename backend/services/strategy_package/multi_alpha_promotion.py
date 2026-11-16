@@ -270,6 +270,7 @@ class MultiAlphaPackagePromotionService:
                 run_id=run_id,
                 freeze_prediction_dtype=scheme == "frozen_weighted",
                 expected_prediction_hashes=frozen_contract["source_prediction_sha256"] if frozen_contract else None,
+                freeze_input_projection=original_context_bridge,
             )
             for item in roster
             if item["leg_id"] in weights
@@ -307,6 +308,10 @@ class MultiAlphaPackagePromotionService:
             strategy_snapshot=strategy_snapshot,
             frozen_contract=frozen_contract,
         )
+        if original_context_bridge:
+            from .original_input_projection import retain_raw_projection_assets
+
+            manifest = retain_raw_projection_assets(manifest, leg_evidence)
         if context_bridge is not None:
             manifest = manifest.model_copy(update={
                 "package_version": "1.0.1",
@@ -347,6 +352,7 @@ class MultiAlphaPackagePromotionService:
         run_id: str,
         freeze_prediction_dtype: bool = False,
         expected_prediction_hashes: Mapping[str, str] | None = None,
+        freeze_input_projection: bool = False,
     ) -> _ParentLegAssetPlan:
         if terminal_weight <= 0 or not math.isfinite(terminal_weight):
             _fail_manifest_incomplete(
@@ -366,8 +372,12 @@ class MultiAlphaPackagePromotionService:
                 leg_id=leg_id, seed_run_ids=(seed_ref,), seed_sources=(provenance,), run_id=run_id,
             )
             frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
-            self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
             seed_manifest = frozen_assets.manifest
+            if freeze_input_projection:
+                from .original_input_projection import project_original_inputs
+
+                seed_manifest = project_original_inputs(seed_manifest)
+            self.frozen_runtime_self_check.assert_manifest_self_contained(seed_manifest)
             models = seed_manifest.model_asset if isinstance(seed_manifest.model_asset, list) else [seed_manifest.model_asset]
             if len(models) != 1:
                 _fail_manifest_incomplete("each seed requires exactly one fitted model", leg_id=leg_id, seed_ref=seed_ref)
@@ -386,6 +396,8 @@ class MultiAlphaPackagePromotionService:
                 "factor_artifact_refs": list(seed_manifest.alpha_components[0].lineage.factor_artifact_refs),
                 "runtime_assets": (seed_manifest.runtime_assets or RuntimeAssetManifest()).model_dump(mode="json"),
                 **score_contract,
+                **({"original_model_input_projection": seed_manifest.source_evidence["original_model_input_projection"]}
+                   if "original_model_input_projection" in seed_manifest.source_evidence else {}),
             })
         primary = seed_manifests[0]
         source_evidence = dict(primary.source_evidence or {})

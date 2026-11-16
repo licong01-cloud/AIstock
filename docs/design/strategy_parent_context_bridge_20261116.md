@@ -14,3 +14,6 @@
 | PC-02 原字段提取与冲突失败关闭 | 待实现：promotion桥接接线 | 待验证 | PLANNED | 不混淆n_drop和max_n_drop |
 | PC-03 原执行标识及退役检查 | 待实现：精确映射 | 待验证 | PLANNED | 不创造执行别名 |
 | PC-04 DEV父包完整消费及不可变旧身份 | 待实现：DEV验证收据 | 待验证 | PLANNED | 生产写入激活未授权 |
+| PC-05 原始模型输入投影与原始资产留存 | original_input_projection.py；新父包逐seed投影 | 待验证 | PLANNED | 仅使用原exclude_from_model；不依据缺列猜测 |
+
+DEV检出原LSTM请求明确排除 `Price_Deviation_Historical_High`，原拟合处理器为46列，而按原始因子清单直接拼接得到47列。新版本仅恢复原请求的模型输入投影：逐seed记录原请求、原manifest与处理器SHA，模型权重、处理器和源码不变；原始因子资产继续纳入父包保护账本。无明确原请求时保留失败，不按列差自动删因子。此修复仅由新上下文桥接入口启用，不修改旧冻结包。
