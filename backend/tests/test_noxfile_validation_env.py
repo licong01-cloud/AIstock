@@ -1094,6 +1094,7 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
     monkeypatch.setattr(noxfile, "_is_port_open", lambda *_args: False)
     noxfile.validation_center_ui(DummySession())  # type: ignore[arg-type]
 
+    assert calls.pop(0) == ("node", "--test", "scripts/next-config-3100.test.mjs")
     assert calls[0] == (
         "node",
         "node_modules/typescript/bin/tsc",
