@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2231",
-  "closed_at": null,
+  "closed_at": "2026-11-16T16:33:56Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -35,23 +35,23 @@
   "expected": "3100 compiles relative API bases and proxies both versioned and backend-root API paths; 3000 and production configuration retain prior behavior.",
   "file_scope_contract": {
     "actual_changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
       "frontend/next.config.mjs",
       "frontend/scripts/next-config-3100.test.mjs",
       "noxfile.py",
       "tests/aistock_validation/bugs/20261116_BUG-2231-3100-same-origin-api-base-and-backend-root-proxy-repair.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/test_noxfile_validation_env.py"
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "frontend/scripts/next-config-3100.test.mjs"
     ],
     "changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
       "frontend/next.config.mjs",
       "frontend/scripts/next-config-3100.test.mjs",
       "noxfile.py",
       "tests/aistock_validation/bugs/20261116_BUG-2231-3100-same-origin-api-base-and-backend-root-proxy-repair.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/test_noxfile_validation_env.py"
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -120,8 +120,8 @@
   },
   "first_seen_at": "2026-11-16T15:14:48.098164Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "14a6342c4a4abc1704ed8c138369ace5200c83c6",
+  "fixed_at": "2026-11-16T16:33:56Z",
   "github_issue_number": 7279,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7279",
   "last_seen_at": "2026-11-16T15:14:48.098164Z",
@@ -131,6 +131,7 @@
     "Independent scheduler/Grafana services and retired paper-trading reports are outside this source repair.",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7286",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -149,6 +150,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -158,7 +160,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2231",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a5086ca7490443c4",
+    "recorded_at": "2026-11-16T16:34:32.473206Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "138a89474eb4719abad0415e4c6d94ecc8da4c8d",
+    "source_merge_commit": "14a6342c4a4abc1704ed8c138369ace5200c83c6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7286",
+    "validation_evidence": [
+      "python -m nox -s frontend_type_lint -> passed; 31 Node tests, TypeScript and lint passed",
+      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed; 16 tests, integrity findings=0",
+      "python -m nox -s l0 -- frontend/next.config.mjs frontend/scripts/next-config-3100.test.mjs noxfile.py backend/tests/test_noxfile_validation_env.py tests/aistock_validation/catalog/file_ownership.yaml tests/aistock_validation/bugs/20261116_BUG-2231-3100-same-origin-api-base-and-backend-root-proxy-repair.json -> passed",
+      "python -m pytest backend/tests/test_noxfile_validation_env.py -q -> 138 passed"
+    ],
+    "validation_evidence_digest": "c9a0111800b0c5b817924afed85c637a51256f91c60d5760668cba75aab26022"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "frontend_common"
   ],
@@ -167,6 +193,12 @@
     "fingerprint": "b9da04a091064d25256ed721",
     "source_event_id": "FE-20261116-b9da04a09106"
   },
+  "validation_evidence": [
+    "python -m nox -s frontend_type_lint -> passed; 31 Node tests, TypeScript and lint passed",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed; 16 tests, integrity findings=0",
+    "python -m nox -s l0 -- frontend/next.config.mjs frontend/scripts/next-config-3100.test.mjs noxfile.py backend/tests/test_noxfile_validation_env.py tests/aistock_validation/catalog/file_ownership.yaml tests/aistock_validation/bugs/20261116_BUG-2231-3100-same-origin-api-base-and-backend-root-proxy-repair.json -> passed",
+    "python -m pytest backend/tests/test_noxfile_validation_env.py -q -> 138 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
