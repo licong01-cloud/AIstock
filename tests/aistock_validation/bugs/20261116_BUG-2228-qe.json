@@ -54,8 +54,8 @@
     {
       "action": "ci_compatibility_scope_expansion",
       "actor": "Codex",
-      "timestamp": "2026-11-16T07:58:35.303907+00:00",
-      "note": "CI43825698645归档后端263项通过，工作流旧member引用集合断言失败；在未修改的main同node重现。已核对新增研究引用及其调用方仅研究CLI/测试/编排清单，未发现API/router消费者。仅更新该精确测试并保持线上混入必须重启/禁止降级和任意新增调用方失败；不改HMM模型或runtime catalog。"
+      "note": "CI43825698645归档后端263项通过，工作流旧member引用集合断言失败；在未修改的main同node重现。已核对新增研究引用及其调用方仅研究CLI/测试/编排清单，未发现API/router消费者。仅更新该精确测试并保持线上混入必须重启/禁止降级和任意新增调用方失败；不改HMM模型或runtime catalog。",
+      "timestamp": "2026-11-16T07:58:35.303907+00:00"
     }
   ],
   "evidence_uris": [
@@ -70,6 +70,7 @@
       "backend/services/qe_archive/repository.py",
       "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
       "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "noxfile.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
@@ -89,13 +90,13 @@
       "backend/services/qe_archive/repository.py",
       "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
       "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "noxfile.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
       "scripts/reconcile_qe_multi_alpha_archive.py",
       "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -212,8 +213,8 @@
   },
   "first_seen_at": "2026-11-16T07:01:57.160377Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6ea365bf6fbef30693bf43329879253918700b8f",
+  "fixed_at": "2026-11-16T08:24:45Z",
   "github_issue_number": 7273,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7273",
   "last_seen_at": "2026-11-16T07:01:57.160377Z",
@@ -221,6 +222,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7274",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -256,6 +258,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -267,7 +270,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2228",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "aebe893f6e7f2836",
+    "recorded_at": "2026-11-16T08:25:41.392876Z",
+    "runtime_contract_digest": "bd02c3ab2e4d0531874211bb35dac7c9b6d592ce859c20013ba42d138c3c14c2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "226d2db0e03b7ea31a3f80b214a9dcc30cc37440",
+    "source_merge_commit": "6ea365bf6fbef30693bf43329879253918700b8f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7274",
+    "validation_evidence": [
+      "rtk pytest backend/tests/qe_archive/test_multi_alpha_result_evidence.py backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py backend/tests/qe_archive/test_multi_alpha_archive_handler.py backend/tests/multi_alpha/test_baseline_only_contract.py -q -> 80 passed; current CI43829142205 passed",
+      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> both passed; current CI43829142205 passed",
+      "rtk pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_exact_offline_roles_cannot_downgrade_mixed_online_scope[member] -q -> 2 passed; current CI43829142205 passed"
+    ],
+    "validation_evidence_digest": "eee5cb5c8d81fc751d037ca882c250deb9412bbdc223bdc865b4308c22e0d0ef"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -276,6 +302,11 @@
     "fingerprint": "3428ecaa33f33920656858d6",
     "source_event_id": "FE-20261116-3428ecaa33f3"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/qe_archive/test_multi_alpha_result_evidence.py backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py backend/tests/qe_archive/test_multi_alpha_archive_handler.py backend/tests/multi_alpha/test_baseline_only_contract.py -q -> 80 passed; current CI43829142205 passed",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> both passed; current CI43829142205 passed",
+    "rtk pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_exact_offline_roles_cannot_downgrade_mixed_online_scope[member] -q -> 2 passed; current CI43829142205 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
