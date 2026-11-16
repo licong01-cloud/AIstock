@@ -29,15 +29,15 @@
   "expected": "3100实例不会阻止启动3000；已有3000不重复启动；未知进程占用3000仍阻断。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json",
       "backend/tests/platform_api/test_windows_launcher.py",
-      "scripts/start_ai_stock.py"
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json",
       "backend/tests/platform_api/test_windows_launcher.py",
-      "scripts/start_ai_stock.py"
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -88,8 +88,8 @@
   },
   "first_seen_at": "2026-11-16T09:51:48.421836Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1a957daf9b6114b7d8161dcf85553770a7a6f3d4",
+  "fixed_at": "2026-11-16T10:11:03Z",
   "github_issue_number": 7276,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7276",
   "last_seen_at": "2026-11-16T09:51:48.421836Z",
@@ -97,6 +97,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7277",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,6 +124,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -134,7 +136,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2229",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "df10613a9dd4ff8e",
+    "recorded_at": "2026-11-16T10:11:48.706415Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "02717e977278a90464e753c9a75baeb7bcadaac4",
+    "source_merge_commit": "1a957daf9b6114b7d8161dcf85553770a7a6f3d4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7277",
+    "validation_evidence": [
+      "python -m nox -s l0 -- scripts/start_ai_stock.py backend/tests/platform_api/test_windows_launcher.py tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json -> passed",
+      "pytest -q backend/tests/platform_api/test_windows_launcher.py backend/tests/platform_api/test_backend_lifecycle.py -p no:cacheprovider -> 85 passed"
+    ],
+    "validation_evidence_digest": "d4cbf547db2cf24de5bd839005833013adab42f886859b7545fec4c2f158133e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api"
   ],
@@ -143,6 +167,10 @@
     "fingerprint": "262cc5c23b5c43268b6f0505",
     "source_event_id": "FE-20261116-262cc5c23b5c"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- scripts/start_ai_stock.py backend/tests/platform_api/test_windows_launcher.py tests/aistock_validation/bugs/20261116_BUG-2229-3100-3000.json -> passed",
+    "pytest -q backend/tests/platform_api/test_windows_launcher.py backend/tests/platform_api/test_backend_lifecycle.py -p no:cacheprovider -> 85 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
