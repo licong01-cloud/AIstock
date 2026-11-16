@@ -8,7 +8,7 @@ from datetime import datetime, time
 from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
-from .notification_repository import AdvisoryNotificationRepository
+from .notification_repository import AdvisoryNotificationRepository, FEISHU_COMPLETION_ROUTE
 
 CN = ZoneInfo('Asia/Shanghai')
 
@@ -26,7 +26,9 @@ def configured_channels(config):
     )):
         channels.append('email')
     if (config.get('webhook_enabled') and config.get('webhook_url')
-            and config.get('webhook_type') in {'dingtalk', 'feishu'}):
+            and (config.get('webhook_type') == 'dingtalk'
+                 or (config.get('webhook_type') == 'feishu'
+                     and config.get('advisory_feishu_completion_only')))):
         channels.append('webhook')
     return channels
 
@@ -79,6 +81,42 @@ def events_for_day(now, target, rows, base_url):
     return events
 
 
+def completion_events_for_day(now, target, rows):
+    """One brief notice after every current daily program has really published."""
+    if now.tzinfo is None:
+        raise ValueError('notification clock must be timezone-aware')
+    now = now.astimezone(CN)
+    if target is None or not rows:
+        return []
+    if target <= now.date():
+        raise ValueError('ADVISORY_NOTIFICATION_TARGET_ORDER')
+    if any(row.get('publication_status') != 'PUBLISHED' for row in rows):
+        return []
+    roster = []
+    for row in rows:
+        published = row.get('published_at')
+        if (not all(row.get(k) for k in ('program_id', 'binding_version_id', 'list_version_id'))
+                or not isinstance(published, datetime) or published.tzinfo is None
+                or row.get('target_trade_date') != target
+                or published.astimezone(CN).date() != now.date() or published > now):
+            raise ValueError('ADVISORY_NOTIFICATION_PUBLICATION_IDENTITY_INVALID')
+        roster.append([row['program_id'], row['binding_version_id'], row['list_version_id']])
+    if len({item[0] for item in roster}) != len(roster) or len(roster) > 100:
+        raise ValueError('ADVISORY_NOTIFICATION_COMPLETION_ROSTER_INVALID')
+    key = hashlib.sha256(json.dumps([FEISHU_COMPLETION_ROUTE, str(now.date())]).encode()).hexdigest()
+    roster_sha = hashlib.sha256(json.dumps(sorted(roster), ensure_ascii=True).encode()).hexdigest()
+    return [dict(
+        event_key=key, kind='SUMMARY', decision_date=now.date(),
+        expires_at=datetime.combine(target, time(9, 30), CN),
+        payload=dict(
+            schema_version='advisory_notification_message_v1',
+            delivery_route=FEISHU_COMPLETION_ROUTE,
+            completion_roster_sha256=roster_sha,
+            subject='AIstock', message=f'{now.date()} 荐股任务已完成。',
+        ),
+    )]
+
+
 class AdvisoryNotificationService:
     def __init__(self, repository=None, transport=None, now_provider=None):
         self.repository = repository
@@ -93,8 +131,22 @@ class AdvisoryNotificationService:
             from .notification_transport import AdvisoryNotificationTransport
             self.transport = AdvisoryNotificationTransport()
         channels = configured_channels(self.transport.config)
+        completion_only = bool(self.transport.config.get('advisory_feishu_completion_only'))
+        completion_status = None
+        if completion_only:
+            completion_status = {
+                'status': 'WAITING_COMPLETION' if 'webhook' in channels else 'NOT_CONFIGURED',
+            }
+            error = self.transport.config.get('advisory_feishu_configuration_error')
+            if error:
+                completion_status['reason_code'] = error
+        elif self.transport.config.get('webhook_type') == 'feishu':
+            completion_status = {'status': 'DISABLED'}
         if not channels:
-            return {'status': 'NOT_CONFIGURED'}
+            result = {'status': 'NOT_CONFIGURED'}
+            if completion_status:
+                result['feishu_completion'] = completion_status
+            return result
         if self.repository is None:
             self.repository = AdvisoryNotificationRepository()
         now = self.now_provider()
@@ -102,12 +154,20 @@ class AdvisoryNotificationService:
             raise ValueError('notification clock must be timezone-aware')
         now = now.astimezone(CN)
         target, rows = self.repository.snapshot(now.date())
+        legacy_channels = [ch for ch in channels if ch != 'webhook' or not completion_only]
         events = events_for_day(now, target, rows,
-            os.getenv('AISTOCK_ADVISORY_NOTIFICATION_BASE_URL', 'http://localhost:3000'))
-        queued = sum(self.repository.enqueue(e, ch, now) for e in events for ch in channels)
+            os.getenv('AISTOCK_ADVISORY_NOTIFICATION_BASE_URL', 'http://localhost:3000')) if legacy_channels else []
+        queued = sum(self.repository.enqueue(e, ch, now) for e in events for ch in legacy_channels)
+        if completion_only and 'webhook' in channels:
+            completed = completion_events_for_day(now, target, rows)
+            queued += sum(self.repository.enqueue(e, 'webhook', now) for e in completed)
+            if completed:
+                completion_status = {'status': 'EVENT_READY', 'event_key': completed[0]['event_key']}
         results = []
         for _ in range(4):
-            row = self.repository.claim(self.now_provider().astimezone(CN), channels)
+            claim_time = self.now_provider().astimezone(CN)
+            row = self.repository.claim(claim_time, channels,
+                webhook_route=FEISHU_COMPLETION_ROUTE) if completion_only else self.repository.claim(claim_time, channels)
             if row is None:
                 break
             try:
@@ -119,4 +179,7 @@ class AdvisoryNotificationService:
             state = self.repository.finish(row, accepted=accepted,
                 now=self.now_provider().astimezone(CN), error_code=error)
             results.append({'event_key': row['event_key'], 'channel': row['channel'], 'status': state})
-        return {'status': 'PROCESSED', 'queued': queued, 'deliveries': results}
+        result = {'status': 'PROCESSED', 'queued': queued, 'deliveries': results}
+        if completion_status:
+            result['feishu_completion'] = completion_status
+        return result
