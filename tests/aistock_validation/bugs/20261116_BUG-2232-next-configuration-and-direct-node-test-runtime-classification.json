@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2232",
-  "closed_at": null,
+  "closed_at": "2026-11-16T16:01:28Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -96,8 +96,8 @@
   },
   "first_seen_at": "2026-11-16T15:26:39.047596Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "85b45783213f7728f0c33dbbcac5093d6070db99",
+  "fixed_at": "2026-11-16T16:01:28Z",
   "github_issue_number": 7280,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7280",
   "last_seen_at": "2026-11-16T15:26:39.047596Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7281",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,6 +123,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -131,7 +133,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2232",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ff1dfe4fb4ffe362",
+    "recorded_at": "2026-11-16T16:02:42.258916Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "22f8c78f65464f7f982de585badc67e9b81d973e",
+    "source_merge_commit": "85b45783213f7728f0c33dbbcac5093d6070db99",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7281",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator backend/tests/scripts/test_aistock_issue_workflow_fast.py -k \"honest_production_denominator or catalog_runtime_roles_keep_exact or runtime_catalog_validation_error\" -q -p no:cacheprovider -> 47 passed",
+      "python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261116_BUG-2232-next-configuration-and-direct-node-test-runtime-classification.json -> passed"
+    ],
+    "validation_evidence_digest": "3ae635d1af75c24365e2b18ddf18ffe305e8b36417dd6d0dd24ec86659b8234a"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
@@ -140,6 +164,10 @@
     "fingerprint": "a665ef7c87c6897ec8f44144",
     "source_event_id": "FE-20261116-a665ef7c87c6"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator backend/tests/scripts/test_aistock_issue_workflow_fast.py -k \"honest_production_denominator or catalog_runtime_roles_keep_exact or runtime_catalog_validation_error\" -q -p no:cacheprovider -> 47 passed",
+    "python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261116_BUG-2232-next-configuration-and-direct-node-test-runtime-classification.json -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
