@@ -208,7 +208,9 @@ def compose_absolute_targets(composer, *, custom_params, factor_names, model_id,
             experiment_id=experiment_id, experiment_name=experiment_name, exp_dir="<in_memory>/" + experiment_name,
             factor_names=[], model_id=None, strategy_id=None, data_split=data_split, custom_params=params,
             evolution_goal=None, llm_hypothesis=None)
-    return {"experiment_files": files, "wsl_command": "set -euo pipefail && cd " + shlex.quote(workdir) + " && " + core,
+    # The shared WSL envelope validates the leading canonical workspace cd.
+    # Keep strict bash options inside that workspace without changing the core.
+    return {"experiment_files": files, "wsl_command": "cd -- " + shlex.quote(workdir) + " && set -euo pipefail && " + core,
             "wsl_command_core": core, "wsl_workdir": workdir, "experiment_name": experiment_name,
             "experiment_id": experiment_id, "factor_count": 0, "has_custom_factors": False,
             "long_trend_evaluation_descriptor": None, "direct_v2_dataset_binding": binding.as_dict()}
