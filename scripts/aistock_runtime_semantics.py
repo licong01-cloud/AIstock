@@ -546,6 +546,28 @@ def _validate_scheduler_verification_status(
     return "passed", None, {"verification_scope": observed_scope}
 
 
+def _validate_qe_multi_alpha_archive_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Require the named successful account and its completed delivery, not HTTP alone."""
+    if not isinstance(payload, dict) or payload.get("status") != "success":
+        return "failed", "multi-alpha archive response is not successful", {}
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return "failed", "multi-alpha archive data is missing", {}
+    run = data.get("archive_run")
+    outbox = data.get("archive_outbox")
+    if not isinstance(run, dict) or not isinstance(outbox, dict):
+        return "failed", "multi-alpha account or delivery receipt is missing", {}
+    facts = {"run_id": data.get("run_id"), "archive_status": data.get("archive_status"),
+             "run_status": run.get("status"), "research_valid": run.get("research_valid"),
+             "event_id": outbox.get("event_id"), "delivery_status": outbox.get("status")}
+    if (not facts["run_id"] or run.get("run_id") != facts["run_id"]
+            or facts["archive_status"] != "archived" or facts["run_status"] != "succeeded"
+            or facts["research_valid"] is not True or not facts["event_id"]
+            or facts["delivery_status"] != "completed" or outbox.get("error_message")):
+        return "failed", "multi-alpha account and delivery are not fully accepted", facts
+    return "passed", None, facts
+
+
 def _validate_health_ok(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Health endpoints must report ok=true or an explicitly healthy status."""
     if not isinstance(payload, dict):

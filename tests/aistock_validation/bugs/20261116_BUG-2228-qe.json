@@ -1,0 +1,385 @@
+{
+  "actual": "OLD_AF3与UPDATED_AF5均succeeded但archive_skipped，已验收13/15。",
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+    "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+    "backend/services/qe_archive/multi_alpha_result_evidence.py",
+    "scripts/reconcile_qe_multi_alpha_archive.py",
+    "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+    "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
+    "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
+    "backend/services/qe_archive/repository.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/aistock_runtime_semantics.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2228",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-16T07:01:57.160377Z",
+  "description": "OLD_AF3与UPDATED_AF5均succeeded但archive_skipped，已验收13/15。",
+  "dev_validation_summary": {
+    "database": "aistock_dev",
+    "new_fit_predict_backtest": 0,
+    "production_writes": 0,
+    "receipt_sha256": "74fb91abb5992802ad8f942b24ef9738bcd85017b3e35d740ca46bd1730a7155",
+    "rollback_verified": true,
+    "run_ids": [
+      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
+      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
+    ],
+    "schema_version": "bug_existing_dev_result_recovery_v1",
+    "status": "PASS_EXISTING_DEV_DML_AND_READBACK_ROLLED_BACK"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261116-3428ecaa33f3",
+      "timestamp": "2026-11-16T07:01:57.160363Z"
+    },
+    {
+      "action": "author_review_two_rounds_complete",
+      "actor": "Codex",
+      "note": "第一轮：真实remote manifest仅有哈希，修复正式baseline结果读取；原始内容、选定attempt、metrics和窗口逐项核验。第二轮：保留SKIP/smoke、负值/零值及旧多方案；补原子完成已入仓事件，拒绝活跃/错源事件；新增有真实账户语义的runtime只读probe和CI映射。当前79项直接测试、Ruff、diff-check及两项必需Nox目录检查通过。四项DESIGN-COMPLIANCE-001通过：完整交付、无吞错或默认值、原经济/冻结合同不变、无新审批。此为作者自审，非独立外审。",
+      "timestamp": "2026-11-16T07:35:46.372496+00:00"
+    },
+    {
+      "action": "ci_compatibility_scope_expansion",
+      "actor": "Codex",
+      "timestamp": "2026-11-16T07:58:35.303907+00:00",
+      "note": "CI43825698645归档后端263项通过，工作流旧member引用集合断言失败；在未修改的main同node重现。已核对新增研究引用及其调用方仅研究CLI/测试/编排清单，未发现API/router消费者。仅更新该精确测试并保持线上混入必须重启/禁止降级和任意新增调用方失败；不改HMM模型或runtime catalog。"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-parallel-next-plan-20261116/execution/derived/A_OLD_AF3_H20_K20/archive_response.json",
+    "tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json"
+  ],
+  "expected": "成功的明确单基准账户以核验后的原始结果正常入仓，缺失/坏哈希仍拒绝；接续明确归档阻断并支持原run恢复。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "backend/services/qe_archive/repository.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py"
+    ],
+    "changed_files": [
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "backend/services/qe_archive/repository.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2228-qe.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+        "backend/services/qe_archive/multi_alpha_result_evidence.py",
+        "scripts/reconcile_qe_multi_alpha_archive.py",
+        "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py"
+      ],
+      "impacted_modules": [
+        "qe.archive_handlers",
+        "qe.archive",
+        "qe.data_completeness",
+        "paper_v2",
+        "qe.enhanced_metrics",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/services/qe_archive/multi_alpha_result_evidence.py",
+          "impact_modules": [
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.archive",
+          "risk_level": "high",
+          "rule_id": "qe_archive_services"
+        },
+        {
+          "file": "scripts/reconcile_qe_multi_alpha_archive.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+        "backend/services/qe_archive/multi_alpha_result_evidence.py",
+        "scripts/reconcile_qe_multi_alpha_archive.py",
+        "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "backend/services/qe_archive/multi_alpha_result_evidence.py",
+      "scripts/reconcile_qe_multi_alpha_archive.py",
+      "backend/tests/qe_archive/test_multi_alpha_result_evidence.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_reconcile.py"
+    ]
+  },
+  "first_seen_at": "2026-11-16T07:01:57.160377Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7273,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7273",
+  "last_seen_at": "2026-11-16T07:01:57.160377Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_recovery_scope": {
+    "action": "仅经DEV验证的正式归档器与条件事件完成；不修改原任务、attempt、预测或清单；无DDL/训练/服务操作",
+    "authorization_reference": "用户：立刻执行修复并完成后续任务；承接已明确补入仓的原两个run",
+    "database": "aistock",
+    "run_ids": [
+      "macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1",
+      "macb_idem_93dafb868654c6249011ded2269c523bede22714"
+    ]
+  },
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_archive_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1/archive-status",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_10dd63181fc1177ef6394fbfdf192377ea6cada1/archive-detail",
+    "fresh_process_evidence": [
+      "独立Python进程从持久化工作树加载修复，原两个run的原始内容及metrics哈希一致；aistock_dev真实入仓、幂等回读及CAS拒绝无仓和活跃事件通过，事务已回滚。receipt=tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json。无训练、推理、回测、服务控制。",
+      "独立Python进程从当前持久化修复加载；原两个run原始内容和metrics哈希一致；现有aistock_dev入仓、幂等回读与CAS反证通过并回滚。DEV收据digest已写BUG记录，路径tmp/issue_workflow/BUG-2228/dev-archive-readback-v2.json。无训练、推理、回测或服务控制。"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "QE单一基准账户真实结果被归档误判为空且接续器持续等待",
+  "trigger_condition": {
+    "fingerprint": "3428ecaa33f33920656858d6",
+    "source_event_id": "FE-20261116-3428ecaa33f3"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe_archive"
+      ],
+      "plans": [
+        "qe_archive_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe_archive"
+        ],
+        "plans": [
+          "qe_archive_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

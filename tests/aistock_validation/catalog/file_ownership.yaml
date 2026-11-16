@@ -854,6 +854,7 @@ rules:
     priority: 90
     include:
       - backend/services/qe_archive/**
+      - scripts/reconcile_qe_multi_alpha_archive.py
       - backend/routers/qe_archive.py
     primary_module: qe.archive
     impact_modules: [qe.data_completeness, qe.enhanced_metrics]

@@ -1443,6 +1443,34 @@ class QEArchiveRepository:
             for row in rows
         ]
 
+    def complete_skipped_multi_alpha_archive_event(self, event_id: str, *, run_id: str) -> bool:
+        """CAS-close this known skip only after a valid archive exists."""
+        if not event_id or not run_id:
+            raise ValueError("archive reconciliation requires an exact event and run")
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_archive.outbox_event AS e
+                    SET status = 'completed', locked_by = NULL, locked_at = NULL,
+                        error_message = NULL, updated_at = NOW()
+                    WHERE e.event_id = %s AND e.source_id = %s
+                      AND e.source_system = 'multi_alpha'
+                      AND e.event_type = 'qe.multi_alpha.combine.completed'
+                      AND e.status = 'skipped' AND e.locked_by IS NULL
+                      AND e.error_message = 'qe_lifecycle_no_evaluable_result'
+                      AND EXISTS (
+                          SELECT 1 FROM qe_archive.run AS r
+                          WHERE r.run_id = %s AND r.source_system = 'multi_alpha'
+                            AND r.run_type = 'multi_alpha_combine'
+                            AND r.status = 'succeeded' AND r.research_valid IS TRUE
+                      )
+                    RETURNING e.event_id
+                    """,
+                    (event_id, run_id, run_id),
+                )
+                return cur.fetchone() is not None
+
     def complete_outbox_event(self, event_id: str) -> None:
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
