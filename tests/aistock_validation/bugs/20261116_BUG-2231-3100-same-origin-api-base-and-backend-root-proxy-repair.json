@@ -1,11 +1,18 @@
 {
   "actual": "3100 public bundle contains a Windows path; backend alert count is JSON 200 on 8001 and HTML 404 through 3100.",
   "allowed_write_scope": [
+    "frontend/next.config.mjs",
+    "frontend/scripts/next-config-3100.test.mjs",
     "noxfile.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20261116_BUG-2231-3100-same-origin-api-base-and-backend-root-proxy-repair.json"
   ],
   "assigned_agent": null,
+  "agent_review": {
+    "correctness": "passed: Next's actual client defines override the shell-converted path and inherited absolute root; real Next rewrite matching preserves API paths and queries.",
+    "completeness_regression": "passed: 31 direct Node tests and 16 ownership/catalog tests; corrected duplicate CLI ports and build-directory hints without an actual 3100 listener.",
+    "runtime_boundary": "Source-only delivery. 3100 activation and remote browser business acceptance remain pending user restart; preserve the current 3000/8001/19080 processes."
+  },
   "bug_id": "BUG-2231",
   "closed_at": null,
   "closure_requirements": [
@@ -26,8 +33,11 @@
   "evidence_uris": [],
   "expected": "3100 compiles relative API bases and proxies both versioned and backend-root API paths; 3000 and production configuration retain prior behavior.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "frontend/scripts/next-config-3100.test.mjs"
+    ],
     "changed_files": [
+      "frontend/next.config.mjs",
       "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
@@ -81,11 +91,15 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "frontend/next.config.mjs",
+      "frontend/scripts/next-config-3100.test.mjs",
       "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "frontend/next.config.mjs",
+      "frontend/scripts/next-config-3100.test.mjs",
       "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
@@ -99,6 +113,8 @@
   "last_seen_at": "2026-11-16T15:14:48.098164Z",
   "module": "frontend_common",
   "non_goals": [
+    "Do not sync canonical source, activate frontend code, control any service, read credential files, or change VPN/Caddy/proxy configuration.",
+    "Independent scheduler/Grafana services and retired paper-trading reports are outside this source repair.",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
@@ -119,7 +135,7 @@
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
     "provisional": true,
-    "runtime_impact": "none",
+    "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []

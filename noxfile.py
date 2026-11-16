@@ -802,6 +802,7 @@ def frontend_type_lint(session: nox.Session) -> None:
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
+        session.run("node", "--test", "scripts/next-config-3100.test.mjs", external=True)
         session.run(
             "node",
             "node_modules/typescript/bin/tsc",

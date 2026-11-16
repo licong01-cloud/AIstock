@@ -2003,6 +2003,8 @@ rules:
       - frontend/src/app/layout.tsx
       - frontend/src/app/page.tsx
       - frontend/tsconfig.json
+      - frontend/next.config.mjs
+      - frontend/scripts/next-config-3100.test.mjs
       - frontend/package.json
       - frontend/playwright*.config.ts
     exclude:
