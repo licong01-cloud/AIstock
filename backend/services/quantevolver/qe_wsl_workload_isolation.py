@@ -35,6 +35,12 @@ def isolate_payload(payload, *, source, compute_kind: str | None):
     pure_replay = source.backtest_only and (
         payload.config.get("prediction_replay") is True
         or bool(re.search(r"(?:^|\s)--pred-backtest(?:\s|$)", payload.wsl_command))
+        or (
+            isinstance(payload.config.get("absolute_target_replay"), dict)
+            and bool(payload.config["absolute_target_replay"])
+            and not payload.config.get("model_id")
+            and bool(re.search(r"(?:^|\s)--absolute-target-replay(?:\s|$)", payload.wsl_command))
+        )
     )
     kind = "replay" if pure_replay else ("cpu" if compute_kind == "cpu" else "gpu")
     lexer = shlex.shlex(payload.wsl_command, posix=True, punctuation_chars=";&|()<>")

@@ -110,3 +110,24 @@ def test_model_reuse_prediction_is_not_misclassified_as_pure_replay(command, con
     assert policy["peak_bytes"] == expected * GIB
     assert wrapped.experiment_files["qe_wsl_workload_command.sh"] == original
     assert wrapped.config == payload.config
+
+
+@pytest.mark.parametrize("flag,config,expected", [
+    ("--absolute-target-replay", {"absolute_target_replay": {"arm": "B"}, "model_id": None}, 20),
+    ("--absolute-target-replay-invalid", {"absolute_target_replay": {"arm": "B"}}, 32),
+    ("--absolute-target-replay", {}, 32),
+    ("--absolute-target-replay", {"absolute_target_replay": {}}, 32),
+    ("--absolute-target-replay", {"absolute_target_replay": {"arm": "B"}, "model_id": "LSTM"}, 32),
+    ("--backtest-only", {"absolute_target_replay": {"arm": "B"}}, 32),
+])
+def test_explicit_model_free_target_account_has_pure_replay_envelope(flag, config, expected):
+    original = "cd -- '/mnt/f/job with spaces' && set -euo pipefail && python qrun_limit_minute.py conf.yaml " + flag
+    payload = QEWorkspaceSubmissionPayload("qe_targets", 2, config, {"conf.yaml": "frozen"}, original)
+    wrapped = isolate_payload(
+        payload, source=SimpleNamespace(backtest_only=True, submission_intent_hash="d" * 64), compute_kind=None,
+    )
+    policy = json.loads(wrapped.experiment_files["qe_wsl_workload_policy.json"])
+    assert policy["kind"] == ("replay" if expected == 20 else "gpu")
+    assert policy["peak_bytes"] == expected * GIB
+    assert wrapped.experiment_files["qe_wsl_workload_command.sh"] == original
+    assert wrapped.config == payload.config and payload.experiment_files == {"conf.yaml": "frozen"}
