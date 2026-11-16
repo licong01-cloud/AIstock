@@ -1,7 +1,7 @@
 {
   "actual": "BUG-2231 canonical finish rejects inferred runtime_impact=unknown.",
   "agent_review": {
-    "completeness_regression": "passed: 777 workflow tests preserve unknown-neighbor, catalog-failure, mixed-backend and activation contracts.",
+    "completeness_regression": "passed: 47 affected role/catalog/budget cases on final tests; the earlier broad suite passed 777 tests. Current-head CI reruns the broad workflow suite. Existing parameterization now covers frontend, test-only, unknown neighbors, mixed backend, invalid catalog and activation without changing the 30 percent budget.",
     "correctness": "passed: exact Next configuration remains frontend runtime; only the actual direct Node test is non-runtime.",
     "runtime_actions": "none; source delivery does not activate the pending BUG-2231 frontend change."
   },
