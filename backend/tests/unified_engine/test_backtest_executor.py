@@ -126,6 +126,39 @@ def make_ctx(
     )
 
 
+def test_absolute_target_real_executor_payload_is_recognized_by_isolation():
+    from backend.services.quantevolver.qe_wsl_workload_isolation import isolate_payload
+
+    contract = {
+        "schema_version": "qe_absolute_target_replay_v1", "arm": "B",
+        "targets": {"path": "targets.parquet", "sha256": "a" * 64},
+        "execution_reference": {"path": "reference.yaml", "sha256": "b" * 64},
+        "dataset": {"release_id": "release", "manifest_sha256": "c" * 64, "profile_sha256": "d" * 64},
+        "window": {"signal_start": "2026-04-01", "signal_end": "2026-04-01",
+                   "account_start": "2026-04-02", "account_end": "2026-04-02", "account_days": 1},
+        "initial_cash": 10000000, "sector_ids": [1], "known_at": "UNVERIFIED",
+    }
+    composer = make_mock_composer("cd -- /workspace/Loop1 && python qrun_limit_minute.py conf.yaml --absolute-target-replay")
+    client = make_mock_client()
+    captured = {}
+
+    class Coordinator:
+        async def submit(self, *, client, source, payload):
+            captured.update(source=source, payload=payload)
+            return await _UnitSubmissionCoordinator().submit(client=client, source=source, payload=payload)
+
+    executor = ProductionBacktestExecutor(composer, client, submission_coordinator=Coordinator())
+    cfg = ExperimentConfig(factor_names=[], model_id=None, absolute_target_replay=contract)
+    ctx = make_ctx(node_id="wsl2-5080").model_copy(update={
+        "submission_source_kind": "qe_evolution_loop", "submission_source_execution_id": "task_test_Loop1"})
+    asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx, mode=BacktestMode.ABSOLUTE_TARGET_REPLAY))
+    assert captured["source"].backtest_only is True
+    assert captured["payload"].config["absolute_target_replay"] == contract
+    isolated = isolate_payload(captured["payload"], source=captured["source"], compute_kind=None)
+    policy = json.loads(isolated.experiment_files["qe_wsl_workload_policy.json"])
+    assert policy["kind"] == "replay" and policy["peak_bytes"] == 20 * 1024**3
+
+
 # ── BacktestExecutor 基础测试 ──────────────────────────────────────────────────
 
 class TestBacktestExecutorBasic:

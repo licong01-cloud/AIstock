@@ -310,3 +310,35 @@ def test_recorder_nonempty_malformed_indicators_fail_without_fake_success(target
         run()
     assert "report_normal_1day.pkl" in saved[0]
     assert not Path("qe_absolute_target_result.json").exists()
+
+
+@pytest.mark.parametrize("failed_activation", [False, True])
+def test_conda_bootstrap_tolerates_unset_hook_and_restores_strictness(failed_activation):
+    import shutil
+    import subprocess
+    from backend.services.quantevolver.absolute_target_consumer import absolute_target_command_core
+
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash required for the real activation shell boundary")
+    activate = ('activate_test() { export LD_LIBRARY_PATH="/cuda:$LD_LIBRARY_PATH"; }; activate_test'
+                if not failed_activation else "false")
+    parts = ["unset LD_LIBRARY_PATH", activate,
+             'case "$-" in *u*) ;; *) exit 99;; esac', 'printf "activated=%s" "$LD_LIBRARY_PATH"']
+    original = list(parts)
+    command = "set -euo pipefail && " + absolute_target_command_core(parts, activate)
+    result = subprocess.run([bash, "--noprofile", "--norc", "-s"], input=command.encode(), capture_output=True)
+    assert parts == original
+    if failed_activation:
+        assert result.returncode != 0 and b"activated=" not in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        assert result.stdout == b"activated=/cuda:"
+
+
+def test_bootstrap_missing_or_duplicate_activation_fails_closed():
+    from backend.services.quantevolver.absolute_target_consumer import absolute_target_command_core
+
+    for parts in [["echo unrelated"], ["activate", "activate"]]:
+        with pytest.raises(ValueError, match="QE_ABSOLUTE_TARGET_BOOTSTRAP_COUNT"):
+            absolute_target_command_core(parts, "activate")
