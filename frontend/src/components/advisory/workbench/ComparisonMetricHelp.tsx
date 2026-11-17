@@ -44,7 +44,11 @@ function MetricDialog({ metric, onClose }: { metric?: ComparisonMetric; onClose:
   const entries = Object.entries(comparisonMetrics).filter(([, value]) => !term || `${value.label} ${value.group} ${value.meaning} ${value.calculation} ${value.boundary}`.toLowerCase().includes(term));
   const groups = [...new Set(entries.map(([, definition]) => definition.group))];
   const close = () => { ref.current?.close(); onClose(); };
-  return <dialog ref={ref} className={styles.metricDialog} aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={event => { event.preventDefault(); close(); }}>
+  return <dialog ref={ref} className={styles.metricDialog} aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={event => { event.preventDefault(); close(); }} onKeyDownCapture={event => {
+    if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+      event.preventDefault(); event.stopPropagation(); close();
+    }
+  }}>
     <header className={styles.metricDialogHeader}><h2 id={titleId}>指标中文说明</h2><button type="button" aria-label="关闭指标说明" onClick={close}>关闭</button></header>
     <p id={descriptionId} className={styles.metricDialogIntro}>5TD 表示5个交易日；STD 表示标准差，本页未展示标准差。收益空缺“—”表示证据或样本不足，不等于0。</p>
     <div className={styles.metricSearch}><label>查找指标<input autoFocus type="search" aria-label="查找指标" placeholder="输入均值、胜率、回撤等" value={query} onChange={event => setQuery(event.target.value)} /></label>{query && <button type="button" onClick={() => setQuery("")}>查看全部指标</button>}<span role="status" aria-live="polite">共 {entries.length} 项说明</span></div>
