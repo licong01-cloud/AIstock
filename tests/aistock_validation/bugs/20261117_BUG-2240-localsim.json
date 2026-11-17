@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2240",
-  "closed_at": null,
+  "closed_at": "2026-11-17T05:39:34Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -116,8 +116,8 @@
   },
   "first_seen_at": "2026-11-17T05:08:21.893466Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f3ac702a9d607fe8c4a76d745c3088666d515bde",
+  "fixed_at": "2026-11-17T05:39:34Z",
   "github_issue_number": 7304,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7304",
   "implementation_review": {
@@ -146,6 +146,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7306",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -162,6 +163,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -171,7 +173,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2240",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a92890d7c0177f35",
+    "recorded_at": "2026-11-17T05:40:25.754289Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7453c260dfbe1ca693c54c17bdba934d64505849",
+    "source_merge_commit": "f3ac702a9d607fe8c4a76d745c3088666d515bde",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7306",
+    "validation_evidence": [
+      "validation-receipt: id=98faebf2bac45664 commit=7453c260dfbe1ca693c54c17bdba934d64505849 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- frontend/src/app/simulation/localsim/components/trading-workbench.tsx frontend/src/lib/simulation/localsim/workbench.ts frontend/tests/paper-v2/localsim-trading-workbench.spec.ts tests/aistock_validation/bugs/20261117_BUG-2240-localsim.json` result=`passed (0 blocking; changed TypeScript syntax compilation passed; visual acceptance requested from CI)`"
+    ],
+    "validation_evidence_digest": "9d1330f4089f743adb8760293e0f93b0ab3b90435c8ac433b60241cdb3d8b6c9"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -223,6 +246,9 @@
     ],
     "risk_tier": "P2"
   },
+  "validation_evidence": [
+    "validation-receipt: id=98faebf2bac45664 commit=7453c260dfbe1ca693c54c17bdba934d64505849 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- frontend/src/app/simulation/localsim/components/trading-workbench.tsx frontend/src/lib/simulation/localsim/workbench.ts frontend/tests/paper-v2/localsim-trading-workbench.spec.ts tests/aistock_validation/bugs/20261117_BUG-2240-localsim.json` result=`passed (0 blocking; changed TypeScript syntax compilation passed; visual acceptance requested from CI)`"
+  ],
   "verification_budget": {
     "budget": "light_ui",
     "ci_premerge_plans": [],
