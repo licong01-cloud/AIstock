@@ -5,6 +5,7 @@ import argparse
 from contextlib import ExitStack, contextmanager
 import ctypes
 from ctypes import wintypes
+from datetime import datetime
 import importlib.util
 import json
 import os
@@ -49,9 +50,24 @@ def active(directory: Path, data: dict) -> None:
         raise RuntimeError("Backend request cancelled or expired; no late startup permitted")
 
 
-def result(directory: Path, data: dict, **values) -> None:
-    write_json(directory / "result.json", {"nonce": data["nonce"], "expected_head": data["head"],
-                                          "business_acceptance": "not_evaluated", **values})
+def timestamp(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
+def result(directory: Path, data: dict, **values) -> dict:
+    receipt = {"nonce": data["nonce"], "expected_head": data["head"], "mode": data["mode"],
+               "requested_at": data.get("requested_at"),
+               "business_acceptance": "not_evaluated", **values}
+    if values.get("status") == "ready":
+        receipt.update(process_started_at=timestamp(values["created"]), ready_at=timestamp(time.time()))
+    write_json(directory / "result.json", receipt)
+    return receipt
+
+
+def print_ready(directory: Path, receipt: dict) -> None:
+    print(f"Backend READY: new PID {receipt['pid']}; source {receipt['expected_head']}; "
+          f"process started at {receipt['process_started_at']}; "
+          f"ready verified at {receipt['ready_at']}; logs: {directory}", flush=True)
 
 
 def dispatch(restart: bool = False) -> int:
@@ -62,9 +78,11 @@ def dispatch(restart: bool = False) -> int:
     RUNTIME.mkdir(parents=True, exist_ok=True)
     directory = RUNTIME / ("backend-" + uuid4().hex)
     directory.mkdir()
+    requested = time.time()
     data = {"nonce": directory.name, "head": head, "mode": "restart" if restart else "start",
-            "deadline": time.time() + TIMEOUT}
+            "requested_at": timestamp(requested), "deadline": requested + TIMEOUT}
     write_json(directory / "request.json", data)
+    print(f"Backend {data['mode'].upper()} requested at {data['requested_at']}", flush=True)
     print(f"Opening NEW backend tab; waiting for actual readiness. Logs: {directory}", flush=True)
     try:
         subprocess.run([terminal, "-w", "0", "new-tab", "--title", "AIstock Backend",
@@ -82,7 +100,7 @@ def dispatch(restart: bool = False) -> int:
                 process = psutil.Process(observed["pid"])
                 if process.create_time() != observed["created"] or not process.is_running():
                     raise RuntimeError("New backend exited/replaced before readiness acknowledgement")
-                print(f"Backend READY: new PID {process.pid}; source {head}; logs: {directory}", flush=True)
+                print_ready(directory, observed)
                 return 0
             time.sleep(0.25)
         raise RuntimeError(f"Backend readiness timeout; request cancelled. Inspect new tab/logs: {directory}")
@@ -327,6 +345,8 @@ def wait_ready(process, directory: Path, data: dict) -> dict:
 
 def serve(directory: Path) -> int:
     data = request(directory)
+    print(f"Backend {data['mode'].upper()} requested at {data.get('requested_at', 'unavailable (legacy request)')}",
+          flush=True)
     try:
         with ExitStack() as lifetime:
             with startup.startup_lock("backend"):
@@ -338,7 +358,8 @@ def serve(directory: Path) -> int:
                 active(directory, data)
                 command, _, _ = startup.commands("backend")
                 process = lifetime.enter_context(managed_process(command, directory / "backend.log"))
-                result(directory, data, **wait_ready(process, directory, data))
+                receipt = result(directory, data, **wait_ready(process, directory, data))
+                print_ready(directory, receipt)
             # Release the lock once ready so a later explicit restart can replace us.
             return hold(process, directory, data)
     except (Exception, KeyboardInterrupt) as exc:

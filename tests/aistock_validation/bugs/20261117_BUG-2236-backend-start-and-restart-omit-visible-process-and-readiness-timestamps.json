@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Show request time, actual verified backend process creation time and readiness confirmation time in caller and new backend tab, with persisted existing receipts; failed startup never prints success.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json",
+      "backend/tests/platform_api/test_backend_lifecycle.py",
+      "scripts/backend_lifecycle.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/backend_lifecycle.py",
-      "backend/tests/platform_api/test_backend_lifecycle.py"
+      "tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json",
+      "backend/tests/platform_api/test_backend_lifecycle.py",
+      "scripts/backend_lifecycle.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/backend_lifecycle.py",
@@ -101,11 +107,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -B scripts/backend_lifecycle.py --help -> passed in a fresh CLI process; python -m pytest backend/tests/platform_api/test_backend_lifecycle.py -q -k \"not real_ and not failed_job_assignment\" -> 22 passed, including actual timestamp formatting, atomic request/readiness receipts and caller/new-tab output through the source functions. No application backend was started or restarted; runtime activation and post-restart identity/business verification remain pending user execution."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

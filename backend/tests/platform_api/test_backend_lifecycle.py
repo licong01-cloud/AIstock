@@ -1,5 +1,6 @@
 """Backend lifecycle regressions; real Windows tests use disposable Python trees only."""
 from contextlib import contextmanager, nullcontext
+from datetime import datetime
 import importlib.util
 import json
 import os
@@ -36,20 +37,24 @@ def info(pid=101, parent=1, command=None, cwd=None):
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_dispatch_waits_for_new_invocation_receipt_and_always_requests_a_new_tab(pending, monkeypatch, restart):
+def test_dispatch_waits_for_new_invocation_receipt_and_always_requests_a_new_tab(pending, monkeypatch, capsys, restart):
     directory, _ = pending
     monkeypatch.setattr(lifecycle.shutil, "which", lambda _: "wt.exe")
     monkeypatch.setattr(lifecycle.startup, "git_head", lambda: SHA)
     monkeypatch.setattr(Path, "is_file", lambda self: self.name == ".env" or self.exists())
     commands = []
+    created = psutil.Process().create_time()
+    ready_epoch = time.time()
+    monkeypatch.setattr(lifecycle.time, "time", lambda: ready_epoch)
 
     def run(command, **kwargs):
         commands.append(command)
         request_dir = Path(command[-1])
         data = lifecycle.request(request_dir)
         assert data["mode"] == ("restart" if restart else "start")
+        assert datetime.fromisoformat(data["requested_at"]).utcoffset() is not None
         lifecycle.result(request_dir, data, status="ready", pid=os.getpid(),
-                         created=psutil.Process().create_time())
+                         created=created)
 
     monkeypatch.setattr(lifecycle.subprocess, "run", run)
     assert lifecycle.dispatch(restart) == lifecycle.dispatch(restart) == 0
@@ -57,10 +62,17 @@ def test_dispatch_waits_for_new_invocation_receipt_and_always_requests_a_new_tab
     for command in commands:
         assert command[1:4] == ["-w", "0", "new-tab"]
         assert command[-3:-1] == [str(ROOT / "start_backend.bat"), "--child"]
+        receipt = json.loads((Path(command[-1]) / "result.json").read_text())
+        assert receipt["process_started_at"] == lifecycle.timestamp(created)
+        assert receipt["ready_at"] == lifecycle.timestamp(ready_epoch)
+    output = capsys.readouterr().out
+    assert output.count(f"Backend {'RESTART' if restart else 'START'} requested at ") == 2
+    assert output.count(f"process started at {lifecycle.timestamp(created)}") == 2
+    assert output.count(f"ready verified at {lifecycle.timestamp(ready_epoch)}") == 2
 
 
 @pytest.mark.parametrize("outcome", ["activation_failed", "stale_receipt", "dispatch_failed", "timeout"])
-def test_dispatch_never_reports_tab_dispatch_or_stale_receipt_as_success(pending, monkeypatch, outcome):
+def test_dispatch_never_reports_tab_dispatch_or_stale_receipt_as_success(pending, monkeypatch, capsys, outcome):
     monkeypatch.setattr(lifecycle.shutil, "which", lambda _: "wt.exe")
     monkeypatch.setattr(lifecycle.startup, "git_head", lambda: SHA)
     monkeypatch.setattr(Path, "is_file", lambda self: self.name == ".env" or self.exists())
@@ -84,6 +96,11 @@ def test_dispatch_never_reports_tab_dispatch_or_stale_receipt_as_success(pending
         lifecycle.dispatch(True)
     requests = [p for p in lifecycle.RUNTIME.iterdir() if p.name != "backend-request"]
     assert len(requests) == 1 and (requests[0] / "cancel").is_file()
+    output = capsys.readouterr().out
+    assert "Backend RESTART requested at " in output
+    assert "Backend READY" not in output and "ready verified at " not in output
+    if (requests[0] / "result.json").exists():
+        assert "ready_at" not in json.loads((requests[0] / "result.json").read_text())
 
 
 def test_restart_selects_only_backend_python_roots_and_supervised_orphans():
@@ -161,7 +178,7 @@ def test_failed_preconditions_do_not_stop_or_launch_a_backend(pending, monkeypat
     assert json.loads((directory / "result.json").read_text())["status"] == "failed"
 
 
-def test_success_releases_startup_lock_while_tab_supervises_the_job(pending, monkeypatch):
+def test_success_releases_startup_lock_while_tab_supervises_the_job(pending, monkeypatch, capsys):
     directory, _ = pending
     locked = []
 
@@ -175,12 +192,19 @@ def test_success_releases_startup_lock_while_tab_supervises_the_job(pending, mon
     monkeypatch.setattr(lifecycle.startup, "git_head", lambda: SHA)
     monkeypatch.setattr(lifecycle, "prepare", Mock())
     monkeypatch.setattr(lifecycle, "managed_process", lambda *a: nullcontext(Mock(pid=101)))
-    monkeypatch.setattr(lifecycle, "wait_ready", lambda *a: {"status": "ready", "pid": 101, "created": 101.0})
+    created = 1_700_000_000.0
+    monkeypatch.setattr(lifecycle, "wait_ready", lambda *a: {"status": "ready", "pid": 101, "created": created})
     def hold(*_):
         assert not locked, "A later restart must be able to acquire the startup lock"
         return 0
     monkeypatch.setattr(lifecycle, "hold", hold)
     assert lifecycle.serve(directory) == 0
+    receipt = json.loads((directory / "result.json").read_text())
+    assert receipt["process_started_at"] == lifecycle.timestamp(created)
+    assert datetime.fromisoformat(receipt["ready_at"]).utcoffset() is not None
+    output = capsys.readouterr().out
+    assert f"process started at {receipt['process_started_at']}" in output
+    assert f"ready verified at {receipt['ready_at']}" in output
 
 
 @pytest.mark.parametrize("cause", ["wrong_listener", "source_changed", "exited", "identity_mismatch"])
