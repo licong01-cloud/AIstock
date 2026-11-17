@@ -30,14 +30,22 @@
   ],
   "expected": "Task completed after every required logical account succeeds; historical failed attempts stay visible; missing or changed-contract results cannot mask failure.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_custom_evo_outcome.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+      "tests/aistock_validation/bugs/20261117_BUG-2241-qe-successful-deterministic-replay-retries-leave-the-task-failed.json"
+    ],
     "added_files": [
       "backend/services/quantevolver/qe_custom_evo_outcome.py"
     ],
     "changed_files": [
+      "backend/services/quantevolver/qe_custom_evo_outcome.py",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/unified_engine/test_qe_custom_evo_status.py"
+      "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+      "tests/aistock_validation/bugs/20261117_BUG-2241-qe-successful-deterministic-replay-retries-leave-the-task-failed.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_evolution_service.py",
@@ -138,24 +146,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
     "fresh_process_evidence": [
-      "Fresh isolated process loaded actual worktree scheduler and formal serializer, read the real task through a production read-only transaction, and ran the real recompute_custom_evo_task_status DML on existing DEV. Exact six attempts resolve to T3/B6, repeated status recomputation is idempotent, all six loop records unchanged, partial receipt fails, active retry remains running, user pause preserved. DEV fixtures rolled back and independently verified absent. No production writes, fit, predict, account execution or service control. receipt=tmp/issue_workflow/BUG-2241/dev_status_receipt_v2.json;sha256=5a23b5e511921802e963472d5322e3c470dd6cb06017b461fbf8d26b6d1c33d9;source_sha256={\"backend/services/quantevolver/qe_custom_evo_outcome.py\": \"8bed5a00ec38a077d64ab9c30aa5b364eb0989796af156393356016f3d7e9273\", \"backend/services/quantevolver/qe_evolution_service.py\": \"0d9b461bc918cb388a263bc0e84bfb9bf4af101ee56cfeb70ee8e74f9fca423d\"}"
+      "Fresh isolated process loaded actual worktree scheduler and formal serializer, read the real task through a production read-only transaction, and ran the real recompute_custom_evo_task_status DML on existing DEV. Exact six attempts resolve to T3/B6, repeated status recomputation is idempotent, all six loop records unchanged, partial receipt fails, active retry remains running, user pause preserved. DEV fixtures rolled back and independently verified absent. No production writes, fit, predict, account execution or service control. receipt=tmp/issue_workflow/BUG-2241/dev_status_receipt_v2.json;sha256=5a23b5e511921802e963472d5322e3c470dd6cb06017b461fbf8d26b6d1c33d9;source_sha256={\"backend/services/quantevolver/qe_custom_evo_outcome.py\": \"8bed5a00ec38a077d64ab9c30aa5b364eb0989796af156393356016f3d7e9273\", \"backend/services/quantevolver/qe_evolution_service.py\": \"0d9b461bc918cb388a263bc0e84bfb9bf4af101ee56cfeb70ee8e74f9fca423d\"}",
+      "Committed process 8aba91b41aff5a51321323af63212c52d2ad6d84 loaded actual scheduler and formal serialization; Git blob and DEV source SHA256 seals match, real task read-only resolution is T3/B6 with four historical failed attempts preserved. tmp/issue_workflow/BUG-2241/fresh_committed_source_receipt.json. No production write, experiments or service actions; API activation remains pending user restart.",
+      "Commit 8aba91b41aff5a51321323af63212c52d2ad6d84 actual fresh scheduler and formal serializer; Git blob hashes match actual DEV validation; real original task resolves to T3/B6 without erasing history. receipt=tmp/issue_workflow/BUG-2241/fresh_committed_source_receipt.json; no production mutation, experiments or service control."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
