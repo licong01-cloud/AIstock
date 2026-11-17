@@ -4,7 +4,8 @@
     "backend/services/simulation_runtime/localsim_reconstruction.py",
     "backend/services/simulation_runtime/localsim_reconstruction_inputs.py",
     "backend/tests/simulation_runtime/test_localsim_reconstruction.py",
-    "tests/aistock_validation/bugs/20261117_BUG-2242-localsim.json"
+    "tests/aistock_validation/bugs/20261117_BUG-2242-localsim.json",
+    "backend/services/simulation_execution/localsim/runtime.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2242",
@@ -34,7 +35,9 @@
       "backend/services/simulation_runtime/localsim_reconstruction_inputs.py",
       "backend/tests/simulation_runtime/test_localsim_reconstruction.py"
     ],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/simulation_execution/localsim/runtime.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
@@ -92,13 +95,15 @@
     "planned_files": [
       "backend/services/simulation_runtime/localsim_reconstruction.py",
       "backend/services/simulation_runtime/localsim_reconstruction_inputs.py",
-      "backend/tests/simulation_runtime/test_localsim_reconstruction.py"
+      "backend/tests/simulation_runtime/test_localsim_reconstruction.py",
+      "backend/services/simulation_execution/localsim/runtime.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/simulation_runtime/localsim_reconstruction.py",
       "backend/services/simulation_runtime/localsim_reconstruction_inputs.py",
-      "backend/tests/simulation_runtime/test_localsim_reconstruction.py"
+      "backend/tests/simulation_runtime/test_localsim_reconstruction.py",
+      "backend/services/simulation_execution/localsim/runtime.py"
     ]
   },
   "first_seen_at": "2026-11-17T08:38:54.415441Z",
@@ -124,15 +129,27 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh process: 11 direct reconstruction tests passed; unchanged native runtime matrix 73 passed. Both real-account source preflights complete: 7 and 6 days, zero gaps. First day per account completed with native causal matching: 108 and 192 fills, every order FILLED, verified cash/quantity/NAV bridges. Existing original books and all production rows untouched. Offline source refs: X:/AIstock_temp/localsim-reconstruction-20261117/native-replay-r1/*/request.json."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
+      "backend-main"
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "business_smoke_contract_id": "localsim_workbench_valuation",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/accounts/simacct_a01e9086e0197228/performance?limit=500",
+    "runtime_identity_match": "pending",
+    "planned_target_ids": [
       "backend-main"
     ]
   },
@@ -254,5 +271,29 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "reconstruction_scope": {
+    "old_accounts_preserved": true,
+    "production_writes_authorized": false,
+    "execution": "isolated frozen offline replay, existing DEV validation",
+    "scope_expansion_reason": "Opt-in causal historical feed must reuse native incremental broker loop; synchronous whole-order matching can use sell proceeds from a later minute."
+  },
+  "reconstruction_progress": {
+    "source_preflight": "TWO_NATIVE_ACCOUNTS_13_DAYS_COMPLETE; TCN_209_DAYS_MARKS_COMPLETE",
+    "offline_execution": "FIRST_DAY_EACH_NATIVE_ACCOUNT_PASSED; original accounts preserved",
+    "legacy_l16": "BLOCKED_MISSING_13_DAYS_FROZEN_SELECTION_AND_RETIRED_V25_1_POLICY; no rule replacement or inference",
+    "production_data_repair": "NOT_APPLIED; DEV validation and exact target/migration authorization separate",
+    "reviews": [
+      {
+        "round": 1,
+        "result": "PASS",
+        "coverage": "original opening cash/quantity bridge; sealed signal/market identities; opt-in native causal minute loop preserves default runtime and truthful DB source; no future sell proceeds; unknown original plans immutable"
+      },
+      {
+        "round": 2,
+        "result": "PASS",
+        "coverage": "source preflight precedes outcomes; exact calendar and closing session; per-tick economic effects collected before native delta reset; independent cash/sign/fee/quantity/NAV/PnL verification; immutable retry tests"
+      }
+    ]
   }
 }
