@@ -85,6 +85,17 @@ def require_bound_contract(contract, summary):
     return contract
 
 
+def absolute_target_command_core(parts, activate):
+    """Allow legacy Conda hooks; retain strict execution after activation."""
+    require(parts.count(activate) == 1, "QE_ABSOLUTE_TARGET_BOOTSTRAP_COUNT")
+    parts = list(parts)
+    # Some installed hooks append to an optional unset LD_LIBRARY_PATH. Do not
+    # modify those environments or invent a library path. Activation failures
+    # still stop the && chain; nounset is restored before any scientific step.
+    parts[parts.index(activate)] = "set +u && " + activate + " && set -u"
+    return " && ".join(parts)
+
+
 def compose_absolute_targets(composer, *, custom_params, factor_names, model_id, strategy_id,
                              data_split, experiment_name, execution_algo, execution_algo_params,
                              strategy_params, node_id, task_id, loop_index, train_only, skip_db_save, **unused):
@@ -202,7 +213,7 @@ def compose_absolute_targets(composer, *, custom_params, factor_names, model_id,
         day_provider_prepare_command=prepare)
     require(parts.count("python qrun_limit_minute.py conf.yaml") == 1, "QE_ABSOLUTE_TARGET_RUNNER_COUNT")
     parts[parts.index("python qrun_limit_minute.py conf.yaml")] += " --absolute-target-replay"
-    core = " && ".join(parts)
+    core = absolute_target_command_core(parts, composer._build_conda_activate_chain())
     if not skip_db_save:
         composer._save_experiment_record(
             experiment_id=experiment_id, experiment_name=experiment_name, exp_dir="<in_memory>/" + experiment_name,

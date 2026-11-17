@@ -459,6 +459,10 @@ class BacktestExecutor(BaseExecutor):
         }
         if fixed_seed is not None:
             rdagent_config["random_seed"] = fixed_seed
+        if config.absolute_target_replay is not None:
+            # The isolation coordinator classifies the actual transport record,
+            # not the Composer's model_params. Preserve the explicit mode marker.
+            rdagent_config["absolute_target_replay"] = config.absolute_target_replay
         if runtime_contract:
             rdagent_config.update(runtime_contract)
         if long_trend_descriptor is not None:
