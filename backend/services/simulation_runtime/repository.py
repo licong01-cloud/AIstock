@@ -2839,6 +2839,17 @@ class SimulationRuntimeRepository:
                 require_no_economic_effects(current.run_payload_json, economic_fact_counts(cur, run.run_id),
                                             now=datetime.now(UTC), check_retry_claims=False)
 
+    def get_latest_local_sim_economic_run(self, *, strategy_id, portfolio_id, before_or_on):
+        rows = self._fetch_rows(
+            """SELECT d.* FROM paper_v2.simulation_daily_run d
+            JOIN paper_v2.run r USING (run_id)
+            WHERE d.strategy_id = %s AND r.portfolio_id = %s
+              AND d.broker_backend = 'local_sim' AND d.trade_date <= %s
+              AND d.run_payload_json ? 'local_sim_projection_outbox_v1'
+            ORDER BY d.trade_date DESC, d.updated_at DESC, d.created_at DESC, d.run_id DESC
+            LIMIT 1""", (strategy_id, portfolio_id, before_or_on))
+        return self._daily_run_from_row(rows[0]) if rows else None
+
     def list_simulation_daily_runs(
         self,
         *,
@@ -4134,6 +4145,13 @@ class InMemorySimulationRuntimeRepository:
     ) -> SimulationDailyRun | None:
         run_id = self.daily_run_key_index.get((strategy_id, binding_id, trade_date))
         return self.daily_runs[run_id] if run_id else None
+
+    def get_latest_local_sim_economic_run(self, *, strategy_id, portfolio_id, before_or_on):
+        rows = [r for r in self.daily_runs.values()
+                if r.strategy_id == strategy_id and r.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                and r.trade_date <= before_or_on and "local_sim_projection_outbox_v1" in r.run_payload_json
+                and (r.run_payload_json["local_sim_projection_outbox_v1"].get("projection_payload") or {}).get("portfolio_id") == portfolio_id]
+        return max(rows, key=lambda r: (r.trade_date, r.updated_at, r.created_at, r.run_id), default=None)
 
     def list_simulation_daily_runs(
         self,

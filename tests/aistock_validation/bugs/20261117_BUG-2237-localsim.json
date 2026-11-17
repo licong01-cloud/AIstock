@@ -12,7 +12,10 @@
     "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
     "backend/services/simulation_runtime/localsim_integrity_recovery.py",
     "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py",
-    "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json"
+    "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/services/simulation_runtime/localsim_economic_context.py",
+    "backend/tests/simulation_runtime/test_localsim_economic_context.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2237",
@@ -260,7 +263,7 @@
     ],
     "fresh_readonly_scope_evidence": "X:/AIstock_temp/localsim-integrity-repair-20261117",
     "frontend": "SEPARATE_UI_BUG_TO_AVOID_MIXED_RUNTIME_TARGETS",
-    "historical_data_repair": "PREPARING_SOURCE_PINNED_REPAIR_SCOPE_NO_PRODUCTION_WRITE",
+    "historical_data_repair": "SOURCE_SCOPES_SEALED; existing oversold fills and legacy capital residual need source reconstruction before DEV correction and target-specific production authorization; not repaired",
     "integrity_diagnostics": "IMPLEMENTED_5_TESTS_PASSED",
     "reviews": [
       {
@@ -272,9 +275,15 @@
         "coverage": "linear bounded inspection indexes, archived caller keeps exact as-of, correct same-valuation cash boundary, completion wins over stale pending evidence; source activation and history correction still pending",
         "result": "PASS_FOR_SOURCE_REVIEW",
         "round": 2
+      },
+      {
+        "round": 3,
+        "result": "PASS_FOR_FINAL_SOURCE_REVISION",
+        "coverage": "Pending valuation and ordinary pending projection restore cash and lots from one immutable receipt; exact scope/date/hash checks and two-plane independent readback, normal projection retry and next-day T+1 settlement. 12 new direct checks and 28 existing provider checks passed. No production write/replay. Historical corrections still pending source evidence."
       }
     ],
-    "source_clock_fix": "IMPLEMENTED_TARGETED_TEST_PASSED"
+    "source_clock_fix": "IMPLEMENTED_TARGETED_TEST_PASSED",
+    "economic_context_source": "IMPLEMENTED_SAME_VERIFIED_DURABLE_GENERATION_NO_REPLAY"
   },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -290,7 +299,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/accounts/simacct_a01e9086e0197228/performance?limit=500",
     "fresh_process_evidence": [
-      "Fresh Python imported persistent task source: 88 direct clock/workbench/integrity tests passed, 5 affected integrity tests passed after bounded index review; four real accounts loaded in REPEATABLE READ READ ONLY transactions and sealed to X:/AIstock_temp/localsim-integrity-repair-20261117/*-recovery-scope-r1.json. No backend/service start, production writes or account replay."
+      "Fresh Python imported persistent task source: 88 direct clock/workbench/integrity tests passed, 5 affected integrity tests passed after bounded index review; four real accounts loaded in REPEATABLE READ READ ONLY transactions and sealed to X:/AIstock_temp/localsim-integrity-repair-20261117/*-recovery-scope-r1.json. No backend/service start, production writes or account replay.",
+      "Fresh Python selected and read back the real LSTM 2026-11-17 generation in one REPEATABLE READ READ ONLY transaction: 66 lots, cash 248425.98, generation 1, economic hash 74d46aee0cb9165bfbc20d5c25a42906050e5a700d28949ed73189c8067587b5; zero writes, zero replay, zero economic commits. 12 economic-context regression tests and 28 original production-provider tests passed."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
