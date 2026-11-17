@@ -10,3 +10,24 @@
 @container(max-width:650px){.comparisonDetail,.programChecks{grid-template-columns:minmax(0,1fr)}.comparisonFilters{padding:12px}.chartGrid{padding:10px;gap:12px}.chartPanel,.chartWide{padding:12px}.periodButtons{gap:5px}.periodButtons button{padding:6px 8px}.comparisonMeta{gap:8px;font-size:11px}.comparisonFilters input[type=date]{max-width:145px}.comparisonFilters .filters>label{flex-wrap:wrap}}
 
 .comparisonDetail{max-width:calc(100cqw - 64px)}
+.comparisonFilterHeading{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px;font-size:12px;color:#64748b}
+.metricLabel{display:inline-flex;align-items:baseline;gap:4px;max-width:100%;vertical-align:baseline}
+.shell .metricHelpButton{display:inline-grid;place-items:center;flex:0 0 20px;width:20px;min-width:20px;height:20px;padding:0;border:1px solid #cbd5e1;border-radius:50%;font-size:11px;line-height:1;color:#64748b;background:#fff}
+.shell .metricHelpButton:hover{color:#2563eb;border-color:#93c5fd;background:#eff6ff}
+.comparisonTable th>.metricLabel{align-items:center;white-space:normal}.metricColumnName{display:inline-grid;gap:3px;white-space:nowrap;line-height:1.5}
+.detailMetrics dt{min-width:0}.detailMetrics dt .metricLabel{white-space:nowrap}
+.metricDialog{width:min(980px,calc(100vw - 32px));max-height:84dvh;padding:0;border:1px solid #dce3ed;border-radius:14px;color:#334155;background:#fff;box-shadow:0 20px 70px #0f172a30;overflow:auto;font:inherit}
+.metricDialog::backdrop{background:#0f172a70}
+.metricDialogHeader{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 20px;background:#fff;border-bottom:1px solid #edf1f6}
+.metricDialogHeader h2{font-size:18px;color:#182433}
+.metricDialogIntro{padding:4px 20px;color:#64748b;font-size:12px;line-height:1.8}
+.metricSearch{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:8px 20px 18px;font-size:12px;color:#64748b}
+.metricSearch label{flex:1 1 240px;flex-direction:column;align-items:stretch;gap:6px}
+.metricSearch input{width:100%}.metricSearch>span{padding-bottom:8px}
+.metricGuideBody{padding:0 20px 20px}.metricGuideBody section+section{margin-top:22px}
+.metricGuideBody h3{font-size:14px;color:#2563eb;border-bottom:1px solid #edf1f6;padding:0 0 10px;margin-bottom:12px}
+.metricGuideGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.metricDefinition{min-width:0;padding:14px 16px;border:1px solid #e2e8f0;border-radius:9px;background:#fbfdff;white-space:normal;overflow-wrap:anywhere;font-size:12px;line-height:1.8}
+.metricDefinition h4{margin:0;color:#182433;font-size:13px}.metricDefinition p{color:#475569}
+.metricDefinition dl{margin:12px 0 0}.metricDefinition dl>div+div{margin-top:10px}.metricDefinition dt{color:#64748b;font-size:11px}.metricDefinition dd{margin:2px 0 0;color:#334155}
+@media(max-width:650px){.metricDialog{width:calc(100vw - 20px);max-height:88dvh}.metricDialogHeader{padding:12px}.metricDialogIntro{padding:4px 12px}.metricSearch{padding:8px 12px 16px}.metricGuideBody{padding:0 12px 16px}.metricGuideGrid{grid-template-columns:minmax(0,1fr)}.shell .metricHelpButton{width:24px;min-width:24px;height:24px;flex-basis:24px}}
