@@ -56,6 +56,77 @@ def test_full_window_absolute_values_unknown_and_no_second_lag(targets):
     assert len(reader.coverage) == 2
 
 
+@pytest.mark.parametrize("arm", ["T", "B"])
+def test_v2_preserves_unequal_frozen_targets_and_records_each_arm(targets, arm):
+    from qe_absolute_targets import EXPOSURE_POLICY, SCHEMA_V2, build_exposure_audit
+
+    contract, calendar, frame = targets
+    frame.loc[frame.instrument.eq("000001.SZ"), "weight_T"] = .2
+    rewrite(contract, frame)
+    frozen_sha = contract["targets"]["sha256"]
+    with pytest.raises(ValueError, match="PAIR_EXPOSURE"):
+        AbsoluteTargets(contract, calendar=calendar)
+    contract.update(schema_version=SCHEMA_V2, exposure_policy=EXPOSURE_POLICY, arm=arm)
+    reader = AbsoluteTargets(contract, calendar=calendar)
+    weights, summary = reader.day(calendar[1])
+    assert weights == ({"000001.SZ": .2} if arm == "T" else {"000001.SZ": .05, "600001.SH": .05})
+    assert summary["target_exposure"] == pytest.approx(.2 if arm == "T" else .1)
+    assert summary["target_exposure_by_arm"] == {"T": .2, "B": .1}
+    assert summary["target_cash_by_arm"] == {"T": .8, "B": .9}
+    assert summary["target_exposure_gap"] == pytest.approx(.1)
+    assert file_sha256(contract["targets"]["path"]) == frozen_sha
+    actions = [dict(row, arm=arm) for row in reader.coverage]
+    audit = build_exposure_audit(actions, contract)
+    assert audit["unequal_days"] == 2 and audit["max_abs_pair_gap"] == pytest.approx(.1)
+    assert audit["mean_target_exposure_by_arm"] == {"T": .2, "B": .1}
+    assert audit["mean_target_cash_by_arm"] == {"T": .8, "B": .9}
+    wrong_arm = copy.deepcopy(actions)
+    wrong_arm[0]["target_exposure"] = .1 if arm == "T" else .2
+    with pytest.raises(ValueError, match="SELECTED_ARM"):
+        build_exposure_audit(wrong_arm, contract)
+
+
+def test_v2_exposure_policy_is_explicit_and_cannot_disable_v1_check(targets):
+    from qe_absolute_targets import EXPOSURE_POLICY, SCHEMA_V2
+
+    contract, _, _ = targets
+    with pytest.raises(ValueError, match="FIELDS"):
+        normalize_contract(dict(contract, exposure_policy=EXPOSURE_POLICY))
+    with pytest.raises(ValueError, match="FIELDS"):
+        normalize_contract(dict(contract, schema_version=SCHEMA_V2))
+    with pytest.raises(ValueError, match="EXPOSURE_POLICY"):
+        normalize_contract(dict(contract, schema_version=SCHEMA_V2, exposure_policy="renormalize"))
+
+
+def test_v2_terminal_receipt_requires_valid_per_arm_exposure_audit(targets):
+    from backend.services.quantevolver.absolute_target_consumer import validate_absolute_result
+    from qe_absolute_targets import EXPOSURE_POLICY, SCHEMA_V2, build_exposure_audit
+
+    contract, calendar, frame = targets
+    frame.loc[frame.instrument.eq("000001.SZ"), "weight_T"] = .2
+    rewrite(contract, frame)
+    contract.update(schema_version=SCHEMA_V2, exposure_policy=EXPOSURE_POLICY, arm="B")
+    reader = AbsoluteTargets(contract, calendar=calendar)
+    audit = build_exposure_audit([dict(row, arm="B") for row in reader.coverage], contract)
+    receipt = dict(result_for(contract), schema_version=SCHEMA_V2, exposure_policy=EXPOSURE_POLICY,
+                   exposure_audit=audit)
+    assert validate_absolute_result(receipt, contract) == receipt
+    for field in ("exposure_policy", "exposure_audit"):
+        incomplete = copy.deepcopy(receipt)
+        del incomplete[field]
+        with pytest.raises(ValueError, match="EXPOSURE"):
+            validate_absolute_result(incomplete, contract)
+    for key, value in [("account_days", 1), ("unequal_days", 0),
+                       ("daily_exposure_sha256", "unknown"),
+                       ("mean_target_cash_by_arm", {"T": .8, "B": .8})]:
+        invalid = copy.deepcopy(receipt)
+        invalid["exposure_audit"][key] = value
+        with pytest.raises(ValueError, match="EXPOSURE_AUDIT"):
+            validate_absolute_result(invalid, contract)
+    with pytest.raises(ValueError, match="RESULT_MISMATCH"):
+        validate_absolute_result(dict(receipt, schema_version=SCHEMA), contract)
+
+
 @pytest.mark.parametrize("defect,reason", [
     ("sha", "HASH_MISMATCH"), ("missing", "MISSING_DAY"), ("lag", "CLOCK_NOT_NEXT_SESSION"),
     ("duplicate", "INSTRUMENT_KEYS"), ("nan", "NULL_OR_EMPTY"), ("unknown", "UNKNOWN_BUDGET"),
