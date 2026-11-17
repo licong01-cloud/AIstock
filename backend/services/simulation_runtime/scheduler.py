@@ -1255,6 +1255,8 @@ class ProductionSimulationRunContextProvider:
             stk_limit_attempt_loader=stk_limit_attempt_loader,
             supporting_fact_loader=supporting_fact_loader,
             tdx_reference_reader=self._localsim_daily_pre_close_quote_fetcher,
+            observation_clock=(lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
+                if scheduler_time(as_of_time).date() == datetime.now(ZoneInfo("Asia/Shanghai")).date() else None,
         )
         context = provider.load(
             symbols=symbols,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -150,6 +151,35 @@ def test_localsim_cross_date_stk_limit_fails_batch_without_tdx() -> None:
 def test_localsim_all_unavailable_symbols_fail_the_batch() -> None:
     with pytest.raises(DataUnavailableError, match="every plan symbol"):
         _load(_attempt([], availability="UNAVAILABLE"), lambda symbols: {})
+
+
+def test_live_batch_uses_post_read_clock_and_still_rejects_future_quotes() -> None:
+    tz = ZoneInfo("Asia/Shanghai")
+    observed = AS_OF.replace(tzinfo=tz) + timedelta(seconds=75)
+    def quotes(symbols):
+        return {s: {"K": {"Last": 10_000}, "time": (observed + timedelta(seconds=31 if s == SYMBOLS[1] else -5)).strftime("%Y%m%d%H%M%S")} for s in symbols}
+    provider = LocalSimDailyLimitAuthorityProvider(
+        stk_limit_attempt_loader=_attempt([], availability="UNAVAILABLE"), supporting_fact_loader=_supporting,
+        tdx_reference_reader=quotes, observation_clock=lambda: observed)
+    context = provider.load(symbols=SYMBOLS, trade_date=TRADE_DATE, as_of_time=AS_OF,
+        calendar_service_snapshot={"is_trading_day": True}, binding_identity="binding:hash",
+        package_identity="package:manifest", release_identity="release:hash")
+    assert context.captured_at == context.sources.limit_resolution.read_at == observed
+    assert context.symbols[SYMBOLS[0]].authority_state is DailyTradingAuthorityStateV2.READY
+    assert context.symbols[SYMBOLS[1]].authority_reason_code == "REALTIME_QUOTE_FUTURE_TIMESTAMP"
+    assert context.sources.tdx_reference["requested_at"] == AS_OF.replace(tzinfo=tz).isoformat()
+
+
+@pytest.mark.parametrize("offset", [-1, 86400])
+def test_live_capture_clock_cannot_rewind_or_cross_trade_date(offset) -> None:
+    provider = LocalSimDailyLimitAuthorityProvider(
+        stk_limit_attempt_loader=_attempt([], availability="UNAVAILABLE"), supporting_fact_loader=_supporting,
+        tdx_reference_reader=lambda symbols: {s: _quote(s, 10_000) for s in symbols},
+        observation_clock=lambda: AS_OF.replace(tzinfo=ZoneInfo("Asia/Shanghai")) + timedelta(seconds=offset))
+    with pytest.raises(DataUnavailableError, match="observation clock crossed"):
+        provider.load(symbols=SYMBOLS, trade_date=TRADE_DATE, as_of_time=AS_OF,
+            calendar_service_snapshot={"is_trading_day": True}, binding_identity="binding:hash",
+            package_identity="package:manifest", release_identity="release:hash")
 
 
 def test_stk_limit_attempt_unavailable_does_not_query_market_table() -> None:

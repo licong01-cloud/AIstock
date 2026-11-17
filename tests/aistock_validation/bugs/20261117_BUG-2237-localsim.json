@@ -35,22 +35,31 @@
   "evidence_uris": [],
   "expected": "真实报价按真实采集边界冻结；未来报价仍拒绝；已提交经济事实不丢失、不重复记账；统计能准确说明时点、缺口及恢复条件；历史数据修复先DEV验证且生产按具体目标授权。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json",
+      "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+      "backend/services/simulation_runtime/localsim_integrity_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py"
+    ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_integrity_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json",
       "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
-      "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/localsim_workbench.py",
-      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
       "backend/services/simulation_runtime/localsim_workbench_models.py",
-      "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
-      "backend/tests/simulation_runtime/test_localsim_workbench.py",
-      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py"
+      "backend/services/simulation_runtime/localsim_integrity_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
@@ -242,6 +251,31 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "repair_progress": {
+    "execution_boundaries": [
+      "NO_SERVICE_CONTROL",
+      "NO_PRODUCTION_DML",
+      "NO_ECONOMIC_REPLAY",
+      "NO_UNKNOWN_ZERO_FILL"
+    ],
+    "fresh_readonly_scope_evidence": "X:/AIstock_temp/localsim-integrity-repair-20261117",
+    "frontend": "SEPARATE_UI_BUG_TO_AVOID_MIXED_RUNTIME_TARGETS",
+    "historical_data_repair": "PREPARING_SOURCE_PINNED_REPAIR_SCOPE_NO_PRODUCTION_WRITE",
+    "integrity_diagnostics": "IMPLEMENTED_5_TESTS_PASSED",
+    "reviews": [
+      {
+        "coverage": "live post-I/O capture clock, unchanged 30s future limit, cross-date and rewind rejection, cash and quantity proof boundaries, read-only deterministic recovery scope",
+        "result": "PASS_FOR_CURRENT_FIX_POINTS",
+        "round": 1
+      },
+      {
+        "coverage": "linear bounded inspection indexes, archived caller keeps exact as-of, correct same-valuation cash boundary, completion wins over stale pending evidence; source activation and history correction still pending",
+        "result": "PASS_FOR_SOURCE_REVIEW",
+        "round": 2
+      }
+    ],
+    "source_clock_fix": "IMPLEMENTED_TARGETED_TEST_PASSED"
+  },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -251,11 +285,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "localsim_workbench_valuation",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/accounts/simacct_a01e9086e0197228/performance?limit=500",
+    "fresh_process_evidence": [
+      "Fresh Python imported persistent task source: 88 direct clock/workbench/integrity tests passed, 5 affected integrity tests passed after bounded index review; four real accounts loaded in REPEATABLE READ READ ONLY transactions and sealed to X:/AIstock_temp/localsim-integrity-repair-20261117/*-recovery-scope-r1.json. No backend/service start, production writes or account replay."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
