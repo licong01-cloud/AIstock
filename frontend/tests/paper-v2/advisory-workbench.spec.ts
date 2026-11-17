@@ -602,6 +602,9 @@ test("comparison metric explanations support keyboard search and preserve data w
   await search.fill("盈亏比");
   await expect(dialog.getByRole("heading", { name: "盈亏比", exact: true })).toBeVisible();
   await expect(dialog.getByText("平均盈利÷平均亏损的绝对值。", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0); await expect(guide).toBeFocused();
+  await guide.click();
   await search.fill("不存在的指标zzzz");
   await expect(dialog.getByText("没有匹配的指标，请换个关键词或查看全部指标。", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "查看全部指标", exact: true }).click();
