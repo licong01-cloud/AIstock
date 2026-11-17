@@ -27,15 +27,15 @@
   "expected": "Show request time, actual verified backend process creation time and readiness confirmation time in caller and new backend tab, with persisted existing receipts; failed startup never prints success.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json",
       "backend/tests/platform_api/test_backend_lifecycle.py",
-      "scripts/backend_lifecycle.py"
+      "scripts/backend_lifecycle.py",
+      "tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json",
       "backend/tests/platform_api/test_backend_lifecycle.py",
-      "scripts/backend_lifecycle.py"
+      "scripts/backend_lifecycle.py",
+      "tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -86,8 +86,8 @@
   },
   "first_seen_at": "2026-11-17T03:27:17.116314Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7ee7822dea8f122011e08ded96af79fc6d6e4fa8",
+  "fixed_at": "2026-11-17T03:37:34Z",
   "github_issue_number": 7298,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7298",
   "last_seen_at": "2026-11-17T03:27:17.116314Z",
@@ -95,6 +95,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7299",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -121,6 +122,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -132,7 +134,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2236",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1c765a9b5bf27c9e",
+    "recorded_at": "2026-11-17T03:38:33.709913Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "847f5ecfc64866c35f095c07a50ccba2a997f387",
+    "source_merge_commit": "7ee7822dea8f122011e08ded96af79fc6d6e4fa8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7299",
+    "validation_evidence": [
+      "python -m pytest backend/tests/platform_api/test_backend_lifecycle.py -q -k \"not real_ and not failed_job_assignment\" -> 22 passed",
+      "python -m nox -s l0 -- scripts/backend_lifecycle.py backend/tests/platform_api/test_backend_lifecycle.py tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json -> passed"
+    ],
+    "validation_evidence_digest": "910634e453cba0845379321bb82485e3c8f90c299682e0a89e5f65a385c54959"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api"
   ],
@@ -141,6 +165,10 @@
     "fingerprint": "7a013344adc5985d560acfbf",
     "source_event_id": "FE-20261117-7a013344adc5"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/platform_api/test_backend_lifecycle.py -q -k \"not real_ and not failed_job_assignment\" -> 22 passed",
+    "python -m nox -s l0 -- scripts/backend_lifecycle.py backend/tests/platform_api/test_backend_lifecycle.py tests/aistock_validation/bugs/20261117_BUG-2236-backend-start-and-restart-omit-visible-process-and-readiness-timestamps.json -> passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
