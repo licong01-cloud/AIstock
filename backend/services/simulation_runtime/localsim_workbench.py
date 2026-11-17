@@ -26,6 +26,7 @@ from .localsim_workbench_models import (
 )
 from .localsim_workbench_presentation import account_name, market, problem, readable, state, strategy_name
 from .localsim_workbench_metrics import apply_valuation_metrics
+from .localsim_integrity_recovery import inspect_integrity
 
 TZ = ZoneInfo("Asia/Shanghai")
 ZERO = Decimal(0)
@@ -42,6 +43,13 @@ READ_COLUMNS = {
     "fills": "fill_id,run_id,order_id,symbol,stock_name,side,quantity,price,trade_time,created_at",
     "events": "event_id,run_id,order_id,event_type,event_time,reason",
 }
+VALUATION_COLUMNS = """run_id, status, trade_date, updated_at,
+    run_payload_json->'local_sim_valuation_pending_v1' AS pending,
+    run_payload_json->'local_sim_projection_outbox_v1'->>'status' AS outbox_status,
+    jsonb_build_object('outbox_id',run_payload_json->'local_sim_projection_outbox_v1'->'outbox_id',
+        'projection_payload',jsonb_build_object('marks',run_payload_json->'local_sim_projection_outbox_v1'->'projection_payload'->'marks')) AS outbox,
+    CASE WHEN run_payload_json->'local_sim_valuation_completion_v1' IS NOT NULL
+        THEN jsonb_build_object('marks',run_payload_json->'local_sim_valuation_completion_v1'->'marks') END AS completion"""
 
 
 def money(value: Any) -> Decimal:
@@ -128,18 +136,14 @@ class LocalSimWorkbenchService:
             ):
                 data[name] = self._read(cur, f"SELECT {READ_COLUMNS[name]} FROM paper_v2.{table} WHERE {where}", (data["scope"],))
             data["replays"] = self._read(cur, "SELECT replay_job_id,status,start_trade_date,end_trade_date,next_trade_date,completed_trade_date,activation_trade_date,historical_source_id,failure_code,created_at,updated_at FROM paper_v2.localsim_replay_job_v1 WHERE simulation_account_id = %s ORDER BY created_at DESC, replay_job_id DESC", (account_id,))
-            data["valuation"] = self._read(cur, """SELECT run_id, status,
-                jsonb_build_object('outbox_id',run_payload_json->'local_sim_projection_outbox_v1'->'outbox_id',
-                    'projection_payload',jsonb_build_object('marks',run_payload_json->'local_sim_projection_outbox_v1'->'projection_payload'->'marks')) AS outbox,
-                CASE WHEN run_payload_json->'local_sim_valuation_completion_v1' IS NOT NULL
-                    THEN jsonb_build_object('marks',run_payload_json->'local_sim_valuation_completion_v1'->'marks') END AS completion
+            data["valuation"] = self._read(cur, f"""SELECT {VALUATION_COLUMNS}
                 FROM paper_v2.simulation_daily_run WHERE run_id IN
                 (SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s)""", (data["scope"],))
             cur.execute("SELECT display_name, package_name, manifest_sha256, manifest_json FROM strategy_pkg.package WHERE package_id = %s", (account.package_id,))
             data["package"] = dict(cur.fetchone() or {})
             cur.execute("SELECT initial_cash FROM paper_v2.portfolio WHERE portfolio_id = %s", (data["scope"],))
             data["capital_origin"] = dict(cur.fetchone() or {})
-            dates = [day(s["trade_date"]) for s in data["snapshots"]]
+            dates = [day(s["trade_date"]) for s in [*data["snapshots"], *data["runs"]]]
             if dates:
                 data["calendar"] = self._read(cur, "SELECT cal_date FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date BETWEEN %s AND %s ORDER BY cal_date", (min(dates), max(dates)))
             else:
@@ -247,6 +251,32 @@ class LocalSimWorkbenchService:
             if complete:
                 result.unrealized = text(sum((money(p["market_value"]) - money(p["avg_cost"]) * int(p["quantity"]) for p in ps.values()), ZERO))
         apply_valuation_metrics(data, result, positions=self._positions, is_close=self._is_close)
+        integrity = inspect_integrity(data, positions=self._positions, is_close=self._is_close)
+        result.missing_close_dates = integrity["missing_close_dates"]
+        result.integrity_issues = integrity["issues"]
+        latest_status = integrity["latest_run_status"]
+        result.runtime_note = state(latest_status) if latest_status else "尚无运行记录"
+        if not replay and latest_status:
+            result.stage = "日常模拟，" + result.runtime_note
+            result.source = "本地模拟账本" if data["native"] else "本地模拟账本，含历史承接"
+        pending = integrity["pending_valuations"]
+        if pending:
+            result.valuation_state = "PENDING"
+            result.valuation_note = "已提交的经济事实尚未完成权威估值，资产显示最后已发布时点"
+            result.issue = "权威行情核验受阻，需恢复估值；历史记录与当前资产时点分别核对"
+            result.runtime_note = "交易与估值需分别核验，存在尚未发布的估值"
+            result.comparable_live = False
+        elif snap:
+            result.valuation_state = "CURRENT" if result.valuation_day == datetime.now(TZ).date().isoformat() else "STALE"
+            result.valuation_note = "资产按所示估值时点记录；不代表当前实时或收盘盈亏"
+        else:
+            result.valuation_state = "MISSING"
+        if result.cumulative_pnl is None and integrity["cash_bridge_residual"] is not None:
+            residual = money(integrity["cash_bridge_residual"])
+            if abs(residual) > Decimal("0.02"):
+                result.cumulative_note += f"；现金核对差额 {residual:.2f} 元，未计作收益或追加资金"
+        if result.cumulative_pnl is None and integrity["inventory_mismatch_count"]:
+            result.cumulative_note += f"；{integrity['inventory_mismatch_count']} 只证券的累计成交与期末数量不闭合"
         return result
 
     def view(self, account_id: str, kind: str = "summary", *, start: date | None = None,
@@ -498,7 +528,10 @@ class LocalSimWorkbenchService:
                 batches[name] = self._read(cur, f"SELECT {READ_COLUMNS[name]} FROM paper_v2.{table} WHERE portfolio_id = ANY(%s)", (scopes,))
             fill_columns = ",".join("f."+column for column in READ_COLUMNS["fills"].split(","))
             batches["fills"] = self._read(cur, f"SELECT {fill_columns}, r.portfolio_id FROM paper_v2.fills f JOIN paper_v2.run r USING (run_id) WHERE r.portfolio_id = ANY(%s)", (scopes,))
-            dates = [day(s["trade_date"]) for s in batches["snapshots"]]
+            batches["valuation"] = self._read(cur, f"""SELECT v.*, r.portfolio_id FROM
+                (SELECT {VALUATION_COLUMNS} FROM paper_v2.simulation_daily_run WHERE strategy_id = ANY(%s)) v
+                JOIN paper_v2.run r USING (run_id)""", (scopes,))
+            dates = [day(s["trade_date"]) for s in [*batches["snapshots"], *batches["runs"]]]
             calendar = self._read(cur, "SELECT cal_date FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date BETWEEN %s AND %s ORDER BY cal_date", (min(dates), max(dates))) if dates else []
         if len({r["account_id"] for r in records}) != len(records):
             raise DataUnavailableError("账户账本关联不唯一，请先核对归属")
@@ -530,7 +563,7 @@ class LocalSimWorkbenchService:
             curve.sort(key=lambda row: row.date)
             if curve:
                 summary.daily_pnl, summary.daily_date = curve[-1].pnl, curve[-1].date
-            if ws and not r.get("failure_code"):
+            if ws and not r.get("failure_code") and summary.valuation_state != "PENDING":
                 summary.issue = "收益覆盖存在缺口，请进入账户核验"
             result.append(WorkbenchAccount(key=r["account_id"], summary=summary, curve=curve))
         return self._aggregate_overview(result)

@@ -95,6 +95,11 @@ class WorkbenchSummary(BaseModel):
     valuation_change: str | None = None
     previous_valuation_at: str | None = None
     change_note: str = "尚无两次可核对的估值"
+    valuation_state: str | None = None
+    valuation_note: str = "尚无权威估值"
+    runtime_note: str = "尚无运行记录"
+    missing_close_dates: list[str] | None = None
+    integrity_issues: list[dict] | None = None
 
 
 class WorkbenchResult(BaseModel):

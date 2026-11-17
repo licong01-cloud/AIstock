@@ -466,6 +466,7 @@ class ProductionSimulationRunContextProvider:
         enable_miniqmt_submit: bool | None = None,
     ) -> None:
         self._position_loader = position_loader
+        self._use_durable_localsim_context = runtime_repository is not None or paper_repository_factory is None
         self._price_loader = price_loader or _default_price_loader
         self._paper_repository_factory = paper_repository_factory or _default_paper_repository_factory
         self._localsim_repository_factory = localsim_repository_factory
@@ -738,18 +739,30 @@ class ProductionSimulationRunContextProvider:
                 portfolio_id = portfolio.ledger_scope_id
             else:
                 portfolio = paper_repository.get_portfolio(portfolio_id)
-            positions = (
-                self._load_positions_with_injected_loader(binding.strategy_id, trade_date)
-                if self._position_loader is not None
-                else paper_repository.load_latest_positions(portfolio_id, trade_date)
-            )
+            economic_context = None
+            if self._position_loader is None and self._use_durable_localsim_context:
+                from .localsim_economic_context import pending_economic_context
+
+                economic_context = pending_economic_context(
+                    runtime_repository=self._runtime_repository or SimulationRuntimeRepository(),
+                    paper_repository=paper_repository, strategy_id=binding.strategy_id,
+                    portfolio_id=portfolio_id, trade_date=trade_date)
+            if economic_context is not None:
+                positions, cash, economic_context_evidence = economic_context
+            else:
+                positions = (
+                    self._load_positions_with_injected_loader(binding.strategy_id, trade_date)
+                    if self._position_loader is not None
+                    else paper_repository.load_latest_positions(portfolio_id, trade_date)
+                )
+                cash = float(paper_repository.load_latest_cash(portfolio, trade_date))
+                economic_context_evidence = {"source": "published_ledger_projection"}
             positions, settlement_diagnostics = self._settle_local_sim_positions_for_trade_date(
                 positions=positions,
                 trade_date=trade_date,
                 strategy_id=binding.strategy_id,
                 binding_id=binding.binding_id,
             )
-            cash = float(paper_repository.load_latest_cash(portfolio, trade_date))
         except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
         except Exception as exc:  # noqa: BLE001
@@ -850,6 +863,7 @@ class ProductionSimulationRunContextProvider:
             context_diagnostics={
                 "manifest_identity": manifest_identity_diagnostics,
                 "localsim_tplus1_settlement": settlement_diagnostics,
+                "localsim_economic_context": economic_context_evidence,
                 "localsim_state_authority": "simulation_account_v1"
                 if getattr(portfolio, "profile", None) is not None
                 else "paper_v2_portfolio",
@@ -1255,6 +1269,8 @@ class ProductionSimulationRunContextProvider:
             stk_limit_attempt_loader=stk_limit_attempt_loader,
             supporting_fact_loader=supporting_fact_loader,
             tdx_reference_reader=self._localsim_daily_pre_close_quote_fetcher,
+            observation_clock=(lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
+                if scheduler_time(as_of_time).date() == datetime.now(ZoneInfo("Asia/Shanghai")).date() else None,
         )
         context = provider.load(
             symbols=symbols,

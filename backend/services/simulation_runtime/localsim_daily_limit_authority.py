@@ -49,12 +49,14 @@ class LocalSimDailyLimitAuthorityProvider:
         stk_limit_attempt_loader: StkLimitAttemptLoader,
         supporting_fact_loader: SupportingFactLoader,
         tdx_reference_reader: TdxReferenceReader,
+        observation_clock: Callable[[], datetime] | None = None,
     ) -> None:
         if not all(callable(item) for item in (stk_limit_attempt_loader, supporting_fact_loader, tdx_reference_reader)):
             raise TypeError("LocalSIM daily authority requires callable batch loaders")
         self._stk_limit_attempt_loader = stk_limit_attempt_loader
         self._supporting_fact_loader = supporting_fact_loader
         self._tdx_reference_reader = tdx_reference_reader
+        self._observation_clock = observation_clock
 
     def load(
         self,
@@ -72,6 +74,7 @@ class LocalSimDailyLimitAuthorityProvider:
             if as_of_time.tzinfo is None
             else as_of_time.astimezone(ZoneInfo("Asia/Shanghai"))
         )
+        requested_at = captured_at
         normalized = _exact_symbols(symbols)
         if captured_at.date() != trade_date:
             raise _error(
@@ -107,6 +110,18 @@ class LocalSimDailyLimitAuthorityProvider:
                 )
                 raw_tdx = {}
             tdx_rows = _tdx_batch(raw_tdx, reference_symbols)
+
+        # A live batch may finish well after its scheduler tick began. Freeze
+        # the actual observation boundary, never the timestamps of its quotes.
+        # Explicit historical callers keep their supplied, deterministic time.
+        if self._observation_clock is not None:
+            observed_at = self._observation_clock()
+            if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+                raise _error("LocalSIM observation clock must be timezone-aware", "DAILY_TRADING_CONTEXT_CAPTURE_CLOCK_INVALID")
+            observed_at = observed_at.astimezone(ZoneInfo("Asia/Shanghai"))
+            if observed_at.date() != trade_date or observed_at < requested_at:
+                raise _error("LocalSIM observation clock crossed its frozen boundary", "DAILY_TRADING_CONTEXT_CAPTURE_CLOCK_CONFLICT")
+            captured_at = observed_at
 
         facts: dict[str, DailyTradingSymbolFactV2] = {}
         stk_hashes: dict[str, str] = {}
@@ -222,6 +237,8 @@ class LocalSimDailyLimitAuthorityProvider:
                 "symbol_evidence_hashes": tdx_hashes,
                 "batch_hash": canonical_json_sha256(tdx_hashes),
             }
+            if self._observation_clock is not None:
+                tdx_source.update(requested_at=requested_at.isoformat(), observed_at=captured_at.isoformat())
         actual = tuple(sorted({fact.limit_authority for fact in facts.values()}, key=lambda value: value.value))
         allowed = tuple(
             sorted(DAILY_LIMIT_AUTHORITY_BY_BROKER_V2[SimulationBrokerBackend.LOCAL_SIM], key=lambda value: value.value)
