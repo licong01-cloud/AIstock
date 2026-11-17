@@ -39,28 +39,34 @@
   "expected": "真实报价按真实采集边界冻结；未来报价仍拒绝；已提交经济事实不丢失、不重复记账；统计能准确说明时点、缺口及恢复条件；历史数据修复先DEV验证且生产按具体目标授权。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json",
       "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+      "backend/services/simulation_runtime/localsim_economic_context.py",
+      "backend/services/simulation_runtime/localsim_integrity_recovery.py",
       "backend/services/simulation_runtime/localsim_workbench.py",
       "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/repository.py",
       "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_economic_context.py",
+      "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
-      "backend/services/simulation_runtime/localsim_integrity_recovery.py",
-      "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py"
+      "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json"
     ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_integrity_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json",
       "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+      "backend/services/simulation_runtime/localsim_economic_context.py",
+      "backend/services/simulation_runtime/localsim_integrity_recovery.py",
       "backend/services/simulation_runtime/localsim_workbench.py",
       "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/repository.py",
       "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_economic_context.py",
+      "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
-      "backend/services/simulation_runtime/localsim_integrity_recovery.py",
-      "backend/tests/simulation_runtime/test_localsim_integrity_recovery.py"
+      "tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -242,8 +248,8 @@
   },
   "first_seen_at": "2026-11-17T04:56:07.509823Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "acbf3f98db1b116ca0c3b7d400990a831e9fb821",
+  "fixed_at": "2026-11-17T06:10:10Z",
   "github_issue_number": 7303,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7303",
   "last_seen_at": "2026-11-17T04:56:07.509823Z",
@@ -251,10 +257,12 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7305",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repair_progress": {
+    "economic_context_source": "IMPLEMENTED_SAME_VERIFIED_DURABLE_GENERATION_NO_REPLAY",
     "execution_boundaries": [
       "NO_SERVICE_CONTROL",
       "NO_PRODUCTION_DML",
@@ -277,13 +285,12 @@
         "round": 2
       },
       {
-        "round": 3,
+        "coverage": "Pending valuation and ordinary pending projection restore cash and lots from one immutable receipt; exact scope/date/hash checks and two-plane independent readback, normal projection retry and next-day T+1 settlement. 12 new direct checks and 28 existing provider checks passed. No production write/replay. Historical corrections still pending source evidence.",
         "result": "PASS_FOR_FINAL_SOURCE_REVISION",
-        "coverage": "Pending valuation and ordinary pending projection restore cash and lots from one immutable receipt; exact scope/date/hash checks and two-plane independent readback, normal projection retry and next-day T+1 settlement. 12 new direct checks and 28 existing provider checks passed. No production write/replay. Historical corrections still pending source evidence."
+        "round": 3
       }
     ],
-    "source_clock_fix": "IMPLEMENTED_TARGETED_TEST_PASSED",
-    "economic_context_source": "IMPLEMENTED_SAME_VERIFIED_DURABLE_GENERATION_NO_REPLAY"
+    "source_clock_fix": "IMPLEMENTED_TARGETED_TEST_PASSED"
   },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -310,6 +317,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -321,7 +329,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2237",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ebe76289070d9f43",
+    "recorded_at": "2026-11-17T06:11:09.905039Z",
+    "runtime_contract_digest": "38c6e404a69977fea94e498bb3942e7f2063a1137bd1e6d90cad43b07a18c431",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e069068cab3c8a3cb89136c4e97ec139c5eca767",
+    "source_merge_commit": "acbf3f98db1b116ca0c3b7d400990a831e9fb821",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7305",
+    "validation_evidence": [
+      "validation-receipt: id=6a7a05f9262151f5 commit=e069068cab3c8a3cb89136c4e97ec139c5eca767 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/localsim_daily_limit_authority.py backend/services/simulation_runtime/localsim_integrity_recovery.py backend/services/simulation_runtime/localsim_economic_context.py backend/services/simulation_runtime/localsim_workbench.py backend/services/simulation_runtime/localsim_workbench_models.py backend/services/simulation_runtime/repository.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_limit_authority.py backend/tests/simulation_runtime/test_localsim_integrity_recovery.py backend/tests/simulation_runtime/test_localsim_economic_context.py tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json` result=`passed (0 blocking)`",
+      "validation-receipt: id=e4f4ce6ddd94ecc7 commit=e069068cab3c8a3cb89136c4e97ec139c5eca767 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_economic_context.py -q -x` result=`passed (12 tests)`",
+      "validation-receipt: id=6d00d971e4999fd1 commit=e069068cab3c8a3cb89136c4e97ec139c5eca767 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k production_context_provider -q -x` result=`passed (28 tests)`"
+    ],
+    "validation_evidence_digest": "b6840b2d17b0aa1c8a9a348373133ccafdbfb337c9903a69342a0f9ac4cbe41f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -330,6 +361,11 @@
     "fingerprint": "5439dffddd971678cdcde171",
     "source_event_id": "FE-20261117-5439dffddd97"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6a7a05f9262151f5 commit=e069068cab3c8a3cb89136c4e97ec139c5eca767 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/localsim_daily_limit_authority.py backend/services/simulation_runtime/localsim_integrity_recovery.py backend/services/simulation_runtime/localsim_economic_context.py backend/services/simulation_runtime/localsim_workbench.py backend/services/simulation_runtime/localsim_workbench_models.py backend/services/simulation_runtime/repository.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_localsim_limit_authority.py backend/tests/simulation_runtime/test_localsim_integrity_recovery.py backend/tests/simulation_runtime/test_localsim_economic_context.py tests/aistock_validation/bugs/20261117_BUG-2237-localsim.json` result=`passed (0 blocking)`",
+    "validation-receipt: id=e4f4ce6ddd94ecc7 commit=e069068cab3c8a3cb89136c4e97ec139c5eca767 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_economic_context.py -q -x` result=`passed (12 tests)`",
+    "validation-receipt: id=6d00d971e4999fd1 commit=e069068cab3c8a3cb89136c4e97ec139c5eca767 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k production_context_provider -q -x` result=`passed (28 tests)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
