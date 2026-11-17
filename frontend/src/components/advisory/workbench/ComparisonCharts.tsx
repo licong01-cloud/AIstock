@@ -1,6 +1,7 @@
 "use client";
 import type { ComparisonResponse, NavPoint, SeriesResponse } from "@/lib/api/advisoryComparison";
 import { bps, Empty, ErrorNotice, useRead } from "./shared";
+import { MetricLabel } from "./ComparisonMetricHelp";
 import styles from "./workbench.module.css";
 
 const colors = ["#2563eb", "#7c3aed", "#0891b2", "#d97706", "#db2777", "#059669", "#475569", "#9333ea"];
@@ -28,7 +29,7 @@ function NavChart({ data }: { data: SeriesResponse }) {
 }
 function Heatmap({ data }: { data: SeriesResponse }) {
   const months = [...new Set(data.series.flatMap(s => s.monthly.map(r => r.month)))].sort();
-  return <div className={styles.tableWrap}><table className={styles.heatmap}><thead><tr><th>平均5TD净超额</th>{months.map(m => <th key={m}>{m}</th>)}</tr></thead><tbody>{data.series.map(s => <tr key={s.arm_id}><td>{s.name}</td>{months.map(m => { const r = s.monthly.find(r => r.month === m); return <td key={m} style={r ? { background: r.excess_bps >= 0 ? "#fff1f2" : "#ecfdf5", color: r.excess_bps >= 0 ? "#be123c" : "#047857" } : undefined} title={r ? `${r.count} 个可评价日` : "无可评价日"}>{r ? bps(r.excess_bps) : "—"}</td>; })}</tr>)}</tbody></table>{!months.length && <Empty>当前时间范围暂无月度样本。</Empty>}</div>;
+  return <div className={styles.tableWrap}><table className={styles.heatmap}><thead><tr><th><MetricLabel metric="monthly_excess">平均5交易日净超额</MetricLabel></th>{months.map(m => <th key={m}>{m}</th>)}</tr></thead><tbody>{data.series.map(s => <tr key={s.arm_id}><td>{s.name}</td>{months.map(m => { const r = s.monthly.find(r => r.month === m); return <td key={m} style={r ? { background: r.excess_bps >= 0 ? "#fff1f2" : "#ecfdf5", color: r.excess_bps >= 0 ? "#be123c" : "#047857" } : undefined} title={r ? `${r.count} 个可评价日` : "无可评价日"}>{r ? bps(r.excess_bps) : "—"}</td>; })}</tr>)}</tbody></table>{!months.length && <Empty>当前时间范围暂无月度样本。</Empty>}</div>;
 }
 function Scatter({ data }: { data: ComparisonResponse }) {
   const rows = data.items.filter(r => r.portfolio.total_return_bps != null && r.portfolio.max_drawdown_bps != null);
@@ -39,8 +40,8 @@ function Scatter({ data }: { data: ComparisonResponse }) {
 export default function ComparisonCharts({ summary, url, refresh }: { summary: ComparisonResponse; url: string; refresh: number }) {
   const result = useRead<SeriesResponse>(url, refresh);
   const consistent = result.data?.source_version === summary.source_version;
-  return <div className={styles.chartGrid}><section className={styles.chartPanel}><h3>固定5TD · 净超额收益</h3><BarChart data={summary} /></section><section className={styles.chartPanel}><h3>参考组合 · 收益与风险</h3><Scatter data={summary} /></section>
-    <section className={styles.chartWide}><h3>参考组合净值 · 含费用与浮动估值</h3><ErrorNotice error={result.error} stale={false} />{result.loading && <Empty>正在按需读取净值曲线…</Empty>}{consistent && result.data ? <NavChart data={result.data} /> : !result.loading && !result.error ? <Empty>来源版本已变化，请刷新对比后重新查看图表。</Empty> : null}</section>
-    <section className={styles.chartWide}><h3>月度稳定性 · 按推荐目标日分组</h3>{consistent && result.data && <Heatmap data={result.data} />}</section>
+  return <div className={styles.chartGrid}><section className={styles.chartPanel}><h3><MetricLabel metric="net_excess">固定5交易日 · 净超额收益</MetricLabel></h3><BarChart data={summary} /></section><section className={styles.chartPanel}><h3><MetricLabel metric="risk_scatter">参考组合 · 收益与风险</MetricLabel></h3><Scatter data={summary} /></section>
+    <section className={styles.chartWide}><h3><MetricLabel metric="nav_curve">参考组合净值 · 含费用与浮动估值</MetricLabel></h3><ErrorNotice error={result.error} stale={false} />{result.loading && <Empty>正在按需读取净值曲线…</Empty>}{consistent && result.data ? <NavChart data={result.data} /> : !result.loading && !result.error ? <Empty>来源版本已变化，请刷新对比后重新查看图表。</Empty> : null}</section>
+    <section className={styles.chartWide}><h3><MetricLabel metric="monthly_excess">月度稳定性 · 按推荐目标日分组</MetricLabel></h3>{consistent && result.data && <Heatmap data={result.data} />}</section>
   </div>;
 }

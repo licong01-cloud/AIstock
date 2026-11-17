@@ -490,12 +490,12 @@ test("real read-only capture renders overview daily history and detail without w
 test("comparison applies date selection explicitly, expands all metrics and loads charts only on demand", async ({ page }) => {
   const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
   const comparison = main(page).getByRole("region", { name: "策略包收益横向对比" });
-  await expect(comparison.getByRole("columnheader", { name: "5TD净超额" })).toBeVisible();
+  await expect(comparison.getByRole("columnheader", { name: "5交易日净超额收益", exact: true })).toBeVisible();
   expect(state.seen.filter(x => x.includes("/comparison/series"))).toHaveLength(0);
   expect(state.seen.some(x => x.includes("mode=brief"))).toBe(true);
   await comparison.getByRole("button", { name: "展开LSTM 策略包指标" }).click();
   await expect(comparison.getByText("实际过程 · 已结束净收益", { exact: false })).toBeVisible();
-  await expect(comparison.getByText("平均盈利 / 亏损", { exact: true })).toHaveCount(2);
+  await expect(comparison.getByRole("button", { name: "查看平均盈利说明", exact: true })).toHaveCount(2);
   const before = state.seen.filter(x => x.includes("/comparison?")).length;
   await comparison.getByRole("button", { name: "自定义", exact: true }).click();
   await comparison.getByLabel("对比开始日期").fill("2026-10-01");
@@ -578,6 +578,68 @@ test("saved list deep link opens its exact version without a date guess", async 
   await expect(page).not.toHaveURL(/list_version_id/);
 });
 
+test("comparison metric explanations support keyboard search and preserve data without API requests", async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
+  const comparison = main(page).getByRole("region", { name: "策略包收益横向对比" });
+  const header = comparison.getByRole("columnheader", { name: "5交易日净收益均值", exact: true });
+  await expect(header).toBeVisible();
+  const rows = comparison.locator("tbody > tr"), beforeRows = await rows.allTextContents();
+  const beforeRequests = state.seen.length;
+  const trigger = header.getByRole("button", { name: "查看5交易日净收益均值说明", exact: true });
+  await trigger.focus(); await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "指标中文说明", exact: true });
+  await expect(dialog.getByRole("heading", { name: "5交易日净收益均值", exact: true })).toBeVisible();
+  await expect(dialog.getByText(/净指扣费，均值不是净资产值/)).toBeVisible();
+  await expect(dialog.getByText(/STD 表示标准差，本页未展示标准差/)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
+  const guide = comparison.getByRole("button", { name: "指标中文说明", exact: true });
+  await guide.click();
+  for (const name of ["比较日数", "5交易日净超额收益", "最差10%净收益均值", "成熟目标日数", "假设清算净收益", "参考组合累计收益", "月度平均5交易日净超额", "单边滑点"]) {
+    await expect(dialog.getByRole("heading", { name, exact: true })).toBeAttached();
+  }
+  const search = dialog.getByRole("searchbox", { name: "查找指标", exact: true });
+  await search.fill("盈亏比");
+  await expect(dialog.getByRole("heading", { name: "盈亏比", exact: true })).toBeVisible();
+  await expect(dialog.getByText("平均盈利÷平均亏损的绝对值。", { exact: true })).toBeVisible();
+  await search.fill("不存在的指标zzzz");
+  await expect(dialog.getByText("没有匹配的指标，请换个关键词或查看全部指标。", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "查看全部指标", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "收益单位与净收益", exact: true })).toBeVisible();
+  await dialog.screenshot({ path: test.info().outputPath("metric-guide-desktop.png") });
+  await page.keyboard.press("Escape"); await expect(guide).toBeFocused();
+  expect(await rows.allTextContents()).toEqual(beforeRows);
+  expect(state.seen.length).toBe(beforeRequests);
+  expect(state.seen.some(url => url.includes("/comparison/series"))).toBe(false);
+});
+
+test("comparison metric explanations cover detail filters and charts on mobile without extra reads", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state: State = { seen: [] }; await setup(page, state); await page.goto("/paper-v2/advisory");
+  const comparison = main(page).getByRole("region", { name: "策略包收益横向对比" });
+  await comparison.getByRole("button", { name: "展开LSTM 策略包指标", exact: true }).click();
+  const before = state.seen.length;
+  await comparison.getByRole("button", { name: "查看盈亏比说明", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "指标中文说明", exact: true });
+  await expect(dialog.getByRole("heading", { name: "盈亏比", exact: true })).toBeVisible();
+  const size = await dialog.evaluate(element => ({ width: element.getBoundingClientRect().width, client: element.clientWidth, scroll: element.scrollWidth }));
+  expect(size.width).toBeLessThanOrEqual(390); expect(size.scroll).toBeLessThanOrEqual(size.client + 1);
+  await dialog.screenshot({ path: test.info().outputPath("metric-guide-mobile.png") });
+  await dialog.getByRole("button", { name: "关闭指标说明", exact: true }).click();
+  await comparison.getByRole("button", { name: "查看共同日期与各自样本说明", exact: true }).first().click();
+  await expect(dialog.getByText(/共同日期取所有参与策略净超额均可计算的目标日交集/)).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭指标说明", exact: true }).click();
+  expect(state.seen.length).toBe(before);
+  await comparison.getByRole("button", { name: "查看横向对比图表", exact: true }).click();
+  await expect(comparison.getByRole("img", { name: /参考组合与沪深300净值曲线/ })).toBeVisible();
+  const chartReads = state.seen.length;
+  await comparison.getByRole("button", { name: "查看参考组合净值曲线说明", exact: true }).click();
+  await expect(dialog.getByText(/空缺保持断线/)).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭指标说明", exact: true }).click();
+  expect(state.seen.length).toBe(chartReads);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+});
+
 test("comparison first paint and controls remain responsive with deferred chart transport", async ({ page }) => {
   test.skip(!process.env.ADVISORY_COMPARISON_PERF, "Opt-in bounded browser performance receipt");
   type Perf = { lcp: number; events: number[]; longTasks: number[] };
@@ -592,7 +654,7 @@ test("comparison first paint and controls remain responsive with deferred chart 
   const samples: Perf[] = [];
   for (let i = 0; i < 8; i++) {
     await page.goto("/paper-v2/advisory");
-    await expect(main(page).getByRole("columnheader", { name: "5TD净超额", exact: true })).toBeVisible();
+    await expect(main(page).getByRole("columnheader", { name: "5交易日净超额收益", exact: true })).toBeVisible();
     await main(page).getByRole("button", { name: "近20交易日", exact: true }).click();
     await main(page).getByRole("button", { name: "应用对比", exact: true }).click();
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -697,7 +759,7 @@ test("ten programs with five-year series stay bounded and interactive", async ({
   await main(page).getByRole("button", { name: "查看横向对比图表", exact: true }).click();
   await expect(main(page).getByRole("img", { name: /参考组合与沪深300净值曲线/ })).toBeVisible();
   await main(page).getByRole("button", { name: "展开SYNTHETIC-0指标", exact: true }).click();
-  await expect(main(page).getByText("实际过程 · 已结束净收益 · 10000 个", { exact: true })).toBeVisible();
+  await expect(main(page).getByRole("heading", { name: /实际过程 · 已结束净收益.*10000 个/ })).toBeVisible();
   await main(page).getByRole("button", { name: "收起图表", exact: true }).click();
   await expect(main(page).getByRole("img", { name: /参考组合与沪深300净值曲线/ })).toHaveCount(0);
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

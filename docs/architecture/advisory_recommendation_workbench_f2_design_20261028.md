@@ -140,6 +140,11 @@
 - F-020：轻量首屏、范围批量读取、有界缓存与并发、历史页不扫描行情，性能预算和规模验证。
 - F-021：后端合同、浏览器视觉/交互、真实只读与修订失效证据；源码与用户重启后的加载分态。
 - F-022：近5、10交易日比较快捷按钮，摘要和曲线接受同一周期；按交易日裁剪目标日，固定5TD成熟、费用和UNKNOWN语义不变。
+- F-023：所有现有比较指标、详情、图表与筛选口径具备中文说明，5TD明确为5交易日，区别于STD标准差。
+- F-024：顶部完整指标说明及逐指标入口，支持键盘、关闭后焦点恢复、手机窄屏和中文搜索。
+- F-025：说明复用既有计算公式，区分每日名单、荐股过程和有限资金参考组合；未知和无样本保持原义。
+- F-026：说明仅使用本地静态文字，按需挂载；开启/搜索/关闭不新增业务请求，图表继续懒加载。
+- F-027：当前版本多轮自审、直接浏览器验证与类型/静态检查；源码交付和前端运行加载分态。
 
 ## 6. 实施方案与允许修改文件
 
@@ -274,3 +279,25 @@
 | F-022 | frontend/src/components/advisory/workbench/ComparisonFilters.tsx; backend/routers/advisory_workbench.py | backend/tests/advisory_workbench/test_api.py; backend/tests/advisory_workbench/test_comparison_service.py; frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
 
 F-022本地验证：6项后端直接合同、2项快捷周期浏览器用例通过；Ruff/ESLint/TypeScript通过。当前Agent按正确性、完整性/回归与范围三轮核对，源码交付仍需最终HEAD的既有CI；用户后端重启与5/10周期在线加载另报。当前查询默认5个包均未退役，7个ARCHIVED任务仅在显式历史状态下参与。
+
+## 12. 2026-11-17指标中文说明功能卡（F0 Feature Card）
+
+用户要求对比页全部指标都有中文解释。范围为固定5交易日主表、展开详情、图表、样本/来源/绑定/费用筛选和单位。5TD表示5个交易日；STD表示标准差，当前接口未提供标准差，不添加计算值或将其与均值混同。
+
+采用一份本地类型化说明目录；每项说明包含名称、计算口径及适用边界。顶部“指标中文说明”显示可搜索完整目录，指标旁问号打开对应说明；使用单个原生dialog，支持键盘Esc、关闭焦点恢复和手机滚动。弹窗关闭时不挂载目录，不新增网络请求、定时器、依赖或金融计算；保留图表懒加载和既有UNKNOWN/null展示。
+
+实现口径以`comparison_metrics.py`、`comparison_tracking.py`、`comparison_portfolio.py`及`program_performance.py`为准：每日名单原始槽位等权后再按日统计；共同日期需要各策略净超额可评价；已结束过程按各自有效进入日选样，使用未复权参考价；组合为初始资金1、每日最多前日净值20%、卖出资金次日可用的费用后参考测算。95%描述区间为Newey-West四阶修正，不是独立经济确认。分母为零或证据不足时保留缺失，不写成0或无穷大。
+
+精确允许文件：`frontend/src/components/advisory/workbench/comparisonMetricDefinitions.ts`、`ComparisonMetricHelp.tsx`、`Comparison.tsx`、`ComparisonTable.tsx`、`ComparisonFilters.tsx`、`ComparisonCharts.tsx`、同目录`workbench.module.css`，`frontend/tests/paper-v2/advisory-workbench.spec.ts`及本设计；不改后端计算、筛选语义、生产名单、数据库或生命周期。
+
+验证：直接Playwright覆盖主指标说明、完整目录搜索、展开详情/图表/筛选帮助、键盘关闭与焦点恢复、移动端无横向溢出、说明交互零新增API请求及原比较/短周期回归；changed-file ESLint、TypeScript、diff/scope检查及feature validator。广域回归交既有CI。生产门禁：DDL/DML、训练、后端服务操作均noop；前端运行加载与源码合入分别报告。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-023 | frontend/src/components/advisory/workbench/comparisonMetricDefinitions.ts; frontend/src/components/advisory/workbench/ComparisonTable.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-024 | frontend/src/components/advisory/workbench/ComparisonMetricHelp.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-025 | frontend/src/components/advisory/workbench/comparisonMetricDefinitions.ts | frontend/tests/paper-v2/advisory-workbench.spec.ts; backend/services/advisory_workbench/comparison_metrics.py; backend/services/advisory_workbench/comparison_tracking.py; backend/services/advisory_workbench/comparison_portfolio.py; backend/services/advisory_historical_range/program_performance.py | verified | none |
+| F-026 | frontend/src/components/advisory/workbench/Comparison.tsx; frontend/src/components/advisory/workbench/ComparisonMetricHelp.tsx | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+| F-027 | frontend/tests/paper-v2/advisory-workbench.spec.ts; docs/architecture/advisory_recommendation_workbench_f2_design_20261028.md | frontend/tests/paper-v2/advisory-workbench.spec.ts | verified | none |
+
+F-023?F-027???59????????7???????????????Esc??????????????????????????5/10?????8???API???????????LCP P75 100ms???EventTiming????P75 16ms??????INP??ESLint?TypeScript?scope/ownership?guardrail???????Agent??????????????????????????????????????/???/??/?????
