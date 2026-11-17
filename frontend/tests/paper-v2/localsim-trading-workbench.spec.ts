@@ -5,9 +5,9 @@ const a="simacct_private_a", b="simacct_private_b", symbol="600000.SH";
 const stamp="2026-01-06T15:00:00+08:00";
 const base="/simulation-runtime/localsim";
 type Seen={method:string;path:string;query:string;body:unknown};
-type State={many?:boolean;fail?:boolean;wrongIdentity?:boolean;badAccount?:boolean;malicious?:boolean;pointOnly?:boolean;gate?:Promise<void>;paused?:boolean;seen:Seen[]};
+type State={many?:boolean;integrity?:boolean;fail?:boolean;wrongIdentity?:boolean;badAccount?:boolean;malicious?:boolean;pointOnly?:boolean;gate?:Promise<void>;paused?:boolean;seen:Seen[]};
 const accountName=(id:string)=>id===a?"历史模拟账户甲":"日常模拟账户乙";
-function summary(id:string){
+function summary(id:string,integrity=false){
   return {name:accountName(id),strategy:id===a?"LSTM长短期记忆＋Alpha158价量因子＋26项因子":"TCN时序卷积＋Alpha158价量因子＋24项因子",stage:"历史回放",status:"启用",initial_capital:id===a?"10000":"20000",created_at:"2026-01-01T00:00:00Z",
     economic_as_of:stamp,valuation_kind:"已完成收盘估值",nav:id===a?"10190":"20200",cash:id===a?"10190":"18000",value:id===a?"0":"2200",available_cash:null,frozen_cash:null,
     opening_nav:"10000",closing_nav:"10190",net_flows:"0",pnl:"190",daily_pnl:"95",daily_date:"2026-01-06",return_pct:"1.9",realized:"200",
@@ -15,7 +15,7 @@ function summary(id:string){
     start_date:"2026-01-05",end_date:"2026-08-31",source:"数据集文件",issue:"等待下一处理步骤",cost_basis:"账本平均成本不含交易费用，费用单列",comparable_live:false,
     cumulative_pnl:id===a?"190":"200",cumulative_return_pct:id===a?"1.9":"1",cumulative_fees:"10",cumulative_note:"正式期初至本账户估值；实际费用已计入",
     valuation_day:"2026-01-06",valuation_day_pnl:"95",valuation_day_note:"前一交易日收盘至本次估值",today_pnl:null,today_note:"今天尚无权威估值；最近资产时点为一月六日",
-    valuation_change:"95",previous_valuation_at:"2026-01-05T15:00:00+08:00",change_note:"两次估值净变化，不能代替日盈亏"};
+    valuation_change:"95",previous_valuation_at:"2026-01-05T15:00:00+08:00",change_note:"两次估值净变化，不能代替日盈亏",...(integrity?{valuation_state:"PENDING",valuation_note:"资产显示最近已发布时点，估值发布受阻",runtime_note:"交易与估值需分别核验",missing_close_dates:["2026-01-05"],cumulative_pnl:null,cumulative_return_pct:null,cumulative_note:"累计成交与持仓数量不闭合，需要恢复历史承接",valuation_day_pnl:null,valuation_day_note:"缺少前一交易日的权威收盘估值",today_pnl:null,today_note:"今天尚未发布权威估值"}:{})};
 }
 const securityRow={key:symbol,security:symbol,name:"测试证券",market:"上海市场",date:"2026-01-05",time:"2026-01-05T15:00:00+08:00",side:"买入",status:"",description:"历史分钟收盘估值",known:true};
 const curve=[{key:"2026-01-06",date:"2026-01-06",value:"10190",pnl:"95",fees:"5",opening_value:"10095",cash_delta:"0",known:true},{key:"2026-01-05",date:"2026-01-05",value:"10095",pnl:"95",fees:"5",opening_value:"10000",cash_delta:"0",known:true}];
@@ -31,7 +31,7 @@ async function mock(page:Page,state:State){
     state.seen.push({method:req.method(),path,query:url.search,body:req.postData()?req.postDataJSON():null});
     if(path.endsWith("/cutover-readiness"))return json(route,{readiness:readiness()});
     if(path.includes("scheduler/verification-status"))return json(route,{scheduler:{running:true,thread_alive:true,scheduler_loop_health:{status:"HEALTHY"},current_trade_date_blockers:{trade_date:"2026-10-19",status:"CLEAR",blocker_count:0},effective_runtime_health:"NO_CURRENT_DAY_BLOCKER"}});
-    if(path===base+"/workbench/overview")return json(route,{items:[a,b].map(key=>({key,summary:{...summary(key),name:state.malicious?"精选 qe_20261007_141342_0221":accountName(key)},curve})),generated_at:stamp,complete:true,nav:null,pnl:null,daily_pnl:null,return_pct:null,economic_as_of:null,included_count:0,excluded_count:2,explanation:"历史回放不纳入实时合计；按各账户经济日查看",curve:[]});
+    if(path===base+"/workbench/overview")return json(route,{items:[a,b].map(key=>({key,summary:{...summary(key,state.integrity),name:state.malicious?"精选 qe_20261007_141342_0221":accountName(key)},curve})),generated_at:stamp,complete:true,nav:null,pnl:null,daily_pnl:null,return_pct:null,economic_as_of:null,included_count:0,excluded_count:2,explanation:"历史回放不纳入实时合计；按各账户经济日查看",curve:[]});
     if(path==="/strategy-packages")return json(route,{packages:[{package_id:"qe_private_package",display_name:"沪深300增强",package_status:"PAPER_READY",created_at:stamp}]});
     if(path.endsWith("/execution-policies"))return json(route,{execution_policies:[{policy_id:"policy_private",policy_name:"均匀分时规则",algo_code:"TWAP"}]});
     if(path===base+"/runtime-profiles")return json(route,list([profile]));
@@ -59,7 +59,7 @@ async function mock(page:Page,state:State){
       if(view==="pnl")rows=state.pointOnly?[]:url.searchParams.get("group_by")==="security"?[{...securityRow,opening_quantity:0,closing_quantity:0,opening_value:"0",value:"0",buy_quantity:100,sell_quantity:100,buy_amount:"1000",sell_amount:"1200",fees:"10",pnl:"190",realized:"200",unrealized_change:"0"}]:curve;
       const q=url.searchParams.get("search");if(q)rows=rows.filter(r=>String(r.name||"").includes(q));
       const offset=Number((url.searchParams.get("cursor")||"").split("_").at(-1))||0,size=Number(url.searchParams.get("page_size")||50);
-      return json(route,{schema_version:"localsim_workbench_v1",account_id:state.wrongIdentity&&view!=="summary"?(id===a?b:a):id,snapshot_set:id+"_private_generation",generated_at:stamp,status:state.pointOnly?"partial":"complete",summary:{...summary(id),...(state.pointOnly?{pnl:null,return_pct:null}:{})},items:rows.slice(offset,offset+size),total_count:rows.length,next_cursor:offset+size<rows.length?"cursor_private_"+(offset+size):null,missing_dates:[],warnings:state.pointOnly?["没有已完成收盘估值"]:[],actual_start:"2026-01-05",actual_end:"2026-01-06"});
+      return json(route,{schema_version:"localsim_workbench_v1",account_id:state.wrongIdentity&&view!=="summary"?(id===a?b:a):id,snapshot_set:id+"_private_generation",generated_at:stamp,status:state.pointOnly?"partial":"complete",summary:{...summary(id,state.integrity),...(state.pointOnly?{pnl:null,return_pct:null}:{})},items:rows.slice(offset,offset+size),total_count:rows.length,next_cursor:offset+size<rows.length?"cursor_private_"+(offset+size):null,missing_dates:[],warnings:state.pointOnly?["没有已完成收盘估值"]:[],actual_start:"2026-01-05",actual_end:"2026-01-06"});
     }
     return json(route,{items:[],count:0,alerts:[]});
   });
@@ -218,4 +218,18 @@ test("account lifecycle controls submit only after a deliberate confirmation usi
   await page.getByRole("button",{name:"确认暂停账户",exact:true}).click();
   await expect(page.getByRole("button",{name:"恢复账户",exact:true})).toBeVisible();
   expect(state.seen.filter(r=>r.method==="POST")).toEqual([{method:"POST",path:base+"/accounts/"+a+"/pause",query:"",body:{schema_version:"localsim_lifecycle_request_v1",expected_version:7}}]);await noOpaque(page);
+});
+
+test("valuation gaps show precise reasons and timestamps without fabricating profit",async({page},info)=>{
+  const state:State={seen:[],integrity:true};
+  await mock(page,state);await page.goto("/simulation/localsim/workbench");
+  await expect(page.getByText("2 个账户需要处理",{exact:true})).toBeVisible();
+  await expect(page.getByText("估值发布受阻",{exact:true}).first()).toBeVisible();
+  await expect(page.getByText("累计成交与持仓数量不闭合，需要恢复历史承接",{exact:true}).first()).toBeVisible();
+  await expect(page.getByText("缺少前一交易日的权威收盘估值",{exact:false}).first()).toBeVisible();
+  await expect(page.getByText("历史收盘估值未覆盖 1 日（含仅有盘中估值）",{exact:true}).first()).toBeVisible();
+  await expect(page.getByText("今天尚未发布权威估值",{exact:false}).first()).toBeVisible();
+  await noOpaque(page);
+  await page.screenshot({path:info.outputPath("valuation-gap-overview.png"),fullPage:true});
+  expect(state.seen.filter(r=>r.method!=="GET")).toEqual([]);
 });

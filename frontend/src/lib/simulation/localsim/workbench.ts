@@ -18,6 +18,8 @@ export interface Summary {
   valuation_day: string | null; valuation_day_pnl: string | null; valuation_day_note: string;
   today_pnl: string | null; today_note: string;
   valuation_change: string | null; previous_valuation_at: string | null; change_note: string;
+  valuation_state?: string | null; valuation_note?: string; runtime_note?: string;
+  missing_close_dates?: string[] | null; integrity_issues?: {code:string;detail:string}[] | null;
 }
 export interface Row {
   key: string; security?: string | null; order_key?: string | null;
