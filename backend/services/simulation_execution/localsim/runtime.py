@@ -174,6 +174,7 @@ class LocalSimBackend(BrokerBackend):
         scheduler_as_of_time: datetime | None = None,
         historical_suspension_provider: Any | None = None,
         frozen_research_inputs: bool = False,
+        causal_historical_replay: bool = False,
     ) -> None:
         if not portfolio_id:
             raise ValueError("portfolio_id is required")
@@ -183,6 +184,11 @@ class LocalSimBackend(BrokerBackend):
         # already validated the binding, recheck at backend init so a misuse
         # path that bypasses the service still fails fast.
         assert_broker_market_source_match(self.backend_id, data_source)
+        if causal_historical_replay:
+            from backend.services.simulation_runtime.localsim_reconstruction_inputs import FrozenHistoricalMarketProvider
+            if data_source != MinuteDataSource.DB_HISTORICAL or not isinstance(market_data_provider, FrozenHistoricalMarketProvider):
+                raise ValueError("LOCALSIM_CAUSAL_HISTORY_REQUIRES_SEALED_PROVIDER")
+        self._causal_historical_replay = causal_historical_replay
 
         self._portfolio_id = portfolio_id
         self._package_id = package_id or (manifest.package_id if manifest else None)
@@ -382,6 +388,9 @@ class LocalSimBackend(BrokerBackend):
         """
 
         return getattr(self._market_data_provider, "requires_frozen_daily_context", False) is True
+
+    def _uses_causal_minute_loop(self) -> bool:
+        return self._data_source == MinuteDataSource.TDX_REALTIME or self._causal_historical_replay
 
     def configure_execution_runtime(self, *, run_id: str, binding_id: str) -> None:
         """Bind the immutable scheduler/run identity used by durable state."""
@@ -647,7 +656,7 @@ class LocalSimBackend(BrokerBackend):
     def advance_realtime_execution(self, *, as_of_time: datetime) -> tuple[OrderHandle, ...]:
         """Apply each newly observed causal minute exactly once to restored states."""
         self._ensure_alive()
-        if self._data_source != MinuteDataSource.TDX_REALTIME:
+        if not self._uses_causal_minute_loop():
             raise BrokerSubmitError(
                 "incremental LocalSim advancement is only valid for TDX realtime",
                 context={"reason_code": "LOCALSIM_INCREMENTAL_SOURCE_INVALID", "source": self._data_source.value},
@@ -838,7 +847,7 @@ class LocalSimBackend(BrokerBackend):
     # ----- BrokerBackend Protocol -----
     def bind_execution_plan(self, *, plan: Any, as_of_time: datetime) -> None:
         """Bind the immutable scheduler cursor used to prevent look-ahead fills."""
-        if self._data_source != MinuteDataSource.TDX_REALTIME:
+        if not self._uses_causal_minute_loop():
             from .suspension import REFERENCE_KEY, SUSPENSION_KEY, validate_suspension_fact, validate_suspension_reference
 
             statuses = {}
@@ -1030,7 +1039,7 @@ class LocalSimBackend(BrokerBackend):
                 )
 
             historical_suspended = False
-            if self._data_source in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES}:
+            if self._data_source in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES} and not self._causal_historical_replay:
                 status = self._historical_suspension_statuses.get(intent.symbol)
                 if status is None and self._historical_suspension_provider is not None:
                     status = self._historical_suspension_provider.load_statuses(
@@ -1045,7 +1054,7 @@ class LocalSimBackend(BrokerBackend):
             market_input = None
             market_data_error: BrokerConnectivityError | None = None
             try:
-                if self._data_source == MinuteDataSource.TDX_REALTIME:
+                if self._uses_causal_minute_loop():
                     self._require_runtime_scope()
                     if self._eligible_bar_after is None or self._scheduler_as_of_time is None:
                         raise DataUnavailableError(
@@ -1078,7 +1087,7 @@ class LocalSimBackend(BrokerBackend):
                         min_bars=1,
                     )
             except BrokerConnectivityError as exc:
-                if self._data_source != MinuteDataSource.TDX_REALTIME:
+                if not self._uses_causal_minute_loop():
                     raise
                 market_data_error = exc
             except DataUnavailableError as exc:
@@ -1099,7 +1108,7 @@ class LocalSimBackend(BrokerBackend):
             order = self._oms.create_order(intent)
             execution_state: LocalSimExecutionStateV1 | None = None
             try:
-                if self._data_source == MinuteDataSource.TDX_REALTIME:
+                if self._uses_causal_minute_loop():
                     execution_state = self._new_execution_state(intent=intent, order=order)
                     if market_data_error is not None:
                         error_context = dict(getattr(market_data_error, "context", None) or {})
@@ -1888,6 +1897,12 @@ class LocalSimBackend(BrokerBackend):
                     "missing_symbols": missing_context_symbols,
                 },
             )
+        if self._causal_historical_replay:
+            snapshot = self._market_data_provider.freeze_snapshot(
+                market_inputs=market_inputs, errors=errors, as_of_time=as_of_time,
+            )
+            self._market_snapshot = snapshot
+            return snapshot
         snapshot = LocalSimMarketSnapshotV2(
             trade_date=trade_date,
             as_of_time=as_of_time,
