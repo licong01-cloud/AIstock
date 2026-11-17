@@ -33,6 +33,7 @@ from .long_trend_evaluation_contract import get_long_trend_profile
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
+from .qe_custom_evo_outcome import resolve_custom_evo_attempts
 from .qe_run_registry import (
     QE_RUN_DEFAULT_CONSUMER,
     QE_RUN_REGISTRATION_PARAM,
@@ -7988,21 +7989,27 @@ class AutoEvolutionScheduler:
     def recompute_custom_evo_task_status(self, task_id: str) -> Optional[str]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT strategy_evo_config FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute("SELECT strategy_evo_config, status FROM qe_evolution_tasks WHERE task_id = %s FOR UPDATE", (task_id,))
                 task = cur.fetchone()
                 if not task:
                     return None
+                if task.get("status") in {"paused", "cancelled", "canceled", "stopped"}:
+                    return task["status"]
                 strategy_config = self._parse_custom_evo_strategy_config(task.get("strategy_evo_config"), task_id=task_id)
-                expected_count = len(strategy_config["loops"])
                 cur.execute(
-                    "SELECT status, COUNT(*) AS count FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
+                    "SELECT loop_index, status, "
+                    "CASE WHEN config_json -> 'absolute_target_replay' IS NOT NULL "
+                    "THEN config_json END AS config_json, "
+                    "jsonb_build_object('absolute_target_result', "
+                    "metrics_json -> 'absolute_target_result') AS metrics_json, experiment_id "
+                    "FROM qe_evolution_loops WHERE task_id = %s ORDER BY loop_index",
                     (task_id,),
                 )
-                status_counts = {
-                    str(row["status"]): int(row["count"])
-                    for row in cur.fetchall()
-                }
+                outcome = resolve_custom_evo_attempts(strategy_config["loops"], list(cur.fetchall()))
+                expected_count = outcome["expected_count"]
+                status_counts = outcome["status_counts"]
                 terminal_statuses = {"completed", "failed", "cancelled", "canceled"}
+                terminal_statuses.add("invalid_result")
                 active_count = sum(
                     int(count) for status, count in status_counts.items()
                     if status not in terminal_statuses
@@ -8022,6 +8029,8 @@ class AutoEvolutionScheduler:
                     (final_status, task_id),
                 )
             conn.commit()
+        if outcome["recovered_attempts"] or outcome["unverified_completed_loop_indexes"]:
+            logger.info("Custom evolution task %s attempt reconciliation: %s", task_id, outcome)
         return final_status
 
     async def submit_custom_evo_selected_loops(
@@ -8771,28 +8780,9 @@ class AutoEvolutionScheduler:
 
         if not loops_to_run:
             logger.info(f"自定义演进任务 {task_id} 没有待自动提交的 Loop")
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT status, COUNT(*) FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
-                        (task_id,),
-                    )
-                    status_counts = {status: count for status, count in cur.fetchall()}
-            if any(
-                count and status not in {"completed", "failed", "cancelled", "canceled"}
-                for status, count in status_counts.items()
-            ):
-                # Running work remains owned by reconciliation; do not finalize or resubmit it.
-                return
-            final_status = derive_custom_evo_final_status(len(loops_config), status_counts)
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() "
-                        "WHERE task_id = %s AND status = 'running'",
-                        (final_status, task_id),
-                    )
-                conn.commit()
+            # Both batch entry points use the same authoritative attempt rules.
+            # Reconciliation never submits work or overwrites a stopped task.
+            self.recompute_custom_evo_task_status(task_id)
             return
 
         # 统一 Semaphore 路径：node_parallelism dict 控制每节点并发上限
@@ -8837,44 +8827,7 @@ class AutoEvolutionScheduler:
                 cur.execute("SELECT status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 final_task = cur.fetchone()
         if final_task and final_task["status"] == "running":
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT status, COUNT(*) FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
-                        (task_id,),
-                    )
-                    status_counts = {status: count for status, count in cur.fetchall()}
-            terminal_statuses = {"completed", "failed", "cancelled", "canceled"}
-            active_count = sum(
-                int(count) for status, count in status_counts.items()
-                if status not in terminal_statuses
-            )
-            if active_count == 0:
-                # 没有正在跑的 loop 了，检查结果
-                completed_count = int(status_counts.get("completed", 0))
-                failed_count = int(status_counts.get("failed", 0))
-                cancelled_count = int(status_counts.get("cancelled", 0)) + int(status_counts.get("canceled", 0))
-                expected_count = len(loops_config)
-                terminal_count = completed_count + failed_count + cancelled_count
-                final_status = derive_custom_evo_final_status(expected_count, status_counts)
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s AND status = 'running'",
-                            (final_status, task_id),
-                        )
-                    conn.commit()
-                logger.info(
-                    "Custom evolution task %s final status: %s "
-                    "(expected=%s, terminal=%s, completed=%s, failed=%s, cancelled=%s)",
-                    task_id,
-                    final_status,
-                    expected_count,
-                    terminal_count,
-                    completed_count,
-                    failed_count,
-                    cancelled_count,
-                )
+            self.recompute_custom_evo_task_status(task_id)
 
 
     # ── Multi-Alpha Phase 3: helper methods ──────────────────────────────
