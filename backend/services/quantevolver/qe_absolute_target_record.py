@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from qe_absolute_targets import MANIFEST_FILE, RESULT_FILE, SCHEMA, file_sha256, require
+from qe_absolute_targets import MANIFEST_FILE, RESULT_FILE, SCHEMA_V2, build_exposure_audit, file_sha256, require
 
 
 def run_absolute_account(config, recorder):
@@ -59,7 +59,7 @@ def run_absolute_account(config, recorder):
         artifacts[f"indicator_analysis_{freq}.pkl"] = analysis
         recorder.log_metrics(**{f"{freq}.{k}": v for k, v in analysis["value"].to_dict().items()})
     recorder.save_objects(artifact_path="portfolio_analysis", **artifacts)
-    result = {"schema_version": SCHEMA, "status": "COMPLETE_ACCOUNT_AND_TARGET_CONSUMPTION",
+    result = {"schema_version": contract["schema_version"], "status": "COMPLETE_ACCOUNT_AND_TARGET_CONSUMPTION",
               "arm": contract["arm"], "targets_sha256": file_sha256("absolute_targets.parquet"),
               "dataset": contract["dataset"], "window": w, "account_days": len(days),
               "target_days_consumed": len(actions), "new_fit_calls": 0, "new_predict_calls": 0,
@@ -67,6 +67,9 @@ def run_absolute_account(config, recorder):
               "actions_sha256": file_sha256("qe_absolute_target_actions.jsonl"),
               "indicator_availability": indicator_availability,
               "actual_exposure_equals_target": "NOT_ASSUMED", "known_at": "UNVERIFIED"}
+    if contract["schema_version"] == SCHEMA_V2:
+        result.update(exposure_policy=contract["exposure_policy"],
+                      exposure_audit=build_exposure_audit(actions, contract))
     require(result["targets_sha256"] == contract["targets"]["sha256"], "QE_ABSOLUTE_TARGET_POSTRUN_HASH")
     Path(RESULT_FILE).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     recorder.save_objects(absolute_target_result=result, config=config)

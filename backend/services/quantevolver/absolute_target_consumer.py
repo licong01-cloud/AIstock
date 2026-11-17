@@ -10,7 +10,7 @@ import uuid
 
 import yaml
 
-from backend.services.quantevolver.qe_absolute_targets import MANIFEST_FILE, PARAM, TARGET_FILE, file_sha256, normalize_contract, require
+from backend.services.quantevolver.qe_absolute_targets import MANIFEST_FILE, PARAM, SCHEMA_V2, TARGET_FILE, file_sha256, normalize_contract, require, validate_exposure_audit
 
 
 def validate_absolute_result(value, contract):
@@ -31,6 +31,10 @@ def validate_absolute_result(value, contract):
     from backend.services.quantevolver.qe_absolute_targets import SHA
 
     require(bool(SHA.fullmatch(str(value.get("actions_sha256")))), "QE_ABSOLUTE_TARGET_ACTIONS_HASH_REQUIRED")
+    if contract["schema_version"] == SCHEMA_V2:
+        require(value.get("exposure_policy") == contract["exposure_policy"],
+                "QE_ABSOLUTE_TARGET_EXPOSURE_RESULT_POLICY")
+        validate_exposure_audit(value.get("exposure_audit"), contract)
     return dict(value)
 
 
