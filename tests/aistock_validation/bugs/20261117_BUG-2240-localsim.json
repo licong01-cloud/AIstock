@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "金额未知保留未知，同时显示具体原因和估值时点；旧API保持兼容。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "frontend/src/lib/simulation/localsim/workbench.ts",
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261117_BUG-2240-localsim.json"
+    ],
     "added_files": [],
     "changed_files": [
       "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
       "frontend/src/lib/simulation/localsim/workbench.ts",
-      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts"
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261117_BUG-2240-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
@@ -113,6 +120,27 @@
   "fixed_at": null,
   "github_issue_number": 7304,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7304",
+  "implementation_review": {
+    "production_gates": {
+      "backend_restart": "NOOP",
+      "database": "NOOP",
+      "dependencies": "NOOP"
+    },
+    "reviewer": "CURRENT_AGENT_SELF_REVIEW",
+    "rounds": [
+      {
+        "coverage": "new optional diagnostics remain compatible with old API; PENDING counts as account action item; exact valuation time and per-metric reasons visible; no unknown zero-fill or POST in read-only regression",
+        "result": "PASS_SOURCE_SYNTAX_AND_CONTRACT",
+        "round": 1
+      },
+      {
+        "coverage": "separate frontend activation target, existing layout tokens, no new dependencies or service actions; current-head browser screenshot and regression requested from CI",
+        "result": "PASS_LOCALSIM_SCOPE",
+        "round": 2
+      }
+    ],
+    "source_backend_dependency": "BUG-2237"
+  },
   "last_seen_at": "2026-11-17T05:08:21.893466Z",
   "module": "simulation_runtime",
   "non_goals": [
@@ -130,10 +158,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -179,6 +209,19 @@
       "/src/app/simulation/localsim/components/trading-workbench.tsx"
     ],
     "visual_acceptance_required": true
+  },
+  "validation_delegation": {
+    "deferred_nightly_modules": [
+      "simulation_runtime_ops_ui",
+      "localsim_control_plane_ui",
+      "localsim_dual_mode_ui"
+    ],
+    "production_actions": "NONE",
+    "requested_scope": [
+      "localsim_workbench_ui",
+      "frontend_type_lint"
+    ],
+    "risk_tier": "P2"
   },
   "verification_budget": {
     "budget": "light_ui",
@@ -278,39 +321,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-40%"
     }
-  },
-  "implementation_review": {
-    "reviewer": "CURRENT_AGENT_SELF_REVIEW",
-    "rounds": [
-      {
-        "round": 1,
-        "result": "PASS_SOURCE_SYNTAX_AND_CONTRACT",
-        "coverage": "new optional diagnostics remain compatible with old API; PENDING counts as account action item; exact valuation time and per-metric reasons visible; no unknown zero-fill or POST in read-only regression"
-      },
-      {
-        "round": 2,
-        "result": "PASS_LOCALSIM_SCOPE",
-        "coverage": "separate frontend activation target, existing layout tokens, no new dependencies or service actions; current-head browser screenshot and regression requested from CI"
-      }
-    ],
-    "source_backend_dependency": "BUG-2237",
-    "production_gates": {
-      "database": "NOOP",
-      "backend_restart": "NOOP",
-      "dependencies": "NOOP"
-    }
-  },
-  "validation_delegation": {
-    "requested_scope": [
-      "localsim_workbench_ui",
-      "frontend_type_lint"
-    ],
-    "deferred_nightly_modules": [
-      "simulation_runtime_ops_ui",
-      "localsim_control_plane_ui",
-      "localsim_dual_mode_ui"
-    ],
-    "risk_tier": "P2",
-    "production_actions": "NONE"
   }
 }
