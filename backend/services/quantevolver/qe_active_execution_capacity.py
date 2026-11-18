@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import uuid
@@ -19,7 +20,13 @@ from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import normalize_json
 
 from .node_execution import MAX_QE_NODE_PARALLELISM
-from .qe_batch_execution_policy import QE_CPU_TRAINING_LOOP_CAPACITY, QE_TRAINING_LOOP_CAPACITY
+from .qe_batch_execution_policy import (
+    CPU_NODE,
+    QE_BACKTEST_LOOP_CAPACITY,
+    QE_CPU_TRAINING_LOOP_CAPACITY,
+    QE_TRAINING_LOOP_CAPACITY,
+    loop_compute_kind,
+)
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
@@ -113,9 +120,15 @@ class QEWorkspaceSubmissionSource:
     parallel_training_eligible: bool = False
     lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS
     consumer_id: str = QE_RUN_DEFAULT_CONSUMER
+    prepared_batch_sha256: str | None = None
 
     def __post_init__(self) -> None:
         normalize_qe_run_consumer_id(self.consumer_id)
+        if self.prepared_batch_sha256 is not None and (
+            self.source_kind != "qe_experiment"
+            or re.fullmatch(r"[0-9a-f]{64}", self.prepared_batch_sha256) is None
+        ):
+            raise ValueError("QE_PREPARED_WORKSPACE_SOURCE_INVALID")
         lease_seconds = int(self.lease_seconds)
         if not 1 <= lease_seconds <= MAX_RESTART_SAFE_LEASE_SECONDS:
             raise QEWorkspaceSubmissionCoordinatorError(
@@ -1061,6 +1074,50 @@ class QEWorkspaceSubmissionCoordinator:
         self._repository = reservation_repository or QEExecutionReservationRepository()
         self._capacity_service = capacity_service or QEActiveExecutionCapacityService()
 
+    def prepared_workspace_contract(
+        self,
+        source: QEWorkspaceSubmissionSource,
+        payload: QEWorkspaceSubmissionPayload,
+    ) -> dict[str, Any]:
+        """Resolve capacity from actual workload mode and model policy."""
+        from .config_composer import ConfigComposer
+        from .qe_gpu_training_policy import GPU_TRAINING_POLICY_PARALLEL, resolve_gpu_training_policy
+
+        mode = payload.config.get("workload_mode")
+        train = re.findall(r"(?<![\w-])--train-only\b", payload.wsl_command)
+        replay = re.findall(r"(?<![\w-])--pred-backtest\b", payload.wsl_command)
+        if source.prepared_batch_sha256 is None or payload.execution_identity_hash != source.submission_intent_hash:
+            raise ValueError("QE_PREPARED_WORKSPACE_IDENTITY_MISMATCH")
+        if mode == "PREDICTION_REPLAY" and source.backtest_only and len(replay) == 1 and not train:
+            kind = "prediction_replay"
+            maximum = QE_BACKTEST_LOOP_CAPACITY
+        elif mode == "TRAIN_ONLY" and not source.backtest_only and len(train) == 1 and not replay:
+            info = ConfigComposer()._get_model_info(payload.config.get("model_id"))
+            kind = loop_compute_kind(payload.config, info)
+            if kind == "gpu":
+                if not self._capacity_service.is_wsl_node(source.node_id):
+                    raise ValueError("QE_PREPARED_GPU_WORKSPACE_NODE_MISMATCH")
+                maximum = (QE_TRAINING_LOOP_CAPACITY
+                           if resolve_gpu_training_policy(info) == GPU_TRAINING_POLICY_PARALLEL else 1)
+            elif kind == "cpu":
+                if self._capacity_service.canonical_node_id(source.node_id) != CPU_NODE:
+                    raise ValueError("QE_PREPARED_CPU_WORKSPACE_NODE_MISMATCH")
+                maximum = QE_CPU_TRAINING_LOOP_CAPACITY
+            else:
+                raise ValueError("QE_PREPARED_TRAINING_COMPUTE_KIND_INVALID")
+        else:
+            raise ValueError("QE_PREPARED_WORKSPACE_MODE_MISMATCH")
+        return {
+            "batch_sha256": source.prepared_batch_sha256,
+            "workload": mode,
+            "compute_kind": kind,
+            "task_id": payload.task_id,
+            "loop_id": payload.loop_id,
+            "intent_sha256": source.submission_intent_hash,
+            "parallel_eligible": maximum > 1,
+            "maximum": maximum,
+        }
+
     def observe_capacity(
         self,
         *,
@@ -1118,6 +1175,8 @@ class QEWorkspaceSubmissionCoordinator:
     ) -> QEWorkspaceSubmissionOutcome:
         self._validate_payload(payload)
         self._repository.preflight_schema(raise_on_error=True)
+        prepared = (self.prepared_workspace_contract(source, payload)
+                    if source.prepared_batch_sha256 is not None else None)
         same_task_backtest_cohort = (
             source.backtest_only
             and source.source_kind == "qe_evolution_loop"
@@ -1134,20 +1193,21 @@ class QEWorkspaceSubmissionCoordinator:
             and source.source_kind == "multi_alpha_durable_attempt"
             and self._capacity_service.is_wsl_node(source.node_id)
         )
-        compute_kind = None
+        compute_kind = prepared["compute_kind"] if prepared else None
         if same_task_parallel_training_cohort and payload.config.get("model_id"):
             from .config_composer import ConfigComposer
-            from .qe_batch_execution_policy import loop_compute_kind
             # Resolve the real catalog model and device overrides. A caller's
             # eligibility flag alone must never raise GPU training above two.
             compute_kind = loop_compute_kind(
                 payload.config, ConfigComposer()._get_model_info(payload.config["model_id"]),
             )
+        prepared_train = bool(prepared and not source.backtest_only and prepared["parallel_eligible"])
+        prepared_replay = bool(prepared and source.backtest_only)
         physical_capacity = self._capacity_service.resolve_node_capacity(
             source.node_id,
-            source.requested_node_capacity,
-            backtest_only=same_task_backtest_cohort or durable_replay_cohort,
-            parallel_training=same_task_parallel_training_cohort,
+            prepared["maximum"] if prepared else source.requested_node_capacity,
+            backtest_only=same_task_backtest_cohort or durable_replay_cohort or prepared_replay,
+            parallel_training=same_task_parallel_training_cohort or prepared_train,
             compute_kind=compute_kind,
         )
         # WSL GPU training keeps its tighter cap, including replay-to-fit retry.
@@ -1207,6 +1267,10 @@ class QEWorkspaceSubmissionCoordinator:
             allow_durable_prediction_replay_parallelism=(
                 durable_replay_cohort and capacity > WSL_HARD_CAPACITY
             ),
+            **({
+                "prepared_workspace_contract": prepared,
+                "isolate_prepared_workspace_cohort": self._capacity_service.is_wsl_node(source.node_id),
+            } if prepared else {}),
             owner_id=source.owner_id,
             lease_seconds=source.lease_seconds,
             claim_source=source.claim_source,

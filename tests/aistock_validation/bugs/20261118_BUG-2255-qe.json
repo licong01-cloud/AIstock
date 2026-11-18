@@ -18,6 +18,24 @@
   ],
   "created_at": "2026-11-18T17:15:10.066670Z",
   "description": "经审核的冻结工作区任务需要精确 YAML、工厂和执行载荷。TCN 359/361 经受管单实验入口提交并显式申请 1 个槽，接续器逐 seed 等全部阶段完成才启动后续工作。普通 custom-evo 已有节点规则，受管预组装批次缺少可持久化的同批资格和依赖推进入口。",
+  "design_compliance_review": {
+    "DESIGN-COMPLIANCE-001.1": {
+      "evidence": "Prepared CLI and scheduler register and submit the reviewed payload via shared coordinator; source tests plus actual DEV SQL and real templates via live read-only identity.",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.2": {
+      "evidence": "Identity mismatch, absent dataset and terminal or unknown status remain explicit; dependency requires verified evidence; unchanged intents reconcile rather than issuing a blind submit.",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.3": {
+      "evidence": "No changes to a model, fee, dataset, frozen YAML, current cohort or ordinary source policy. GPU2 CPU4 replay4 use existing constants.",
+      "verdict": "passed_source"
+    },
+    "DESIGN-COMPLIANCE-001.4": {
+      "evidence": "Uses existing registry, node reservation, model restrictions, dataset proof and worker isolation. No new approval, service or migration.",
+      "verdict": "passed_source"
+    }
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -172,11 +190,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "Fresh interpreter resolved real pinned revision 359 TCN config on wsl2-5080 at 2, frozen remote pure replay at 4, and read the same node dataset manifest from both APIs. No worker submission. Receipt tmp/issue_workflow/BUG-2255/fresh-no-submit.json.",
+      "Existing DEV PostgreSQL READ ONLY ran the repository SQL with six CTE cases. A matching GPU cohort keeps 2; mixed modes, foreign cohorts, changed intent and an exclusive neighbor stay 1. Receipt tmp/issue_workflow/BUG-2255/dev-prepared-cohorts.json."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "After the user reloads, verify source identity and existing policy readback. Real admission for prepared cohorts requires a newly approved prepared batch; do not resubmit revision 359 or launch synthetic production work.",
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

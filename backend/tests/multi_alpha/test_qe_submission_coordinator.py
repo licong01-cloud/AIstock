@@ -639,6 +639,64 @@ def test_wsl_unresolved_model_cannot_raise_capacity(monkeypatch):
     repository.reserve_execution_and_claim_source.assert_not_called()
 
 
+@pytest.mark.parametrize(("node", "mode", "model", "capacity"), [
+    ("wsl2-5080", "TRAIN_ONLY", "TCN", 2),
+    ("wsl2-5080", "TRAIN_ONLY", "GAT", 1),
+    ("rdagent-node1", "TRAIN_ONLY", "LGBModel", 4),
+    ("wsl2-5080", "PREDICTION_REPLAY", None, 4),
+    ("rdagent-node1", "PREDICTION_REPLAY", None, 4),
+])
+def test_prepared_workspace_reuses_workload_limit(monkeypatch, node, mode, model, capacity):
+    monkeypatch.setattr(
+        "backend.services.quantevolver.config_composer.ConfigComposer._get_model_info",
+        lambda _, model_id: {
+            "model_type": model_id if model_id != "TCN" else "TimeSeries",
+            "code_text": "registered neural model" if model_id == "TCN" else None,
+        },
+    )
+    repo = Mock(spec=QEExecutionReservationRepository)
+    repo.reserve_execution_and_claim_source.return_value = QEExecutionReservationAcquireResult(
+        acquired=False, duplicate_replay=False, active_count=capacity, node_capacity=capacity,
+        reservation=None, source_claim=None,
+    )
+    replay = mode == "PREDICTION_REPLAY"
+    source = _source(
+        node_id=node, source_kind="qe_experiment", backtest_only=replay,
+        prepared_batch_sha256="b" * 64,
+    )
+    payload = QEWorkspaceSubmissionPayload(
+        "prepared", 1, {"workload_mode": mode, "model_id": model}, {"conf.yaml": "frozen"},
+        "qrun --pred-backtest pred.pkl" if replay else "qrun --train-only",
+        execution_identity_hash=source.submission_intent_hash,
+        execution_environment_snapshot_id="env",
+        execution_environment_manifest_sha256="c" * 64,
+    )
+    result = asyncio.run(QEWorkspaceSubmissionCoordinator(reservation_repository=repo).submit(
+        client=Mock(), source=source, payload=payload,
+    ))
+    assert result.waiting_capacity and result.node_capacity == capacity
+    kwargs = repo.reserve_execution_and_claim_source.call_args.kwargs
+    assert kwargs["node_capacity"] == capacity
+    assert kwargs["prepared_workspace_contract"]["intent_sha256"] == source.submission_intent_hash
+    assert kwargs["isolate_prepared_workspace_cohort"] == (node == "wsl2-5080")
+
+
+def test_prepared_workspace_cannot_call_training_in_replay_mode():
+    source = _source(source_kind="qe_experiment", backtest_only=True, prepared_batch_sha256="b" * 64)
+    repo = Mock(spec=QEExecutionReservationRepository)
+    payload = QEWorkspaceSubmissionPayload(
+        "prepared", 1, {"workload_mode": "PREDICTION_REPLAY"}, {}, "qrun --train-only",
+        execution_identity_hash=source.submission_intent_hash,
+        execution_environment_snapshot_id="env",
+        execution_environment_manifest_sha256="c" * 64,
+    )
+    with pytest.raises(ValueError, match="MODE_MISMATCH"):
+        asyncio.run(QEWorkspaceSubmissionCoordinator(reservation_repository=repo).submit(
+            client=Mock(), source=source, payload=payload,
+        ))
+    repo.reserve_execution_and_claim_source.assert_not_called()
+
+
 @pytest.mark.parametrize("kind,backtest,capacity", [
     ("multi_alpha_durable_attempt", True, 4),
     ("multi_alpha_durable_attempt", False, 1),
