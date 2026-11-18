@@ -1652,6 +1652,7 @@ def simulation_core_l2(session: nox.Session) -> None:
         "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
         "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
         "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
+        "backend/tests/scripts/test_verify_localsim_corrected_ledger.py",
         "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py",
         "-q",
         "-p",
