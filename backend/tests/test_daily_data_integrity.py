@@ -14,6 +14,67 @@ from backend.services.data_integrity.provider import provider_scan, verify_scan
 from backend.services.tushare_dataset_specs import DAILY_BASIC, DIVIDEND
 
 
+@pytest.mark.parametrize(("phase", "expected_state", "closed", "pending"), [
+    ("normal_wait", "IN_PROGRESS", True, 2),
+    ("same_day_still_pending", "IN_PROGRESS", False, 2),
+    ("same_day_stale", "UNVERIFIED", False, 2),
+    ("cross_day_deadline", "UNVERIFIED", False, 1),
+    ("cross_day_overdue", "UNVERIFIED", False, 1),
+    ("cross_day_incomplete", "PARTIAL", False, 1),
+    ("all_sources_verified", "COMPLETE", False, 0),
+    ("unknown_next_session", "UNVERIFIED", False, 0),
+    ("future", "UNVERIFIED", False, 0),
+])
+def test_daily_calendar_separates_same_day_completion_from_full_source_verdict(
+    monkeypatch, phase, expected_state, closed, pending,
+):
+    from backend.services.data_integrity import service
+    from backend.services.data_integrity.catalog import CN, Obligation
+
+    friday = date(2026, 11, 20)
+    monday = date(2026, 11, 23)
+    calendar = {friday: True, date(2026, 11, 21): False, date(2026, 11, 22): False, monday: True}
+    same_day = Obligation("index_daily", "daily_series", "20:00")
+    etf = Obligation("etf_share_size", "daily_series", "08:30", lag_trading_days=1)
+    margin = Obligation("margin_detail", "daily_series", "19:10", lag_trading_days=1)
+    monkeypatch.setattr(service, "obligations", lambda *_: ([same_day, etf, margin], "catalogue"))
+
+    def verdict(obligation, state="VALID", *, stale=False):
+        return {"dataset": obligation.dataset, "validation_status": state, "validation_id": "receipt",
+                "data_revision": 2, "validated_revision": 1 if stale else 2,
+                "scope_version": obligation.scope_version, "rule_version": obligation.rule_version}
+
+    partitions = {(friday, same_day.dataset): verdict(same_day, stale=phase == "same_day_stale")}
+    now = datetime.combine(friday, time(21), CN)
+    if phase == "same_day_still_pending":
+        partitions.clear()
+        now = datetime.combine(friday, time(19), CN)
+    elif phase in {"cross_day_deadline", "cross_day_overdue", "cross_day_incomplete"}:
+        now = datetime.combine(monday, time(8, 30 if phase == "cross_day_deadline" else 31), CN)
+        if phase == "cross_day_incomplete":
+            partitions[(friday, etf.dataset)] = verdict(etf, "INCOMPLETE")
+    elif phase == "all_sources_verified":
+        for obligation in (etf, margin):
+            partitions[(friday, obligation.dataset)] = verdict(obligation)
+        now = datetime.combine(monday, time(20), CN)
+    elif phase == "unknown_next_session":
+        del calendar[monday]
+    elif phase == "future":
+        now = datetime(2026, 11, 19, 21, tzinfo=CN)
+        partitions.clear()
+
+    result = service.DailyIntegrityService._day(friday, calendar, [], {}, partitions, now)
+    assert result["state"] == expected_state
+    assert result["same_day_complete"] is closed
+    assert result["next_session_pending_count"] == pending
+    assert result["all_sync_complete"] == (phase == "all_sources_verified")
+    assert result["source_complete"] == result["all_sync_complete"]
+    if phase in {"normal_wait", "cross_day_deadline", "cross_day_overdue"}:
+        etf_partition = next(p for p in result["partitions"] if p["dataset"] == etf.dataset)
+        assert etf_partition["due_at"] == datetime.combine(monday, time(8, 30), CN)
+        assert etf_partition["overdue"] == (phase == "cross_day_overdue")
+
+
 def test_newly_supported_contract_wakes_validation_not_facts_or_a_valid_verdict():
     from contextlib import nullcontext
     from types import SimpleNamespace

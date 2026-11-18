@@ -99,6 +99,14 @@ class DailyIntegrityService:
             items.append(item)
         result = aggregate_day(items, trading_day=trading is not False,
                                catalogue_known=trading is not None, future=day > now.date())
+        # The calendar can close the day's work while a later session's normal
+        # publication window is open. Keep this separate from source completeness.
+        later_pending = sum(p["state"] == "NOT_DUE" and p["due_at"] is not None
+                            and p["due_at"].date() > day for p in items)
+        complete_items = sum(p["source_complete"] is True for p in items)
+        same_day_complete = (result["state"] == "IN_PROGRESS" and
+                             later_pending > 0 and complete_items > 0 and
+                             later_pending + complete_items == len(items))
         watermark = digest([{key: p.get(key) for key in
             ("dataset", "data_revision", "validated_revision", "validation_id", "scope_version", "rule_version", "state")}
             for p in items])
@@ -109,6 +117,8 @@ class DailyIntegrityService:
                 "daily_integrity_id": summary.get("daily_integrity_id") if current else None,
                 "last_materialized_integrity_id": summary.get("daily_integrity_id"),
                 "revision": summary.get("revision") if current else None, **result,
+                "same_day_complete": same_day_complete,
+                "next_session_pending_count": later_pending,
                 "future": day > now.date(),
                 "is_trading": trading,
                 "first_completed_at": materialized.get("first_completed_at"),
@@ -116,7 +126,8 @@ class DailyIntegrityService:
                 "completion_kind": summary.get("completion_kind") if current and result["all_sync_complete"] else None,
                 "observed_on_time": summary.get("observed_on_time") if current else None,
                 "watermark": watermark, "summary_current": current, "catalogue_id": catalogue_id,
-                "view_watermark": digest([watermark, [p.get("validation_queue") for p in items]]),
+                "view_watermark": digest([watermark, [[p.get("validation_queue"), p["due_at"], p["overdue"]]
+                                                      for p in items]]),
                 "obligations": [o.as_dict() for o in required], "partitions": items,
                 "source_complete": result["all_sync_complete"],
                 "release_contains_revision": None,

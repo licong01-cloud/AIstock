@@ -33,6 +33,61 @@ const calendar = {
     completion_kind: state === "COMPLETE" ? "RECOVERED" : null })),
 };
 
+test("calendar closes same-day work, flags overdue data, then shows full source completion", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-11-18T14:00:00Z") });
+  let phase = 0;
+  const date = "2026-11-18";
+  const day = () => ({
+    fact_date: date,
+    state: ["IN_PROGRESS", "PARTIAL", "COMPLETE"][phase],
+    same_day_complete: phase === 0,
+    next_session_pending_count: phase === 0 ? 2 : phase === 1 ? 1 : 0,
+    all_sync_complete: phase === 2,
+    watermark: String(phase),
+    completion_kind: phase === 2 ? "RECOVERED" : null,
+    release_contains_revision: false,
+    release_coverage_state: "OUTSIDE_CUTOFF",
+  });
+  await page.route("**/api/v1/local-data/integrity/calendar?*", route => route.fulfill({ json: {
+    month: "2026-11", as_of: "2026-11-19T09:00:00+08:00", days: [day()],
+    counts: Object.fromEntries(states.map(state => [state, Number(state === day().state)])),
+  } }));
+  const validated = { data_revision: 2, validated_revision: 2 };
+  await page.route(`**/api/v1/local-data/integrity/days/${date}`, route => route.fulfill({ json: {
+    ...day(), partitions: [
+      { dataset: "daily_basic", state: "VALID", source_complete: true, ...validated },
+      { dataset: "etf_share_size", state: ["NOT_DUE", "INCOMPLETE", "VALID"][phase],
+        due_at: "2026-11-19T08:30:00+08:00", overdue: phase > 0, source_complete: phase === 2,
+        ...validated },
+      { dataset: "margin_detail", state: phase === 2 ? "VALID" : "NOT_DUE",
+        due_at: "2026-11-19T19:10:00+08:00", overdue: false, source_complete: phase === 2,
+        ...validated },
+    ],
+  } }));
+
+  await page.goto("/local-data");
+  const card = page.getByTestId("daily-integrity-calendar");
+  const completeToday = card.getByRole("button", { name: `${date} 当日已完成 2 项次日待发布` });
+  await completeToday.focus();
+  await page.keyboard.press("Enter");
+  await expect(card.getByText(/当日已完成 · 2 项次日待发布 · 全源完整：否/)).toBeVisible();
+  await expect(card.getByText(/同步或等待 0.*当日已完成 1/)).toBeVisible();
+  const etf = card.locator('tr[data-dataset="etf_share_size"]');
+  await expect(etf.getByText("已逾应到时间")).toHaveCount(0);
+
+  phase = 1;
+  await card.getByRole("button", { name: "刷新状态" }).click();
+  await expect(card.getByRole("button", { name: `${date} 部分完成` })).toBeVisible();
+  await expect(etf.getByText("已逾应到时间")).toBeVisible();
+  await expect(card.locator('tr[data-dataset="margin_detail"]').getByText("已逾应到时间")).toHaveCount(0);
+
+  phase = 2;
+  await card.getByRole("button", { name: "刷新状态" }).click();
+  await expect(card.getByRole("button", { name: `${date} 全源完整 补齐` })).toBeVisible();
+  await expect(card.getByText(/全源完整：是/)).toBeVisible();
+  await expect(etf.getByText("已逾应到时间")).toHaveCount(0);
+});
+
 test("calendar exposes real states, null counts, release boundary and revision paging", async ({ page }) => {
   await page.clock.install({ time: new Date("2026-10-27T12:00:00Z") });
   await page.route("**/api/v1/local-data/integrity/calendar?*", route => route.fulfill({ json: calendar }));
@@ -133,7 +188,7 @@ test("failed refresh keeps last read visibly stale and never manufactures persis
   });
   await page.goto("/local-data");
   const card = page.getByTestId("daily-integrity-calendar");
-  await expect(card.getByRole("button", { name: "2026-10-06 完整 补齐" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "2026-10-06 全源完整 补齐" })).toBeVisible();
   failed = true;
   await card.getByRole("button", { name: "刷新状态" }).click();
   await expect(card.getByRole("alert")).toContainText("仅为上次读回");

@@ -11,22 +11,33 @@ type Count = { unit: string; expected: number | null; valid: number | null; lega
   missing: number | null; invalid: number | null; unverified: number | null };
 type Day = { fact_date: string; state: State; completion_kind: string | null; as_of: string;
   future?: boolean;
+  same_day_complete?: boolean; next_session_pending_count?: number;
   watermark: string; view_watermark?: string;
   revision: number | null; all_sync_complete: boolean; release_contains_revision: boolean | null;
   release_coverage_state: string; release_read_error?: string; partitions?: Partition[] };
 type Partition = { dataset: string; state: string; data_revision?: number; validated_revision?: number;
-  due_at: string | null; next_retry_at?: string | null; metadata?: { validation?: {
+  due_at: string | null; overdue?: boolean; source_complete?: boolean;
+  next_retry_at?: string | null; metadata?: { validation?: {
     counts?: Count[]; reason?: string; gaps?: { classification?: string }[] } } };
 type Calendar = { month: string; as_of: string; days: Day[]; counts: Record<State, number>;
   trading_day_count?: number; recovered_day_count?: number };
 type GapPage = { dataset: string; groups: Record<string, unknown>[]; next_cursor: string | null; group_count: number };
 
 const labels: Record<State, string> = { NOT_TRADING: "休市", UNVERIFIED: "待核验", IN_PROGRESS: "同步或等待",
-  PARTIAL: "部分完成", ERROR: "检查异常", COMPLETE: "完整" };
+  PARTIAL: "部分完成", ERROR: "检查异常", COMPLETE: "全源完整" };
 const kinds: Record<string, string> = { RECOVERED: "补齐", HISTORICAL_VERIFIED: "历史补验", SOURCE_REVISED: "已修订" };
 const partitionLabels: Record<string, string> = { VALID: "完整", INCOMPLETE: "未完整", ERROR: "检查异常",
   UNVERIFIED: "待核验", IN_PROGRESS: "同步或等待", NOT_DUE: "未到期" };
 const todayCN = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(new Date());
+
+function dayPresentation(day: Day) {
+  const pending = day.next_session_pending_count;
+  if (!day.future && day.state === "IN_PROGRESS" && day.same_day_complete === true
+    && typeof pending === "number" && Number.isInteger(pending) && pending > 0) {
+    return { label: "当日已完成", waiting: `${pending} 项次日待发布` };
+  }
+  return { label: day.future ? "未到期" : labels[day.state], waiting: null };
+}
 
 function currentValidation(partition: Partition) {
   return partition.data_revision != null && partition.validated_revision != null
@@ -144,6 +155,10 @@ export function DailyIntegrityCalendar({ backendBase }: { backendBase: string })
   const pendingCount = partitions.filter(partition => partition.state !== "NOT_DUE" && !knownGap(partition)
     && (partition.state !== "VALID" || !currentValidation(partition))).length;
   const notDueCount = partitions.filter(partition => partition.state === "NOT_DUE").length;
+  const sameDayCount = calendar?.days.filter(day => dayPresentation(day).waiting).length ?? 0;
+  const summary = calendar && Object.entries(calendar.counts).map(([state, count]) =>
+    `${labels[state as State]} ${state === "IN_PROGRESS" ? count - sameDayCount : count}`);
+  const detailPresentation = detail && dayPresentation(detail);
   return <Card className={styles.root} data-testid="daily-integrity-calendar">
     <CardHeader><CardTitle>交易日数据完整性</CardTitle></CardHeader>
     <CardContent>
@@ -156,27 +171,31 @@ export function DailyIntegrityCalendar({ backendBase }: { backendBase: string })
       </div>
       {error && <p role="alert" className={styles.error}>无法获取最新状态：{error}。下方如有数据，仅为上次读回。</p>}
       <p className={styles.note}>事实完整性与任务执行状态、发布文件覆盖分别显示；未知不代表成功。</p>
-      {calendar && <p aria-live="polite" className={styles.note}>最后读回：{calendar.as_of} · {Object.entries(calendar.counts).map(([state, count]) => `${labels[state as State]} ${count}`).join(" · ")}</p>}
+      {calendar && summary && <p aria-live="polite" className={styles.note}>最后读回：{calendar.as_of} · {summary.join(" · ")}{sameDayCount > 0 && ` · 当日已完成 ${sameDayCount}`}</p>}
       {calendar && <p className={styles.note}>交易日 {calendar.trading_day_count ?? "未知"} · 补齐 {calendar.recovered_day_count ?? "未知"}</p>}
       <div className={styles.grid} aria-label={`${month}完整性日历`}>
         {["一", "二", "三", "四", "五", "六", "日"].map(day => <span key={day} className={styles.weekday}>{day}</span>)}
         {Array.from({ length: offset }, (_, index) => <span key={`blank-${index}`} />)}
-        {(calendar?.days || []).map(day => <button type="button" key={day.fact_date}
-          className={`${styles.day} ${styles[day.state]} ${day.completion_kind === "RECOVERED" ? styles.recovered : ""}`}
-          onClick={() => setSelected(day.fact_date)} aria-pressed={selected === day.fact_date}
-          aria-label={`${day.fact_date} ${day.future ? "未到期" : labels[day.state]} ${kinds[day.completion_kind || ""] || ""}`}>
-          <span>{Number(day.fact_date.slice(-2))}</span><span>{day.future ? "未到期" : labels[day.state]}</span>
-          {day.completion_kind && kinds[day.completion_kind] && <small>{kinds[day.completion_kind]}</small>}
-        </button>)}
+        {(calendar?.days || []).map(day => {
+          const { label, waiting } = dayPresentation(day);
+          const kind = kinds[day.completion_kind || ""];
+          return <button type="button" key={day.fact_date}
+            className={`${styles.day} ${styles[day.state]} ${waiting ? styles.sameDayComplete : ""} ${kind === kinds.RECOVERED ? styles.recovered : ""}`}
+            onClick={() => setSelected(day.fact_date)} aria-pressed={selected === day.fact_date}
+            aria-label={[day.fact_date, label, waiting, kind].filter(Boolean).join(" ")}>
+            <span>{Number(day.fact_date.slice(-2))}</span><span>{label}</span>
+            {(waiting || kind) && <small>{waiting || kind}</small>}
+          </button>;
+        })}
       </div>
       {!calendar && !error && <p role="status">正在读取状态台账…</p>}
-      <p className={styles.legend} aria-label="状态图例">灰：待核验/休市　蓝：同步或等待　黄：部分完成　红：检查异常　绿：完整　青绿：补齐</p>
+      <p className={styles.legend} aria-label="状态图例">灰：待核验/休市　蓝：同步或等待　黄：部分完成　红：检查异常　绿：全源完整　青绿：补齐　蓝绿：当日已完成，另有次日待发布</p>
       {selected && <section aria-label={`${selected}详情`} className={styles.detail}>
         <h3>{selected} 数据详情</h3>
         {detailError && <p role="alert">无法读取详情：{detailError}</p>}
         {!detail && !detailError && <p role="status">正在读取…</p>}
         {detail && <>
-          <p>源完整：{detail.all_sync_complete ? "是" : "否"} · 已包含于活动发布：{detail.release_coverage_state === "OUTSIDE_CUTOFF" ? "未覆盖" : detail.release_contains_revision === null ? "未建立对应关系" : detail.release_contains_revision ? "是" : "否"}</p>
+          <p>{detailPresentation?.waiting && `${detailPresentation.label} · ${detailPresentation.waiting} · `}全源完整：{detail.all_sync_complete ? "是" : "否"} · 已包含于活动发布：{detail.release_coverage_state === "OUTSIDE_CUTOFF" ? "未覆盖" : detail.release_contains_revision === null ? "未建立对应关系" : detail.release_contains_revision ? "是" : "否"}</p>
           <p className={styles.note} data-testid="partition-summary">已确认缺口：{gapPartitions.length ? gapPartitions.map(partition => datasetName(partition.dataset)).join("、") : "暂无"}
             {`；尚待验收或检查异常：${pendingCount}项；未到期：${notDueCount}项。合法NA及未到期不算缺失，待核验不代表完整。`}</p>
           {detail.release_read_error && <p role="alert">活动发布身份暂不可读，不能确认是否包含本次源修订；源完整性结论不因此改变。</p>}
@@ -185,6 +204,8 @@ export function DailyIntegrityCalendar({ backendBase }: { backendBase: string })
               data-gap-status={knownGap(partition) ? "known-gap" : "none-confirmed"}
               className={knownGap(partition) ? styles.gapRow : undefined}>
               <td><span>{datasetName(partition.dataset)}</span><br />{partitionStatus(partition)}<br />{partition.metadata?.validation?.reason || ""}
+                {partition.overdue === true && partition.source_complete === false
+                  && <strong className={styles.overdueLabel}>已逾应到时间</strong>}
                 {knownGap(partition) && <strong className={styles.gapLabel}>存在缺失或无效数据</strong>}
                 {partition.next_retry_at && <small>下次重试：{partition.next_retry_at}</small>}</td><td>{partition.due_at || "待确认日历"}</td>
               <td>{partition.validated_revision ?? "未知"} / {partition.data_revision ?? "未知"}</td>
