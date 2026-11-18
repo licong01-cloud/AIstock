@@ -31,12 +31,18 @@
   ],
   "expected": "Reuse exact-date native completion when independently proven, validate current physical facts once and publish through existing fenced canonical flow",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_integrity/legacy_validation.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2244-historical-canonical-validation-rejects-completed-date-when-multi-date-p.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/data_integrity/legacy_validation.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2244-historical-canonical-validation-rejects-completed-date-when-multi-date-p.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/legacy_validation.py",
@@ -111,7 +117,6 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
-  "risk_area": "bug",
   "resolution_notes": [
     "Root cause: 89 requested historical dates have no canonical row/target. Existing compatibility validates88 immediately;2026-10-09 has15 physical rows and an exact-date native reconciled attempt, but later parent timeout is incorrectly applied to that committed date.",
     "Round1 correctness: preserve original job/source rows and current physical/semantic checks; reuse exact-date native attempt only for existing by_date contracts, never aggregate counters or synthetic source scans.",
@@ -120,6 +125,7 @@
     "Final exact source matrix: rtk pytest backend/tests/test_daily_data_integrity.py backend/tests/test_dataset_refresh_audit.py -q ->258 passed,2 intentional skips; Ruff and3-file L0 passed. Native path test covers exact date/job query, latest failed attempt, missing fact and unresolved timing. Specific89-day production metadata-only validation authorized by user before apply; no service control.",
     "DESIGN-COMPLIANCE-001: complete targeted compatibility and native backvalidation, explicit invalid/unknown outcomes, no account/model/PIT/suspension policy change, no added gate/service/full-history scan. Specific production authorization covers89 metadata-only VALIDATE_ONLY dates, not market facts. Production application and105-day final readback still pending merge; backend runtime remains pending user restart."
   ],
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -128,15 +134,17 @@
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/integrity/days/2026-10-09",
     "fresh_process_evidence": [
       "python -X utf8 -B X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/dev_validate.py -> existing aistock_dev:5433 native89 VALID/public PASS/idempotent reuse89,1042 exact historical fact rows,missing fact control INCOMPLETE; transaction rollback true; no persistent DEV or production fact write",
-      "python -X utf8 -B X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/readonly_check.py production with isolated worktree source ->89 native VALID,16 current canonical results reused,0.547seconds,no production write"
+      "python -X utf8 -B X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/readonly_check.py production with isolated worktree source ->89 native VALID,16 current canonical results reused,0.547seconds,no production write",
+      "python -X utf8 -B X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/dev_validate.py ->89 native public PASS,idempotent reuse89,rollback true; fixed production readonly ->89 VALID+16 reused,zero writes"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "PhysicalValidator._scan_contract -> validate_legacy_partition,shared backend worker; targeted offline native application does not control service",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
