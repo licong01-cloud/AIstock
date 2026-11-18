@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2252",
-  "closed_at": null,
+  "closed_at": "2026-11-18T12:00:07.991336Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,15 +29,15 @@
   "expected": "Same-task absolute-target model-free replays use the existing approved pure-backtest node capacity; mixed tasks and training remain unchanged.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261118_BUG-2252-wsl-absolute-target-replay-fails-existing-same-task-backtest-cohort-proo.json",
       "backend/services/quantevolver/qe_execution_reservation.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2252-wsl-absolute-target-replay-fails-existing-same-task-backtest-cohort-proo.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261118_BUG-2252-wsl-absolute-target-replay-fails-existing-same-task-backtest-cohort-proo.json",
       "backend/services/quantevolver/qe_execution_reservation.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2252-wsl-absolute-target-replay-fails-existing-same-task-backtest-cohort-proo.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-11-18T07:29:27.141445Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5322b93a62e37fb873013316284d02b4bd120bc2",
+  "fixed_at": "2026-11-18T08:00:43Z",
   "github_issue_number": 7339,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7339",
   "implementation_review": {
@@ -135,6 +135,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7341",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -158,10 +159,33 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_note": "Source/fresh-process proof does not establish API load. Existing task remains immutable; after user reload, check source identity and real waiting-capacity behavior if still in progress. Do not rerun completed accounts merely to prove capacity.",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2252/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2252",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "ae31761c61dafdbd71963cadf238b53963b4582ba830eda1ef76dd3edc5fc80c",
+      "expected_identity": "5322b93a62e37fb873013316284d02b4bd120bc2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T11:46:55.093760Z",
+      "mode": "read_only",
+      "observed_identity": "5f55b1b5d099292b727f87bd81cf0f015236a3de",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e4d23652000b58b763784e0f77b3dd723b18559834e60e7291f77c722953ab7b",
+      "receipt_sha256": "734f760df3ff0c71342bdbbb34458d1327e3519c61735f1e838424219708bfaa",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "02db2d431e329eb1b6432751d3553558b43d958a18902665aa3923ee9be96960",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -171,7 +195,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2252",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9f0af2750c9a1b2d",
+    "recorded_at": "2026-11-18T08:02:03.925321Z",
+    "runtime_contract_digest": "ae31761c61dafdbd71963cadf238b53963b4582ba830eda1ef76dd3edc5fc80c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b9600602892c34e227a72853a79470eacb25ab54",
+    "source_merge_commit": "5322b93a62e37fb873013316284d02b4bd120bc2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7341",
+    "validation_evidence": [
+      "rtk pytest -q backend/tests/multi_alpha/test_qe_submission_coordinator.py -> 68 passed, 18 environment skips",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "a6e2cfbb020b0c394d302f37ebb3ccf736ec6f4d0b883555bad820052a149bd7"
+  },
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -180,6 +226,11 @@
     "fingerprint": "6f3861810756de1f3242101a",
     "source_event_id": "FE-20261118-6f3861810756"
   },
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/multi_alpha/test_qe_submission_coordinator.py -> 68 passed, 18 environment skips",
+    "python -m nox -s l0 -> passed",
+    "Original source validation: 68 passed; seven real DEV read-only SQL cases passed. User restarted backend; post-restart health, descendant identity, same-task configuration business smoke and task DB readback passed. Existing four accounts already complete; no rerun to demonstrate concurrency."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
