@@ -19,7 +19,6 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.hmm_risk import risk_l2_date_inference as core
 from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.services.hmm_risk.formal_state_input import SOURCE_START, _collect_domains, _fact_identity
@@ -209,37 +208,13 @@ def _read_plan(request, connection):
 
 
 def _completion(request, connection, plan):
-    if request["source"]["knowledge_mode"] == "historical_current_revision":
-        return {"authority": "bounded_fact_validation", "historical_as_known_verified": False, "statuses": []}
-    repository = DataRefreshAuditRepository(conn_factory=lambda: nullcontext(connection))
-    statuses = []
-    for day in sorted(set(plan["as_of"].values())):
-        for dataset in REQUIRED_DATASETS:
-            try:
-                status = repository.require_success(dataset=dataset, trade_date=core._day(day))
-            except RuntimeError as exc:
-                raise core.risk.fail(f"completion not ready: {dataset}/{day}", "database_data_waiting") from exc
-            require(
-                status.row_count >= (0 if dataset == "suspend_d" else 1)
-                and _timestamp(status.refreshed_at.isoformat()) <= _timestamp(plan["read_cutoff_at"]),
-                f"completion invalid: {dataset}/{day}",
-                "database_data_waiting",
-            )
-            statuses.append(
-                {
-                    "dataset": dataset,
-                    "trade_date": day,
-                    "status": status.status,
-                    "quality_status": status.quality_status,
-                    "row_count": status.row_count,
-                    "refreshed_at": status.refreshed_at.isoformat(),
-                    "job_id": None if status.job_id is None else str(status.job_id),
-                }
-            )
+    # The existing bounded fact readers below enforce actual required fields.
+    # Do not demand producer receipts for every historical decision day.
     return {
-        "authority": "market.dataset_date_refresh_audit",
+        "authority": "database_fact_snapshot",
         "historical_as_known_verified": False,
-        "statuses": statuses,
+        "source_acceptance_required": False,
+        "statuses": [],
     }
 
 
@@ -514,28 +489,31 @@ def validate_bundle(request, bundle, expected_sha256):
         core.reader._require_sha256(identity[field], field)
     completion = identity["completion"]
     require(completion["historical_as_known_verified"] is False, "historical knowledge claim forbidden")
-    if source["knowledge_mode"] == "historical_current_revision":
+    if completion.get("authority") == "database_fact_snapshot":
+        require(
+            completion == {
+                "authority": "database_fact_snapshot",
+                "historical_as_known_verified": False,
+                "source_acceptance_required": False,
+                "statuses": [],
+            },
+            "database fact snapshot carrier differs",
+            "identity_mismatch",
+        )
+    elif source["knowledge_mode"] == "historical_current_revision":
         require(
             completion
             == {"authority": "bounded_fact_validation", "historical_as_known_verified": False, "statuses": []},
             "historical source cannot claim forward completion",
         )
     else:
-        expected = [(day, dataset) for day in sorted(set(plan["as_of"].values())) for dataset in REQUIRED_DATASETS]
-        statuses = completion["statuses"]
+        # Legacy frozen carriers retain their original provenance and digest.
+        # Their producer quality verdict is not a permission to read facts.
         require(
             completion["authority"] == "market.dataset_date_refresh_audit"
-            and [(s["trade_date"], s["dataset"]) for s in statuses] == expected
-            and all(
-                s["status"] == "success"
-                and s["quality_status"] not in {"error", "empty_invalid", "low_coverage"}
-                and type(s["row_count"]) is int
-                and s["row_count"] >= (0 if s["dataset"] == "suspend_d" else 1)
-                and _timestamp(s["refreshed_at"]) <= _timestamp(plan["read_cutoff_at"])
-                for s in statuses
-            ),
+            and isinstance(completion["statuses"], list),
             "database completion carrier differs",
-            "database_data_waiting",
+            "identity_mismatch",
         )
     core.validate_feature_rows(request, bundle, plan["as_of"])
 

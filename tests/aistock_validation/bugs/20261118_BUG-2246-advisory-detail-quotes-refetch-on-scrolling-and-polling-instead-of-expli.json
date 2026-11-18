@@ -1,0 +1,423 @@
+{
+  "actual": "IntersectionObserver updates visible subscriptions, causing repeat HTTP reads; a 15-second timer and focus handlers fetch additional quotes.",
+  "allowed_write_scope": [
+    "frontend/src/components/advisory/LiveQuotes.tsx",
+    "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+    "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+    "frontend/src/components/advisory/workbench/DailyList.tsx",
+    "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+    "frontend/src/components/advisory/workbench/workbench.module.css",
+    "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+    "frontend/src/components/advisory/QuoteSnapshot.tsx",
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/lib/api/advisory.ts",
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+    "backend/routers/advisory.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2246",
+  "closed_at": "2026-11-18T04:58:39Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-18T04:37:37.170090Z",
+  "description": "IntersectionObserver updates visible subscriptions, causing repeat HTTP reads; a 15-second timer and focus handlers fetch additional quotes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261118-b637816e1307",
+      "timestamp": "2026-11-18T04:37:37.170070Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Batch all displayed page symbols once; scrolling/focus/timers issue no quote reads; pagination reuses scope-isolated cache; manual refresh refreshes current mounted page only, preserves old values on transient failure with visible stale status, rejects identity mismatch, and exposes acquisition time.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx",
+      "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "frontend/src/components/advisory/workbench/workbench.module.css",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json"
+    ],
+    "added_files": [
+      "frontend/src/components/advisory/QuoteSnapshot.tsx"
+    ],
+    "changed_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx",
+      "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "frontend/src/components/advisory/workbench/workbench.module.css",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "frontend/src/components/advisory/LiveQuotes.tsx",
+        "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+        "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+        "frontend/src/components/advisory/workbench/DailyList.tsx",
+        "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+        "frontend/src/components/advisory/workbench/workbench.module.css",
+        "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+        "frontend/src/components/advisory/QuoteSnapshot.tsx"
+      ],
+      "impacted_modules": [
+        "advisory.ui"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/components/advisory/LiveQuotes.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/src/components/advisory/workbench/DailyList.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/src/components/advisory/workbench/workbench.module.css",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        },
+        {
+          "file": "frontend/src/components/advisory/QuoteSnapshot.tsx",
+          "impact_modules": [],
+          "primary_module": "advisory.ui",
+          "risk_level": "medium",
+          "rule_id": "advisory_mocked_ui"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "frontend/src/components/advisory/LiveQuotes.tsx",
+        "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+        "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+        "frontend/src/components/advisory/workbench/DailyList.tsx",
+        "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+        "frontend/src/components/advisory/workbench/workbench.module.css",
+        "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+        "frontend/src/components/advisory/QuoteSnapshot.tsx"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/workbench.module.css",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/workbench.module.css",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx"
+    ]
+  },
+  "first_seen_at": "2026-11-18T04:37:37.170090Z",
+  "fix_branch": null,
+  "fix_commit": "bbd57e1cc4ab15a640343d7b09b8bb9a0cf145ad",
+  "fixed_at": "2026-11-18T04:58:39Z",
+  "github_issue_number": 7323,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7323",
+  "last_seen_at": "2026-11-18T04:37:37.170090Z",
+  "module": "advisory.ui",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7325",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "advisory_mocked_ui",
+    "advisory_workbench_ui",
+    "advisory_historical_range_ui",
+    "frontend_type_lint",
+    "watchlist_backend",
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "frontend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2246",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5aa930bdecb740a1",
+    "recorded_at": "2026-11-18T04:59:32.974155Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ae04acf74982f1f08110ddbef7f6f06104a9a44b",
+    "source_merge_commit": "bbd57e1cc4ab15a640343d7b09b8bb9a0cf145ad",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7325",
+    "validation_evidence": [
+      "validation-receipt: id=9e217bbcab9df28d commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- frontend/src/components/advisory/LiveQuotes.tsx frontend/src/components/advisory/QuoteSnapshot.tsx frontend/src/components/advisory/workbench/ProgramDetail.tsx frontend/src/components/advisory/workbench/HistoricalLists.tsx frontend/src/components/advisory/workbench/DailyList.tsx frontend/src/components/advisory/workbench/EpisodeTable.tsx frontend/src/components/advisory/workbench/workbench.module.css frontend/tests/paper-v2/advisory-workbench.spec.ts tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json` result=`passed`",
+      "validation-receipt: id=1975668eeba30357 commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "52c525b67adcad05e47272086c7cfc077d2e26214c85995c93ca1b93136ff0cf"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory.ui"
+  ],
+  "title": "Advisory detail quotes refetch on scrolling and polling instead of explicit snapshots",
+  "trigger_condition": {
+    "fingerprint": "b637816e1307d815768070ae",
+    "source_event_id": "FE-20261118-b637816e1307"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:advisory.ui",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_type_lint",
+      "watchlist_backend",
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/lib/api/advisory.ts",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "backend/routers/advisory.py",
+      "backend/services/advisory_program.py",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "backend/tests/watchlist/test_advisory_program.py",
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/workbench.module.css",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/components/advisory/LiveQuotes.tsx",
+    "ui_routes": [
+      "/src/components/advisory/LiveQuotes.tsx",
+      "/paper-v2/advisory"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "validation-receipt: id=9e217bbcab9df28d commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- frontend/src/components/advisory/LiveQuotes.tsx frontend/src/components/advisory/QuoteSnapshot.tsx frontend/src/components/advisory/workbench/ProgramDetail.tsx frontend/src/components/advisory/workbench/HistoricalLists.tsx frontend/src/components/advisory/workbench/DailyList.tsx frontend/src/components/advisory/workbench/EpisodeTable.tsx frontend/src/components/advisory/workbench/workbench.module.css frontend/tests/paper-v2/advisory-workbench.spec.ts tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json` result=`passed`",
+    "validation-receipt: id=1975668eeba30357 commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "light_ui",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.ui",
+        "advisory_mocked",
+        "advisory_workbench",
+        "advisory_historical_range",
+        "watchlist"
+      ],
+      "plans": [
+        "advisory_mocked_ui",
+        "advisory_workbench_ui",
+        "advisory_historical_range_ui",
+        "watchlist_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "frontend_type_lint",
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-40%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light_ui",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.ui",
+          "advisory_mocked",
+          "advisory_workbench",
+          "advisory_historical_range",
+          "watchlist"
+        ],
+        "plans": [
+          "advisory_mocked_ui",
+          "advisory_workbench_ui",
+          "advisory_historical_range_ui",
+          "watchlist_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "frontend_type_lint",
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-40%"
+    }
+  }
+}
