@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2253",
-  "closed_at": null,
+  "closed_at": "2026-11-18T12:24:33Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -93,8 +93,8 @@
   },
   "first_seen_at": "2026-11-18T11:49:00.660826Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d38d43185976c89de2a4f3a1e6fb9339ececbd32",
+  "fixed_at": "2026-11-18T12:24:33Z",
   "github_issue_number": 7349,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7349",
   "implementation_review": {
@@ -117,9 +117,9 @@
         "result": "passed"
       },
       {
+        "evidence": "CI 44299565644 had 777 passes and only the existing 30 percent test/production SLOC budget failure. Consolidated duplicate fixture setup, retained all parameterized cases and native writer digest oracle, no threshold/catalog/production padding. Failed node recovered; final related matrix including budget passed 51 tests, Ruff and diff passed. Corrupt hash fixtures are applied after constructing the valid native writer model.",
         "focus": "CI_test_budget_and_final_fixture_integrity",
-        "result": "passed",
-        "evidence": "CI 44299565644 had 777 passes and only the existing 30 percent test/production SLOC budget failure. Consolidated duplicate fixture setup, retained all parameterized cases and native writer digest oracle, no threshold/catalog/production padding. Failed node recovered; final related matrix including budget passed 51 tests, Ruff and diff passed. Corrupt hash fixtures are applied after constructing the valid native writer model."
+        "result": "passed"
       }
     ],
     "reviewed_at": "2026-11-18T12:16:26.018162+00:00",
@@ -135,6 +135,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7350",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -152,6 +153,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -161,7 +163,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2253",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1a88b706e18f7fc7",
+    "recorded_at": "2026-11-18T12:26:00.199738Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e6128987614b1564a8f2f104d66ee234b8bc842c",
+    "source_merge_commit": "d38d43185976c89de2a4f3a1e6fb9339ececbd32",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7350",
+    "validation_evidence": [
+      "Final related selection artifact, post-restart scope and existing test-budget matrix -> 51 passed; L0, Ruff, diff/scope, workflow smoke and author correctness/completeness reviews passed. Real native multi-alpha artifact readback passed. CI 44302385087 passed for e6128987614b1564a8f2f104d66ee234b8bc842c. No backend restart, services, production writes or new model calls."
+    ],
+    "validation_evidence_digest": "cdf3eff67a4ebb8b5b2269270cc74569056822531b6c156f7f7dfaadc083a214"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -170,6 +193,9 @@
     "fingerprint": "41d16a1acf44468c628de207",
     "source_event_id": "FE-20261118-41d16a1acf44"
   },
+  "validation_evidence": [
+    "Final related selection artifact, post-restart scope and existing test-budget matrix -> 51 passed; L0, Ruff, diff/scope, workflow smoke and author correctness/completeness reviews passed. Real native multi-alpha artifact readback passed. CI 44302385087 passed for e6128987614b1564a8f2f104d66ee234b8bc842c. No backend restart, services, production writes or new model calls."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
