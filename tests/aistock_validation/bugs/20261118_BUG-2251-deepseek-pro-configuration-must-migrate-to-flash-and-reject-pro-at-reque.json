@@ -1,0 +1,446 @@
+{
+  "actual": "Replace shared DeepSeek Pro defaults and active direct_exp_gen binding with deepseek-v4-flash. Guard explicit model overrides at request boundaries; preserve historical usage. Add exact shared-client ownership mapping before implementation. No service control or live model calls.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/services/quantevolver/llm_client.py",
+    "backend/services/rdagent_llm_config_client.py",
+    "backend/services/research_assistant/service.py",
+    "backend/routers/rdagent_llm_config_endpoints.py",
+    "backend/tests/infra/test_deepseek_config.py",
+    "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+    "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+    "backend/infra/deepseek_config.py",
+    "backend/infra/deepseek_client.py",
+    "deepseek_client.py",
+    "backend/routers/llm_config.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py",
+    "docs/operations/deepseek_flash_policy_runbook.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2251",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-18T07:27:11.345628Z",
+  "description": "Replace shared DeepSeek Pro defaults and active direct_exp_gen binding with deepseek-v4-flash. Guard explicit model overrides at request boundaries; preserve historical usage. Add exact shared-client ownership mapping before implementation. No service control or live model calls.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261118-0c41d95a9377",
+      "timestamp": "2026-11-18T07:27:11.345610Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "backend/infra/deepseek_client.py",
+      "backend/infra/deepseek_config.py",
+      "backend/routers/llm_config.py",
+      "backend/routers/rdagent_llm_config_endpoints.py",
+      "backend/services/quantevolver/llm_client.py",
+      "backend/services/rdagent_llm_config_client.py",
+      "backend/services/research_assistant/service.py",
+      "backend/tests/infra/test_deepseek_config.py",
+      "deepseek_client.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+      "docs/operations/deepseek_flash_policy_runbook.md"
+    ],
+    "added_files": [
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+      "docs/operations/deepseek_flash_policy_runbook.md"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "backend/infra/deepseek_client.py",
+      "backend/infra/deepseek_config.py",
+      "backend/routers/llm_config.py",
+      "backend/routers/rdagent_llm_config_endpoints.py",
+      "backend/services/quantevolver/llm_client.py",
+      "backend/services/rdagent_llm_config_client.py",
+      "backend/services/research_assistant/service.py",
+      "backend/tests/infra/test_deepseek_config.py",
+      "deepseek_client.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+      "docs/operations/deepseek_flash_policy_runbook.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/quantevolver/llm_client.py",
+        "backend/services/rdagent_llm_config_client.py",
+        "backend/services/research_assistant/service.py",
+        "backend/routers/rdagent_llm_config_endpoints.py",
+        "backend/tests/infra/test_deepseek_config.py",
+        "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "platform.api",
+        "platform.db",
+        "research_assistant",
+        "research_assistant.react_grounding",
+        "research_assistant.evidence_guard",
+        "research_assistant.generic_mcp_client",
+        "platform.config",
+        "platform.scheduler",
+        "platform.monitoring",
+        "qe.archive",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "validation.center"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/services/quantevolver/llm_client.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/rdagent_llm_config_client.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/research_assistant/service.py",
+          "impact_modules": [
+            "research_assistant.react_grounding",
+            "research_assistant.evidence_guard",
+            "research_assistant.generic_mcp_client"
+          ],
+          "primary_module": "research_assistant",
+          "risk_level": "high",
+          "rule_id": "research_assistant_runtime"
+        },
+        {
+          "file": "backend/routers/rdagent_llm_config_endpoints.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/infra/test_deepseek_config.py",
+          "impact_modules": [
+            "platform.scheduler",
+            "platform.monitoring"
+          ],
+          "primary_module": "platform.config",
+          "risk_level": "high",
+          "rule_id": "platform_remaining_tests"
+        },
+        {
+          "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/quantevolver/llm_client.py",
+        "backend/services/rdagent_llm_config_client.py",
+        "backend/services/research_assistant/service.py",
+        "backend/routers/rdagent_llm_config_endpoints.py",
+        "backend/tests/infra/test_deepseek_config.py",
+        "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/quantevolver/llm_client.py",
+      "backend/services/rdagent_llm_config_client.py",
+      "backend/services/research_assistant/service.py",
+      "backend/routers/rdagent_llm_config_endpoints.py",
+      "backend/tests/infra/test_deepseek_config.py",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/quantevolver/llm_client.py",
+      "backend/services/rdagent_llm_config_client.py",
+      "backend/services/research_assistant/service.py",
+      "backend/routers/rdagent_llm_config_endpoints.py",
+      "backend/tests/infra/test_deepseek_config.py",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql"
+    ]
+  },
+  "first_seen_at": "2026-11-18T07:27:11.345628Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7338,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7338",
+  "last_seen_at": "2026-11-18T07:27:11.345628Z",
+  "module": "platform",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "required",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_backend",
+    "platform_api_backend",
+    "research_assistant_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/llm/deepseek-policy",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/infra/test_deepseek_config.py -q -> passed; fresh isolated test process exercised shared resolver, SDK call overrides, QE numeric/legacy/default, RD-Agent payloads, assistant final wire and no-charge policy endpoint; real model calls=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/deepseek_flash_policy_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "platform"
+  ],
+  "title": "DeepSeek Pro configuration must migrate to Flash and reject Pro at request boundaries",
+  "trigger_condition": {
+    "fingerprint": "0c41d95a93774d32d6f01634",
+    "source_event_id": "FE-20261118-0c41d95a9377"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "platform",
+        "qe_read",
+        "platform_api",
+        "research_assistant"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "platform_api_backend",
+        "research_assistant_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "platform",
+          "qe_read",
+          "platform_api",
+          "research_assistant"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "platform_api_backend",
+          "research_assistant_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "database_config_migration": {
+    "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+    "dev_receipt": {
+      "bug_id": "BUG-2251",
+      "target": "aistock-pg-dev/aistock_dev",
+      "migration_sha256": "0f597991d2e4b797fe926b3a40cdfa69303f555b895974501ec386a82ff8f0a4",
+      "passed": true,
+      "transaction": "rolled_back",
+      "live_model_calls": 0,
+      "note": "Existing DEV database; original assistant-table DDL in rollback transaction; PostgreSQL sequence allocation is not rolled back."
+    },
+    "production_target": "timescaledb/aistock",
+    "production_status": "pending_merged_source",
+    "scope": "LLM current model bindings and selection; no business/usage-history writes",
+    "authorization": "User requested replacing all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; no service-control authorization."
+  },
+  "review_results": {
+    "executor": "active_agent",
+    "rounds": [
+      "Correctness: normalize Pro at final wire; preserve other vendors, prefixes and historical usage; verification refuses to certify Pro using Flash responses.",
+      "Completeness/regression: all currently found active Pro bindings included; real DEV migration and repeat-run checks rolled back; no services, real LLM requests or business data modified."
+    ],
+    "design_compliance": {
+      "partial_or_placeholder": false,
+      "silent_error_or_fake_success": false,
+      "unapproved_semantic_change": false,
+      "unapproved_gate_or_manual_control": false
+    },
+    "runtime_acceptance": "pending_user_restart"
+  }
+}

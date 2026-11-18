@@ -3557,6 +3557,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/llm/deepseek-policy$"),
+     "deepseek_flash_policy", _runtime_semantics._validate_deepseek_flash_policy),
     (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+/archive-status$"),
      "qe_multi_alpha_archive_status", _runtime_semantics._validate_qe_multi_alpha_archive_status),
     (re.compile(r"^/api/v1/advisory/workbench/programs/[^/]+/daily$"),

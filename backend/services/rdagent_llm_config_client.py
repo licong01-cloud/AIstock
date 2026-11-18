@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from backend.infra.deepseek_config import enforce_deepseek_model_policy
+
 # RD-Agent API configuration
 RDAGENT_API_BASE = "http://127.0.0.1:9000"
 RDAGENT_LLM_CONFIG_PREFIX = "/llm-config"
@@ -84,7 +86,7 @@ class RDAgentLLMConfigClient:
         for mapping in stage_mappings:
             api_mapping = {
                 "stage_name": mapping.get("stage_name"),
-                "model_id": mapping.get("model_id") or mapping.get("full_model_id"),
+                "model_id": enforce_deepseek_model_policy(mapping.get("model_id") or mapping.get("full_model_id") or ""),
             }
             if mapping.get("temperature") is not None:
                 api_mapping["temperature"] = mapping["temperature"]
@@ -117,7 +119,7 @@ class RDAgentLLMConfigClient:
         """Verify model API availability.
 
         Args:
-            model_id: Model identifier (e.g., "deepseek/deepseek-v4-pro")
+            model_id: Model identifier (e.g., "deepseek/deepseek-v4-flash")
             api_key: Optional API key to use for verification
             api_base: Optional API base URL
             custom_prompt: Optional custom verification prompt
@@ -133,7 +135,7 @@ class RDAgentLLMConfigClient:
         """
         url = f"{self.base_url}{RDAGENT_LLM_CONFIG_PREFIX}/verify-model"
 
-        payload: dict[str, Any] = {"model_id": model_id}
+        payload: dict[str, Any] = {"model_id": enforce_deepseek_model_policy(model_id)}
         if api_key:
             payload["api_key"] = api_key
         if api_base:

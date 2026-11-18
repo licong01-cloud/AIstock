@@ -8,6 +8,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.db.pg_pool import get_conn
+from backend.infra.deepseek_config import (
+    DEFAULT_DEEPSEEK_MODEL,
+    enforce_deepseek_model_policy,
+)
 from backend.services.llm_model_sync import (
     batch_import_models,
     fetch_provider_models,
@@ -15,6 +19,47 @@ from backend.services.llm_model_sync import (
 )
 
 router = APIRouter(prefix="/api/v1/llm", tags=["LLM配置管理"])
+
+
+@router.get("/deepseek-policy")
+def deepseek_policy_status() -> dict[str, Any]:
+    """Read-only policy/configuration smoke; no credentials or model requests."""
+    selections: list[str] = []
+    with get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT full_model_id FROM aistock_llm_models WHERE is_active = true
+                UNION ALL
+                SELECT proxy_model_alias FROM aistock_llm_models
+                    WHERE is_active = true AND proxy_model_alias IS NOT NULL
+                UNION ALL
+                SELECT model_name FROM assistant_model_profiles WHERE status = 'enabled'
+                UNION ALL
+                SELECT model_id FROM qe_agent_model_config
+                UNION ALL
+                SELECT m.full_model_id FROM aistock_llm_models m
+                    JOIN aistock_llm_stage_mappings s ON s.model_id = m.id WHERE s.is_active = true
+                UNION ALL
+                SELECT m.full_model_id FROM aistock_llm_models m
+                    JOIN aistock_llm_rdagent_stages s ON s.model_id = m.id WHERE s.is_active = true
+                UNION ALL
+                SELECT m.full_model_id FROM aistock_llm_models m
+                    JOIN aistock_llm_aistock_agents s ON s.model_id = m.id WHERE s.is_active = true
+                UNION ALL
+                SELECT m.full_model_id FROM aistock_llm_models m
+                    JOIN qe_agent_model_config q ON q.model_id = m.id::text
+            """)
+            selections = [str(row[0]) for row in cursor.fetchall()]
+    remaining = sum(enforce_deepseek_model_policy(value) != value.strip() for value in selections)
+    return {
+        "schema_version": "deepseek_flash_policy_v1",
+        "default_model": DEFAULT_DEEPSEEK_MODEL,
+        "pro_override_model": enforce_deepseek_model_policy("deepseek-v4-pro"),
+        "prefixed_pro_override_model": enforce_deepseek_model_policy("deepseek/deepseek-v4-pro"),
+        "remaining_pro_configurations": remaining,
+        "status": "ready" if remaining == 0 else "blocked",
+        "live_model_called": False,
+    }
 
 
 # ============================================

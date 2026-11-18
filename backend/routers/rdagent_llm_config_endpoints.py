@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..db.pg_pool import get_conn
+from backend.infra.deepseek_config import enforce_deepseek_model_policy
 
 router = APIRouter(prefix="/rdagent/llm-config", tags=["rdagent-llm-config-extended"])
 
@@ -117,7 +118,14 @@ async def comprehensive_model_verification(
     }
 
     # 确保 litellm 可识别的 model ID
-    verified_model_id = _ensure_litellm_prefix(full_model_id, litellm_prefix, provider_name)
+    requested_model_id = _ensure_litellm_prefix(full_model_id, litellm_prefix, provider_name)
+    verified_model_id = enforce_deepseek_model_policy(requested_model_id)
+    if verified_model_id != requested_model_id:
+        # Verification is about the selected catalog identity. A Flash response
+        # must never mark a different Pro catalog row as successfully verified.
+        results["errors"].append("DeepSeek Pro is disabled; select deepseek-v4-flash before verification")
+        results["effective_model_id"] = verified_model_id
+        return results
 
     # 1. LiteLLM验证
     if run_litellm_test:

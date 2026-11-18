@@ -3446,6 +3446,7 @@ def platform_api_backend(session: nox.Session) -> None:
         session,
         "backend/tests/platform_api",
         "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/infra/test_deepseek_config.py",
         "backend/tests/test_manual_factor_service_wsl_output.py",
         "-q",
         "-p",

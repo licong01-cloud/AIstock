@@ -2,7 +2,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from backend.db.pg_pool import get_conn
-from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_LITELLM_MODEL
+from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_LITELLM_MODEL, enforce_deepseek_model_policy
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +13,9 @@ def _find_provider_api_config(
     purposes = []
     if model_type in {"chat", "reasoner", "embedding"}:
         purposes.append(model_type)
-    for fallback in ("chat", "default"):
-        if fallback not in purposes:
-            purposes.append(fallback)
+    for credential_purpose in ("chat", "default"):
+        if credential_purpose not in purposes:
+            purposes.append(credential_purpose)
 
     for purpose in purposes:
         cursor.execute(
@@ -79,18 +79,18 @@ def get_llm_kwargs(agent_type: str, default_model: str = DEFAULT_DEEPSEEK_LITELL
                                     api_base = api_base or p_api.get("api_base")
                                     api_key = api_key or p_api.get("api_key")
 
-                        kwargs = {"model": full_model_id}
+                        kwargs = {"model": enforce_deepseek_model_policy(full_model_id)}
                         if api_base:
                             kwargs["api_base"] = api_base
                         if api_key:
                             kwargs["api_key"] = api_key
                         return kwargs
                 elif model_id_db and isinstance(model_id_db, str) and model_id_db.strip():
-                    # Fallback for old str format (e.g. direct full_model_id like "deepseek/deepseek-v4-pro")
-                    return {"model": model_id_db}
+                    # Fallback for old str format (e.g. direct full_model_id like "deepseek/deepseek-v4-flash")
+                    return {"model": enforce_deepseek_model_policy(model_id_db)}
 
     except Exception as e:
         raise RuntimeError(f"获取Agent '{agent_type}' 的LLM配置失败: {e}") from e
 
     # 未找到任何配置 → 使用默认模型
-    return {"model": default_model}
+    return {"model": enforce_deepseek_model_policy(default_model)}

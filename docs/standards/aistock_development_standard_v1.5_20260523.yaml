@@ -372,6 +372,8 @@ rules:
         - yarn.lock
         - tsconfig.json
         - noxfile.py
+        # Existing backend sector-strategy import; stable compatibility entrypoint.
+        - deepseek_client.py
     checker:
       type: path_regex
       patterns:

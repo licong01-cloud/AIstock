@@ -253,6 +253,11 @@ PROMPT_EVALUATION_FILES = {
     "scripts/llm_provider_adapter.py",
 }
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
+    "backend/infra/deepseek_config.py": ("platform_api_backend",),
+    "backend/infra/deepseek_client.py": ("platform_api_backend",),
+    "deepseek_client.py": ("platform_api_backend",),
+    "backend/tests/infra/test_deepseek_config.py": ("platform_api_backend",),
+
     "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
     "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
     "scripts/activate_canonical_pit_default.py": ("qlib_data_backend",),
