@@ -39,19 +39,32 @@
   "evidence_uris": [],
   "expected": "Batch all displayed page symbols once; scrolling/focus/timers issue no quote reads; pagination reuses scope-isolated cache; manual refresh refreshes current mounted page only, preserves old values on transient failure with visible stale status, rejects identity mismatch, and exposes acquisition time.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/components/advisory/LiveQuotes.tsx",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx",
+      "frontend/src/components/advisory/workbench/DailyList.tsx",
+      "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
+      "frontend/src/components/advisory/workbench/workbench.module.css",
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json"
+    ],
     "added_files": [
       "frontend/src/components/advisory/QuoteSnapshot.tsx"
     ],
     "changed_files": [
       "frontend/src/components/advisory/LiveQuotes.tsx",
-      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
-      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/QuoteSnapshot.tsx",
       "frontend/src/components/advisory/workbench/DailyList.tsx",
       "frontend/src/components/advisory/workbench/EpisodeTable.tsx",
+      "frontend/src/components/advisory/workbench/HistoricalLists.tsx",
+      "frontend/src/components/advisory/workbench/ProgramDetail.tsx",
       "frontend/src/components/advisory/workbench/workbench.module.css",
-      "frontend/tests/paper-v2/advisory-workbench.spec.ts"
+      "frontend/tests/paper-v2/advisory-workbench.spec.ts",
+      "tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/components/advisory/LiveQuotes.tsx",
@@ -189,10 +202,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
