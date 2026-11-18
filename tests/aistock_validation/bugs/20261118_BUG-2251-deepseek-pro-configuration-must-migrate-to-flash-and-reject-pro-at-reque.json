@@ -30,6 +30,22 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-18T07:27:11.345628Z",
+  "database_config_migration": {
+    "authorization": "User requested replacing all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; no service-control authorization.",
+    "dev_receipt": {
+      "bug_id": "BUG-2251",
+      "live_model_calls": 0,
+      "migration_sha256": "0f597991d2e4b797fe926b3a40cdfa69303f555b895974501ec386a82ff8f0a4",
+      "note": "Existing DEV database; original assistant-table DDL in rollback transaction; PostgreSQL sequence allocation is not rolled back.",
+      "passed": true,
+      "target": "aistock-pg-dev/aistock_dev",
+      "transaction": "rolled_back"
+    },
+    "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+    "production_status": "pending_merged_source",
+    "production_target": "timescaledb/aistock",
+    "scope": "LLM current model bindings and selection; no business/usage-history writes"
+  },
   "description": "Replace shared DeepSeek Pro defaults and active direct_exp_gen binding with deepseek-v4-flash. Guard explicit model overrides at request boundaries; preserve historical usage. Add exact shared-client ownership mapping before implementation. No service control or live model calls.",
   "events": [
     {
@@ -43,7 +59,7 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
       "backend/infra/deepseek_client.py",
       "backend/infra/deepseek_config.py",
       "backend/routers/llm_config.py",
@@ -53,21 +69,22 @@
       "backend/services/research_assistant/service.py",
       "backend/tests/infra/test_deepseek_config.py",
       "deepseek_client.py",
+      "docs/operations/deepseek_flash_policy_runbook.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
       "scripts/ci_change_classifier.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
-      "docs/operations/deepseek_flash_policy_runbook.md"
+      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
       "docs/operations/deepseek_flash_policy_runbook.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
       "backend/infra/deepseek_client.py",
       "backend/infra/deepseek_config.py",
       "backend/routers/llm_config.py",
@@ -77,15 +94,15 @@
       "backend/services/research_assistant/service.py",
       "backend/tests/infra/test_deepseek_config.py",
       "deepseek_client.py",
+      "docs/operations/deepseek_flash_policy_runbook.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
       "scripts/ci_change_classifier.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
-      "docs/operations/deepseek_flash_policy_runbook.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -236,8 +253,8 @@
   },
   "first_seen_at": "2026-11-18T07:27:11.345628Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+  "fixed_at": "2026-11-18T08:09:11Z",
   "github_issue_number": 7338,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7338",
   "last_seen_at": "2026-11-18T07:27:11.345628Z",
@@ -245,8 +262,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7340",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -258,6 +276,20 @@
     "research_assistant_backend",
     "validation_catalog_integrity"
   ],
+  "review_results": {
+    "design_compliance": {
+      "partial_or_placeholder": false,
+      "silent_error_or_fake_success": false,
+      "unapproved_gate_or_manual_control": false,
+      "unapproved_semantic_change": false
+    },
+    "executor": "active_agent",
+    "rounds": [
+      "Correctness: normalize Pro at final wire; preserve other vendors, prefixes and historical usage; verification refuses to certify Pro using Flash responses.",
+      "Completeness/regression: all currently found active Pro bindings included; real DEV migration and repeat-run checks rolled back; no services, real LLM requests or business data modified."
+    ],
+    "runtime_acceptance": "pending_user_restart"
+  },
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
@@ -273,6 +305,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -284,7 +317,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2251",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e93734ce62191c5b",
+    "recorded_at": "2026-11-18T08:10:06.749984Z",
+    "runtime_contract_digest": "d968655f45889bc6b1fdc1a324bd1b15d792a5438d30f39fa82ce007c22c8c13",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7b0076b417ff0e0a8265168b4ff8faa322522ef5",
+    "source_merge_commit": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7340",
+    "validation_evidence": [
+      "validation-receipt: id=3e5efe4efbc4f216 commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=d5481b37f7d8ca86 commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=b708117f4cb4c53e commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=427774b4e5442b2a commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/infra/test_deepseek_config.py -q` result=`passed`"
+    ],
+    "validation_evidence_digest": "f09532a6f36572b1a07c6c43ff658863ca3775c0a351e2f5bdf977b0a192bc13"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform"
   ],
@@ -293,6 +350,12 @@
     "fingerprint": "0c41d95a93774d32d6f01634",
     "source_event_id": "FE-20261118-0c41d95a9377"
   },
+  "validation_evidence": [
+    "validation-receipt: id=3e5efe4efbc4f216 commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=d5481b37f7d8ca86 commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=b708117f4cb4c53e commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=427774b4e5442b2a commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/infra/test_deepseek_config.py -q` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -412,35 +475,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "database_config_migration": {
-    "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
-    "dev_receipt": {
-      "bug_id": "BUG-2251",
-      "target": "aistock-pg-dev/aistock_dev",
-      "migration_sha256": "0f597991d2e4b797fe926b3a40cdfa69303f555b895974501ec386a82ff8f0a4",
-      "passed": true,
-      "transaction": "rolled_back",
-      "live_model_calls": 0,
-      "note": "Existing DEV database; original assistant-table DDL in rollback transaction; PostgreSQL sequence allocation is not rolled back."
-    },
-    "production_target": "timescaledb/aistock",
-    "production_status": "pending_merged_source",
-    "scope": "LLM current model bindings and selection; no business/usage-history writes",
-    "authorization": "User requested replacing all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; no service-control authorization."
-  },
-  "review_results": {
-    "executor": "active_agent",
-    "rounds": [
-      "Correctness: normalize Pro at final wire; preserve other vendors, prefixes and historical usage; verification refuses to certify Pro using Flash responses.",
-      "Completeness/regression: all currently found active Pro bindings included; real DEV migration and repeat-run checks rolled back; no services, real LLM requests or business data modified."
-    ],
-    "design_compliance": {
-      "partial_or_placeholder": false,
-      "silent_error_or_fake_success": false,
-      "unapproved_semantic_change": false,
-      "unapproved_gate_or_manual_control": false
-    },
-    "runtime_acceptance": "pending_user_restart"
   }
 }
