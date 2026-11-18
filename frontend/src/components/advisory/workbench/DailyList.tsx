@@ -4,6 +4,7 @@ import { path, programPath, type DailyItem, type DailyPage } from "@/lib/api/adv
 import { QuoteCell, RecommendationValue, TodayChange } from "../LiveQuotes";
 import { Badge, Empty, ErrorNotice, Metric, number, Pager, useRead } from "./shared";
 import type { ProgramSelection } from "@/lib/api/advisoryComparison";
+import MinuteStopAlerts from "./MinuteStopAlerts";
 import styles from "./workbench.module.css";
 
 type Props = { summary: ProgramSelection; refresh: number; onStock: (item: DailyItem) => void; onDate: (date: string) => void; versionId?: string };
@@ -28,12 +29,16 @@ export default function DailyList({ summary, refresh, onStock, onDate, versionId
   const [query, setQuery] = useState("");
   const result = useRead<DailyPage>(path(programPath(summary.program_id, versionId ? `/history/${encodeURIComponent(versionId)}` : "/daily"), { target_date: versionId ? undefined : summary.target_date, snapshot_id: versionId ? undefined : summary.snapshot_id, change, q: query, limit, offset: (page - 1) * limit }), refresh, summary.program_id);
   const counts = result.data?.summary;
-  const scopeLabel = !versionId && summary.target_date === summary.default_target_date ? "当日" : "所选日";
+  const scopeLabel = !versionId && summary.target_date === new Date(summary.generated_at).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" }) ? "当日" : "所选日";
   return <>
     <div className={styles.metrics}><Metric label={`${scopeLabel}荐股范围`} value={`${number(counts?.in_scope)} 只`} note={versionId ? "按此保存版本的进入合同，发布状态见上方" : "按已发布名单的进入合同"} /><Metric label="新加入" value={`${number(counts?.comparison_known ? counts.new : null)} 只`} note="相较上次名单新增" /><Metric label="继续推荐" value={`${number(counts?.comparison_known ? counts.continuing : null)} 只`} note="相较上次名单保留" /><Metric label={`${scopeLabel}移出`} value={`${number(counts?.comparison_known ? counts.removed : null)} 只`} note="退出确认另外跟踪" /></div>
     <ErrorNotice error={result.error} stale={!!result.data} />
     {result.loading && !result.data && <Empty>正在读取所选交易日名单…</Empty>}
     {result.data?.status === "NO_CURRENT_LIST" && <div className={styles.notice}>所选目标日 {summary.target_date} 尚无有效推荐名单。{summary.runtime.state === "ASSET_BLOCKED" ? "冻结资产绑定不完整，发布受阻。" : "请查看下方运行与数据状态。"}{summary.latest && <button onClick={() => onDate(summary.latest!.trade_date)}>查看最近有效名单（{summary.latest.trade_date}）</button>}</div>}
+    {!versionId && summary.target_date === new Date(summary.generated_at).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" }) && summary.selected?.list_version_id && (
+      <MinuteStopAlerts key={summary.selected.list_version_id} programId={summary.program_id}
+        targetDate={summary.target_date} listVersionId={summary.selected.list_version_id} />
+    )}
     {counts && <>
       <div className={styles.dailyGrid}><section className={styles.panel}><header className={styles.panelHeader}><h2>{scopeLabel}推荐名单</h2><Badge value="IN_SCOPE">范围内 · {counts.in_scope} 只</Badge></header>
         <div className={styles.toolbar}><div className={styles.filters}>{[["", "全部"], ["NEW", "新加入"], ["CONTINUING", "继续推荐"], ["UNKNOWN", "变化待核验"]].map(([key, label]) => <button key={key} aria-pressed={change === key} className={change === key ? styles.selected : ""} onClick={() => { setChange(key); setPage(1); }}>{label}</button>)}</div><input aria-label="搜索当日股票" placeholder="搜索股票" value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} /></div>

@@ -883,3 +883,56 @@ test("ten programs with five-year series stay bounded and interactive", async ({
   expect(report.curve_bytes).toBeLessThanOrEqual(300000);
   expect(report.max_points).toBeLessThanOrEqual(800);
 });
+
+test("盘中止损只在当日页开启，区分触发与可卖状态", async ({ page }) => {
+  await page.clock.install({ time: new Date(stamp) });
+  await setup(page, { seen: [] });
+  const calls: string[] = [];
+  let changed = false;
+  await page.route("**/advisory/workbench/programs/lstm/minute-stop-alerts?**", async route => {
+    const url = new URL(route.request().url());
+    calls.push(url.href);
+    expect(route.request().method()).toBe("GET");
+    expect(url.searchParams.get("target_date")).toBe(target);
+    expect(url.searchParams.get("list_version_id")).toBe(`lstm-${target}`);
+    if (changed) return json(route, { detail: { message: "荐股名单或跟踪状态已变化，请刷新资料。" } }, 409);
+    const alert = { status: "TRIGGERED", entry_price: 10, trigger_price: 9.2, triggered_at: stamp,
+      observed_through: stamp, observed_bars: 1, first_trigger_verified: true, coverage: "COMPLETE" };
+    return json(route, { ...envelope("lstm"), schema_version: "advisory_minute_stop_alerts_v1",
+      status: "READY", checked_at: stamp, stop_loss_bps: 800, eligible_count: 2, evaluated_count: 2,
+      items: [
+        { ...alert, alert_id: "inside", membership: "IN_SCOPE", stock_name: "已跟踪股票", symbol: "600101.SH",
+          sellability: "T1_RESTRICTED" },
+        { ...alert, alert_id: "outside", membership: "OUTSIDE_PENDING", stock_name: "等待复评股票", symbol: "600102.SH",
+          sellability: "UNVERIFIED" },
+      ],
+    });
+  });
+  await page.goto("/paper-v2/advisory?program_id=lstm");
+  const panel = main(page).getByRole("region", { name: "盘中止损提醒" });
+  const enable = panel.getByRole("button", { name: "开启本页提醒" });
+  await expect(enable).toBeVisible();
+  expect(calls).toHaveLength(0);
+  await enable.click();
+  const inScope = panel.getByRole("row").filter({ hasText: "已跟踪股票" });
+  const outside = panel.getByRole("row").filter({ hasText: "等待复评股票" });
+  await expect(inScope).toContainText("荐股范围内");
+  await expect(inScope).toContainText("已触发");
+  await expect(inScope).toContainText("T+1");
+  await expect(outside).toContainText("范围外待复评");
+  await expect(outside).toContainText("账户可卖数量待核验");
+  await page.clock.fastForward(60_001);
+  await expect.poll(() => calls.length).toBe(2);
+  await expect(outside).toContainText("已触发");
+  changed = true;
+  await panel.getByRole("button", { name: "刷新提醒", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("请刷新资料");
+  await expect(panel.getByText("已触发")).toHaveCount(0);
+  await panel.getByRole("button", { name: "暂停本页提醒" }).click();
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await page.clock.fastForward(60_001);
+  await main(page).getByRole("button", { name: "历史名单", exact: true }).click();
+  await main(page).getByRole("button", { name: `查看${target}名单版本lstm-history-0`, exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  expect(calls).toHaveLength(3);
+});
