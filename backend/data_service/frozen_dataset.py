@@ -244,6 +244,36 @@ def freeze_dataset_binding(profile_path: Path | str | None = None) -> dict[str, 
     return {**body, "binding_hash": digest(body)}
 
 
+def extend_static_projection_binding(binding: dict[str, Any], *, root_override: str | Path | None = None) -> dict[str, Any]:
+    """Bind the producer's existing projection without re-resolving active data.
+
+    The original binding, profile, H5 pins and bin lease remain unchanged. Old
+    bindings keep their existing contract; this returns a distinct input digest.
+    """
+    body = deepcopy({k: v for k, v in binding.items() if k != "binding_hash"})
+    if body.get("schema_version") != SCHEMA or digest(body) != binding.get("binding_hash"):
+        raise FrozenDatasetError("frozen file binding digest mismatch")
+    root = Path(root_override or body["profile"]["controller_paths"]["candidate_root"]).resolve(strict=True)
+    manifest_pin = body["files"]["manifest"]
+    content_pin(root, manifest_pin["path"], expected=manifest_pin["sha256"])
+    manifest = json.loads(inside(root, manifest_pin["path"]).read_text(encoding="utf-8-sig"))
+    relative = (Path(body["files"]["factor_meta"]["path"]).parent / "static_factors.parquet").as_posix()
+    matches = [v for v in manifest.get("components", {}).values()
+               if isinstance(v, dict) and v.get("path") == relative]
+    hashes = {v.get("sha256") for v in matches}
+    if len(hashes) != 1:
+        raise FrozenDatasetError("static projection producer pin is absent or conflicting")
+    expected = next(iter(hashes))
+    if not isinstance(expected, str) or len(expected) != 64:
+        raise FrozenDatasetError("static projection producer pin is invalid")
+    pin = content_pin(root, relative, expected=expected)
+    old = body["files"].get("static_factors")
+    if old is not None and old != pin:
+        raise FrozenDatasetError("static projection differs from the existing frozen pin")
+    body["files"]["static_factors"] = pin
+    return {**body, "binding_hash": digest(body)}
+
+
 class FrozenDataset:
     """One consumer/run's file validation and bounded raw-read cache."""
 
@@ -288,6 +318,7 @@ class FrozenDataset:
         if self.factor_meta.get("schema_version") != "qe_direct_factor_h5_static_v2":
             raise FrozenDatasetError("unsupported factor file schema")
         self._minute_calendar: pd.DatetimeIndex | None = None
+        self._day_model_pins: dict[str, dict] | None = None
 
     def file(self, key: str) -> Path:
         pin = self.binding["files"].get(key)
@@ -339,6 +370,114 @@ class FrozenDataset:
         self.read_receipts.append({"component": name, "start": str(start), "end": str(end), "row_count": len(frame),
                                    "file_sha256": self.binding["files"][name]["sha256"]})
         return frame
+
+    def static_factors(self, members: list[str], start: date, end: date) -> pd.DataFrame:
+        """Read the exact frozen projection, including its original NA/schema."""
+        if start < date.fromisoformat(self.factor_meta["start"]) or end > date.fromisoformat(self.factor_meta["end"]):
+            raise FrozenDatasetError("static projection request exceeds frozen coverage")
+        path = self.file("static_factors")
+        frame = pd.read_parquet(path, filters=[("datetime", ">=", pd.Timestamp(start)),
+                                              ("datetime", "<=", pd.Timestamp(end)),
+                                              ("instrument", "in", list(members))])
+        if not isinstance(frame.index, pd.MultiIndex) or set(frame.index.names) != {"datetime", "instrument"}:
+            raise FrozenDatasetError("invalid frozen static projection index")
+        frame = frame.reorder_levels(["datetime", "instrument"]).sort_index()
+        if frame.index.has_duplicates:
+            raise FrozenDatasetError("duplicate stock/date keys in static projection")
+        self.assert_unchanged()
+        self.read_receipts.append({"component": "static_factors", "start": str(start), "end": str(end),
+                                   "row_count": len(frame), "file_sha256": self.binding["files"]["static_factors"]["sha256"]})
+        return frame
+
+    def daily_model_history(self, members: list[str], start: date, end: date) -> pd.DataFrame:
+        """Read original Qlib OHLCV bytes, independently of the factor H5 view."""
+        self.require_day(start)
+        self.require_day(end)
+        if start > end:
+            raise FrozenDatasetError("invalid model price window")
+        fields = ("open", "high", "low", "close", "volume")
+        prefix = (self.file("day_meta_export").parent.relative_to(self.root) / "features").as_posix() + "/"
+        if self._day_model_pins is None:
+            manifest = json.loads(self.file("manifest").read_text(encoding="utf-8-sig"))
+            pins = {}
+            for entry in manifest.get("components", {}).values():
+                if not isinstance(entry, dict):
+                    continue
+                relative = entry.get("path", "")
+                if (not isinstance(relative, str) or not relative.startswith(prefix)
+                        or Path(relative).name not in {field + ".day.bin" for field in fields}):
+                    continue
+                if relative in pins and pins[relative] != entry:
+                    raise FrozenDatasetError("conflicting daily model producer pins", component=relative)
+                pins[relative] = entry
+            self._day_model_pins = pins
+        first, last = self._day_positions[start], self._day_positions[end]
+        dates = pd.DatetimeIndex(self.calendar[first:last + 1])
+        frames, observed = [], []
+        for symbol in sorted(set(members)):
+            self._symbol(symbol)
+            directory = (self.root / prefix / symbol.lower()).resolve(strict=True)
+            if not directory.is_relative_to(self.root) or not directory.is_dir():
+                raise FrozenDatasetError("daily model directory escapes frozen root")
+            columns = {}
+            for field in fields:
+                relative = prefix + symbol.lower() + "/" + field + ".day.bin"
+                pin = self._day_model_pins.get(relative)
+                if pin is None:
+                    raise FrozenDatasetError("daily model producer pin missing", component=relative)
+                path = directory / (field + ".day.bin")
+                if path.is_symlink():
+                    path = inside(self.root, relative)
+                before = stamp(path)
+                payload = path.read_bytes()
+                if (hashlib.sha256(payload).hexdigest() != pin.get("sha256")
+                        or before != stamp(path)):
+                    raise FrozenDatasetError("daily model content hash differs", component=relative)
+                if path in self._verified and self._verified[path] != before:
+                    raise FrozenDatasetError("daily model file changed after validation", component=relative)
+                if len(payload) < 4 or len(payload) % 4:
+                    raise FrozenDatasetError("truncated daily model bin", component=relative)
+                raw = np.frombuffer(payload, dtype="<f4")
+                header = float(raw[0])
+                if not math.isfinite(header) or header < 0 or header != int(header) or int(header) + len(raw) - 1 > len(self.calendar):
+                    raise FrozenDatasetError("invalid daily model calendar offset", component=relative)
+                offset = int(header)
+                values = np.full(len(dates), np.nan, dtype="float32")
+                low, high = max(first, offset), min(last + 1, offset + len(raw) - 1)
+                if low < high:
+                    values[low - first:high - first] = raw[1 + low - offset:1 + high - offset]
+                columns[field] = values
+                self._verified[path] = before
+                self.bytes_read += len(payload)
+                observed.append((relative, pin["sha256"]))
+            index = pd.MultiIndex.from_product([dates, [symbol]], names=["datetime", "instrument"])
+            frames.append(pd.DataFrame(columns, index=index))
+        frame = pd.concat(frames).sort_index() if frames else pd.DataFrame(
+            columns=fields, index=pd.MultiIndex.from_arrays([pd.DatetimeIndex([]), []], names=["datetime", "instrument"]))
+        self.assert_unchanged()
+        self.read_receipts.append({"component": "day_model_bins", "start": str(start), "end": str(end),
+                                   "row_count": len(frame), "producer_manifest_sha256": self.binding["files"]["manifest"]["sha256"],
+                                   "file_pins_sha256": digest(observed), "verified_file_count": len(observed)})
+        return frame
+
+    def filter_model_history(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Apply original per-date instrument spans before fitted processors."""
+        dates = frame.index.get_level_values("datetime").to_numpy()
+        groups = frame.groupby(level="instrument", sort=False).indices
+        keep = np.zeros(len(frame), dtype=bool)
+        for symbol, first, last in self._pool:
+            positions = groups.get(symbol.upper())
+            if positions is not None:
+                selected_dates = dates[positions]
+                keep[positions] |= ((selected_dates >= np.datetime64(first))
+                                    & (selected_dates <= np.datetime64(last)))
+        result = frame.loc[keep].copy()
+        self.assert_unchanged()
+        self.read_receipts.append({"component": "day_selection_universe", "read_purpose": "original_model_history",
+                                   "input_rows": len(frame), "row_count": len(result),
+                                   "mask_sha256": hashlib.sha256(keep.tobytes()).hexdigest(),
+                                   "file_sha256": self.binding["files"]["day_selection_universe"]["sha256"]})
+        return result
 
     def suspension_rows(self, symbols: list[str], start: date, end: date):
         if start > end or start < self.calendar[0] or end > self.calendar[-1]:

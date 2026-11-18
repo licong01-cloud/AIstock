@@ -49,6 +49,9 @@ def project_original_inputs(manifest):
                      "model_factor_names": retained_names,
                      "raw_factor_assets": [f.model_dump(mode="json") for f in factors],
                      "weights_or_processors_changed": False, "exclusion_inferred_from_missing_columns": False}
+    panel = (evidence.get("custom_params") or {}).get("observation_panel")
+    if panel is not None:
+        evidence[KEY]["observation_panel"] = dict(panel)
     return freeze_manifest(manifest.model_copy(update={
         "factor_set": retained, "alpha_components": components, "source_evidence": evidence,
         "manifest_sha256": None,

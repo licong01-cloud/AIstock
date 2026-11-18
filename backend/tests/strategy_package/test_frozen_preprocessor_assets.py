@@ -92,6 +92,33 @@ def test_legacy_manifest_hash_remains_unchanged_without_processor_asset():
     assert freeze_manifest(manifest).manifest_sha256 == compute_manifest_json_sha256(old)
 
 
+def test_reference_asset_is_materialized_without_becoming_a_model_feature(tmp_path):
+    import ast
+    import json
+    store, result = freeze(tmp_path)
+    manifest = result.manifest
+    panel = {"schema_version": "qe_observation_panel_v2", "panel_id": "frozen-test",
+             "mode": "reference_factor_intersection", "reference_factor_names": ["factor_b"]}
+    resolver = QEExperimentRuntimeAssetResolver(asset_store=store, cache_root=tmp_path / "cache")
+    source = resolver.load_source_for_strategy_package_leg(
+        manifest=manifest, package_id=manifest.package_id, leg_id="one",
+        model_asset=manifest.model_asset, factor_set=manifest.factor_set[:1], runtime_assets=manifest.runtime_assets,
+        observation_panel=panel, reference_factor_set=manifest.factor_set[1:],
+    )
+    assert source.factor_names == ["factor_a"]
+    assert (source.asset_workspace_path / "factors/factor_b.py").read_bytes() == b"VALUE = 1\n"
+    prepared = resolver.prepare_workspace(package_id=manifest.package_id, manifest_sha256=manifest.manifest_sha256,
+        source=source, verify_model_code_contract=False)
+    assert prepared.dynamic_factors == ["factor_a"]
+    assert json.loads(prepared.manifest_path.read_text(encoding="utf-8"))["observation_panel"] == panel
+    nodes = ast.parse(prepared.factor_entry_path.read_text(encoding="utf-8")).body
+    files = next(ast.literal_eval(node.value) for node in nodes if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == "_FACTOR_FILES" for target in node.targets))
+    assert set(files) == {"factor_a", "factor_b"}
+    assert prepared.model_params_path.read_bytes() == b"weights"
+    assert prepared.dataset_processor_path.read_bytes() == DATASET
+
+
 def test_parent_refreeze_keeps_fitted_processor_module_without_original_workspace(tmp_path, monkeypatch):
     from backend.services.strategy_package.models import ModelCodeAsset
     from backend.services.strategy_package import package_asset_freeze as module
@@ -251,3 +278,94 @@ def test_recorder_pairing_never_uses_another_models_dataset(case, expected):
         with pytest.raises((DataUnavailableError, ArtifactGenerationFailedError)) as caught:
             _fitted_dataset_from_mlruns_archive(_archive(rows), **args)
         assert caught.value.context["reason_code"] == expected
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_frozen_observation_mask_uses_raw_reference_before_fillna(grouped):
+    from backend import inference_engine
+    import numpy as np
+    frame = pd.DataFrame({"factor_a": [1., 2., 3.], "reference": [1., np.nan, np.inf]})
+    if grouped:
+        frame.columns = pd.MultiIndex.from_product([["feature"], frame.columns])
+    contract = {"schema_version": "qe_observation_panel_v2", "panel_id": "original",
+                "mode": "reference_factor_intersection", "reference_factor_names": ["reference"]}
+    actual, receipt = inference_engine._apply_frozen_observation_panel(frame, contract)
+    assert actual.index.tolist() == [frame.index[0], frame.index[2]]
+    # The original prepare_factors contract uses notna(), not a new finite gate.
+    assert receipt["kept_rows"] == 2 and receipt["dropped_rows"] == 1
+    assert receipt["stage"] == "raw_factors_before_infer_processors"
+    assert len(receipt["mask_sha256"]) == 64
+    assert frame.shape[0] == 3 and frame.isna().any().any()
+
+
+def test_unversioned_observation_contract_does_not_infer_a_filter():
+    from backend import inference_engine
+    frame = pd.DataFrame({"factor_a": [1., 2., 3.]})
+    actual, receipt = inference_engine._apply_frozen_observation_panel(frame, None)
+    assert actual is frame and receipt is None
+
+
+@pytest.mark.parametrize("source", ["declared_projection", "legacy_files", "database", "legacy"])
+def test_frozen_projection_is_not_overwritten_by_live_precomputation(monkeypatch, source):
+    from types import SimpleNamespace
+    from backend import inference_engine
+    import numpy as np
+
+    frame = pd.DataFrame({"db_derived": [7., np.nan]})
+    original = frame.copy(deep=True)
+    history = pd.DataFrame({"close": [1., 2.]})
+    calls = []
+
+    def calculate(actual, prices):
+        assert actual is frame and prices is history
+        calls.append(True)
+        return actual.assign(db_derived=99.)
+
+    monkeypatch.setattr(inference_engine, "compute_precomputed_factors", calculate)
+    session = None
+    if source in {"declared_projection", "legacy_files"}:
+        files = {"static_factors": {"sha256": "producer-pin"}} if source == "declared_projection" else {}
+        session = SimpleNamespace(file_dataset=SimpleNamespace(binding={"files": files}))
+    elif source == "database":
+        session = SimpleNamespace(file_dataset=None)
+    actual = inference_engine._prepare_inference_precomputed_factors(frame, history, input_session=session)
+    pd.testing.assert_frame_equal(frame, original)
+    if source == "declared_projection":
+        assert actual is frame and calls == []
+        assert pd.isna(actual.loc[1, "db_derived"])
+    else:
+        assert calls == [True] and (actual.db_derived == 99.).all()
+
+
+def test_native_pytorch_uses_saved_inference_batch_size_and_original_order(monkeypatch):
+    from types import SimpleNamespace
+    from backend import inference_engine
+    import numpy as np
+    torch = pytest.importorskip("torch")
+
+    class Network(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.batch_lengths = []
+
+        def forward(self, values):
+            self.batch_lengths.append(len(values))
+            return values.sum(dim=(1, 2))
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    network = Network()
+    source = np.arange(30, dtype=np.float32).reshape(5, 3, 2)
+    frame = pd.DataFrame(source[:, -1, :])
+    actual = inference_engine.predict_scores(SimpleNamespace(batch_size=2, device="cpu"), network,
+                                             "pytorch", frame, sequence_data=source)
+    assert network.batch_lengths == [2, 2, 1]
+    np.testing.assert_array_equal(actual, source.sum(axis=(1, 2)))
+
+
+@pytest.mark.parametrize("names", [["missing"], ["factor_a", "factor_a"], [], [None]])
+def test_declared_observation_contract_never_uses_a_default_reference(names):
+    from backend import inference_engine
+    contract = {"schema_version": "qe_observation_panel_v1", "mode": "reference_factor_intersection",
+                "reference_factor_names": names}
+    with pytest.raises(ValueError, match="observation panel"):
+        inference_engine._apply_frozen_observation_panel(pd.DataFrame({"factor_a": [1., 2., 3.]}), contract)
