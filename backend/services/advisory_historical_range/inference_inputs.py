@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from functools import update_wrapper
+from functools import partial, update_wrapper
 import hashlib
 import json
 from threading import RLock
@@ -78,7 +78,12 @@ class InferenceInputSession:
         self._lock = RLock()
         self.retained_bytes = self.reads = self.hits = self.append_reads = self.rows_read = 0
         self.price_reader: Callable | None = None
+        self.model_price_reader: Callable | None = None
+        self.model_alpha_reader: Callable | None = None
+        self.model_history_filter: Callable | None = None
         self.static_builder: Callable | None = None
+        self.model_static_builder: Callable | None = None
+        self.model_universe_reader: Callable | None = None
         self.file_dataset = None
         self.universe_reader: Callable | None = None
         self.capture_factory = None
@@ -347,6 +352,10 @@ def database_input_session(*, consumer_scope: str, run_id: str, source_identity:
         readers[name] = read
     readers["load_daily_pv"] = lambda members, start, end: price_view(members, start, end, qlib_adjusted=True)
     session.price_reader = price_view
+    # Native inference previously calls get_history_window(adj="front"). Keep
+    # the raw view for static orchestration, and give the model that same qfq
+    # view explicitly; it must not see corporate actions as price movements.
+    session.model_price_reader = partial(price_view, qlib_adjusted=True)
     session.static_builder = bind_readers(static.build_static_factors, readers)
     return session
 
@@ -356,13 +365,28 @@ def file_input_session(*, consumer_scope: str, run_id: str, binding: dict[str, A
     """Same feature builder and independent cache, backed by immutable files."""
     from backend.data_service import api, qe_data_service as static
     from backend.data_service.adj_factor_provider import AdjFactorProvider
-    from backend.data_service.frozen_dataset import FrozenDataset
+    from backend.data_service.frozen_dataset import FrozenDataset, read_h5_window
 
     dataset = FrozenDataset(binding, consumer_scope=consumer_scope, run_id=run_id, root_override=root_override)
     session = InferenceInputSession(consumer_scope=consumer_scope, run_id=run_id,
                                     source_identity=dataset.identity, max_bytes=max_bytes)
     session.file_dataset = dataset
     session.universe_reader = lambda members_day, key: dataset.members(members_day, universe_key=key)
+
+    def computation_members(start: date, end: date) -> list[str]:
+        # Original QE factor preparation computes on the frozen H5 domain,
+        # before the PIT selection pool is applied by the model loader.
+        dataset.require_day(start)
+        dataset.require_day(end)
+        dataset.assert_unchanged()
+        frame = read_h5_window(dataset.file("daily_pv"), start=start, end=end, columns=["close"])
+        dataset.assert_unchanged()
+        dataset.read_receipts.append({"component": "daily_pv", "start": str(start), "end": str(end),
+                                      "row_count": len(frame), "file_sha256": dataset.binding["files"]["daily_pv"]["sha256"],
+                                      "read_purpose": "factor_computation_domain_only"})
+        return sorted(set(frame.index.get_level_values("instrument")))
+
+    session.model_universe_reader = computation_members
 
     def pv(members, start, end):
         frame = session.read(dataset="files.daily_pv", members=members, start=start, end=end,
@@ -411,5 +435,21 @@ def file_input_session(*, consumer_scope: str, run_id: str, binding: dict[str, A
         readers["load_" + name] = read
     readers["load_daily_pv"] = lambda members, start, end: price_view(members, start, end, qlib_adjusted=True)
     session.price_reader = price_view
+    # The trained frozen-file model uses the release's stored Qlib price basis.
+    # Reconstructing raw prices and rebasing them again changes both rounding
+    # and the model inputs. The separate execution/raw view remains causal.
+    session.model_price_reader = pv
     session.static_builder = bind_readers(static.build_static_factors, readers)
+    # These are already frozen model inputs. Live as-of filling would revive
+    # unavailable chip/fundamental values and change the original reference mask.
+    if "static_factors" in dataset.binding["files"]:
+        # Original QE preparation reads this producer-frozen projection. Do not
+        # rebuild its derived values or row domain from the individual tables.
+        session.model_static_builder = dataset.static_factors
+        session.model_alpha_reader = dataset.daily_model_history
+        session.model_history_filter = dataset.filter_model_history
+    else:
+        # Explicit legacy H5-only bindings remain supported, with no new pin
+        # inferred or claimed. A declared projection never falls back here.
+        session.model_static_builder = partial(session.static_builder, asof_fill_slow_static=False)
     return session

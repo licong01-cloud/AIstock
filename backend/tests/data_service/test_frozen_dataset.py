@@ -82,6 +82,117 @@ def make_dataset(root):
     return profile
 
 
+def add_static_projection(root, frame):
+    """Publish a real tiny projection through the fixture's existing manifest."""
+    target = root / "factors/static_factors.parquet"
+    frame.to_parquet(target)
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["components"]["static_factors"] = {"path": "factors/static_factors.parquet",
+        "sha256": hashlib.sha256(target.read_bytes()).hexdigest(), "size": target.stat().st_size}
+    manifest_path.write_text(json.dumps(manifest))
+    profile_path = root / "active.json"
+    profile = json.loads(profile_path.read_bytes())
+    profile["components"]["dataset_manifest_file_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    profile_path.write_text(json.dumps(profile))
+    return profile_path
+
+
+def test_static_projection_extension_preserves_original_binding_and_exact_na(tmp_path):
+    from copy import deepcopy
+    from backend.data_service.frozen_dataset import extend_static_projection_binding
+    make_dataset(tmp_path)
+    index = pd.MultiIndex.from_product([pd.to_datetime(DAYS), [SYMBOL]], names=["datetime", "instrument"])
+    expected = pd.DataFrame({"original_derived": [0.5, np.nan, 1.25]}, index=index)
+    profile = add_static_projection(tmp_path, expected)
+    old = freeze_dataset_binding(profile)
+    before = deepcopy(old)
+    bound = extend_static_projection_binding(old)
+    assert old == before and bound["binding_hash"] != old["binding_hash"]
+    assert bound["profile"] == old["profile"] and bound["bin_stat_lease"] == old["bin_stat_lease"]
+    assert set(bound["files"]) - set(old["files"]) == {"static_factors"}
+    assert all(bound["files"][k] == v for k, v in old["files"].items())
+    dataset = FrozenDataset(bound, consumer_scope="ADVISORY", run_id="original-static")
+    pd.testing.assert_frame_equal(dataset.static_factors([SYMBOL], DAYS[0], DAYS[2]), expected)
+    assert dataset.read_receipts[-1]["component"] == "static_factors"
+
+
+def test_static_projection_extension_never_invents_a_producer_pin(tmp_path):
+    from backend.data_service.frozen_dataset import extend_static_projection_binding
+    old = freeze_dataset_binding(make_dataset(tmp_path))
+    with pytest.raises(FrozenDatasetError, match="producer pin"):
+        extend_static_projection_binding(old)
+
+
+def test_declared_static_projection_cannot_fall_back_after_content_changes(tmp_path):
+    from backend.data_service.frozen_dataset import extend_static_projection_binding
+    make_dataset(tmp_path)
+    index = pd.MultiIndex.from_product([pd.to_datetime(DAYS), [SYMBOL]], names=["datetime", "instrument"])
+    profile = add_static_projection(tmp_path, pd.DataFrame({"raw": 1.}, index=index))
+    bound = extend_static_projection_binding(freeze_dataset_binding(profile))
+    (tmp_path / "factors/static_factors.parquet").write_bytes(b"changed projection")
+    with pytest.raises(FrozenDatasetError, match="content hash"):
+        FrozenDataset(bound, consumer_scope="ADVISORY", run_id="changed").static_factors([SYMBOL], DAYS[0], DAYS[2])
+
+
+def add_daily_model_pins(root, *, omit_volume=False):
+    profile_path = make_dataset(root)
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    for field in ("open", "high", "low", "close", "volume"):
+        relative = f"day/features/{SYMBOL.lower()}/{field}.day.bin"
+        path = root / relative
+        # Deliberately different from H5, and a genuine missing bin value.
+        np.array([0, 10., np.nan if field == "volume" else 20., 999.], dtype="<f4").tofile(path)
+        if not (omit_volume and field == "volume"):
+            manifest["components"][relative] = {"path": relative,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    manifest_path.write_text(json.dumps(manifest))
+    profile = json.loads(profile_path.read_bytes())
+    profile["components"]["dataset_manifest_file_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    profile_path.write_text(json.dumps(profile))
+    return profile_path
+
+
+def test_daily_model_history_uses_producer_bins_and_preserves_na_and_cutoff(tmp_path):
+    dataset = FrozenDataset(freeze_dataset_binding(add_daily_model_pins(tmp_path)),
+                            consumer_scope="ADVISORY", run_id="model-prices")
+    actual = dataset.daily_model_history([SYMBOL], DAYS[0], DAYS[1])
+    assert actual.index.tolist() == [(pd.Timestamp(d), SYMBOL) for d in DAYS[:2]]
+    assert actual.close.tolist() == [10., 20.]
+    assert pd.isna(actual.volume.iloc[-1])
+    assert (actual.close < 999.).all()
+    assert dataset.read_receipts[-1]["verified_file_count"] == 5
+    assert dataset.read_receipts[-1]["component"] == "day_model_bins"
+    path = tmp_path / f"day/features/{SYMBOL.lower()}/volume.day.bin"
+    np.array([0, 9., 8., 7.], dtype="<f4").tofile(path)
+    with pytest.raises(FrozenDatasetError, match="content hash"):
+        dataset.daily_model_history([SYMBOL], DAYS[0], DAYS[1])
+
+
+def test_daily_model_history_never_falls_back_to_h5_without_producer_pin(tmp_path):
+    dataset = FrozenDataset(freeze_dataset_binding(add_daily_model_pins(tmp_path, omit_volume=True)),
+                            consumer_scope="ADVISORY", run_id="model-missing")
+    with pytest.raises(FrozenDatasetError, match="producer pin missing"):
+        dataset.daily_model_history([SYMBOL], DAYS[0], DAYS[1])
+
+
+def test_model_history_obeys_each_days_original_pit_spans_before_sequence(tmp_path):
+    dataset = FrozenDataset(freeze_dataset_binding(make_dataset(tmp_path)),
+                            consumer_scope="ADVISORY", run_id="historical-membership")
+    dataset._pool = ((SYMBOL, str(DAYS[1]), str(DAYS[2])),
+                     (HALT, str(DAYS[0]), str(DAYS[0])), (HALT, str(DAYS[2]), str(DAYS[2])))
+    index = pd.MultiIndex.from_product([pd.to_datetime(DAYS), [SYMBOL, HALT]], names=["datetime", "instrument"])
+    frame = pd.DataFrame({"raw": [1., 2., 3., np.nan, 5., 6.]}, index=index)
+    before = frame.copy(deep=True)
+    actual = dataset.filter_model_history(frame)
+    assert actual.index.tolist() == [(pd.Timestamp(DAYS[0]), HALT), (pd.Timestamp(DAYS[1]), SYMBOL),
+                                     (pd.Timestamp(DAYS[2]), SYMBOL), (pd.Timestamp(DAYS[2]), HALT)]
+    assert actual.raw.tolist() == [2., 3., 5., 6.]
+    pd.testing.assert_frame_equal(frame, before)
+    assert dataset.read_receipts[-1]["read_purpose"] == "original_model_history"
+
+
 def make_monthly_dataset(root):
     """Tiny real files in the monthly v4 producer's path-indexed layout."""
     profile_path = make_dataset(root)

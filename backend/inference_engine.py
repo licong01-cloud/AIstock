@@ -100,6 +100,17 @@ def _strict_inference_enabled() -> bool:
     return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _prepare_inference_precomputed_factors(frame, history, *, input_session=None):
+    """Preserve declared frozen model inputs; calculate only non-frozen views."""
+    dataset = getattr(input_session, "file_dataset", None)
+    if dataset is not None and "static_factors" in dataset.binding["files"]:
+        # QE training consumed the producer's projection, including derived
+        # fields and NA. Recomputing them on a shorter inference window changes
+        # the frozen input even when the underlying H5 files are unchanged.
+        return frame
+    return compute_precomputed_factors(frame, history)
+
+
 def _load_admitted_strategy_package_pickle(path: Path) -> Any:
     """Load an asset whose integrity was established during package admission.
 
@@ -506,20 +517,26 @@ def predict_scores(
                     raise ValueError("frozen QE sequence input does not match the scored feature schema")
                 if not np.isfinite(x_values).all():
                     raise ValueError("frozen QE sequence input contains non-finite values")
-            x_tensor = torch.tensor(x_values, dtype=torch.float32)
-
             model_type_name = type(inner_model).__name__
             is_seq = any(kw in model_type_name for kw in ["GRU", "LSTM", "RNN", "Sequence", "Recurrent"])
-            if is_seq and sequence_data is None:
-                x_tensor = x_tensor.unsqueeze(1)
-
-            if torch.cuda.is_available():
-                x_tensor = x_tensor.cuda()
-            elif hasattr(model, "device"):
-                x_tensor = x_tensor.to(model.device)
-
-            output = inner_model(x_tensor)
-            scores = output.cpu().numpy()
+            # GeneralPTNN.predict uses its persisted batch size. Preserve that
+            # inference contract rather than changing the reduction kernels by
+            # sending the complete stock population in one new batch.
+            batch_size = getattr(model, "batch_size", None)
+            if batch_size is not None and (not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0):
+                raise ValueError("saved pytorch inference batch size is invalid")
+            batch_size = batch_size or max(1, len(X))
+            batches = []
+            for first in range(0, len(X), batch_size):
+                x_tensor = torch.tensor(x_values[first:first + batch_size], dtype=torch.float32)
+                if is_seq and sequence_data is None:
+                    x_tensor = x_tensor.unsqueeze(1)
+                if torch.cuda.is_available():
+                    x_tensor = x_tensor.cuda()
+                elif hasattr(model, "device"):
+                    x_tensor = x_tensor.to(model.device)
+                batches.append(inner_model(x_tensor).cpu().numpy())
+            scores = np.concatenate(batches) if batches else np.empty(0, dtype=np.float32)
 
             if len(scores.shape) == 3:
                 scores = scores[:, -1, :]
@@ -597,6 +614,29 @@ def _apply_saved_qe_infer_processors(
         [type(processor).__name__ for processor in processors],
     )
     return processed
+
+
+def _apply_frozen_observation_panel(features: pd.DataFrame, contract: dict | None) -> tuple[pd.DataFrame, dict | None]:
+    """Apply the original raw reference mask before fitted transforms/Fillna."""
+    if contract is None:
+        return features, None
+    if not isinstance(contract, dict):
+        raise ValueError("frozen observation panel contract is invalid")
+    names = contract.get("reference_factor_names")
+    if (contract.get("mode") != "reference_factor_intersection"
+            or contract.get("schema_version") not in {"qe_observation_panel_v1", "qe_observation_panel_v2"}
+            or not isinstance(names, list) or not names
+            or any(not isinstance(name, str) or not name.strip() for name in names)
+            or len(names) != len(set(names))):
+        raise ValueError("frozen observation panel contract is invalid")
+    columns = [("feature", name) for name in names] if isinstance(features.columns, pd.MultiIndex) else names
+    if any(column not in features.columns for column in columns):
+        raise ValueError("frozen observation panel reference factors are missing")
+    keep = features.loc[:, columns].notna().all(axis=1)
+    result = features.loc[keep].copy()
+    return result, {"contract": contract, "input_rows": len(features), "kept_rows": len(result),
+                    "dropped_rows": int((~keep).sum()), "mask_sha256": _frame_receipt_sha256(keep.to_frame("keep")),
+                    "stage": "raw_factors_before_infer_processors"}
 
 
 def _saved_qe_feature_order(processors: list[Any]) -> list[str] | None:
@@ -973,6 +1013,13 @@ class InferenceEngine:
         预期效果：内存占用从 50GB+ 降低到 < 2GB
         """
         import gc
+
+        # The fitted QE loader uses Qlib Alpha158 semantics. Keep the legacy
+        # explicit-day entry on the same corrected formulas as sequence calls.
+        ordered_history = df_history.sort_index()
+        if supports_batch(ordered_history, col_list):
+            day = _safe_get_datetime_level(ordered_history).max()
+            return self._alpha158_evaluator(ordered_history).for_dates([day], col_list)
         
         df = df_history
         if not isinstance(df.index, pd.MultiIndex) or "instrument" not in df.index.names or "datetime" not in df.index.names:
@@ -1407,7 +1454,7 @@ class InferenceEngine:
         sequence_dates = sorted(history_dates.unique())[-sequence_length:]
         if not getattr(self, "performance_reference", False) and supports_batch(df_history, col_list):
             logger.info("Alpha158 execution mode=indexed_causal_batch dates=%s", len(sequence_dates))
-            evaluator = Alpha158BatchEvaluator(df_history)
+            evaluator = self._alpha158_evaluator(df_history)
             cache = getattr(self, "feature_session", None)
             if cache is None:
                 return evaluator.for_dates(sequence_dates, col_list)
@@ -1421,6 +1468,11 @@ class InferenceEngine:
             self._compute_alpha158_subset(df_history.loc[history_dates <= day], col_list)
             for day in sequence_dates
         ])
+
+    def _alpha158_evaluator(self, history: pd.DataFrame) -> Alpha158BatchEvaluator:
+        dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        calendar = dataset.calendar if dataset is not None else None
+        return Alpha158BatchEvaluator(history, calendar=calendar)
 
     def _load_task_manifest(self, task_id: str) -> Optional[Dict[str, Any]]:
         """加载本地任务 manifest.json"""
@@ -1809,9 +1861,18 @@ class InferenceEngine:
                         raise ValueError("consumer input sessions require explicit DB-only source selection")
                     if self.input_session.price_reader is None or self.input_session.static_builder is None:
                         raise ValueError("input session has no read-only daily view providers")
-                    df_history = self.input_session.price_reader(universe, start_date.date(), actual_date.date())
-                    df_fund_raw = self.input_session.static_builder(
-                        universe, start_date.date(), actual_date.date(), asof_fill_slow_static=True)
+                    price_reader = getattr(self.input_session, "model_price_reader", None) or self.input_session.price_reader
+                    computation_members = universe
+                    context_reader = getattr(self.input_session, "model_universe_reader", None)
+                    if manifest.get("observation_panel") is not None and context_reader is not None:
+                        computation_members = context_reader(start_date.date(), actual_date.date())
+                    df_history = price_reader(computation_members, start_date.date(), actual_date.date())
+                    model_static_builder = getattr(self.input_session, "model_static_builder", None)
+                    if model_static_builder is not None:
+                        df_fund_raw = model_static_builder(computation_members, start_date.date(), actual_date.date())
+                    else:
+                        df_fund_raw = self.input_session.static_builder(
+                            universe, start_date.date(), actual_date.date(), asof_fill_slow_static=True)
                 else:
                     df_history = get_history_window(
                         universe=universe, start=start_date, end=actual_date,
@@ -1906,8 +1967,8 @@ class InferenceEngine:
                 df_fund = df_fund_raw.rename(columns=field_mapping)
 
                 # 7. 调用预计算因子服务（集中计算所有派生字段）
-                logger.info("调用预计算因子服务计算派生字段...")
-                df_fund = compute_precomputed_factors(df_fund, df_history)
+                df_fund = _prepare_inference_precomputed_factors(
+                    df_fund, df_history, input_session=self.input_session)
 
                 # 验证预计算字段完整性
                 is_valid, missing_fields = validate_precomputed_factors(df_fund)
@@ -2118,6 +2179,10 @@ class InferenceEngine:
                     f"SOTA因子计算函数必须返回DataFrame，实际返回类型: {type(df_factors_raw)}"
                 )
             
+            df_factors_raw, observation_panel_receipt = _apply_frozen_observation_panel(
+                df_factors_raw, manifest.get("observation_panel"),
+            )
+
             # 检查是否为空DataFrame（QE实验可能只使用Alpha158基线因子）
             if df_factors_raw.empty:
                 if _strict_inference_enabled() and dynamic_feats:
@@ -2204,10 +2269,17 @@ class InferenceEngine:
         if alpha158_feats:
             logger.info(f"开始计算 Alpha158 基线因子，请求的因子数量: {len(alpha158_feats)}")
             logger.info(f"请求的Alpha158因子列表: {alpha158_feats}")
+            alpha_history = df_history
+            alpha_reader = getattr(self.input_session, "model_alpha_reader", None)
+            if alpha_reader is not None:
+                alpha_history = alpha_reader(computation_members, start_date.date(), actual_date.date())
             if sequence_length > 1:
-                alpha_subset = self._compute_alpha158_sequence(df_history, alpha158_feats, sequence_length)
+                alpha_subset = self._compute_alpha158_sequence(alpha_history, alpha158_feats, sequence_length)
             else:
-                alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
+                alpha_subset = self._compute_alpha158_subset(alpha_history, alpha158_feats)
+            alpha_price_input_hash = _frame_receipt_sha256(alpha_history)
+            alpha_price_row_count = len(alpha_history)
+            del alpha_history
             
             # 关键诊断：检查实际返回的列数
             logger.info(f"⚠️ Alpha158计算完成，实际返回列数: {len(alpha_subset.columns)}")
@@ -2302,6 +2374,10 @@ class InferenceEngine:
 
         # 7. 模型预测（使用提取的模块级函数）
         timings.mark("feature_assembly_validation")
+        history_filter = getattr(self.input_session, "model_history_filter", None)
+        if history_filter is not None:
+            df_factors_combined = history_filter(df_factors_combined)
+            df_today = df_factors_combined.loc[_safe_get_datetime_level(df_factors_combined) == actual_date]
         df_today = _apply_saved_qe_infer_processors(
             df_factors_combined if sequence_length > 1 else df_today,
             task_dir=task_dir,
@@ -2309,6 +2385,10 @@ class InferenceEngine:
             processor_bundle=processor_bundle,
         )
         timings.mark("frozen_infer_processors")
+
+        # Compute-only rows preserve the original cross-sectional factors; they
+        # never enlarge the authorized decision-day stock pool or its scores.
+        df_today = df_today.loc[df_today.index.get_level_values("instrument").isin(universe)]
 
         sequence_data = None
         if sequence_length > 1:
@@ -2436,6 +2516,7 @@ class InferenceEngine:
                 },
             ],
             "input_context": {
+                "observation_panel": observation_panel_receipt,
                 "input_capture": self.last_input_capture,
                 "requested_trade_date": requested_trade_date.date().isoformat(),
                 "effective_trade_date": actual_date.date().isoformat(),
@@ -2461,13 +2542,25 @@ class InferenceEngine:
             context.update(calendar_version=file_dataset.identity, calendar_source="FROZEN_DATASET_FILES",
                            frozen_file_binding_hash=file_dataset.identity)
             names = {"pit_universe": "day_selection_universe", "market_history": "daily_pv",
-                     "fundamental_moneyflow": "static_factor_h5", "trading_calendar": "day_calendar"}
+                     "fundamental_moneyflow": ("static_factors" if "static_factors" in file_dataset.binding["files"]
+                                                else "static_factor_h5"), "trading_calendar": "day_calendar"}
             for receipt in self.last_inference_receipt["source_read_receipts"]:
                 receipt["dataset_id"] = "dataset_files." + names[receipt["source_role"]]
                 receipt["query_template_id"] = "FrozenDataset." + names[receipt["source_role"]]
                 receipt["query_template_version"] = "frozen_market_dataset_files_v1"
                 receipt["parameter_hash"] = _inference_receipt_sha256({
                     "native_parameters": receipt["parameter_hash"], "file_binding_hash": file_dataset.identity})
+            if alpha158_feats and getattr(self.input_session, "model_alpha_reader", None) is not None:
+                self.last_inference_receipt["source_read_receipts"].append({
+                    "source_role": "alpha158_price_history", "dataset_id": "dataset_files.day_model_bins",
+                    "partition_ref": f"{start_date.date()}:{actual_date.date()}",
+                    "query_template_id": "FrozenDataset.daily_model_history",
+                    "query_template_version": "frozen_market_dataset_files_v1",
+                    "parameter_hash": _inference_receipt_sha256({"universe": sorted(universe), "file_binding_hash": file_dataset.identity}),
+                    "row_count": int(alpha_price_row_count),
+                    "content_hash": alpha_price_input_hash, "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "RETROSPECTIVE_FILE_CONTENT_HASH",
+                })
         if source_route is not None:
             from .services.advisory_historical_range.input_source_plan import input_receipt
             self.last_inference_receipt["input_context"]["source_plan_receipt"] = input_receipt(
