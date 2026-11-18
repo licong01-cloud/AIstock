@@ -28,12 +28,18 @@
   ],
   "expected": "A genuine multi-alpha provider identity is accepted only with matching source_type and unchanged persisted header/digest checks; mismatched or unknown providers remain rejected.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2253-runtime-selection-artifact-verifier-rejects-the-native-multi-alpha-provi.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20261118_BUG-2253-runtime-selection-artifact-verifier-rejects-the-native-multi-alpha-provi.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_runtime_semantics.py",
@@ -91,6 +97,34 @@
   "fixed_at": null,
   "github_issue_number": 7349,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7349",
+  "implementation_review": {
+    "design_compliance_001": {
+      "no_new_gate_or_approval": "passed; repaired the existing native-identity check without adding workflow gates, services or manual controls",
+      "no_partial_delivery": "passed; actual native producer identities and real API payload validated, no placeholder or synthetic-only acceptance",
+      "no_silent_error": "passed; unknown/mismatched providers, missing hashes and tampered header/scores remain rejected; original failed receipt retained",
+      "no_unapproved_business_change": "passed; inference, assets, frozen scores, aggregation and execution contracts unchanged"
+    },
+    "production_ddl_dml_training_inference_backtest_service_control": 0,
+    "review_rounds": [
+      {
+        "evidence": "Real multi-alpha writer and production readback use multi_alpha_live_inference_v2. Red tests proved both native multi-alpha false rejection and incompatible pair false acceptance; exact source/provider mapping fixes both.",
+        "focus": "correctness",
+        "result": "passed"
+      },
+      {
+        "evidence": "50 related tests passed, including single/native/legacy/empty paths, source/provider mismatch, missing and malformed semantic hashes, persisted header and score tampering. Real read-only production artifact post-restart verification passed. L0, Ruff, diff/scope and workflow smoke passed.",
+        "focus": "completeness_and_regression",
+        "result": "passed"
+      }
+    ],
+    "reviewed_at": "2026-11-18T11:54:44.882073+00:00",
+    "reviewed_file_sha256": {
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py": "c561620c610533bc1ce236e09b6a159930638f0a3ede0fa3db286cebb92108bc",
+      "scripts/aistock_runtime_semantics.py": "4fa90f8923dc222e8ee6b16069501c6dc25bf88f2722ea40d0599aa9df7edea5"
+    },
+    "reviewer": "current_agent_author_review_not_independent",
+    "runtime_impact": "offline_verifier_only_no_backend_restart"
+  },
   "last_seen_at": "2026-11-18T11:49:00.660826Z",
   "module": "validation",
   "non_goals": [
@@ -109,10 +143,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -237,33 +273,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "implementation_review": {
-    "reviewer": "current_agent_author_review_not_independent",
-    "review_rounds": [
-      {
-        "focus": "correctness",
-        "result": "passed",
-        "evidence": "Real multi-alpha writer and production readback use multi_alpha_live_inference_v2. Red tests proved both native multi-alpha false rejection and incompatible pair false acceptance; exact source/provider mapping fixes both."
-      },
-      {
-        "focus": "completeness_and_regression",
-        "result": "passed",
-        "evidence": "50 related tests passed, including single/native/legacy/empty paths, source/provider mismatch, missing and malformed semantic hashes, persisted header and score tampering. Real read-only production artifact post-restart verification passed. L0, Ruff, diff/scope and workflow smoke passed."
-      }
-    ],
-    "design_compliance_001": {
-      "no_partial_delivery": "passed; actual native producer identities and real API payload validated, no placeholder or synthetic-only acceptance",
-      "no_silent_error": "passed; unknown/mismatched providers, missing hashes and tampered header/scores remain rejected; original failed receipt retained",
-      "no_unapproved_business_change": "passed; inference, assets, frozen scores, aggregation and execution contracts unchanged",
-      "no_new_gate_or_approval": "passed; repaired the existing native-identity check without adding workflow gates, services or manual controls"
-    },
-    "reviewed_file_sha256": {
-      "scripts/aistock_runtime_semantics.py": "4fa90f8923dc222e8ee6b16069501c6dc25bf88f2722ea40d0599aa9df7edea5",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py": "c561620c610533bc1ce236e09b6a159930638f0a3ede0fa3db286cebb92108bc"
-    },
-    "reviewed_at": "2026-11-18T11:54:44.882073+00:00",
-    "runtime_impact": "offline_verifier_only_no_backend_restart",
-    "production_ddl_dml_training_inference_backtest_service_control": 0
   }
 }
