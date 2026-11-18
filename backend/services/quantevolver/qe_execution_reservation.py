@@ -45,6 +45,7 @@ RESERVATION_TRANSITIONS: Mapping[str, frozenset[str]] = {
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _LOOP_ID_RE = re.compile(r"^Loop[1-9][0-9]*$")
 _RESERVATION_ID_RE = re.compile(r"^qer_[0-9a-f]{64}$")
+PREPARED_WORKSPACE_PARAM = "_qe_prepared_workspace"
 
 
 def _transaction_connection() -> AbstractContextManager[Any]:
@@ -376,6 +377,8 @@ class QEExecutionReservationRepository:
         allow_same_task_backtest_parallelism: bool = False,
         allow_same_task_parallel_training: bool = False,
         allow_durable_prediction_replay_parallelism: bool = False,
+        prepared_workspace_contract: Mapping[str, Any] | None = None,
+        isolate_prepared_workspace_cohort: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: SourceClaim,
@@ -403,6 +406,11 @@ class QEExecutionReservationRepository:
                         allow_durable_prediction_replay_parallelism
                     ),
                 )
+                if prepared_workspace_contract is not None:
+                    effective_node_capacity = self._prepared_workspace_capacity(
+                        cur, spec, effective_node_capacity, prepared_workspace_contract,
+                        isolate_cohort=isolate_prepared_workspace_cohort,
+                    )
                 existing = self._find_source_reservation(cur, spec.source_kind, spec.source_execution_id)
                 if existing is not None:
                     self._assert_reservation_identity(existing, spec)
@@ -1158,6 +1166,62 @@ class QEExecutionReservationRepository:
             (node_id, list(ACTIVE_RESERVATION_STATUSES)),
         )
         return int(cur.fetchone()["active_count"])
+
+    @staticmethod
+    def _prepared_workspace_capacity(
+        cur: Any,
+        spec: QEExecutionReservationSpec,
+        capacity: int,
+        contract: Mapping[str, Any],
+        *,
+        isolate_cohort: bool,
+    ) -> int:
+        """Prove the prepared workspace was enrolled before writing a reservation."""
+        cur.execute(
+            """
+            SELECT custom_params -> %s AS prepared
+            FROM qe_experiments
+            WHERE experiment_id = %s AND custom_params ->> 'execution_node_id' = %s
+            """,
+            (PREPARED_WORKSPACE_PARAM, spec.source_execution_id, spec.node_id),
+        )
+        row = cur.fetchone()
+        if spec.source_kind != "qe_experiment" or not row or row["prepared"] != dict(contract):
+            raise QEExecutionReservationError(
+                "prepared QE workspace registration does not match its submission",
+                reason_code="qe_prepared_workspace_registration_mismatch",
+                context={"source_execution_id": spec.source_execution_id},
+            )
+        if not isolate_cohort or capacity <= 1:
+            return capacity
+        # The caller holds the node lock. Compare active worker identities, not
+        # merely the batch name, before admitting another managed WSL process.
+        cur.execute(
+            """
+            SELECT COUNT(*) AS incompatible_count
+            FROM infra.qe_execution_reservation AS r
+            LEFT JOIN qe_experiments AS e
+              ON r.source_kind = 'qe_experiment'
+             AND e.experiment_id = r.source_execution_id
+             AND e.custom_params ->> 'execution_node_id' = r.node_id
+             AND e.custom_params -> %s ->> 'task_id' = r.qe_task_id
+             AND e.custom_params -> %s ->> 'loop_id' = r.qe_loop_id
+             AND e.custom_params -> %s ->> 'intent_sha256' = r.submission_intent_hash
+            WHERE r.node_id = %s AND r.status = ANY(%s)
+              AND (
+                  e.custom_params -> %s ->> 'batch_sha256' IS DISTINCT FROM %s
+                  OR e.custom_params -> %s ->> 'workload' IS DISTINCT FROM %s
+                  OR e.custom_params -> %s ->> 'compute_kind' IS DISTINCT FROM %s
+                  OR e.custom_params -> %s ->> 'parallel_eligible' IS DISTINCT FROM 'true'
+              )
+            """,
+            (PREPARED_WORKSPACE_PARAM, PREPARED_WORKSPACE_PARAM, PREPARED_WORKSPACE_PARAM,
+             spec.node_id, list(ACTIVE_RESERVATION_STATUSES),
+             PREPARED_WORKSPACE_PARAM, contract["batch_sha256"],
+             PREPARED_WORKSPACE_PARAM, contract["workload"],
+             PREPARED_WORKSPACE_PARAM, contract["compute_kind"], PREPARED_WORKSPACE_PARAM),
+        )
+        return 1 if int(cur.fetchone()["incompatible_count"]) else capacity
 
     @staticmethod
     def _effective_node_capacity_for_source(
