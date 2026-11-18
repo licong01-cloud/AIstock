@@ -2,8 +2,8 @@
   "actual": "MULTI_ALPHA leg calendar identity hash is invalid / ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE；模型评分已完成，父包3/16后未接续。",
   "allowed_write_scope": [
     "backend/services/strategy_package/multi_alpha_live.py",
-    "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
-    "tests/aistock_validation/bugs/20261118_BUG-2243-issue.json"
+    "tests/aistock_validation/bugs/20261118_BUG-2243-issue.json",
+    "backend/tests/test_multi_alpha_frozen_calendar.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2243",
@@ -21,19 +21,32 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261118-6b0b82cbb256",
       "timestamp": "2026-11-18T02:50:30.188525Z"
+    },
+    {
+      "action": "repair_review_and_fresh_process_validation",
+      "actor": "Codex",
+      "note": "Two author review passes, 29 focused tests, actual three cached receipts accepted without new inference; runtime restart pending user.",
+      "timestamp": "2026-11-18T02:59:52.720742+00:00"
     }
   ],
   "evidence_uris": [
-    "tmp/handoff/qe-parent-representative-longtask-20261117/parent_runtime_dev_v6.json"
+    "tmp/handoff/qe-parent-representative-longtask-20261117/parent_runtime_dev_v6.json",
+    "tmp/issue_workflow/BUG-2243/fresh-process-real-receipts-v1.json"
   ],
   "expected": "区分真实文件日历dataset_id与calendar_source，验证完整绑定和原回执；保留DB兼容与严格拒绝伪造/混用；复用完成评分。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/tests/test_multi_alpha_frozen_calendar.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2243-issue.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/strategy_package/multi_alpha_live.py",
-      "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py"
+      "backend/tests/test_multi_alpha_frozen_calendar.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2243-issue.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/multi_alpha_live.py",
@@ -118,11 +131,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9/selection-artifacts?limit=1&expected_artifact_id=ssa_a54c4c151dda4319acaf8bedfc0d6cd3&expected_manifest_sha256=f5b008d09fa1c36a1f3604333dee62fa66ba3c692fa07239b57e5690debb6016&expected_runtime_config_hash=5e33d9cf4b0402fad21796a8e904ad138d9dc243021f8f28956bd74cf78556c9&expected_trade_date=2026-10-09&expected_data_source=DB_HISTORICAL",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9",
+    "fresh_process_evidence": [
+      "Fresh isolated process PID 35848 imported actual persistent multi_alpha_live source sha256=1e541e8493442090ebb763e9e6dd5dc6fbc34bf90cd1a4a7fbe9391a02233e95; validated all three real saved native file receipts, batch score SHA256, 4918 actual scores/universe per seed, unchanged frozen binding, original calendar/window hashes and nested seed-to-parent context; no mock scores, no new inference, training, backtest, DB write or service control. receipt=tmp/issue_workflow/BUG-2243/fresh-process-real-receipts-v1.json;sha256=ba930b7bb68f6a81a7a1f4aa9c4ac31ed0f74ae6f4f506c8724f2e85de1ed53d. Remaining full parent service acceptance needs 13 existing-budget native calls; API runtime pending user restart.",
+      "tmp/issue_workflow/BUG-2243/fresh-process-real-receipts-v1.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -141,6 +165,15 @@
     "fingerprint": "6b0b82cbb256fee1eeef5faf",
     "source_event_id": "FE-20261118-6b0b82cbb256"
   },
+  "validation_notes": [
+    "Correctness author review PASS: source transport and dataset_id are separate in InferenceEngine. Recompute expected canonical hash with dataset_files.day_calendar only for explicit FROZEN_DATASET_FILES; require complete lowercase SHA256 binding equal to calendar_version. Do not rewrite receipts or accept legacy wrong hash.",
+    "Completeness/regression author review PASS: preserve strict window/universe/date comparisons, all per-seed/leg receipts and frozen binding through nested aggregation. DB path unchanged; missing/tampered/mixed identities fail closed. No model, seed roster, IC weight, formula, execution, dataset, original assets or service changes.",
+    "Final related small matrix once: rtk pytest -q backend/tests/strategy_package/test_multi_alpha_signal_preparation.py backend/tests/strategy_package/test_multi_seed_package_assets.py backend/tests/strategy_package/test_multi_alpha_live_selection.py --disable-warnings => 29 passed. Changed-file Ruff and git diff --check passed.",
+    "Code Intelligence scoped graph returned unrelated gateway/DB symbols; exact issue source/function and targeted tests used instead. No broad repo scan.",
+    "DESIGN-COMPLIANCE-001: ordinary BUG with no new feature/approved contract semantic change; complete receipt verification implemented, no placeholder, silent success/fallback, unapproved gate/RBAC/manual flow or partial feature represented as complete. Source delivery and post-restart runtime acceptance remain separate.",
+    "Final gate found existing qe_read_backend PR neighbor filtering excludes strategy_package test paths. Move only the new receipt regression tests to backend/tests/test_multi_alpha_frozen_calendar.py, an existing selected test glob; restore pre-existing test file exactly. No CI filter/gate or shared workflow modification.",
+    "Final revision recheck: CI-covered standalone regression file has 11 passing cases; original test_multi_alpha_signal_preparation.py restored byte-for-byte to Git blob. L0 passed, current CI classifier passed targeted coverage. Read-only business probe binds the actual original package persisted artifact identity; this header probe is not proof of repaired scoring, which is separately covered by actual cached native receipts in a fresh process."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
