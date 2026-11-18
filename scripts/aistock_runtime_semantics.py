@@ -1950,7 +1950,11 @@ def _validate_selection_artifacts(payload: Any, *, url: str) -> tuple[str, str |
     hash_fields = ["artifact_sha256"]
     if version == "selection_score_artifact_v2":
         hash_fields += ["artifact_payload_sha256", "artifact_input_context_hash", "source_revision_set_hash", "asset_closure_hash"]
-        if (metadata.get("provider_semantics_id") != "strategy_package_live_inference_v2"
+        expected_provider = {
+            "live_qe_model_inference_v1": "strategy_package_live_inference_v2",
+            "live_multi_alpha_inference_v1": "multi_alpha_live_inference_v2",
+        }[metadata["source_type"]]
+        if (metadata.get("provider_semantics_id") != expected_provider
                 or not isinstance(metadata.get("provider_semantics_hash"), str)
                 or re.fullmatch(r"[0-9a-f]{64}", metadata["provider_semantics_hash"]) is None):
             return "failed", "selection artifact v2 provider identity is incomplete", facts
