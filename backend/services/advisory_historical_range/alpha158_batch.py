@@ -1,7 +1,7 @@
-"""Causal, bounded-window evaluation of the existing inference Alpha158 formulas.
+"""Bounded Alpha158 evaluation using the original Qlib feature semantics.
 
-This is an execution optimization, not a feature/label/model change.  Unknown
-features retain the existing calculator.  No factor receives the batch buffer.
+Instrument labels, sample standard deviation, partial windows and unavailable
+values follow the training loader. No factor receives this private buffer.
 """
 
 from __future__ import annotations
@@ -46,7 +46,17 @@ class Alpha158BatchEvaluator:
     are evaluated against a batch; arbitrary factor code uses its original view.
     """
 
-    def __init__(self, history: pd.DataFrame) -> None:
+    def __init__(self, history: pd.DataFrame, *, calendar: Sequence | None = None) -> None:
+        if calendar is not None:
+            # Qlib shifts and rolling windows count trading-calendar positions,
+            # including missing bars. Keep those positions NA in this private
+            # Alpha158 view; dynamic factor code still receives its original H5.
+            dates = pd.DatetimeIndex(calendar)
+            observed = history.index.get_level_values("datetime")
+            dates = dates[(dates >= observed.min()) & (dates <= observed.max())]
+            instruments = history.index.get_level_values("instrument").unique()
+            history = history.reindex(pd.MultiIndex.from_product(
+                [dates, instruments], names=["datetime", "instrument"]))
         self._history = history
         self._dates = history.index.get_level_values("datetime")
         self._date_values = self._dates.to_numpy()
@@ -62,11 +72,10 @@ class Alpha158BatchEvaluator:
         volume_groups = volume.groupby(level="instrument")
         self._close = close.to_numpy()
         self._volume = volume.to_numpy()
-        self._volume_log = np.log(volume.abs() + 1.0).to_numpy()
-        self._volume_log_return = np.log(volume / (volume_groups.shift(1) + 1e-12) + 1.0).to_numpy()
-        self._close_return = (close / (close_groups.shift(1) + 1e-12)).to_numpy()
-        # Preserve pct_change's existing fill behavior, including long NaN runs.
-        self._weighted_move = (close_groups.pct_change().abs() * volume).fillna(0.0).to_numpy()
+        self._volume_log = np.log(volume + 1.0).to_numpy()
+        self._volume_log_return = np.log(volume / volume_groups.shift(1) + 1.0).to_numpy()
+        self._close_return = (close / close_groups.shift(1)).to_numpy()
+        self._weighted_move = ((close / close_groups.shift(1) - 1).abs() * volume).to_numpy()
 
     def for_dates(self, dates: Sequence[pd.Timestamp], columns: Sequence[str]) -> pd.DataFrame:
         return pd.concat([self._for_date(pd.Timestamp(day), columns) for day in dates])
@@ -78,17 +87,15 @@ class Alpha158BatchEvaluator:
             instrument: int(np.searchsorted(group_dates, day_value, side="right"))
             for instrument, group_dates in self._group_dates.items()
         }
-        instruments = [instrument for instrument in self._instruments if ends[instrument]]
-        sorted_instruments = [instrument for instrument in self._groups if ends[instrument]]
+        instruments = [instrument for instrument in self._groups if ends[instrument]]
         index = pd.MultiIndex.from_product([[day], instruments], names=["datetime", "instrument"])
-        sorted_index = pd.MultiIndex.from_product([[day], sorted_instruments], names=index.names)
         out: dict[str, pd.Series] = {}
 
         def tail(values: np.ndarray, instrument: str, window: int) -> np.ndarray | None:
             end = ends[instrument]
-            if end < window:
+            if end == 0:
                 return None
-            return values[self._groups[instrument][end - window:end]]
+            return values[self._groups[instrument][max(0, end - window):end]]
 
         last_day = self._history.loc[day]
         last_index = pd.MultiIndex.from_product([[day], last_day.index], names=index.names)
@@ -104,11 +111,10 @@ class Alpha158BatchEvaluator:
             if name in requested:
                 window = int(name[4:])
                 values = []
-                for instrument in sorted_instruments:
+                for instrument in instruments:
                     sample = tail(self._weighted_move, instrument, window)
-                    values.append(np.nan if sample is None else np.std(sample) / (np.mean(sample) + 1e-12))
-                # Preserve the legacy groupby-result/unique-index positional
-                # convention.  Correcting it would be a separate semantic fix.
+                    finite = sample[np.isfinite(sample)] if sample is not None else np.array([])
+                    values.append(np.nan if len(finite) < 2 else np.std(finite, ddof=1) / (np.mean(finite) + 1e-12))
                 out[name] = pd.Series(values, index=index)
 
         for prefix, left, right in (
@@ -122,7 +128,18 @@ class Alpha158BatchEvaluator:
                 values = []
                 for instrument in instruments:
                     a, b = tail(left, instrument, window), tail(right, instrument, window)
-                    values.append(np.nan if a is None else np.corrcoef(a, b)[0, 1])
+                    if a is None or b is None:
+                        values.append(np.nan)
+                        continue
+                    valid = np.isfinite(a) & np.isfinite(b)
+                    a_valid, b_valid = a[valid], b[valid]
+                    # Qlib Corr masks near-constant inputs using each complete
+                    # rolling input's sample deviation, before pairwise corr.
+                    a_finite, b_finite = a[np.isfinite(a)], b[np.isfinite(b)]
+                    constant = (len(a_finite) < 2 or len(b_finite) < 2
+                                or np.isclose(np.std(a_finite, ddof=1), 0, atol=2e-5)
+                                or np.isclose(np.std(b_finite, ddof=1), 0, atol=2e-5))
+                    values.append(np.nan if constant or len(a_valid) < 2 else np.corrcoef(a_valid, b_valid)[0, 1])
                 out[name] = pd.Series(values, index=index)
 
         for window in (5, 10, 20, 60):
@@ -130,28 +147,27 @@ class Alpha158BatchEvaluator:
             if r2_name not in requested and residual_name not in requested:
                 continue
             r2_values, residual_values = [], []
-            x = np.arange(window)
-            for instrument in sorted_instruments:
+            for instrument in instruments:
                 sample = tail(self._close, instrument, window)
                 r2, residual = np.nan, np.nan
                 if sample is not None:
-                    try:
-                        slope, intercept = np.polyfit(x, sample, 1)
-                        fitted = slope * x + intercept
+                    valid = np.isfinite(sample)
+                    x = np.arange(len(sample), dtype=float)
+                    if valid.sum() >= 2:
+                        xv, yv = x[valid], sample[valid]
+                        centered_x = xv - xv.mean()
+                        centered_y = yv - yv.mean()
+                        slope = np.dot(centered_x, centered_y) / np.dot(centered_x, centered_x)
+                        fitted = yv.mean() + slope * (x - xv.mean())
                         residual = sample[-1] - fitted[-1]
-                        sst = np.sum((sample - np.mean(sample)) ** 2)
-                        sse = np.sum((sample - fitted) ** 2)
-                        r2 = 1 - sse / (sst + 1e-12)
-                    except (ValueError, np.linalg.LinAlgError, FloatingPointError):
-                        # The established regression formula yields unavailable
-                        # values on a failed fit; it does not invent a feature.
-                        pass
+                        if not np.isclose(np.std(yv, ddof=1), 0, atol=2e-5):
+                            r2 = 1 - np.sum((yv - fitted[valid]) ** 2) / np.dot(centered_y, centered_y)
                 r2_values.append(r2)
                 residual_values.append(residual)
             if r2_name in requested:
-                out[r2_name] = pd.Series(r2_values, index=sorted_index)
+                out[r2_name] = pd.Series(r2_values, index=index)
             if residual_name in requested:
-                residual = pd.Series(residual_values, index=sorted_index)
+                residual = pd.Series(residual_values, index=index)
                 denominator = pd.Series(last_day["close"].to_numpy(), index=last_index).replace(0.0, np.nan)
                 out[residual_name] = residual / denominator
 
@@ -160,11 +176,13 @@ class Alpha158BatchEvaluator:
                 continue
             window = 61 if name == "ROC60" else 5
             values = []
-            for instrument in sorted_instruments:
+            for instrument in instruments:
                 sample = tail(raw, instrument, window)
-                values.append(np.nan if sample is None else (
-                    sample[0] / sample[-1] if name == "ROC60" else np.std(sample)
-                ))
+                finite = sample[np.isfinite(sample)] if sample is not None else np.array([])
+                if name == "ROC60":
+                    values.append(np.nan if sample is None or len(sample) < 61 else sample[0] / sample[-1])
+                else:
+                    values.append(np.nan if len(finite) < 2 else np.std(finite, ddof=1))
             result = pd.Series(values, index=index)
             if name != "ROC60":
                 column = "close" if name == "STD5" else ("volume" if "volume" in last_day else "vol")

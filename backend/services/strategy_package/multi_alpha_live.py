@@ -94,6 +94,8 @@ class ParentSeedRuntimeSlice:
     runtime_assets: RuntimeAssetManifest
     factor_artifact_refs: tuple[str, ...] = ()
     score_dtype: str | None = None
+    observation_panel: Mapping[str, Any] | None = None
+    reference_factors: tuple[FactorAsset, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,8 @@ class ParentLegRuntimeSlice:
     legacy_child_ref_ignored: bool
     seed_assets: tuple[ParentSeedRuntimeSlice, ...] = ()
     seed_cache_namespace: str | None = None
+    observation_panel: Mapping[str, Any] | None = None
+    reference_factors: tuple[FactorAsset, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -921,6 +925,9 @@ class MultiAlphaLivePredictionProvider:
             source_namespace = seed_namespace
             if historical_cache_namespace is not None:
                 source_namespace = f"{seed_namespace}__{historical_cache_namespace}" if seed_namespace else historical_cache_namespace
+            panel_kwargs = ({"observation_panel": dict(leg_slice.observation_panel),
+                             "reference_factor_set": list(leg_slice.reference_factors)}
+                            if leg_slice.observation_panel is not None else {})
             source = source_loader(
                 manifest=manifest,
                 package_id=leg_slice.parent_package_id,
@@ -929,6 +936,7 @@ class MultiAlphaLivePredictionProvider:
                 factor_set=list(leg_slice.factor_set),
                 runtime_assets=leg_slice.runtime_assets,
                 cache_namespace=source_namespace,
+                **panel_kwargs,
             )
             workspace_cache_namespace = f"leg_{leg_slice.leg_id}"
             if seed_namespace:
@@ -1312,7 +1320,20 @@ def _parent_leg_runtime_slices(
                 if strict and (score_dtype not in {"float32", "float64"} or len(prediction_sha) != 64
                                or any(char not in "0123456789abcdef" for char in prediction_sha)):
                     _raise("frozen seed requires original prediction precision and SHA", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id, seed_run_id=seed["seed_run_id"])
-                seed_assets.append(ParentSeedRuntimeSlice(seed["seed_run_id"], seed_model, seed_factors, seed_runtime, tuple(refs), score_dtype))
+                projection = seed.get("original_model_input_projection") or {}
+                panel = projection.get("observation_panel")
+                reference_factors: tuple[FactorAsset, ...] = ()
+                if panel is not None:
+                    if (not isinstance(panel, Mapping) or panel.get("mode") != "reference_factor_intersection"
+                            or panel.get("schema_version") not in {"qe_observation_panel_v1", "qe_observation_panel_v2"}
+                            or not isinstance(panel.get("reference_factor_names"), list)
+                            or not panel["reference_factor_names"]
+                            or any(not isinstance(ref, str) or not ref.strip() for ref in panel["reference_factor_names"])):
+                        _raise("original observation panel contract is invalid", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
+                    reference_factors = tuple(_resolve_parent_factor_ref(ref, factor_index=factor_index,
+                        package_id=package_id, leg_id=leg_id, model_id=seed_model.model_id) for ref in panel["reference_factor_names"])
+                seed_assets.append(ParentSeedRuntimeSlice(seed["seed_run_id"], seed_model, seed_factors, seed_runtime,
+                                                         tuple(refs), score_dtype, panel, reference_factors))
             first_seed = seed_assets[0]
             if first_seed.model_asset.model_id != model_id or first_seed.factor_set != factors or first_seed.runtime_assets != runtime_assets:
                 _raise("MULTI_ALPHA primary component differs from its first seed", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
@@ -1346,6 +1367,7 @@ def _seed_leg_slices(leg: ParentLegRuntimeSlice) -> tuple[ParentLegRuntimeSlice,
     return tuple(replace(
         leg, model_asset=seed.model_asset, factor_set=seed.factor_set, runtime_assets=seed.runtime_assets,
         seed_run_ids=(seed.seed_run_id,), seed_assets=(seed,),
+        observation_panel=seed.observation_panel, reference_factors=seed.reference_factors,
         seed_cache_namespace=(f"seed_{hashlib.sha256(seed.seed_run_id.encode()).hexdigest()[:16]}" if len(seeds) > 1 else None),
         component=leg.component.model_copy(update={
             "model_id": seed.model_asset.model_id,

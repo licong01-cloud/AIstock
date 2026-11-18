@@ -798,6 +798,8 @@ class QEExperimentRuntimeAssetResolver:
         factor_set: list[FactorAsset],
         runtime_assets: RuntimeAssetManifest | None,
         cache_namespace: str | None = None,
+        observation_panel: dict[str, Any] | None = None,
+        reference_factor_set: list[FactorAsset] | None = None,
     ) -> QEExperimentRuntimeSource:
         """Resolve one MULTI_ALPHA leg strictly from parent package-owned assets."""
 
@@ -813,6 +815,8 @@ class QEExperimentRuntimeAssetResolver:
             factor_set_override=factor_set,
             runtime_assets_override=runtime_assets,
             cache_namespace=leg_namespace,
+            observation_panel=observation_panel,
+            reference_factor_set=reference_factor_set,
         )
 
     def load_frozen_source_for_strategy_package(
@@ -839,6 +843,8 @@ class QEExperimentRuntimeAssetResolver:
         factor_set_override: list[FactorAsset] | None = None,
         runtime_assets_override: RuntimeAssetManifest | None = None,
         cache_namespace: str | None = None,
+        observation_panel: dict[str, Any] | None = None,
+        reference_factor_set: list[FactorAsset] | None = None,
     ) -> QEExperimentRuntimeSource:
         package_key = str(package_id or manifest.package_id or "").strip()
         manifest_sha = str(manifest.manifest_sha256 or "").strip().lower()
@@ -871,9 +877,18 @@ class QEExperimentRuntimeAssetResolver:
 
         factor_names: list[str] = []
         factors = list(factor_set_override) if factor_set_override is not None else list(manifest.factor_set)
+        model_factor_names = {_runtime_factor_name(factor, package_id=package_key) for factor in factors}
+        by_name = {_runtime_factor_name(factor, package_id=package_key): factor for factor in factors}
+        for factor in reference_factor_set or []:
+            name = _runtime_factor_name(factor, package_id=package_key)
+            if name in by_name and by_name[name].sha256 != factor.sha256:
+                raise PackageAssetInvalidError("reference factor conflicts with a frozen model factor")
+            by_name[name] = factor
+        factors = list(by_name.values())
         for factor in factors:
             factor_name = _runtime_factor_name(factor, package_id=package_key)
-            factor_names.append(factor_name)
+            if factor_name in model_factor_names:
+                factor_names.append(factor_name)
             payload = self._read_package_asset_bytes(
                 asset_ref=factor.asset_ref,
                 expected_sha256=factor.sha256,
@@ -934,6 +949,8 @@ class QEExperimentRuntimeAssetResolver:
         source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
         backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
         custom_params = _manifest_runtime_custom_params(manifest, runtime_assets_override=runtime_assets_override)
+        if observation_panel is not None:
+            custom_params["observation_panel"] = dict(observation_panel)
         data_split = _manifest_runtime_data_split(source_evidence, backtest_context)
         experiment_id = _manifest_runtime_experiment_id(manifest)
         return QEExperimentRuntimeSource(
@@ -1918,6 +1935,9 @@ class QEExperimentRuntimeAssetResolver:
             factor_source_dir,
             factor_order_resolution.dynamic_factors,
         )
+        observation_panel = (source.custom_params or {}).get("observation_panel")
+        if observation_panel is not None:
+            factor_files.update(self._resolve_factor_files(factor_source_dir, observation_panel["reference_factor_names"]))
         model_source_path, model_candidate_count = self._resolve_model_params_path(source, artifact_config)
 
         cache_key = manifest_sha256[:16] if manifest_sha256 else "unfrozen_manifest"
@@ -2009,6 +2029,7 @@ class QEExperimentRuntimeAssetResolver:
                     "schema_version": 1,
                     "task_id": package_id,
                     "input_readiness": input_readiness,
+                    "observation_panel": observation_panel,
                     "source": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
                     "primary_assets": {
                         "model_weight_relpath": "model/params.pkl",
