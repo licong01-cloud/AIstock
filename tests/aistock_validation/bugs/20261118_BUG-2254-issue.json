@@ -31,23 +31,23 @@
   "expected": "当日项全部通过且仅有跨日项未到期时显示当日已完成及次日待发布数量。到期后未通过的项显示实际状态及逾期，全部验收后显示全源完整。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261118_BUG-2254-issue.json",
       "backend/services/data_integrity/service.py",
       "backend/tests/test_daily_data_integrity.py",
       "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
       "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
       "frontend/src/app/local-data/components/dailyIntegrity.module.css",
-      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261118_BUG-2254-issue.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261118_BUG-2254-issue.json",
       "backend/services/data_integrity/service.py",
       "backend/tests/test_daily_data_integrity.py",
       "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
       "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
       "frontend/src/app/local-data/components/dailyIntegrity.module.css",
-      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
+      "tests/aistock_validation/bugs/20261118_BUG-2254-issue.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -167,8 +167,8 @@
   },
   "first_seen_at": "2026-11-18T16:38:25.791738Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cde633796fdb1b0d5042ff3294c8c49803d44d05",
+  "fixed_at": "2026-11-18T16:53:00Z",
   "github_issue_number": 7353,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7353",
   "last_seen_at": "2026-11-18T16:38:25.791738Z",
@@ -176,6 +176,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7354",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -203,6 +204,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -214,7 +216,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2254",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "19d852245a270dc8",
+    "recorded_at": "2026-11-18T16:53:50.084516Z",
+    "runtime_contract_digest": "5b4529dc58a3db981dbf579bfecafdef7da30cae83c462c9135607fefcd9fbd6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4ffb7678cb3053182928d5fac5652494a65a6f9c",
+    "source_merge_commit": "cde633796fdb1b0d5042ff3294c8c49803d44d05",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7354",
+    "validation_evidence": [
+      "validation-receipt: id=fa37cfbeef241f32 commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed`",
+      "validation-receipt: id=9a79d709a509b80f commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q` result=`247 passed, 2 skipped`",
+      "validation-receipt: id=50a31046c40793fd commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/data_integrity/service.py backend/tests/test_daily_data_integrity.py` result=`passed`",
+      "validation-receipt: id=4c59205a6f92ee97 commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b1eb28086be7378356643ea747824d0d933344d482aeed9ac6e3de812a1cc2e1"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -256,6 +282,12 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=fa37cfbeef241f32 commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed`",
+    "validation-receipt: id=9a79d709a509b80f commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_daily_data_integrity.py -q` result=`247 passed, 2 skipped`",
+    "validation-receipt: id=50a31046c40793fd commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/data_integrity/service.py backend/tests/test_daily_data_integrity.py` result=`passed`",
+    "validation-receipt: id=4c59205a6f92ee97 commit=4ffb7678cb3053182928d5fac5652494a65a6f9c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light_ui",
     "ci_premerge_plans": [],
