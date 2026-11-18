@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2248",
-  "closed_at": null,
+  "closed_at": "2026-11-18T07:10:42.301196Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -83,8 +83,8 @@
   },
   "first_seen_at": "2026-11-18T04:46:44.007141Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ce817815ce1c873dd8d5a896e34d2cb18ff9b0eb",
+  "fixed_at": "2026-11-18T05:02:59Z",
   "github_issue_number": 7324,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7324",
   "last_seen_at": "2026-11-18T04:46:44.007141Z",
@@ -92,6 +92,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7327",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -118,9 +119,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2248/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2248",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_risk_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "46eb808aa821138c63594e26ce6a5220612c3ad1ed8242d144fa27ba7dbaed10",
+      "expected_identity": "ce817815ce1c873dd8d5a896e34d2cb18ff9b0eb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T07:09:12.712432Z",
+      "mode": "read_only",
+      "observed_identity": "b975b7dc0e46536cd39fc679bb373f3d9ee243f7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "49dff7a7a9c5ad91dc64d1ba6c7b10b8a33f1d222818c92e51b0dd3ddb0bf0a3",
+      "receipt_sha256": "a2ee7884e2ad9f67cb4e435c01978435f2965712fae5c7ba88abaf0ce19282c0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1073df978a29e9a5ce8b71c684dec05baf6a6ef9250ed499df0a1731350eeaa8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -130,7 +154,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2248",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "40927dae6c13a393",
+    "recorded_at": "2026-11-18T05:03:43.535169Z",
+    "runtime_contract_digest": "46eb808aa821138c63594e26ce6a5220612c3ad1ed8242d144fa27ba7dbaed10",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f820861f86736a73e6aabaa60c7dfcd2c4cdf574",
+    "source_merge_commit": "ce817815ce1c873dd8d5a896e34d2cb18ff9b0eb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7327",
+    "validation_evidence": [
+      "validation-receipt: id=70f2fd6068a2fc0d commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py -q` result=`44 passed`",
+      "validation-receipt: id=6cb015f7e783436c commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/hmm_risk/risk_l2_database_inference.py backend/tests/hmm_risk/test_risk_l2_database_inference.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "944ca1780d70226d302b925cff5f37aee1ae828ffddfefb461aa6bba44d61224"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -139,6 +185,12 @@
     "fingerprint": "b4eb19523edfe6482a45e96e",
     "source_event_id": "FE-20261118-b4eb19523edf"
   },
+  "validation_evidence": [
+    "validation-receipt: id=70f2fd6068a2fc0d commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py -q` result=`44 passed`",
+    "validation-receipt: id=6cb015f7e783436c commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/hmm_risk/risk_l2_database_inference.py backend/tests/hmm_risk/test_risk_l2_database_inference.py` result=`passed`",
+    "post-restart-verify BUG-2248 backend-main b975b7dc0e46536cd39fc679bb373f3d9ee243f7 -> passed; runtime_identity_match=true; read-only business smoke passed",
+    "post-restart-verify BUG-2248 -> passed; source merge expected, deployed origin/main descendant verified; health identity business smoke passed; read-only"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
