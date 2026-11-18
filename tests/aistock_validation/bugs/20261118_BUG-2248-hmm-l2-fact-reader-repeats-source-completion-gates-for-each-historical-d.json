@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Read prepared facts without mandatory source acceptance receipts; actual field and identity safety unchanged",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2248-hmm-l2-fact-reader-repeats-source-completion-gates-for-each-historical-d.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/risk_l2_database_inference.py",
-      "backend/tests/hmm_risk/test_risk_l2_database_inference.py"
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2248-hmm-l2-fact-reader-repeats-source-completion-gates-for-each-historical-d.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/risk_l2_database_inference.py",
@@ -91,24 +97,30 @@
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py::test_completion_does_not_recertify_prepared_facts -q",
-  "root_cause": "Forward database_daily readers re-required source audit success for each historical input date; historical verdict carrier validation also rejected the new fact-snapshot provenance. Producer acceptance is not consumer read permission.",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
   "review_rounds": [
     "R1: historical and forward completion reads execute zero source acceptance queries; historical_as_known_verified remains false.",
     "R2: corrected legacy carrier compatibility; frozen bundle hash, actual feature completeness, causal cutoff and model identity are unchanged.",
     "R3: final direct module 44 passed, Ruff and L0 passed; real twenty-feature parity and wrong-child-probability rejection remain covered. No database writes, training or process control."
   ],
-  "required_verification": [
-    "l0",
-    "hmm_risk_pr_slice"
-  ],
   "risk_area": "bug",
+  "root_cause": "Forward database_daily readers re-required source audit success for each historical input date; historical verdict carrier validation also rejected the new fact-snapshot provenance. Producer acceptance is not consumer read permission.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py -q -> 44 passed; isolated process; source acceptance query spy, feature parity and negative controls passed"
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
