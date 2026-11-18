@@ -1147,8 +1147,8 @@ def test_advisory_operation_readback_is_not_execution_success(state, patch, area
 
 @pytest.mark.parametrize("target,value", [
     ("native", None), ("multi_alpha", None), ("valid_empty", None), ("legacy", None), ("history", None),
-    ("single_provider_mismatch", None), ("multi_alpha_provider_mismatch", None),
-    ("multi_alpha_missing_provider_hash", None), ("multi_alpha_invalid_provider_hash", None),
+    ("single_provider_mismatch", "multi_alpha_live_inference_v2"), ("multi_alpha_provider_mismatch", "strategy_package_live_inference_v2"),
+    ("multi_alpha_missing_provider_hash", None), ("multi_alpha_invalid_provider_hash", "invalid"),
     ("multi_alpha_header_tamper", None), ("multi_alpha_score_tamper", None),
     ("row.status", "FAILED"), ("row.status", "PENDING"), ("row.error_json", {"error_code": "DATA_UNAVAILABLE"}),
     ("row.artifact_id", "other"), ("row.package_id", "other"), ("row.manifest_sha256", "0" * 64),
@@ -1168,28 +1168,21 @@ def test_selection_artifact_semantic_native_readback(target, value):
     from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact, StrategyPackageSelectionArtifactRepository
 
     empty = target in {"valid_empty", "legacy_empty"}
-    multi_alpha = target.startswith("multi_alpha")
     scores = [] if empty else [{"symbol": "000001.SZ", "score": 0.5}]
     artifact = SelectionScoreArtifact(
         package_id="pkg_native", manifest_sha256="a" * 64, trade_date="2026-10-14", data_source="DB",
         runtime_config_hash="b" * 64, scores_json=scores, score_count=len(scores), universe_count=2,
         top_score_symbol=None if empty else "000001.SZ", artifact_contract_version="selection_score_artifact_v2",
         artifact_input_context_hash="c" * 64, source_revision_set_hash="d" * 64, asset_closure_hash="e" * 64,
-        metadata=dict(authority_scope="authoritative_selection",
-                      source_type="live_multi_alpha_inference_v1" if multi_alpha else "live_qe_model_inference_v1",
+        metadata=dict(authority_scope="authoritative_selection", source_type="live_multi_alpha_inference_v1" if target.startswith("multi_alpha") else "live_qe_model_inference_v1",
                       candidate_outcome="VALID_NO_CANDIDATE" if empty else "CANDIDATES_PRESENT",
                       empty_stage="alpha_raw" if empty else None,
-                      provider_semantics_id="multi_alpha_live_inference_v2" if multi_alpha else "strategy_package_live_inference_v2",
+                      provider_semantics_id=value if target.endswith("provider_mismatch") else (
+                          "multi_alpha_live_inference_v2" if target.startswith("multi_alpha") else "strategy_package_live_inference_v2"),
                       provider_semantics_hash="f" * 64))
     # Bind genuine writer digests before checking incompatible source/provider pairs.
-    if target == "single_provider_mismatch":
-        artifact.metadata["provider_semantics_id"] = "multi_alpha_live_inference_v2"
-    elif target == "multi_alpha_provider_mismatch":
-        artifact.metadata["provider_semantics_id"] = "strategy_package_live_inference_v2"
-    elif target == "multi_alpha_missing_provider_hash":
-        artifact.metadata.pop("provider_semantics_hash")
-    elif target == "multi_alpha_invalid_provider_hash":
-        artifact.metadata["provider_semantics_hash"] = "invalid"
+    if target.endswith("provider_hash"):
+        artifact.metadata["provider_semantics_hash"] = value
     row = StrategyPackageSelectionArtifactRepository._with_digest(artifact).model_dump(mode="json")
     row["score_preview"] = row.pop("scores_json")[:10]
     query = {"expected_" + key: row[key] for key in ("artifact_id", "manifest_sha256", "runtime_config_hash", "trade_date", "data_source")}

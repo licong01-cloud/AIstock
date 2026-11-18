@@ -115,11 +115,16 @@
         "evidence": "50 related tests passed, including single/native/legacy/empty paths, source/provider mismatch, missing and malformed semantic hashes, persisted header and score tampering. Real read-only production artifact post-restart verification passed. L0, Ruff, diff/scope and workflow smoke passed.",
         "focus": "completeness_and_regression",
         "result": "passed"
+      },
+      {
+        "focus": "CI_test_budget_and_final_fixture_integrity",
+        "result": "passed",
+        "evidence": "CI 44299565644 had 777 passes and only the existing 30 percent test/production SLOC budget failure. Consolidated duplicate fixture setup, retained all parameterized cases and native writer digest oracle, no threshold/catalog/production padding. Failed node recovered; final related matrix including budget passed 51 tests, Ruff and diff passed. Corrupt hash fixtures are applied after constructing the valid native writer model."
       }
     ],
-    "reviewed_at": "2026-11-18T11:54:44.882073+00:00",
+    "reviewed_at": "2026-11-18T12:16:26.018162+00:00",
     "reviewed_file_sha256": {
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py": "c561620c610533bc1ce236e09b6a159930638f0a3ede0fa3db286cebb92108bc",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py": "7f6af6c854d7f297fda84d1516a353ec44cc0553b8a8e98fa25495e84122bbce",
       "scripts/aistock_runtime_semantics.py": "4fa90f8923dc222e8ee6b16069501c6dc25bf88f2722ea40d0599aa9df7edea5"
     },
     "reviewer": "current_agent_author_review_not_independent",
