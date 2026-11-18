@@ -31,7 +31,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2245",
-  "closed_at": null,
+  "closed_at": "2026-11-18T07:10:30.400095Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -71,6 +71,7 @@
       "backend/services/simulation_data/daily_context_provider.py",
       "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_forward_scheduler.py",
       "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
@@ -101,6 +102,7 @@
       "backend/services/simulation_data/daily_context_provider.py",
       "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_forward_scheduler.py",
       "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
@@ -332,8 +334,8 @@
   },
   "first_seen_at": "2026-11-18T04:31:05.360946Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d7b553f2dd7a5a8ad3021144b73e2dfe0e7361ea",
+  "fixed_at": "2026-11-18T06:39:16Z",
   "github_issue_number": 7322,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7322",
   "last_seen_at": "2026-11-18T04:31:05.360946Z",
@@ -341,6 +343,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7329",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -382,9 +385,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2245/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2245",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "d7b553f2dd7a5a8ad3021144b73e2dfe0e7361ea",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T07:09:09.961050Z",
+      "mode": "read_only",
+      "observed_identity": "b975b7dc0e46536cd39fc679bb373f3d9ee243f7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "eadefbef7609698508ec90f6600ca2f99caa1f67bd789d5303bd7ec435d6fbc6",
+      "receipt_sha256": "5c5ffd16f0ba5377ec3ced02c4a85676f17e94a3b1b0f1aced08bd1fc7fc2a54",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b0365123937b5c6de5c1c1bafd22b08964cc07308442c360b5b11916dd5c7712",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -394,7 +420,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2245",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7259ff7745722922",
+    "recorded_at": "2026-11-18T06:40:23.384379Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531",
+    "source_merge_commit": "d7b553f2dd7a5a8ad3021144b73e2dfe0e7361ea",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7329",
+    "validation_evidence": [
+      "validation-receipt: id=076dd4bf127126dc commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity_inputs.py -q` result=`80 passed`",
+      "validation-receipt: id=833c09bb04b79eb2 commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q` result=`37 passed`",
+      "validation-receipt: id=5eba7ca77ca06f2b commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py::test_scheduler_reports_concurrent_run_without_starting_duplicate_work -q` result=`1 passed`",
+      "validation-receipt: id=593cb1ee1ca5f3cd commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py backend/tests/advisory_model_first/test_forward_scheduler.py` result=`passed; prior full 24-path L0 passed`"
+    ],
+    "validation_evidence_digest": "6b8e88ace84c1b2f301eaeaacd79699b5a8550b5fefc13f0d1f068781153669b"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -403,6 +453,14 @@
     "fingerprint": "80754681a0361ec1c4ebbbe9",
     "source_event_id": "FE-20261118-80754681a036"
   },
+  "validation_evidence": [
+    "validation-receipt: id=076dd4bf127126dc commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_daily_data_integrity_inputs.py -q` result=`80 passed`",
+    "validation-receipt: id=833c09bb04b79eb2 commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q` result=`37 passed`",
+    "validation-receipt: id=5eba7ca77ca06f2b commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py::test_scheduler_reports_concurrent_run_without_starting_duplicate_work -q` result=`1 passed`",
+    "validation-receipt: id=593cb1ee1ca5f3cd commit=619d0363f16e4c06ccf74dfbcb5eb1cc0cf2c531 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py backend/tests/advisory_model_first/test_forward_scheduler.py` result=`passed; prior full 24-path L0 passed`",
+    "post-restart-verify BUG-2245 backend-main b975b7dc0e46536cd39fc679bb373f3d9ee243f7 -> passed; runtime_identity_match=true; read-only business smoke passed",
+    "post-restart-verify BUG-2245 -> passed; source merge expected, deployed origin/main descendant verified; health identity business smoke passed; read-only"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
