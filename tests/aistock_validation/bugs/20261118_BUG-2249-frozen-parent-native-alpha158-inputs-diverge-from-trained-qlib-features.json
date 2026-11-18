@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2249",
-  "closed_at": null,
+  "closed_at": "2026-11-18T12:28:31.049268Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -45,33 +45,33 @@
   "expected": "Recompute original frozen model inputs with exact instrument/date alignment and original Qlib feature semantics; preserve models, fitted processors, weights, manifests and immutable prior results.",
   "file_scope_contract": {
     "actual_changed_files": [
+      "backend/data_service/frozen_dataset.py",
       "backend/inference_engine.py",
       "backend/services/advisory_historical_range/alpha158_batch.py",
-      "backend/tests/advisory_historical_range/test_alpha158_batch_parity.py",
       "backend/services/advisory_historical_range/inference_inputs.py",
-      "backend/tests/advisory_historical_range/test_file_inference_inputs.py",
-      "backend/services/strategy_package/multi_alpha_live.py",
       "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
       "backend/services/strategy_package/original_input_projection.py",
+      "backend/tests/advisory_historical_range/test_alpha158_batch_parity.py",
+      "backend/tests/advisory_historical_range/test_file_inference_inputs.py",
+      "backend/tests/data_service/test_frozen_dataset.py",
       "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
-      "tests/aistock_validation/bugs/20261118_BUG-2249-frozen-parent-native-alpha158-inputs-diverge-from-trained-qlib-features.json",
-      "backend/data_service/frozen_dataset.py",
-      "backend/tests/data_service/test_frozen_dataset.py"
+      "tests/aistock_validation/bugs/20261118_BUG-2249-frozen-parent-native-alpha158-inputs-diverge-from-trained-qlib-features.json"
     ],
     "added_files": [],
     "changed_files": [
+      "backend/data_service/frozen_dataset.py",
       "backend/inference_engine.py",
       "backend/services/advisory_historical_range/alpha158_batch.py",
-      "backend/tests/advisory_historical_range/test_alpha158_batch_parity.py",
       "backend/services/advisory_historical_range/inference_inputs.py",
-      "backend/tests/advisory_historical_range/test_file_inference_inputs.py",
-      "backend/services/strategy_package/multi_alpha_live.py",
       "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
       "backend/services/strategy_package/original_input_projection.py",
+      "backend/tests/advisory_historical_range/test_alpha158_batch_parity.py",
+      "backend/tests/advisory_historical_range/test_file_inference_inputs.py",
+      "backend/tests/data_service/test_frozen_dataset.py",
       "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
-      "tests/aistock_validation/bugs/20261118_BUG-2249-frozen-parent-native-alpha158-inputs-diverge-from-trained-qlib-features.json",
-      "backend/data_service/frozen_dataset.py",
-      "backend/tests/data_service/test_frozen_dataset.py"
+      "tests/aistock_validation/bugs/20261118_BUG-2249-frozen-parent-native-alpha158-inputs-diverge-from-trained-qlib-features.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -137,8 +137,8 @@
   },
   "first_seen_at": "2026-11-18T06:19:03.312106Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5f55b1b5d099292b727f87bd81cf0f015236a3de",
+  "fixed_at": "2026-11-18T10:45:47Z",
   "github_issue_number": 7331,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7331",
   "implementation_review": {
@@ -180,6 +180,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7347",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -203,9 +204,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2249/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2249",
+      "business_smoke_semantic": {
+        "contract_id": "strategy_package_selection_artifact_readback",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "f37c7ee565791bb5812afe803ff4fcbe76076b457edaa64d41892d378388cd7a",
+      "expected_identity": "5f55b1b5d099292b727f87bd81cf0f015236a3de",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T12:26:27.061156Z",
+      "mode": "read_only",
+      "observed_identity": "5f55b1b5d099292b727f87bd81cf0f015236a3de",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0bcd9d43810e488075fcfca12d837da70ffe45c8e5812dd5628499196dfffd5b",
+      "receipt_sha256": "79a7c4d942eb8ee35b086f7f277ee09aeeba5377b766b68f6ca52e470216a916",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "5c341758509f2ea7ad643f984bf6aefd0a577fc0d305e2e890f66dfdde6e202a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -215,7 +239,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2249",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "74451ab74715ebea",
+    "recorded_at": "2026-11-18T10:47:33.976914Z",
+    "runtime_contract_digest": "f37c7ee565791bb5812afe803ff4fcbe76076b457edaa64d41892d378388cd7a",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "38b105bc86793971d4c2a4839aef2859528ad1c0",
+    "source_merge_commit": "5f55b1b5d099292b727f87bd81cf0f015236a3de",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7347",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed; related six-file matrix -> 70 passed, 4 optional skips; actual WSL PyTorch batch/order smoke -> passed; Ruff/diff/scope and two author reviews -> passed; full native consumers running with no production activation"
+    ],
+    "validation_evidence_digest": "bf3dab4019e8bd217cee093346d2c90277043328f2b337b4d88f7dabf022e88d"
+  },
+  "status": "verified",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -224,6 +269,10 @@
     "fingerprint": "b2304a446c430ced9b591441",
     "source_event_id": "FE-20261118-b2304a446c43"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed; related six-file matrix -> 70 passed, 4 optional skips; actual WSL PyTorch batch/order smoke -> passed; Ruff/diff/scope and two author reviews -> passed; full native consumers running with no production activation",
+    "Source verification: 70 passed, 4 optional Windows skips; actual WSL PyTorch batch/order smoke passed; OLD5 10 plus UPDATED3 6 real fresh native consumers completed. Original-score residuals retained and single-date Top20 agreement does not prove full-period equality. User restarted backend; canonical post-restart health, exact identity, original frozen selection artifact readback and package DB readback passed after offline verifier BUG-2253 was repaired and merged. No production asset registration or activation."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
