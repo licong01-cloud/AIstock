@@ -245,39 +245,21 @@ def forward_request(request):
     return reseal(changed)
 
 
-@pytest.mark.parametrize("fault", [None, "missing", "future", "empty_price"])
-def test_forward_completion_reuses_real_audit_and_accepts_zero_suspensions(case, monkeypatch, fault):
+@pytest.mark.parametrize("mode", ["historical", "forward"])
+def test_completion_does_not_recertify_prepared_facts(case, mode):
     request, _, connection, *_ = case
-    request = forward_request(request)
+    if mode == "forward":
+        request = forward_request(request)
     plan = db._read_plan(request, connection)
-    calls = []
 
-    class Repository:
-        def __init__(self, conn_factory):
-            with conn_factory() as active:
-                assert active is connection
+    class NoAcceptanceQueries:
+        def cursor(self):
+            raise AssertionError("source acceptance must not gate this consumer")
 
-        def require_success(self, *, dataset, trade_date):
-            calls.append((trade_date, dataset))
-            if fault == "missing":
-                raise RuntimeError("not completed")
-            return SimpleNamespace(
-                row_count=0 if dataset == "suspend_d" or fault == "empty_price" else 5000,
-                refreshed_at=datetime(2027 if fault == "future" else 2026, 9, 1, tzinfo=timezone.utc),
-                status="success",
-                quality_status="ok",
-                job_id=None,
-            )
-
-    monkeypatch.setattr(db, "DataRefreshAuditRepository", Repository)
-    if fault:
-        with pytest.raises(FormalStateError, match="completion") as exc:
-            db._completion(request, connection, plan)
-        assert exc.value.reason_code.endswith("database_data_waiting")
-    else:
-        completion = db._completion(request, connection, plan)
-        assert len(calls) == 12 and all(d < date(2026, 8, 31) for d, _ in calls)
-        assert all(s["row_count"] == 0 for s in completion["statuses"] if s["dataset"] == "suspend_d")
+    completion = db._completion(request, NoAcceptanceQueries(), plan)
+    assert completion["source_acceptance_required"] is False
+    assert completion["historical_as_known_verified"] is False
+    assert completion["statuses"] == []
 
 
 def test_owned_connection_is_readonly_rolled_back_and_closed_on_failure(case, monkeypatch):

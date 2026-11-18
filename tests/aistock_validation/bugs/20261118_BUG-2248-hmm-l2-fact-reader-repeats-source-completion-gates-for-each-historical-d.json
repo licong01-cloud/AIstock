@@ -1,0 +1,250 @@
+{
+  "actual": "Valid historical facts blocked by missing canonical metadata",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/risk_l2_database_inference.py",
+    "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+    "tests/aistock_validation/bugs/20261118_BUG-2248-hmm-l2-fact-reader-repeats-source-completion-gates-for-each-historical-d.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2248",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-18T04:46:44.007141Z",
+  "description": "Valid historical facts blocked by missing canonical metadata",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261118-b4eb19523edf",
+      "timestamp": "2026-11-18T04:46:44.007141Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Read prepared facts without mandatory source acceptance receipts; actual field and identity safety unchanged",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2248-hmm-l2-fact-reader-repeats-source-completion-gates-for-each-historical-d.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2248-hmm-l2-fact-reader-repeats-source-completion-gates-for-each-historical-d.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/risk_l2_database_inference.py",
+        "backend/tests/hmm_risk/test_risk_l2_database_inference.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/risk_l2_database_inference.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/risk_l2_database_inference.py",
+        "backend/tests/hmm_risk/test_risk_l2_database_inference.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py"
+    ]
+  },
+  "first_seen_at": "2026-11-18T04:46:44.007141Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7324,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7324",
+  "last_seen_at": "2026-11-18T04:46:44.007141Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py::test_completion_does_not_recertify_prepared_facts -q",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "review_rounds": [
+    "R1: historical and forward completion reads execute zero source acceptance queries; historical_as_known_verified remains false.",
+    "R2: corrected legacy carrier compatibility; frozen bundle hash, actual feature completeness, causal cutoff and model identity are unchanged.",
+    "R3: final direct module 44 passed, Ruff and L0 passed; real twenty-feature parity and wrong-child-probability rejection remain covered. No database writes, training or process control."
+  ],
+  "risk_area": "bug",
+  "root_cause": "Forward database_daily readers re-required source audit success for each historical input date; historical verdict carrier validation also rejected the new fact-snapshot provenance. Producer acceptance is not consumer read permission.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py -q -> 44 passed; isolated process; source acceptance query spy, feature parity and negative controls passed"
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "HMM L2 fact reader repeats source completion gates for each historical date",
+  "trigger_condition": {
+    "fingerprint": "b4eb19523edfe6482a45e96e",
+    "source_event_id": "FE-20261118-b4eb19523edf"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
