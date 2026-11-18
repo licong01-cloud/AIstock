@@ -20,7 +20,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2246",
-  "closed_at": null,
+  "closed_at": "2026-11-18T04:58:39Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -176,8 +176,8 @@
   },
   "first_seen_at": "2026-11-18T04:37:37.170090Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bbd57e1cc4ab15a640343d7b09b8bb9a0cf145ad",
+  "fixed_at": "2026-11-18T04:58:39Z",
   "github_issue_number": 7323,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7323",
   "last_seen_at": "2026-11-18T04:37:37.170090Z",
@@ -185,6 +185,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7325",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -206,6 +207,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -215,7 +217,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2246",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5aa930bdecb740a1",
+    "recorded_at": "2026-11-18T04:59:32.974155Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ae04acf74982f1f08110ddbef7f6f06104a9a44b",
+    "source_merge_commit": "bbd57e1cc4ab15a640343d7b09b8bb9a0cf145ad",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7325",
+    "validation_evidence": [
+      "validation-receipt: id=9e217bbcab9df28d commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- frontend/src/components/advisory/LiveQuotes.tsx frontend/src/components/advisory/QuoteSnapshot.tsx frontend/src/components/advisory/workbench/ProgramDetail.tsx frontend/src/components/advisory/workbench/HistoricalLists.tsx frontend/src/components/advisory/workbench/DailyList.tsx frontend/src/components/advisory/workbench/EpisodeTable.tsx frontend/src/components/advisory/workbench/workbench.module.css frontend/tests/paper-v2/advisory-workbench.spec.ts tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json` result=`passed`",
+      "validation-receipt: id=1975668eeba30357 commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "52c525b67adcad05e47272086c7cfc077d2e26214c85995c93ca1b93136ff0cf"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory.ui"
   ],
@@ -269,6 +293,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=9e217bbcab9df28d commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- frontend/src/components/advisory/LiveQuotes.tsx frontend/src/components/advisory/QuoteSnapshot.tsx frontend/src/components/advisory/workbench/ProgramDetail.tsx frontend/src/components/advisory/workbench/HistoricalLists.tsx frontend/src/components/advisory/workbench/DailyList.tsx frontend/src/components/advisory/workbench/EpisodeTable.tsx frontend/src/components/advisory/workbench/workbench.module.css frontend/tests/paper-v2/advisory-workbench.spec.ts tests/aistock_validation/bugs/20261118_BUG-2246-advisory-detail-quotes-refetch-on-scrolling-and-polling-instead-of-expli.json` result=`passed`",
+    "validation-receipt: id=1975668eeba30357 commit=ae04acf74982f1f08110ddbef7f6f06104a9a44b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light_ui",
     "ci_premerge_plans": [],
