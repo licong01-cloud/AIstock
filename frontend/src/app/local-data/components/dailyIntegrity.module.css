@@ -21,6 +21,7 @@
 .day span:last-of-type { font-size: 12px; }
 .NOT_TRADING, .UNVERIFIED { color: var(--integrity-muted); }
 .IN_PROGRESS { border-left: 5px solid var(--integrity-info); }
+.sameDayComplete { border-left-color: color-mix(in srgb, var(--integrity-info), var(--integrity-success)); }
 .PARTIAL { border-left: 5px solid var(--integrity-warning); }
 .ERROR { border-left: 5px solid var(--integrity-error); }
 .COMPLETE { border-left: 5px solid var(--integrity-success); }
@@ -34,5 +35,6 @@
 .gapRow { background: color-mix(in srgb, var(--integrity-error) 9%, var(--integrity-surface)); }
 .gapRow > td:first-child { border-inline-start: 4px solid var(--integrity-error); }
 .gapLabel { display: block; color: var(--integrity-error); font-weight: 600; }
+.overdueLabel { display: block; color: var(--integrity-warning); font-weight: 600; }
 .gaps { max-height: 260px; overflow: auto; font-size: 12px; }
 @media (max-width: 650px) { .day { min-height: 62px; padding: 4px; } .day span:last-of-type { font-size: 10px; } }

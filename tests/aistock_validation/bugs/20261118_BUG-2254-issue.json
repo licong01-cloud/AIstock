@@ -30,16 +30,26 @@
   "evidence_uris": [],
   "expected": "当日项全部通过且仅有跨日项未到期时显示当日已完成及次日待发布数量。到期后未通过的项显示实际状态及逾期，全部验收后显示全源完整。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2254-issue.json",
       "backend/services/data_integrity/service.py",
       "backend/tests/test_daily_data_integrity.py",
+      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
       "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
       "frontend/src/app/local-data/components/dailyIntegrity.module.css",
-      "frontend/tests/local-data/daily-integrity-calendar.spec.ts",
-      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md"
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2254-issue.json",
+      "backend/services/data_integrity/service.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+      "frontend/src/app/local-data/components/DailyIntegrityCalendar.tsx",
+      "frontend/src/app/local-data/components/dailyIntegrity.module.css",
+      "frontend/tests/local-data/daily-integrity-calendar.spec.ts"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/data_integrity/service.py",
@@ -178,11 +188,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/integrity/days/2026-11-18",
+    "fresh_process_evidence": [
+      "Isolated FastAPI TestClient loaded the worktree service and exercised both GET routes against read-only facts. Nov 18: 23 valid, two next-session pending, same_day_complete=true; unchanged state, revisions and all_sync_complete versus baseline. Isolated /local-data Chromium spec: 6 passed, including keyboard access, overdue transition and final completion."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
