@@ -34,17 +34,58 @@
     "authorization": "User requested replacing all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; no service-control authorization.",
     "dev_receipt": {
       "bug_id": "BUG-2251",
-      "live_model_calls": 0,
-      "migration_sha256": "0f597991d2e4b797fe926b3a40cdfa69303f555b895974501ec386a82ff8f0a4",
-      "note": "Existing DEV database; original assistant-table DDL in rollback transaction; PostgreSQL sequence allocation is not rolled back.",
-      "passed": true,
       "target": "aistock-pg-dev/aistock_dev",
-      "transaction": "rolled_back"
+      "source_merge": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+      "migration_sha256": "e71bc52433895d627daa98b18dd918221758833ada0629f70fa5c66d798f4d77",
+      "passed": true,
+      "transaction": "rolled_back",
+      "real_model_calls": 0,
+      "timestamp": "2026-11-18T08:12:24.924482+00:00",
+      "input_bytes": "Committed Git blob inserted twice in DEV rollback transaction; byte input bypasses Windows text-mode newline translation",
+      "note": "Initial worktree-byte hash differed only by CRLF; exact merged blob independently revalidated before production. DEV fixture data rolled back; sequence allocations are not rolled back."
     },
     "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
-    "production_status": "pending_merged_source",
+    "production_status": "applied_and_readback_verified",
     "production_target": "timescaledb/aistock",
-    "scope": "LLM current model bindings and selection; no business/usage-history writes"
+    "scope": "LLM current model bindings and selection; no business/usage-history writes",
+    "production_receipt": {
+      "bug_id": "BUG-2251",
+      "source_merge": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+      "migration_sha256": "e71bc52433895d627daa98b18dd918221758833ada0629f70fa5c66d798f4d77",
+      "target": "timescaledb/aistock",
+      "dev_passed": true,
+      "applied": true,
+      "timestamp": "2026-11-18T08:13:09.649042+00:00",
+      "real_model_calls": 0,
+      "services_restarted": false,
+      "authorization": "User instruction to replace all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; target matched current backend catalog; no unrelated business/history writes.",
+      "readback": {
+        "database": "aistock",
+        "flash_models": [
+          {
+            "id": 13,
+            "full_model_id": "deepseek/deepseek-v4-flash",
+            "active": true
+          }
+        ],
+        "direct_exp_gen": "deepseek/deepseek-v4-flash",
+        "assistant": "deepseek-v4-flash",
+        "historical_pro_active": false
+      },
+      "remaining_pro_configurations": 0,
+      "api_readback": {
+        "active_flash": true,
+        "active_pro": false,
+        "direct_exp_gen": "deepseek-v4-flash",
+        "runtime_identity": {
+          "status": "ready",
+          "merge_commit": "b975b7dc0e46536cd39fc679bb373f3d9ee243f7"
+        },
+        "policy_endpoint_status": 404,
+        "runtime_acceptance": "pending_user_restart"
+      }
+    },
+    "rdagent_api_readback": "9000 model selection projection: no DeepSeek Pro configuration found; no external configuration or services changed"
   },
   "description": "Replace shared DeepSeek Pro defaults and active direct_exp_gen binding with deepseek-v4-flash. Guard explicit model overrides at request boundaries; preserve historical usage. Add exact shared-client ownership mapping before implementation. No service control or live model calls.",
   "events": [
@@ -475,5 +516,6 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "updated_at": "2026-11-18T08:14:52.008421+00:00"
 }
