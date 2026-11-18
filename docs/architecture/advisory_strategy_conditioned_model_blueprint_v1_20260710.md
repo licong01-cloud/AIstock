@@ -1,4 +1,8 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.68
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.69
+
+> 2026-11-18方向调整：当前研究状态与唯一后续入口统一为§16.0；具体长任务及时间覆盖见[接续计划§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)。优先检验原生Top50内、已有分钟行情的路径结构是否补充日频排序信息，不再默认追加数据集或轮换模型。首个待审问题是“日内回撤后的修复速度与保持程度”，尚非已成立机制或已提名模型。本次交付是蓝图与计划更新，未执行新研究；训练额度仍0。
+>
+> 以下页首日期记录及§16.0.1保留各阶段历史；其中“当前”“下一步”“等待确认”和旧fit数只对其当时有效，不覆盖§16.0。经济结果、工程交付、自然观察和生产启用分别报告。
 
 > 2026-11-08单信号真实实验完成：[ID1272增量F1§12](advisory_lstm_overnight_increment_v1_f1_design_20261108.md)按用户授权完成恰好3fit，真实训练KEY/目标/共同编码匹配和独立24,400分数/排名、488日日表、费用及4组区间通过，完整新进程复用0fit。相对原生Top10开发+46.714083bps、压力−75.666671bps；相对原54字段Ridge开发增量亦负，按事前规则`STOP_EXACT_OVERNIGHT_INCREMENT_CANDIDATE`，只关闭该精确候选，累计269实际fit＋1旧index、追加预算0。没有新上线模型、历史PIT或独立经济确认；保留全部原人口/26NA、Top50→Top10/5TD/费用/100bps、原生/V2和暂停方向，不自动另开模型/信号或等待新D。源码文档/CI合入与经济负面分态，最终证据入口见[接续计划](../analysis/advisory_lstm_next_research_plan_20261107.md)；下方P0/P1未执行训练段落为阶段历史。
 
@@ -13,7 +17,7 @@
 > 2026-11-06关系上下文任务已完成真实6fit：[局部关系F1](advisory_lstm_pool_relation_v1_f1_design_20261106.md)及[研究报告](../analysis/advisory_lstm_pool_relation_review_20261106.md)。候选相对原生开发101D为+42.502494bps、压力108D为−67.070940bps，区间均跨零，按事前规则STOP_EXACT_CONTEXT_CANDIDATE；累计263实际fit＋1旧index、追加预算0，没有可上线的新模型。14直接项、独立24400分数/排名、每臂11111费用及244D损益、6组区间通过，新进程复用0fit。既存VSTD5有限极值导致一日分数尺度异常，原数据/主结果保持，独立相对容差和排名通过不等于源含义或原张量parity成立。设计#7033已合入，源码CI/合入分态；原生/V2/Top50→Top10/5TD/100bps与暂停方向不变，不自动恢复其它候选。
 
 > 初始日期：2026-07-10
-> 修订日期：2026-11-06
+> 修订日期：2026-11-18
 
 > 2026-11-05最新路线评审已完成：[三模型零拟合报告](../analysis/advisory_lstm_three_model_route_review_20261105.md)保留原126/118D、12200评价行和三模型36600既存预测。三模型共同开发101D、压力108D，压力SPO+/Ridge/HGB相对原生为−78.096451/−81.637570/−45.696415bps；HGB原109D主终点仍−46.389696，不替换。三者压力平均一致换出原生6.4167只、一致换入1.9630只，共同部分净贡献−65.022346bps；这是权重不平衡子集的事后损益分解，不是新组合收益或缺信息的因果证明。独立732模型对日/209共同日/12区间与34源角色hash核对通过。终态NO_NEW_CANDIDATE_EVIDENCE_MAINTAIN_PAUSE，新增候选/fit/预测/政策均0，累计257＋1旧index不变。保留当前54字段有限模型轮换暂停，不从分歧或已知压力结果自动立项；原生/V2、暂停方向及资源规则不变，CI/合入另列。
 
@@ -282,6 +286,10 @@ H0 的权威详细设计为
 
 为避免把“代码存在”“单点可调用”“持续运行”和“模型有效”混为同一完成状态，本蓝图固定使用以下独立维度，不再汇总成单一百分比：
 
+2026-11-18研究核对以§16.0及原回执为准：累计269实际fit＋1旧index，当前没有达到100bps目标且获得独立确认的可交付重排序模型；ID1272已关闭，V2已终止为`NOT_EVALUABLE_CAPTURE_GAP`。已有原生荐股、比较/历史展示及模型观察属于工程和业务能力，不折算成Alpha进度。本轮不刷新生产运行态，不将旧日快照冒称今日任务完成。
+
+下表保留历史能力与运行检查点，不是2026-11-18实时状态表；其中P15等“新路线”和“后续优先级”已由§16.0替代。拟开展的分钟路径研究为`PLANNED_NOT_RUN`，不计作模型交付。
+
 本表早期上游QE/HMM及相邻模块条目仍为其注明日期的最后观察，不重新断言其运行态；两包20D回放、既存汇总及只读文件诊断已于2026-10-18核对，日频scheduler/角色配置和运行身份已于2026-10-21 01:40:50+08只读刷新；当日发布/结算仍按各阶段实际状态报告。共享评分、运行可调用、完整回放与经济确认是不同进度；不为刷新无关历史状态占用本轮研发资源。
 
 | 维度 | 当前进度 | 准确含义 |
@@ -416,7 +424,9 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 
 ## 2. Scope / 当前实施范围
 
-本蓝图当前只覆盖直接产生真实模型和荐股能力的工作；过去专门研究的固定预算不自动约束新B0～B5，生产原生政策不因文档更新而改变：
+本章列出架构能力边界，具体当前执行范围只以§16.0和接续计划§11为准；下列模型族、数据输入和角色不是自动待办或训练授权。历史预算不结转，新实验的物理fit预算另行明确，生产原生政策不因文档更新而改变。
+
+本轮方向调整只允许在后续获准任务中研究D日已收盘分钟路径，仍于下一交易日T开盘进入固定5TD评价；不使用T日上午数据决定同一笔T开盘入场，不恢复分钟择时、价格/Exit、拆单或执行策略。分钟输入来自已有冻结行情，新增候选派生特征不等于新增数据集或改写共享资产。
 
 - 读取已有 QE H5/Parquet/Qlib Bin 基础数据和已有模型预测 PKL，并核对可用于训练的字段。
 - 从现有文件构造候选级训练矩阵、标签和时间切分。
@@ -1342,6 +1352,8 @@ PR #4361已实现QE活动数据集/PIT股票池入口。QE负责活动profile、
 
 ### 6.10 有限研究选择、确认与证据使用
 
+当前主终点固定为Top50→Top10、T开盘至T+4收盘、买0.95/卖5.95bps一次扣费，相对同包同日原生Top10的净增量100bps；旧候选自己的阈值、分类和负面终态保持。扩展历史只用于事前定义的新问题，不用更长窗口翻案旧候选。原V2已经终止，不沿旧150D继续等待、补捕获或读取受保护收益；新候选如值得确认，须有自己的完整确认设计。
+
 统一沿用 `frontier -> candidate -> confirmation -> activation`，明确训练内选择与开发外层筛选两个层级：
 
 1. **训练内frontier。** 详细设计预注册有限模型族/配置、数据块、目标、fit预算与确定性选择规则。所有预处理/校准/early stopping及候选选择只用past-only训练内部时间验证；有合法inner搜索不等于结果后救旧模型。登记尝试/失败/选中数，不把fold、树或相关fit当独立假设。
@@ -1376,10 +1388,13 @@ HMM/rotation是可选上下文，不是必经网关。raw-market必须保留为c
 
 ### 6.12 技术路线选择、文献依据与适用限制
 
+2026-11-18唯一优先评审的是**已有分钟路径对日频父排序的条件增量**，详见接续计划§11；下表其他路线保留为历史或条件选项，不自动并行恢复。先比较新表示与旧分钟摘要的构造差异，再研究固定5TD的产品价值；分钟频率、低相关或日内可预测性本身均不构成5TD增益证据。
+
 §6.3.4多时段、§6.3.16成熟更新、§6.3.17原生锚定、§6.3.18成交量条件化及§6.3.21同群残差均已真实完成且未确认；相关精确候选停止。§6.3.22先导—滞后设计、源码/全inner与6fit完成，INNER_INCONCLUSIVE，未进outer；下一仅筛选不同的新经济假设，不同族换lag/符号/参数。文献、相关性和损失缩小不证明AIstock超额，不派生旧同族参数搜索或重做R1诊断。
 
 | 路线 | 优先级与触发 | 最小对照及边界 |
 |---|---|---|
+| 已有分钟路径的回撤修复与保持 | 当前唯一待审方向，尚未实验；先零fit查重、时钟与跨期覆盖 | 保留父排名/分数、日频与旧分钟摘要的匹配对照；只增加一个事前定义的路径信息块，不预设修复越快越好，不从OHLCV推断机构行为；具体任务见接续计划§11 |
 | 多时段条件收益/Top10能力基准 | B0～B3已完成，当前候选停止 | 原生Top10仍为经济基线；旧六配置不重新选择outer赢家，新的有限研究必须有实质不同假设 |
 | 选择边界的净优势/决策感知学习 | 有预测技能但动作价值损耗后 | 同人口/政策/成本对照普通预测；明确与旧P0-F/G/J utility/residual的实质差异，不改loss名称重跑 |
 | 市场共同项—行业—个股残差 | 跨期漂移/公共风险确为瓶颈后 | 原始市场控制与条件化预测；HMM因果概率仅作可选信息，不默认BEAR全拒绝、不训练HMM |
@@ -1669,7 +1684,7 @@ evidence_level = HISTORICAL_REPLAY or SEALED_HOLDOUT or PROSPECTIVE_OOS
 
 ## 9. Implementation Plan / 历史进展与当前唯一后续顺序
 
-本章M/P/N及早期H0记录历史合同和有条件远期选项，不是并行任务；旧“下一步”不覆盖§16.0。既往研究/回放及P0～P3已完成，E2不接跑outer；先导—滞后源码与6fit也按INNER_INCONCLUSIVE停止于inner，详§6.3.22/F1。下一筛选一个不同经济假设，未确认前不扩价格/Exit平台，QE负责上游，不复跑本章失败实验。
+本章M/P/N及早期H0记录历史合同和有条件远期选项，不是并行任务；旧“下一步”不覆盖§16.0。当前具体执行顺序统一引用[接续计划§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)：已有分钟结构查重与覆盖、单一F1、离线实现，训练授权后才进行一次冻结的跨期实验与终态审核。既往研究不重做，E2不接跑outer，先导—滞后保留INNER_INCONCLUSIVE；不扩价格/Exit平台或代QE研发上游Alpha。
 
 ### M0：QE文件可训练性核对
 
@@ -2340,6 +2355,9 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-311 | 逐因子信息长任务：查重/原21150行/46字段来源、重构与NON_VINTAGE边界、同算法旧基线训练身份匹配、唯一3fit候选、主辅分母/100bps/独立算术审核及停止 |
 | F-312 | 固定54字段同MSE的Ridge/受限HGB一次6fit研究：同输入/时钟/资格、原生100bps主端点、实际资源准入/预算、独立复算及事前停止；负面分支完整验收 |
 | F-313 | 三模型零拟合路线评审：复用旧诊断、原244D/12200行与三模型共同分母、集合/排序分歧、共同损益、独立算术及不凭分歧自动提名；既有暂停/资源/生产边界保持 |
+| F-314 | 当前入口统一：ID1272/269fit/零预算与V2漏捕获终态据实接续，旧日期检查点不恢复为队列，工程与经济完成度分开 |
+| F-315 | 分钟研究证据边界：区分历史输入、训练、开发与压力评价，原分钟100共同D不冒称跨年验证；时间扩展、成熟时钟、旧窗消费及UNKNOWN完整披露 |
+| F-316 | 单一长任务：已有分钟回撤修复问题、与旧摘要的条件增量、零fit先行与条件训练、固定费用/100bps、预算/停止/性能/确认边界及可核验交付 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2535,6 +2553,9 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-311 | §16.0、`docs/architecture/advisory_lstm_factor_information_v1_f1_design_20261102.md`；按重构与已消费历史合同验收，不构成生产或独立经济确认 | backend/tests/advisory_model_first/test_lstm_factor_information_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-information-20261102/independent_audit_receipt.json | VERIFIED_FACTOR_INFORMATION_NEGATIVE_BOUNDED_STUDY | none |
 | F-312 | §16.0、`docs/architecture/advisory_lstm_factor_nonlinear_v1_f1_design_20261102.md`、新叶/CLI；用户授权资源修订只改执行准入，模型与经济合同不变 | backend/tests/advisory_model_first/test_lstm_factor_nonlinear_v1.py; artifact: X:/AIstock_temp/ADVISORY/lstm-factor-nonlinear-20261102/independent_audit_receipt.json | VERIFIED_NONLINEAR_NEGATIVE_BOUNDED_STUDY | none |
 | F-313 | §16.0、`docs/analysis/advisory_lstm_three_model_route_review_20261105.md`；原生主结果与共同诊断分账，旧已消费历史仅描述、不作因果或独立确认 | artifact: X:/AIstock_temp/ADVISORY/lstm-three-model-route-review-20261105/independent_audit_receipt.json | VERIFIED_ZERO_FIT_ROUTE_REVIEW_NO_NOMINATION | none |
+| F-314 | §1.2/§9/§16.0、接续计划§11.1 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/delivery_receipt.json; artifact: X:/AIstock_temp/ADVISORY/top10-research-evidence-20261109-v1/confirmation-viability-20261112.json | VERIFIED_DOCUMENTED_TERMINALS | none |
+| F-315 | 接续计划§11.2/§11.5；只核对历史覆盖与新范围提案，新增分钟覆盖尚未验收 | artifact: X:/AIstock_temp/ADVISORY/lstm-overnight-increment-20261108-v1/delivery_receipt.json; artifact: X:/AIstock_temp/ADVISORY/p9-intraday-peer-synchrony-20261023/audit-receipt.json | VERIFIED_DOCUMENTATION_ONLY | none |
+| F-316 | §2/§6.10/§6.12/§16.0、接续计划§11.3～§11.8；仅规划交付，具体F1/代码/研究未执行、训练另需授权 | artifact: docs/analysis/advisory_lstm_next_research_plan_20261107.md; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md --tier F2`; `git diff --check` | VERIFIED_DOCUMENTATION_ONLY_RESEARCH_NOT_RUN | none |
 
 
 ## 12. Verification Plan
@@ -2831,7 +2852,19 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-11-06 接续）
+### 16.0 当前唯一任务队列与真实断点（2026-11-18 接续）
+
+本节是当前路线的唯一入口，详细步骤和覆盖数据只维护在[接续计划§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)。本轮为`docs-fast-update`，源码核对基线`e28dcf251cb36b5832f49222b9e1810974f0599b`，交付前再同步最新main并复核文档；只更新本文和该计划，研究未执行。
+
+- **已完成与关闭**：ID1272按原规则负面关闭，累计269实际fit＋1旧index，剩余/追加训练预算0。54字段模型轮换、同伴、h64、尺度和已关闭分钟候选不改名重做；它们的失败不证明所有分钟结构都无效。
+- **确认的真实终态**：V2因2026-11-10、11-11不可恢复漏捕获，已于11月12日固化`NOT_EVALUABLE_CAPTURE_GAP`。原150D研究不再等待成熟或换日续接；P20自然描述性观察与正式确认分开，旧V2材料不借给新候选。
+- **方向调整**：原生包已经给出Top50，优先检验已有分钟路径能否区分这些候选在固定5TD内的表现。首个待审问题是日内回撤后的修复速度与保持程度；先与父分数、日频及旧分钟摘要查重，不默认扩数据集、另找上游信号、模型融合或换算法。
+- **唯一长任务**：按接续计划§11推进“分钟路径信息增量与跨期排序验证”。先零fit查清输入/机制、形成一个具体F1及离线实现；有覆盖该实验的训练授权后才执行单一配对实验。若查重不成立或数据不可消费，交付明确终态并结束，不以候选数量或耗时充当成果。
+- **不变边界**：Top50→Top10、固定5TD、原费用和100bps目标、原生生产Top20与UNKNOWN/CASH语义不变。研报、现金流、ETF、新数据集及价格/Exit保持暂停；不操作服务、启动脚本、流水线、QE任务、数据库、生产名单、模型激活或受保护确认。
+
+下方内容全部为历史检查点，不再定义当前状态或执行授权。
+
+#### 16.0.1 历史队列与阶段事实（保留原结论）
 
 2026-11-06[跨期尺度失配计划](../analysis/advisory_lstm_crosssection_scale_research_plan_20261106.md)已按条件分支执行至完成，[结果](../analysis/advisory_lstm_crosssection_scale_review_20261106.md)为NO_SCALE_CANDIDATE_EVIDENCE。P0/P1及独立审核完成，尺度持续性门和完整D支持门均失败；开发0联合事件，压力两因子分别4D/1D，不满足各20D/跨两月。全部423D/21150行保留，原输入/控制/阶段链不变；68,526统计、972,900秩坐标及162阈值独立PASS，新进程复用0fit。P2候选F1和P3最多三fit的前置条件未成立，因此未创建候选、模型、预测或金融评价；累计266实际fit＋1旧index，未用预算不自动结转。完整D支持门仅适用于此研究，不阻断原荐股。当前长任务所有适用阶段结束，无自动下一模型或等待新交易日；原生/V2及暂停方向不变。后续需明确不同机制证据才另行立项，不能依据少数极值或本负结果调整门槛继续训练。以下为保留的历史完成记录。
 
