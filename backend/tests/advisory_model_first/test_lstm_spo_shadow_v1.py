@@ -127,8 +127,13 @@ def test_extra_twenty_sessions_require_benchmark_and_adjustments(monkeypatch):
     assert len(captured["partition_refs"]) == 40
     assert len(captured["benchmark"]["partition_refs"]) == 20
     rows[-2]["validated_revision"] = 0
+    # Producer verification metadata does not gate actual, complete prices.
+    assert len(source.extra_input_capture(Connection(), days)["benchmark"]["partition_refs"]) == 20
+    class MissingBenchmark(Connection):
+        def fetchall(self):
+            return self.result if len(self.result[0]) == 1 else self.result[:-1]
     with pytest.raises(InputReadinessError):
-        source.extra_input_capture(Connection(), days)
+        source.extra_input_capture(MissingBenchmark(), days)
 
 
 def test_crossing_open_never_publishes_as_prospective(trial):

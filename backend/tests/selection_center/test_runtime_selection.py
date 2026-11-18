@@ -2349,7 +2349,7 @@ def test_selection_center_preopen_readiness_does_not_require_daily_basic_gate() 
         runtime_config=runtime_config,
     )
 
-    assert [call["dataset"] for call in refresh_audit.calls] == ["suspend_d", "stk_limit"]
+    assert refresh_audit.calls == []
 
 
 def test_selection_center_runtime_profile_industry_blacklist_backfills() -> None:

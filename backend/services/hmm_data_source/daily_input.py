@@ -6,7 +6,6 @@ validate the full, causal input prefix before enabling inference.
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from datetime import date
 from datetime import timedelta
 import json
@@ -14,7 +13,6 @@ import math
 import re
 from typing import Any
 
-from backend.services.data_refresh_audit import DataRefreshAuditRepository
 
 
 REQUIRED_DAILY_DATASETS = ("sector_data", "sw_daily", "index_daily")
@@ -530,11 +528,10 @@ def read_database_daily_completion(
     requested_as_of: date | None,
     cutoff: date,
 ) -> tuple[date, dict[str, Any]]:
-    """Use the existing refresh authority, never MAX(market.trade_date).
+    """Bind the source date in one snapshot; acceptance belongs to ingestion.
 
-    The caller supplies one read-only, repeatable-read transaction.  Re-reading
-    the most recent attempt through the public repository also rejects a newer
-    failure which would otherwise be hidden by a previous success row.
+    Actual required fields are read by the existing input reader. A missing
+    historical completion receipt is not evidence that those facts are absent.
     """
     with connection.cursor() as cursor:
         cursor.execute(
@@ -545,45 +542,21 @@ def read_database_daily_completion(
             raise RuntimeError("hmm_database_daily_input_unavailable: read-only repeatable-read transaction required")
         if requested_as_of is not None and requested_as_of > cutoff:
             raise RuntimeError("hmm_database_daily_input_unavailable: future as_of date")
-        cursor.execute(
-            "SELECT dataset, MAX(trade_date) FROM market.dataset_date_refresh_audit "
-            "WHERE dataset=ANY(%s) AND status='success' AND row_count>0 "
-            "AND trade_date<=%s AND refreshed_at<=%s GROUP BY dataset",
-            (list(REQUIRED_DAILY_DATASETS), cutoff, read_cutoff_at),
-        )
-        completed = dict(cursor.fetchall())
-        if set(completed) != set(REQUIRED_DAILY_DATASETS):
-            raise RuntimeError("hmm_database_daily_input_unavailable: required completion audit missing")
-        candidate = requested_as_of or min(completed.values())
-        cursor.execute(
-            "SELECT is_trading FROM market.trading_calendar WHERE cal_date=%s",
-            (candidate,),
-        )
-        rows = cursor.fetchall()
-        if len(rows) != 1 or rows[0][0] is not True:
-            raise RuntimeError("hmm_database_daily_input_unavailable: canonical trading date missing")
-
-    repository = DataRefreshAuditRepository(conn_factory=lambda: nullcontext(connection))
-    statuses: dict[str, Any] = {}
-    for dataset in REQUIRED_DAILY_DATASETS:
-        try:
-            status = repository.require_success(dataset=dataset, trade_date=candidate)
-        except RuntimeError as exc:
-            raise DailyInputError(
-                "hmm_database_daily_input_unavailable", f"required completion not valid: {dataset}; {exc}"
-            ) from exc
-        if status.row_count <= 0 or status.refreshed_at > read_cutoff_at:
-            raise RuntimeError("hmm_database_daily_input_unavailable: invalid completion audit")
-        statuses[dataset] = {
-            "dataset": status.dataset,
-            "trade_date": status.trade_date.isoformat(),
-            "data_source": status.data_source,
-            "status": status.status,
-            "quality_status": status.quality_status,
-            "row_count": status.row_count,
-            "refreshed_at": status.refreshed_at.isoformat(),
-            "job_id": status.job_id,
-        }
+        candidate = requested_as_of
+        if candidate is None:
+            # Automatic date selection binds the existing producer publication
+            # watermark once. It does not recertify any partition or inspect
+            # the canonical verdict; explicit historical dates need no receipt.
+            cursor.execute(
+                "SELECT dataset, MAX(trade_date) FROM market.dataset_date_refresh_audit "
+                "WHERE dataset=ANY(%s) AND status='success' AND row_count>0 "
+                "AND trade_date<=%s AND refreshed_at<=%s GROUP BY dataset",
+                (list(REQUIRED_DAILY_DATASETS), cutoff, read_cutoff_at))
+            completed = dict(cursor.fetchall())
+            if set(completed) != set(REQUIRED_DAILY_DATASETS):
+                raise DailyInputError("hmm_database_daily_input_unavailable",
+                                      "automatic source date is unresolved; explicit as_of is required")
+            candidate = min(completed.values())
     diagnostic_queries = {
         "sector_data": "SELECT MAX(trade_date) FROM market.sector_data WHERE trade_date<=%s",
         "sw_daily": "SELECT MAX(trade_date) FROM market.sw_daily WHERE trade_date<=%s",
@@ -591,16 +564,21 @@ def read_database_daily_completion(
             "SELECT MAX(trade_date) FROM market.index_daily WHERE ts_code='000300.SH' AND trade_date<=%s"
         ),
     }
-    max_dates: dict[str, str | None] = {}
+    maxima = {}
     with connection.cursor() as cursor:
         for key, query in diagnostic_queries.items():
             cursor.execute(query, (cutoff,))
             maximum = cursor.fetchone()[0]
-            max_dates[key] = maximum.isoformat() if maximum else None
+            maxima[key] = maximum
+        cursor.execute("SELECT is_trading FROM market.trading_calendar WHERE cal_date=%s", (candidate,))
+        rows = cursor.fetchall()
+        if len(rows) != 1 or rows[0][0] is not True:
+            raise RuntimeError("hmm_database_daily_input_unavailable: canonical trading date missing")
     return candidate, {
         "read_cutoff_at": read_cutoff_at.isoformat(),
-        "completion_authority": "market.dataset_date_refresh_audit",
-        "completion_statuses": statuses,
-        "max_dates": max_dates,
+        "completion_authority": "database_fact_snapshot",
+        "completion_statuses": {},
+        "source_acceptance_required": False,
+        "max_dates": {key: day.isoformat() if day else None for key,day in maxima.items()},
         "max_dates_diagnostic_only": True,
     }

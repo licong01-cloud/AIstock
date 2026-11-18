@@ -1330,7 +1330,8 @@ def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:
     assert config["paper_v2_session"]["selection_cutoff_policy"] == "PREVIOUS_TRADING_DAY_CLOSE"
 
 
-def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:
+@pytest.mark.parametrize("at", [datetime(2024, 1, 2, 9, 13, 59), datetime(2024, 1, 2, 9, 14)])
+def test_live_session_does_not_require_preopen_source_audit(at) -> None:
     paper_repo, portfolio_id = make_portfolio_repo()
     session = PaperTradingSessionService(repository=paper_repo).create_session(
         portfolio_id=portfolio_id,
@@ -1348,52 +1349,21 @@ def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:
         calendar_provider=FakeCalendar(),
         market_data_provider=FakeLiveMarket([]),
         refresh_audit=audit,
+        runtime=FakeNoCandidateRuntime(),
+        risk_policy_service=FakeRiskPolicyService(),
+        tradability_filter=FakeTradabilityFilter(),
     )
 
     progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
         session.session_id,
-        as_of_time=datetime(2024, 1, 2, 9, 13, 59),
+        as_of_time=at,
     )
 
-    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
-    assert progress.session.phase == PaperSessionPhase.LIVE_INTRADAY
-    assert paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2)) is None
-    events = paper_repo.list_session_events(session.session_id)
-    assert events[-1]["event_type"] == "LIVE_WAITING_FOR_DATA"
-    assert events[-1]["context"]["deadline_time"] == "09:14"
-    assert audit.calls[-1]["dataset"] == "stk_limit"
-
-
-def test_live_session_fails_if_stk_limit_missing_at_0914() -> None:
-    paper_repo, portfolio_id = make_portfolio_repo()
-    session = PaperTradingSessionService(repository=paper_repo).create_session(
-        portfolio_id=portfolio_id,
-        mode=PaperSessionMode.LIVE_ONLY,
-        start_date=date(2024, 1, 2),
-        live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={
-            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
-            "selection_artifact_config": {"auto_generate": False},
-        },
-    )
-    live_executor = PaperTradingLiveMinuteExecutor(
-        repository=paper_repo,
-        calendar_provider=FakeCalendar(),
-        market_data_provider=FakeLiveMarket([]),
-        refresh_audit=MissingStkLimitAudit(),
-    )
-
-    with pytest.raises(DataUnavailableError, match="requires stk_limit refresh by 09:14"):
-        PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
-            session.session_id,
-            as_of_time=datetime(2024, 1, 2, 9, 14, 0),
-        )
-
-    failed = paper_repo.get_session(session.session_id)
-    assert failed.status == PaperSessionStatus.FAILED
-    assert failed.last_error is not None
-    assert failed.last_error["error_code"] == "DATA_UNAVAILABLE"
-    assert paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2)) is None
+    run = paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2))
+    assert run is not None and run.status == RunStatus.SUCCEEDED
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY
+    assert audit.calls == []
+    assert paper_repo.list_errors(portfolio_id) == []
 
 
 def test_live_valid_no_candidate_no_position_day_succeeds_as_no_rebalance() -> None:

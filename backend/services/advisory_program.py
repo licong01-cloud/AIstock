@@ -2257,14 +2257,6 @@ class AdvisoryProgramService:
         symbols: list[str],
         target_trade_date: date,
     ) -> dict[str, AdvisoryMarketMark]:
-        refresh_audit = getattr(self.selection_service, "refresh_audit", None)
-        require_success = getattr(refresh_audit, "require_success", None)
-        if not callable(require_success):
-            raise DataUnavailableError(
-                "target-open settlement requires the local suspend_d refresh audit",
-                context={"trade_date": target_trade_date.isoformat()},
-            )
-        require_success(dataset="suspend_d", trade_date=target_trade_date)
         conn_factory = getattr(self.repository, "_conn_factory", None)
         if conn_factory is None:
             raise DataUnavailableError(

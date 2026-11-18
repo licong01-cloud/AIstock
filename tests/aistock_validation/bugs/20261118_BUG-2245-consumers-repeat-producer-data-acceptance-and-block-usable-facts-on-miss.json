@@ -1,6 +1,19 @@
 {
   "actual": "Several consumers require canonical/provider success before reading; unchanged facts can be rejected for missing metadata or changed validation_id; Paper live can wait solely for audit; Advisory rechecks validation certification repeatedly",
   "allowed_write_scope": [
+    "backend/services/advisory_program.py",
+    "backend/services/advisory_forward/service.py",
+    "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+    "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+    "backend/tests/test_daily_data_integrity_inputs.py",
+    "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
+    "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+    "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+    "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
     "backend/services/simulation_data/daily_context_provider.py",
     "backend/services/paper_trading_v2/readiness.py",
     "backend/services/paper_trading_v2/day_runner.py",
@@ -8,12 +21,10 @@
     "backend/services/selection_center/service.py",
     "backend/services/simulation_signal/strategy_package_selection.py",
     "backend/services/hmm_data_source/daily_input.py",
-    "backend/services/hmm_risk/risk_l2_database_inference.py",
     "backend/services/data_integrity/inputs.py",
     "backend/services/data_integrity/consumers.py",
     "backend/services/data_integrity/service.py",
     "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
-    "backend/tests/test_consumer_data_access_contract.py",
     "tests/aistock_validation/bugs/20261118_BUG-2245-consumers-repeat-producer-data-acceptance-and-block-usable-facts-on-miss.json"
   ],
   "assigned_agent": null,
@@ -286,7 +297,21 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/test_daily_data_integrity_inputs.py backend/tests/simulation_runtime/test_daily_trading_context.py -q",
+  "root_cause": "Business readers treated provider/canonical acceptance metadata as read permission, conflated revalidation IDs with content revisions, and used zero newly written rows to hide existing facts. Data acceptance belongs to ingestion/backfill/release, not every consumer access.",
+  "related_source_fix": "BUG-2248 / PR #7327 / ce817815ce1c873dd8d5a896e34d2cb18ff9b0eb separates the existing HMM runtime readback route; inherited from origin/main, not reimplemented here.",
+  "review_rounds": [
+    "R1 correctness: removed source-receipt gates in LocalSIM, Paper v2, Selection, HMM daily and Advisory; repeated validation metadata is excluded from content binding. Producer validation, honest UNKNOWN/INCOMPLETE monitoring and monthly publisher checks remain.",
+    "R2 compatibility/negative controls: actual missing or invalid required prices, duplicate data, true revision drift, PIT/package identity, causal clocks and execution policy checks remain strict. Legacy frozen bindings are not rewritten; fact provenance never claims known publication time.",
+    "R3 performance/coverage: constant set-based fact queries drop from five to three; no new fact scans, provider calls, retries or per-symbol SQL. Final related matrix: 354 passed, 1 skipped, one obsolete audit-short-circuit expectation then fixed; focused final 3 passed. Separate HMM module 44 passed and merged.",
+    "R4 real DEV readback: existing DEV 5433, readonly transaction, 001205.SZ/2026-05-08 pre_close=15.30 exactly matches direct facts with zero audit calls. No database writes, dataset changes, account execution or process control."
+  ],
+  "design_compliance_001": {
+    "complete_scope": "All audited consumer require_success call sites removed; producer/quality monitoring retained. Runtime effectiveness remains pending user restart, not claimed complete.",
+    "no_silent_failure": "Actual fact read errors remain UNAVAILABLE/errors; missing metadata never becomes VALID; required-field and identity negative controls retained.",
+    "business_semantics": "Only user-approved validation ownership changed; no model, strategy, stock pool, execution clock or threshold changes. Design sections 4.2/5.1/8 updated.",
+    "no_unapproved_gates": "No new consumer gates, approval framework, backfills, retries or dependencies added."
+  },
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend",
@@ -299,6 +324,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

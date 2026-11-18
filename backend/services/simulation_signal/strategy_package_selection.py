@@ -352,7 +352,6 @@ class StrategyPackageSelectionService:
             config["package_health"] = package_health
 
         global_profile = parse_selection_runtime_profile(config)
-        self._require_data_ready(trade_date=trade_date, runtime_config=config)
         artifact_by_package: dict[str, Any] = {}
         prepared_signals: dict[str, PreparedPackageSignalV1] = {}
         package_profiles: dict[str, SelectionRuntimeProfile] = {}
@@ -781,19 +780,6 @@ class StrategyPackageSelectionService:
             and len(package_ids) < 2
         ):
             raise RuntimeConfigInvalidError("package aggregation requires at least two packages")
-
-    def _require_data_ready(self, *, trade_date: date, runtime_config: dict[str, Any]) -> None:
-        if parse_selection_runtime_profile(runtime_config).tradability.exclude_suspended:
-            self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-        artifact_config = self.selection_artifact_config(runtime_config)
-        for dataset in artifact_config.get("required_cutoff_audit_datasets") or []:
-            cutoff = artifact_config.get("cutoff_date")
-            if not cutoff:
-                raise RuntimeConfigInvalidError(
-                    "required_cutoff_audit_datasets requires selection_artifact_config.cutoff_date",
-                    context={"required_cutoff_audit_datasets": artifact_config.get("required_cutoff_audit_datasets")},
-                )
-            self.refresh_audit.require_success(dataset=str(dataset), trade_date=date.fromisoformat(str(cutoff)))
 
     def _prepare_package_runtime_configs(
         self,

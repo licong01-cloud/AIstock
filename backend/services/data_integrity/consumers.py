@@ -146,10 +146,12 @@ def project_readiness(dependencies: ConsumerDependencies | None, dates: Sequence
                 projection = partition_projection(row, input_scope, members)
             if not effective["source_complete"] and projection is None:
                 blockers.append({"dataset": dataset, "fact_date": str(day), "state": effective["state"]})
-            else:
-                refs.append({"dataset": dataset, "fact_date": str(day), **{key: row.get(key) for key in
-                    ("data_revision", "validation_id", "scope_version", "rule_version")},
-                    **({"consumer_projection": projection} if projection is not None else {})})
+            # Include every requested content partition even when its quality
+            # ledger is absent. The monitor stays UNKNOWN/WAITING; a consumer
+            # binding is not a newly issued quality certificate.
+            refs.append({"dataset": dataset, "fact_date": str(day), **{key: (row or {}).get(key) for key in
+                ("data_revision", "validation_id", "scope_version", "rule_version")},
+                **({"consumer_projection": projection} if projection is not None else {})})
     scope_fields = {"input_scope": dict(input_scope)} if input_scope is not None else {}
     quality = {"outside_scope_gap_count": sum(len(r.get("consumer_projection", {}).get("outside_scope", [])) for r in refs),
                "missing_chip_key_count": sum(len(r.get("consumer_projection", {}).get("missing_as_nan", [])) for r in refs),

@@ -138,47 +138,22 @@ class _CompletionConnection:
 
 def test_database_daily_plan_date_uses_completion_not_physical_maxima(monkeypatch):
     connection = _CompletionConnection()
-    requested = []
-
-    class Repository:
-        def __init__(self, conn_factory):
-            self.conn_factory = conn_factory
-
-        def require_success(self, *, dataset, trade_date):
-            with self.conn_factory() as captured:
-                assert captured is connection
-            requested.append((dataset, trade_date))
-            return SimpleNamespace(
-                dataset=dataset,
-                trade_date=trade_date,
-                data_source="existing_ingestion",
-                status="success",
-                quality_status="ok",
-                row_count=100,
-                refreshed_at=connection.read_cutoff,
-                job_id="job",
-            )
-
-    monkeypatch.setattr("backend.services.hmm_data_source.daily_input.DataRefreshAuditRepository", Repository)
     day, identity = read_database_daily_completion(connection, requested_as_of=None, cutoff=date(2026, 10, 13))
     assert day == date(2026, 10, 12)
-    assert {value[1] for value in requested} == {day}
-    assert len(requested) == 3
+    assert identity["completion_statuses"] == {}
+    assert identity["source_acceptance_required"] is False
     assert set(identity["max_dates"].values()) == {"2026-10-13"}
     assert identity["max_dates_diagnostic_only"] is True
 
 
-def test_database_daily_completion_does_not_hide_latest_failed_attempt(monkeypatch):
-    class Repository:
-        def __init__(self, **kwargs):
-            pass
-
-        def require_success(self, **kwargs):
-            raise RuntimeError("required dataset refresh did not succeed")
-
-    monkeypatch.setattr("backend.services.hmm_data_source.daily_input.DataRefreshAuditRepository", Repository)
-    with pytest.raises(RuntimeError, match="required dataset refresh did not succeed"):
-        read_database_daily_completion(_CompletionConnection(), requested_as_of=None, cutoff=date(2026, 10, 13))
+def test_database_daily_explicit_date_has_no_source_acceptance_dependency():
+    class Connection(_CompletionConnection):
+        def execute(self, query, params=()):
+            assert 'dataset_date_refresh_audit' not in query
+            return super().execute(query, params)
+    day, identity = read_database_daily_completion(Connection(), requested_as_of=date(2026, 10, 12), cutoff=date(2026, 10, 13))
+    assert day == date(2026, 10, 12)
+    assert identity['source_acceptance_required'] is False
 
 
 @pytest.fixture

@@ -16,20 +16,20 @@ class InputReadinessError(DataUnavailableError):
 
 
 def ready_binding(readiness):
-    """Stable source identity only: observation time/global completion are not keys."""
-    if readiness.get("prediction_ready") is not True or readiness.get("state") != "READY":
-        raise InputReadinessError("策略包输入尚未就绪", context={
-            "package_id": readiness.get("binding_id"), "state": readiness.get("state", "UNKNOWN"),
-            "reason_code": readiness.get("reason_code") or "ADVISORY_INPUT_NOT_READY",
-            "reason": readiness.get("reason"), "blocker_count": len(readiness.get("blockers", [])),
-            "blockers": readiness.get("blockers", [])[:20]})
-    body = {key: readiness[key] for key in ("binding_id", "manifest_sha256", "data_date",
-        "dependencies", "partition_refs", "global_pit", "input_binding_sha256")}
+    """Bind resolved content once; producer quality is diagnostic, not a token."""
+    required = ("binding_id", "manifest_sha256", "data_date", "dependencies", "partition_refs", "global_pit")
+    if (not isinstance(readiness, dict) or any(not readiness.get(key) for key in required)
+            or not readiness["dependencies"].get("datasets")):
+        raise InputReadinessError("策略包、输入窗口或 PIT 身份无法绑定")
+    body = {key: readiness[key] for key in required}
     if "input_scope" in readiness:
         body["input_scope"] = readiness["input_scope"]
     body = json.loads(json.dumps(body, default=str))
-    if not body["partition_refs"] or not body["global_pit"]:
-        raise InputReadinessError("就绪证明缺少输入分区或 PIT 身份")
+    body["partition_refs"] = [{**{key: ref.get(key) for key in ("dataset", "fact_date", "data_revision")},
+        **({"consumer_projection": {key: ref["consumer_projection"][key]
+            for key in ("policy", "scope_sha256", "missing_as_nan") if key in ref["consumer_projection"]}}
+           if ref.get("consumer_projection") is not None else {})} for ref in body["partition_refs"]]
+    body["input_binding_sha256"] = digest({k:v for k,v in body.items() if k != "input_binding_sha256"})
     return {**body, "binding_sha256": digest(body)}
 
 
@@ -40,29 +40,26 @@ def check_binding(binding):
 
 
 def verify_partition_refs(expected, actual, *, input_scope=None):
-    """A missing, dirty, stale-rule or changed partition cannot certify a read."""
-    from .catalog import SCOPE_VERSION, RULE_VERSION
-    from .contracts import effective_partition
+    """Check frozen content identity only, never producer acceptance metadata.
+
+    Missing historical ledger rows remain untracked, not a fabricated VALID.
+    A known newer content revision must not silently replace a frozen input.
+    """
     rows = {(r["dataset"], str(r.get("trade_date", r.get("fact_date")))): r for r in (actual or [])}
     if len(rows) != len(actual or []):
         raise InputReadinessError("输入分区证明重复")
     for ref in expected:
         row = rows.get((ref["dataset"], ref["fact_date"]))
-        effective = effective_partition(row, scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
-        projected = False
-        if effective["current"] and ref.get("consumer_projection") is not None:
-            from .advisory_scope import verify_projection
-            projected = verify_projection(ref, row, input_scope)
-        if ((not effective["source_complete"] and not projected)
-                or (ref.get("consumer_projection") is not None and not projected)
-                or any(row.get(k) != ref.get(k) for k in ("data_revision", "validation_id", "scope_version", "rule_version"))):
-            raise InputReadinessError("输入分区未验证或已修订", context={"dataset": ref["dataset"], "fact_date": ref["fact_date"]})
+        revision = row.get("data_revision") if row else None
+        expected_revision = ref.get("data_revision")
+        if revision is not None and revision != expected_revision and not (expected_revision is None and revision == 0):
+            raise InputReadinessError("冻结输入内容已修订", context={"dataset": ref["dataset"], "fact_date": ref["fact_date"]})
 
 
 def verify_capture(binding, capture):
     check_binding(binding)
     dates = [r["fact_date"] for r in binding["partition_refs"]]
-    if (not isinstance(capture, dict) or capture.get("ledger_available") is not True
+    if (not isinstance(capture, dict)
             or capture.get("start") != min(dates) or capture.get("end") != binding["data_date"]
             or capture.get("snapshot_kind") != "REPEATABLE_READ_READ_ONLY"
             or capture.get("external_fallback_allowed") is not False):
@@ -112,15 +109,10 @@ def verify_current(conn, bindings, *, lock=False):
         scope = binding.get("input_scope")
         verify_partition_refs(refs, actual, input_scope=scope)
         if scope is not None:
-            from .advisory_scope import partition_projection, resolve_scope
-            current_scope, members = resolve_scope(conn, pit, date.fromisoformat(binding["data_date"]))
+            from .advisory_scope import resolve_scope
+            current_scope, _members = resolve_scope(conn, pit, date.fromisoformat(binding["data_date"]))
             if current_scope != scope:
                 raise InputReadinessError("荐股 PIT 输入范围已改变")
-            by_key = {(r["dataset"], r["trade_date"]): r for r in actual}
-            for ref in refs:
-                if ref.get("consumer_projection") is not None and partition_projection(
-                        by_key[(ref["dataset"], ref["fact_date"])], scope, members) != ref["consumer_projection"]:
-                    raise InputReadinessError("荐股输入缺失投影与当前范围不符")
 
 
 def partition_pins(conn, start: date, end: date, datasets=None, *, lock=False):

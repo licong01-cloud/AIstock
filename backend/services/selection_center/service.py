@@ -55,7 +55,6 @@ from .runtime_profile import (
     is_non_trading_runtime_config,
     mark_non_trading_preview_runtime_config,
     normalize_selection_runtime_config,
-    parse_selection_runtime_profile,
     runtime_config_scope,
     runtime_profile_config_sha256,
     validate_runtime_profile_binding,
@@ -263,19 +262,6 @@ class SelectionCenterService:
                 context={"context_selection_run_id": existing, "selection_run_id": selection_run_id},
             )
         return prospective_context.model_copy(update={"selection_run_id": selection_run_id})
-
-    def _require_data_ready(self, *, trade_date: date, runtime_config: dict[str, Any]) -> None:
-        if parse_selection_runtime_profile(runtime_config).tradability.exclude_suspended:
-            self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-        artifact_config = self._selection_artifact_config(runtime_config)
-        for dataset in artifact_config.get("required_cutoff_audit_datasets") or []:
-            cutoff = artifact_config.get("cutoff_date")
-            if not cutoff:
-                raise RuntimeConfigInvalidError(
-                    "required_cutoff_audit_datasets requires selection_artifact_config.cutoff_date",
-                    context={"required_cutoff_audit_datasets": artifact_config.get("required_cutoff_audit_datasets")},
-                )
-            self.refresh_audit.require_success(dataset=str(dataset), trade_date=date.fromisoformat(str(cutoff)))
 
     def _prepare_package_runtime_configs(
         self,

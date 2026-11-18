@@ -371,9 +371,6 @@ def extra_input_capture(connection, dates):
     for day in dates:
         row = by_key.get(("index_daily", day), {})
         revision = row.get("data_revision")
-        if (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0
-                or row.get("scope_version") != SCOPE_VERSION or row.get("rule_version") != RULE_VERSION):
-            raise InputReadinessError("沪深300输入缺少当前分区版本", context={"dataset": "index_daily", "fact_date": day})
         index_refs.append(dict(dataset="index_daily", fact_date=day, data_revision=revision,
             validation_id=row.get("validation_id"), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
             global_validation_status=row.get("validation_status"), validated_revision=row.get("validated_revision")))
