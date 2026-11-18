@@ -28,12 +28,18 @@
   ],
   "expected": "Same-task absolute-target model-free replays use the existing approved pure-backtest node capacity; mixed tasks and training remain unchanged.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2252-wsl-absolute-target-replay-fails-existing-same-task-backtest-cohort-proo.json",
       "backend/services/quantevolver/qe_execution_reservation.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2252-wsl-absolute-target-replay-fails-existing-same-task-backtest-cohort-proo.json",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_execution_reservation.py",
@@ -100,6 +106,30 @@
   "fixed_at": null,
   "github_issue_number": 7339,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7339",
+  "implementation_review": {
+    "completeness_and_regression": "Same-task/global reservations, requested limits and training/cross-task exclusions unchanged; 68 tests passed18 environment skips. No new gate or changed experimental contract.",
+    "correctness": "Recognize absolute-target object alongside existing backtest modes; SQL COALESCE avoids three-valued NULL logic admitting training. Real DEV SQL old/new behavior verified.",
+    "design_compliance_001": [
+      {
+        "item": 1,
+        "result": "PASS: complete classification fix; API loading separately pending, not claimed complete"
+      },
+      {
+        "item": 2,
+        "result": "PASS: incompatible and NULL cases retained, no default success"
+      },
+      {
+        "item": 3,
+        "result": "PASS: existing four-loop pure-backtest contract restored, frozen experimental inputs unchanged"
+      },
+      {
+        "item": 4,
+        "result": "PASS: zero new gates, approvals or controls"
+      }
+    ],
+    "independent_review": false,
+    "status": "TWO_AUTHOR_PERSPECTIVES_PASS"
+  },
   "last_seen_at": "2026-11-18T07:29:27.141445Z",
   "module": "quantevolver",
   "non_goals": [
@@ -117,11 +147,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261118_151311_d93b/custom-evo-config",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261118_151311_d93b",
+    "fresh_process_evidence": [
+      "Fresh Python process imported actual persistent reservation source, SHA256=1b1987072cb3d2d74dc1bf93173f8365f46de551ea1ac38b3ddca1dbdb925671, and executed its real SQL against seven read-only VALUES cases in existing DEV PostgreSQL. Original absolute replay returns1, repaired same-task replay4; cross-task/training/null/array stay1, legacy replay4. No schema, DML, production write, service control or experiment rerun. Receipt=tmp\\issue_workflow\\BUG-2252\\dev-cohort-v1.json;sha256=57a6ee0b03b8e1a8b11b2a15e384d70516c79e0dba2c79b6d2da99d79ec5b9f6",
+      "tmp\\issue_workflow\\BUG-2252\\dev-cohort-v1.json",
+      "tmp/issue_workflow/BUG-2252/dev-cohort-v1.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "Source/fresh-process proof does not establish API load. Existing task remains immutable; after user reload, check source identity and real waiting-capacity behavior if still in progress. Do not rerun completed accounts merely to prove capacity.",
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

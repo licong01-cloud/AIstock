@@ -1326,6 +1326,10 @@ class QEExecutionReservationRepository:
                       OR lower(
                           COALESCE(evolution_loop.config_json ->> 'prediction_replay', '')
                       ) = 'true'
+                      OR COALESCE(
+                          jsonb_typeof(evolution_loop.config_json -> 'absolute_target_replay'),
+                          ''
+                      ) = 'object'
                   )
               )
             """,

@@ -481,6 +481,24 @@ def test_invalid_capacity_requests_fail_closed(
     assert excinfo.value.reason_code == reason_code
 
 
+@pytest.mark.parametrize("incompatible,expected", [(0, 4), (1, 1)])
+def test_absolute_targets_share_only_the_existing_pure_backtest_cohort(incompatible, expected):
+    spec = replace(_spec(), source_kind="qe_evolution_loop")
+    cur = ScriptedCursor([Step("evolution_loop.config_json -> 'absolute_target_replay'", one={"incompatible_count": incompatible})])
+    capacity = QEExecutionReservationRepository._effective_node_capacity_for_source(
+        cur, spec, requested_node_capacity=4,
+        allow_same_task_backtest_parallelism=True,
+        allow_same_task_parallel_training=False,
+    )
+    assert capacity == expected
+    sql, params = cur.executions[0]
+    # The existing global reservation proof and same-task restriction remain.
+    assert "reservation.status = ANY(%s)" in sql
+    assert "reservation.qe_task_id = %s" in sql
+    assert "OR COALESCE( jsonb_typeof(" in sql
+    assert params[-1] == spec.qe_task_id
+
+
 def test_capacity_mode_is_unambiguous() -> None:
     with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as excinfo:
         QEActiveExecutionCapacityService().resolve_node_capacity(
