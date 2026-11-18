@@ -1,0 +1,393 @@
+{
+  "actual": "7/7 L3 failed; 6/7 promotion blocked; 7/7 invoked=false despite warning_only.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/ci_failure_issue_summary.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_nightly_session_runner.py",
+    "tests/aistock_validation/bugs/20261118_BUG-2250-nightly-timeout-budget-and-failure-intake-lose-llm-context-and-scoped-re.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2250",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-18T06:26:22.626684Z",
+  "description": "7/7 L3 failed; 6/7 promotion blocked; 7/7 invoked=false despite warning_only.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261118-f7b2590efd1b",
+      "timestamp": "2026-11-18T06:26:22.626670Z"
+    },
+    {
+      "action": "repair_ci_test_debt_budget",
+      "actor": "Codex",
+      "note": "PR7335 first CI failed only honest denominator ratio. Production code and 30% threshold unchanged; duplicate fixtures consolidated; final matrix 192 passed, ratio=14466/48227.",
+      "timestamp": "2026-11-18T06:53:29.011956+00:00"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/44155117997"
+  ],
+  "expected": "600s catalog budgets; complete same-run isolated receipt intake; bounded real DeepSeek diagnosis using authentic code intelligence context; precise old-run cleanup without active jobs.",
+  "external_follow_up": [
+    {
+      "delete_orphan_http": 403,
+      "force_cancel_http": 409,
+      "head": "6817b4ae87b3cee979a411dbf2a71e56eea0f021",
+      "jobs": 0,
+      "kind": "github_orphan_run",
+      "normal_cancel_http": 409,
+      "run_id": 43096131580,
+      "scope": "Exact legacy run only; automatic identity rules preserved; no active job touched.",
+      "status": "blocked_by_github_api",
+      "workflow": "codeql.yml"
+    },
+    {
+      "http_status": 402,
+      "kind": "deepseek_provider",
+      "live_probe_receipt": "tmp/issue_workflow/BUG-2250/live-test-plan-advice.json",
+      "model": "deepseek-v4-flash",
+      "required_action": "Service account owner must verify billing/quota; no model result or successful inference claimed.",
+      "status": "provider_rejected_request"
+    }
+  ],
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_session_runner.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2250-nightly-timeout-budget-and-failure-intake-lose-llm-context-and-scoped-re.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_session_runner.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2250-nightly-timeout-budget-and-failure-intake-lose-llm-context-and-scoped-re.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/nightly.yml",
+        "scripts/ci_failure_issue_summary.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_nightly_session_runner.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails",
+        "validation.center",
+        "tests.validation_history",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/nightly.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_github_workflows"
+        },
+        {
+          "file": "scripts/ci_failure_issue_summary.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/test_plans.yaml",
+          "impact_modules": [
+            "validation.center",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_test_plans"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_failure_issue_summary.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "ci_workflow_policy_test_owner"
+        },
+        {
+          "file": "backend/tests/scripts/test_nightly_session_runner.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        ".github/workflows/nightly.yml",
+        "scripts/ci_failure_issue_summary.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_nightly_session_runner.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/nightly.yml",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/nightly.yml",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ]
+  },
+  "first_seen_at": "2026-11-18T06:26:22.626684Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7333,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7333",
+  "implementation_review": {
+    "design_compliance_001": {
+      "no_business_semantic_change": true,
+      "no_partial_claim": "Source fixes complete; GitHub orphan and HTTP402 external follow-up explicitly pending.",
+      "no_silent_error": "Warnings and deterministic failure intake preserved.",
+      "no_unapproved_gate": true
+    },
+    "reviewer": "active_agent_self_review",
+    "rounds": [
+      {
+        "findings_fixed": [
+          "Keep one scoped row per witnessed session; preserve unproven sessions and independent DR failures.",
+          "Execute live advice in the self-hosted CI environment; publish exact same-run advice without a second call."
+        ],
+        "kind": "correctness",
+        "result": "passed"
+      },
+      {
+        "checks": [
+          "600-second catalog budgets reach runner execution.",
+          "Receipt run/commit/session mismatch and missing/invalid files remain visible warnings.",
+          "Off mode does not invoke or consume live advice; no new jobs, gates, graph refresh, business changes or service control.",
+          "Final affected matrix including honest-denominator invariant: 192 passed; test ratio 14466/48227 < 0.30 with unchanged production denominator and threshold; scope/guardrail, Ruff and diff check passed."
+        ],
+        "kind": "completeness_regression",
+        "result": "passed"
+      },
+      {
+        "findings_fixed": [
+          "Consolidated duplicate helper/off-mode tests into the actual publisher CLI parameter matrix.",
+          "Reused the real deterministic advice contract instead of a retired github_models mock; kept identity, invalid JSON, missing receipt, off-mode and real-call orchestration coverage."
+        ],
+        "kind": "CI_budget_repair_and_final_review",
+        "result": "passed",
+        "validation": "192 related tests passed; 8 receipt-mode/identity cases and 600s catalog runner budget cases included."
+      }
+    ]
+  },
+  "last_seen_at": "2026-11-18T06:26:22.626684Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_workflow_automation",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly timeout budget and failure intake lose LLM context and scoped receipt provenance",
+  "trigger_condition": {
+    "fingerprint": "f7b2590efd1b5040c502cce3",
+    "source_event_id": "FE-20261118-f7b2590efd1b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

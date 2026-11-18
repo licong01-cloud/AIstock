@@ -509,6 +509,49 @@ jobs:
             --session-timeout-seconds 1200 `
             --total-timeout-seconds 6300
 
+      - name: Build same-run Nightly failure LLM advice
+        if: always() && steps.background_window.outputs.background_admitted == 'true' && steps.execute_sessions.outcome == 'failure'
+        timeout-minutes: 4
+        env:
+          LLM_TRIAGE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode || 'warning_only' }}
+          AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: ${{ env.AISTOCK_SELF_HOSTED_SOURCE }}
+        run: |
+          if ($env:LLM_TRIAGE_MODE -eq 'off') { exit 0 }
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          New-Item -ItemType Directory -Force -Path "tmp/validation/nightly_failure_issue" | Out-Null
+          @{ statuses = @{ nightlyL3 = '${{ steps.execute_sessions.outcome }}' } } |
+            ConvertTo-Json | Set-Content -LiteralPath "tmp/validation/nightly_failure_issue/status.json" -Encoding UTF8
+          conda run -n AIstock-CI python scripts/code_intelligence_adapter.py summary `
+            --item-id "nightly-${{ github.run_id }}" `
+            --query "Nightly failed sessions: bounded diagnostic and test-plan context" `
+            --changed-files-file "tmp/validation/nightly_l3/changed-files.txt" `
+            --module validation `
+            --output "$outDir/code-intelligence-summary.json"
+          if ($LASTEXITCODE -ne 0) { throw "Nightly diagnostic code context failed" }
+          conda run -n AIstock-CI python scripts/ci_failure_issue_summary.py `
+            --nightly-status-json "tmp/validation/nightly_failure_issue/status.json" `
+            --run-id "${env:GITHUB_RUN_ID}" --commit "${env:GITHUB_SHA}" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --llm-triage-mode "$env:LLM_TRIAGE_MODE" `
+            --output "$outDir/llm-triage-summary.json" --stdout-format compact
+          if ($LASTEXITCODE -ne 0) { throw "Nightly diagnostic advice receipt failed" }
+          $advice = Get-Content -LiteralPath "$outDir/llm-triage-summary.json" -Raw | ConvertFrom-Json
+          if ($advice.llm_triage_advice.llm_invocation_evidence.invoked -ne $true) {
+            Write-Host "::warning title=Nightly LLM advice::No real LLM invocation; inspect the same-run advisor receipt. Deterministic failure intake is preserved."
+          }
+
+      - name: Upload same-run Nightly failure LLM advice
+        if: always() && steps.background_window.outputs.background_admitted == 'true' && steps.execute_sessions.outcome == 'failure' && (github.event_name != 'workflow_dispatch' || inputs.llm_triage_mode != 'off')
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-failure-advice-${{ github.run_id }}
+          path: |
+            tmp/validation/code-intelligence/${{ github.run_id }}/
+            tmp/issue_workflow/nightly-${{ github.run_id }}/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Print validation history manifest
         if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
@@ -1160,6 +1203,14 @@ jobs:
           path: tmp/validation/code-intelligence/${{ github.run_id }}
         continue-on-error: true
 
+      - name: Download same-run Nightly failure LLM advice
+        if: always() && needs.nightly-l3.outputs.sessions_result == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          name: nightly-failure-advice-${{ github.run_id }}
+          path: tmp/
+        continue-on-error: true
+
       - name: Download Nightly L3 session results
         id: download_nightly_l3
         if: always() && needs.nightly-l3.outputs.background_admitted != 'false' && needs.nightly-l3.result != 'skipped' && needs.nightly-l3.result != 'cancelled'
@@ -1278,6 +1329,9 @@ jobs:
           LLM_ARGS=(--llm-triage-mode "${LLM_TRIAGE_MODE}")
           if [ "${LLM_AUTO_FILE_OPT_IN}" = "true" ]; then
             LLM_ARGS+=(--llm-auto-file-opt-in)
+          fi
+          if [ "${L3_SESSIONS_RESULT}" = "failure" ]; then
+            LLM_ARGS+=(--llm-triage-summary-json "tmp/validation/code-intelligence/${{ github.run_id }}/llm-triage-summary.json")
           fi
           cat > tmp/validation/nightly_failure_issue/status.json <<EOF
           {

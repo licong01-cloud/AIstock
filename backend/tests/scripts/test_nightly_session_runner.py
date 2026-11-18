@@ -10,18 +10,23 @@ import pytest
 from scripts import nightly_session_runner as runner
 
 
-def test_catalog_budget_is_honored_but_never_exceeds_total_deadline(tmp_path):
+@pytest.mark.parametrize("session,budget", [("hmm", 1800), ("simulation_core_l2", 600), ("position_timing_backend", 600)])
+def test_catalog_budget_is_honored_but_never_exceeds_total_deadline(tmp_path, session, budget):
+    if session != "hmm":
+        import yaml
+        plans = yaml.safe_load(Path("tests/aistock_validation/catalog/test_plans.yaml").read_text(encoding="utf-8"))["plans"]
+        assert next(p for p in plans if p.get("nox_session") == session)["max_duration_seconds"] == budget
     observed = []
     def execute(session, timeout, *args):
         observed.append(timeout)
         return dict(session=session, result="success", duration_seconds=0)
-    runner.run_sessions(["hmm"], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
+    runner.run_sessions([session], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
                         session_timeout_seconds=1200, total_timeout_seconds=2400,
-                        session_budgets={"hmm": 1800}, executor=execute)
-    assert observed == [1800]
-    runner.run_sessions(["hmm"], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
+                        session_budgets={session: budget}, executor=execute)
+    assert observed == [budget]
+    runner.run_sessions([session], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
                         session_timeout_seconds=1200, total_timeout_seconds=60,
-                        session_budgets={"hmm": 1800}, executor=execute)
+                        session_budgets={session: budget}, executor=execute)
     assert 0 < observed[-1] <= 60
 
 
