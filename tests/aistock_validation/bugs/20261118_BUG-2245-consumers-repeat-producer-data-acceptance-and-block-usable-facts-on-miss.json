@@ -1,6 +1,7 @@
 {
   "actual": "Several consumers require canonical/provider success before reading; unchanged facts can be rejected for missing metadata or changed validation_id; Paper live can wait solely for audit; Advisory rechecks validation certification repeatedly",
   "allowed_write_scope": [
+    "backend/tests/advisory_model_first/test_forward_scheduler.py",
     "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
     "backend/services/advisory_program.py",
     "backend/services/advisory_forward/service.py",
@@ -70,6 +71,7 @@
       "backend/services/simulation_data/daily_context_provider.py",
       "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "backend/tests/paper_trading_v2/test_day_runner.py",
@@ -99,6 +101,7 @@
       "backend/services/simulation_data/daily_context_provider.py",
       "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
       "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "backend/tests/paper_trading_v2/test_day_runner.py",
@@ -357,7 +360,8 @@
     "R2 compatibility/negative controls: actual missing or invalid required prices, duplicate data, true revision drift, PIT/package identity, causal clocks and execution policy checks remain strict. Legacy frozen bindings are not rewritten; fact provenance never claims known publication time.",
     "R3 performance/coverage: constant set-based fact queries drop from five to three; no new fact scans, provider calls, retries or per-symbol SQL. Final related matrix: 354 passed, 1 skipped, one obsolete audit-short-circuit expectation then fixed; focused final 3 passed. Separate HMM module 44 passed and merged.",
     "R4 real DEV readback: existing DEV 5433, readonly transaction, 001205.SZ/2026-05-08 pre_close=15.30 exactly matches direct facts with zero audit calls. No database writes, dataset changes, account execution or process control.",
-    "R5 broader CI review: LSTM benchmark post-compute comparison also included producer validation IDs in its hash. Split optional provenance from actual values/window/revision comparisons; four stale source-gate expectations updated. Focused 11 passed, complete benchmark slice 37 passed; actual price/missing/window/revision negative controls remain."
+    "R5 broader CI review: LSTM benchmark post-compute comparison also included producer validation IDs in its hash. Split optional provenance from actual values/window/revision comparisons; four stale source-gate expectations updated. Focused 11 passed, complete benchmark slice 37 passed; actual price/missing/window/revision negative controls remain.",
+    "R6 first CI: all other plans exitstatus=0, including simulation_core_l2 1718 items. Advisory had four stale benchmark expectations (fixed) plus a scheduler thread teardown timeout that passes in isolation; isolate its opt-in notification environment, do not relax lock/timeout assertions or change scheduler behavior."
   ],
   "risk_area": "bug",
   "root_cause": "Business readers treated provider/canonical acceptance metadata as read permission, conflated revalidation IDs with content revisions, and used zero newly written rows to hide existing facts. Data acceptance belongs to ingestion/backfill/release, not every consumer access.",
@@ -367,7 +371,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python process loaded changed DailyTradingContextProvider against existing DEV readonly 5433: 001205.SZ/2026-05-08 pre_close=15.30, all three prices equal direct facts, audit_queries=0, database_write=false; 80 input-contract regressions passed"
+      "Fresh Python process loaded changed DailyTradingContextProvider against existing DEV readonly 5433: 001205.SZ/2026-05-08 pre_close=15.30, all three prices equal direct facts, audit_queries=0, database_write=false; 80 input-contract regressions passed",
+      "python -m pytest backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 37 passed; isolated process; optional source metadata ignored, actual price/window/revision negative controls passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
