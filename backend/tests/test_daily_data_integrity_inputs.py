@@ -3,10 +3,96 @@ from datetime import date
 
 import pandas as pd
 import pytest
+import ast
+from pathlib import Path
 
 from backend.services.advisory_historical_range.inference_inputs import InferenceInputSession
 from backend.services.data_integrity.release import pin_payload, release_day
 from backend.services.data_integrity.writes import fact_day
+
+
+@pytest.mark.parametrize('relative', (
+    'simulation_data/daily_context_provider.py', 'paper_trading_v2/readiness.py',
+    'paper_trading_v2/day_runner.py', 'paper_trading_v2/live_session.py',
+    'selection_center/service.py', 'simulation_signal/strategy_package_selection.py',
+    'hmm_data_source/daily_input.py', 'hmm_risk/risk_l2_database_inference.py',
+    'advisory_program.py', 'advisory_forward/service.py',
+))
+def test_consumer_does_not_require_source_acceptance(relative):
+    root = Path(__file__).resolve().parents[2]
+    tree = ast.parse((root/'backend/services'/relative).read_text(encoding='utf-8-sig'))
+    calls = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and ((isinstance(n.func, ast.Attribute) and n.func.attr == 'require_success')
+                  or (isinstance(n.func, ast.Name) and n.func.id == 'require_success'))]
+    assert not calls, f'{relative}: consumer audit gates remain at {calls}'
+
+
+def _content_reference():
+    return dict(dataset='suspend_d', fact_date='2026-10-09', data_revision=0,
+                validation_id='old-verdict', scope_version='old-scope', rule_version='old-rule')
+
+
+@pytest.mark.parametrize('actual', [[], [dict(dataset='suspend_d', trade_date='2026-10-09',
+    data_revision=0, validation_status='UNVERIFIED', validation_id=None)],
+    [dict(dataset='suspend_d', trade_date='2026-10-09', data_revision=0,
+          validation_status='VALID', validation_id='new-verdict', scope_version='new-scope', rule_version='new-rule')]])
+def test_quality_ledger_absence_or_revalidation_is_not_changed_content(actual):
+    from backend.services.data_integrity.inputs import verify_partition_refs
+    verify_partition_refs([_content_reference()], actual)
+
+
+def test_real_content_revision_conflict_is_still_an_identity_error():
+    from backend.services.data_integrity.inputs import InputReadinessError, verify_partition_refs
+    with pytest.raises(InputReadinessError):
+        verify_partition_refs([_content_reference()], [dict(dataset='suspend_d', trade_date='2026-10-09', data_revision=1)])
+
+
+def test_duplicate_content_reference_is_still_invalid():
+    from backend.services.data_integrity.inputs import InputReadinessError, verify_partition_refs
+    row = dict(dataset='suspend_d', trade_date='2026-10-09', data_revision=0)
+    with pytest.raises(InputReadinessError):
+        verify_partition_refs([_content_reference()], [row, row])
+
+
+def _quality_waiting_binding():
+    return dict(prediction_ready=False, state='WAITING', binding_id='pkg',
+        manifest_sha256='a'*64, data_date='2026-10-09', global_pit={'authority_id':'global'},
+        dependencies={'datasets':['suspend_d'], 'window_trading_days':1},
+        input_binding_sha256='b'*64, partition_refs=[_content_reference()],
+        blockers=[{'dataset':'suspend_d','state':'UNVERIFIED'}])
+
+
+def test_quality_waiting_does_not_prevent_resolved_task_input_binding():
+    from backend.services.data_integrity.contracts import digest
+    from backend.services.data_integrity.inputs import ready_binding
+    result = ready_binding(_quality_waiting_binding())
+    assert result['binding_id'] == 'pkg'
+    assert result['partition_refs'] == [{'dataset':'suspend_d','fact_date':'2026-10-09','data_revision':0}]
+    assert digest({k:v for k,v in result.items() if k!='binding_sha256'}) == result['binding_sha256']
+
+
+def test_quality_waiting_with_unresolved_package_or_pit_is_not_a_valid_binding():
+    from backend.services.data_integrity.inputs import InputReadinessError, ready_binding
+    with pytest.raises(InputReadinessError):
+        ready_binding(dict(prediction_ready=False, state='UNKNOWN', binding_id='pkg', partition_refs=[]))
+
+
+def test_revalidation_does_not_change_task_content_identity():
+    from backend.services.data_integrity.inputs import ready_binding
+    readiness = _quality_waiting_binding()
+    original = ready_binding(readiness)
+    readiness.update(prediction_ready=True, state='READY', input_binding_sha256='changed-quality-digest')
+    readiness['partition_refs'][0].update(validation_id='revalidated', rule_version='new-rule')
+    assert ready_binding(readiness) == original
+
+
+def test_producer_validation_is_retained():
+    from backend.services.data_integrity.contracts import effective_partition
+    assert not effective_partition({'dataset':'suspend_d','data_revision':0},
+        scope_version='scope', rule_version='rule')['source_complete']
+    tree = ast.parse((Path(__file__).resolve().parents[2]/'backend/services/stock_universe_pit_service.py').read_text(encoding='utf-8-sig'))
+    assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+               and n.func.attr == 'require_success' for n in ast.walk(tree))
 
 
 def scoped_missing_example(dataset="bak_basic", missing="002731.SZ", members=("000001.SZ",)):
@@ -110,7 +196,7 @@ def test_projected_capture_binds_scope_and_exact_missing_evidence(damage):
         row["validation_id"] = "new"
     if damage == "source_gap":
         row["metadata"]["validation"]["gaps"][0]["symbols"] = ["000002.SZ"]
-    if damage:
+    if damage in {"universe", "revision"}:
         with pytest.raises(InputReadinessError):
             verify_capture(binding, capture)
     else:
@@ -169,12 +255,11 @@ def test_publish_recheck_independently_recomputes_scope(monkeypatch, changed):
 
     monkeypatch.setattr(pit_module.CanonicalPitAuthorityResolver, "resolve_live_binding", lambda _: Pit())
     monkeypatch.setattr(inputs, "partition_pins", lambda *a, **kw: [row])
-    # Even if a supplied hash claims no change, reloaded members must prove the
-    # exemption again; this also covers an erroneously classified source alias.
+    # Bind actual PIT scope identity, not a producer quality projection.
     monkeypatch.setattr(advisory_scope, "resolve_scope", lambda *a: (
-        scope, {"000001.SZ", "002731.SZ"} if changed else {"000001.SZ"}))
+        {**scope, "universe_sha256": "changed"} if changed else scope, {"000001.SZ"}))
     if changed:
-        with pytest.raises(inputs.InputReadinessError, match="缺失投影"):
+        with pytest.raises(inputs.InputReadinessError, match="输入范围"):
             inputs.verify_current(Connection(), {"pkg": binding})
     else:
         inputs.verify_current(Connection(), {"pkg": binding})
@@ -393,7 +478,11 @@ def test_actual_capture_rejects_source_drift(kind):
         capture["pit_identity"] = {"universe_key": "legacy"}
     if kind == "untracked":
         capture["ledger_available"] = False
-    with pytest.raises(InputReadinessError):
+    if kind in {"revision", "fallback", "window", "pit"}:
+        with pytest.raises(InputReadinessError):
+            verify_capture(binding, capture)
+    else:
+        # Ledger absence/quality changes do not alter the captured fact bytes.
         verify_capture(binding, capture)
 
 

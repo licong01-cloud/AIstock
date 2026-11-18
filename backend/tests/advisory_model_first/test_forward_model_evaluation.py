@@ -355,7 +355,7 @@ def test_forward_service_advances_mature_evaluation_without_publication_side_eff
     assert repository.committed["evaluation"].due_observation_count == 2
 
 
-def test_forward_service_keeps_missing_market_audit_visible_without_running_market_query() -> None:
+def test_forward_service_reads_real_market_without_source_acceptance() -> None:
     repository = _EvaluationRepository()
     selection_runs = _selection_runs()
     market_load_count = 0
@@ -383,10 +383,9 @@ def test_forward_service_keeps_missing_market_audit_visible_without_running_mark
 
     result = service.run_once()
 
-    assert result["results"][0]["status"] == "WAITING_DATA"
-    assert result["results"][0]["reason_code"] == "ADVISORY_FORWARD_MODEL_EVALUATION_MARKET_DATA_UNAVAILABLE"
-    assert repository.failure["waiting_data"] is True
-    assert market_load_count == 0
+    assert result["results"][0]["status"] == "MODEL_EVALUATION_READY"
+    assert repository.committed is not None
+    assert market_load_count == 1
 
 
 def test_forward_service_isolates_evaluation_discovery_failure_from_run_once() -> None:
@@ -425,7 +424,9 @@ def test_forward_service_isolates_evaluation_failure_persistence_error() -> None
     service = AdvisoryForwardService(
         repository=repository,
         program_service=program_service,
-        evaluation_market_source=SimpleNamespace(load=lambda **_kwargs: _market()),
+        evaluation_market_source=SimpleNamespace(
+            load=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("actual market read failed"))
+        ),
         calendar=SimpleNamespace(is_trading_day=lambda _value: True),
         now_provider=lambda: datetime(2026, 1, 7, 2, 30, tzinfo=UTC),
     )

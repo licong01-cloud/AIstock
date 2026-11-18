@@ -295,7 +295,6 @@ class DailyTradingContextProvider:
                 "daily supporting facts require a non-empty exact symbol set",
                 context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_SET_EMPTY"},
             )
-        suspend_audit = self._require_refresh("suspend_d", trade_date)
         suspend_rows, st_rows = self._read_supporting_batches(normalized, trade_date)
         suspend_facts = self._validate_suspend_rows(
             rows=suspend_rows,
@@ -322,8 +321,9 @@ class DailyTradingContextProvider:
                 "source": "market.suspend_d",
                 "dataset": "suspend_d",
                 "trade_date": trade_date.isoformat(),
-                "refresh_identity": self._refresh_identity(suspend_audit),
-                "available_at": suspend_audit.refreshed_at.isoformat(),
+                "refresh_identity": self._fact_identity("suspend_d", trade_date, suspend_rows),
+                "available_at": None,
+                "publication_time_quality": "UNKNOWN",
                 "batch_hash": _canonical_json_sha256(suspend_facts),
             },
             "stock_st_facts": st_facts,
@@ -351,29 +351,8 @@ class DailyTradingContextProvider:
                 "stk_limit authority requires a non-empty exact symbol set",
                 context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_SET_EMPTY"},
             )
-        try:
-            audit = self.audit_repository.require_success(dataset="stk_limit", trade_date=trade_date)
-        except DataUnavailableError as exc:
-            return {
-                "schema_version": "stk_limit_authority_attempt_v1",
-                "trade_date": trade_date.isoformat(),
-                "symbol_set": list(requested),
-                "availability": "UNAVAILABLE",
-                "unavailable_reason": exc.message,
-                "refresh_identity": None,
-                "rows": [],
-            }
-        refresh_identity = self._refresh_identity(audit)
-        if int(audit.row_count or 0) == 0:
-            return {
-                "schema_version": "stk_limit_authority_attempt_v1",
-                "trade_date": trade_date.isoformat(),
-                "symbol_set": list(requested),
-                "availability": "ZERO_ROWS",
-                "unavailable_reason": None,
-                "refresh_identity": refresh_identity,
-                "rows": [],
-            }
+        # Availability comes from the requested facts, never from a source
+        # receipt's row_count (which may mean zero newly written rows).
         try:
             with self.conn_factory() as conn:
                 with conn.cursor() as cur:
@@ -394,16 +373,16 @@ class DailyTradingContextProvider:
                 "symbol_set": list(requested),
                 "availability": "UNAVAILABLE",
                 "unavailable_reason": type(exc).__name__,
-                "refresh_identity": refresh_identity,
+                "refresh_identity": None,
                 "rows": [],
             }
         return {
             "schema_version": "stk_limit_authority_attempt_v1",
             "trade_date": trade_date.isoformat(),
             "symbol_set": list(requested),
-            "availability": "AVAILABLE",
+            "availability": "AVAILABLE" if rows else "ZERO_ROWS",
             "unavailable_reason": None,
-            "refresh_identity": refresh_identity,
+            "refresh_identity": self._fact_identity("stk_limit", trade_date, rows),
             "rows": [
                 {
                     "symbol": row[0],
@@ -480,15 +459,14 @@ class DailyTradingContextProvider:
                 },
             )
 
-        stk_audit = self._require_refresh("stk_limit", trade_date)
-        suspend_audit = self._require_refresh("suspend_d", trade_date)
         stk_rows, suspend_rows, st_rows = self._read_exact_batches(normalized, trade_date)
+        stk_identity = self._fact_identity("stk_limit", trade_date, stk_rows)
         symbol_hash = _canonical_json_sha256(list(normalized))
         stk_facts = self._validate_stk_limit_rows(
             rows=stk_rows,
             requested=normalized,
             trade_date=trade_date,
-            refresh_identity=self._refresh_identity(stk_audit),
+            refresh_identity=stk_identity,
         )
         self._resolve_missing_pre_close(
             facts=stk_facts,
@@ -558,8 +536,9 @@ class DailyTradingContextProvider:
                 "source": "market.stk_limit",
                 "dataset": "stk_limit",
                 "trade_date": trade_date.isoformat(),
-                "refresh_identity": self._refresh_identity(stk_audit),
-                "available_at": stk_audit.refreshed_at.isoformat(),
+                "refresh_identity": stk_identity,
+                "available_at": None,
+                "publication_time_quality": "UNKNOWN",
                 "batch_hash": _canonical_json_sha256({symbol: stk_facts[symbol]["row_hash"] for symbol in normalized}),
                 "pre_close_authority": {
                     "policy": "raw_stk_limit_else_broker_bound_plan_quote",
@@ -577,8 +556,9 @@ class DailyTradingContextProvider:
                 "source": "market.suspend_d",
                 "dataset": "suspend_d",
                 "trade_date": trade_date.isoformat(),
-                "refresh_identity": self._refresh_identity(suspend_audit),
-                "available_at": suspend_audit.refreshed_at.isoformat(),
+                "refresh_identity": self._fact_identity("suspend_d", trade_date, suspend_rows),
+                "available_at": None,
+                "publication_time_quality": "UNKNOWN",
                 "batch_hash": _canonical_json_sha256(suspend_facts),
             },
         }
@@ -643,25 +623,6 @@ class DailyTradingContextProvider:
                 },
             }
         return statuses
-
-    def _require_refresh(self, dataset: str, trade_date: date) -> Any:
-        try:
-            return self.audit_repository.require_success(dataset=dataset, trade_date=trade_date)
-        except DataUnavailableError as exc:
-            raise DataUnavailableError(
-                "daily trading context is waiting for dataset refresh",
-                context={
-                    "reason_code": (
-                        "DAILY_TRADING_CONTEXT_WAITING_STK_LIMIT_REFRESH"
-                        if dataset == "stk_limit"
-                        else "DAILY_TRADING_CONTEXT_WAITING_SUSPEND_D_REFRESH"
-                    ),
-                    "dataset": dataset,
-                    "trade_date": trade_date.isoformat(),
-                    "retryable": True,
-                    "cause": exc.message,
-                },
-            ) from exc
 
     def _read_exact_batches(
         self,
@@ -798,18 +759,11 @@ class DailyTradingContextProvider:
         return suspend_rows, st_rows
 
     @staticmethod
-    def _refresh_identity(status: Any) -> str:
-        payload = {
-            "dataset": status.dataset,
-            "trade_date": status.trade_date.isoformat(),
-            "data_source": status.data_source,
-            "status": status.status,
-            "row_count": status.row_count,
-            "refreshed_at": status.refreshed_at.isoformat(),
-            "job_id": status.job_id,
-            "quality_status": status.quality_status,
-        }
-        return f"refresh_{_canonical_json_sha256(payload)[:24]}"
+    def _fact_identity(dataset: str, trade_date: date, rows: list[Any]) -> str:
+        """Identify the actual read, without claiming provider acceptance/time."""
+        payload = _local_sim_snapshot_json_value({
+            "dataset": dataset, "trade_date": trade_date.isoformat(), "rows": rows})
+        return f"facts_{_canonical_json_sha256(payload)[:24]}"
 
     @staticmethod
     def _validate_stk_limit_rows(

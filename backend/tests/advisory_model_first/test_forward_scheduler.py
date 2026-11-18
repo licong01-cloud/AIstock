@@ -82,7 +82,10 @@ def test_scheduler_thread_only_starts_when_start_is_called() -> None:
     assert scheduler.status()["running"] is False
 
 
-def test_scheduler_reports_concurrent_run_without_starting_duplicate_work() -> None:
+def test_scheduler_reports_concurrent_run_without_starting_duplicate_work(monkeypatch) -> None:
+    # Concurrency must not inherit a live notification switch from earlier
+    # configuration-loading tests and wait on external notification work.
+    monkeypatch.setenv("AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED", "false")
     started = threading.Event()
     release = threading.Event()
 

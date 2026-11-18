@@ -182,19 +182,26 @@ def test_live_capture_clock_cannot_rewind_or_cross_trade_date(offset) -> None:
             package_identity="package:manifest", release_identity="release:hash")
 
 
-def test_stk_limit_attempt_unavailable_does_not_query_market_table() -> None:
+def test_stk_limit_attempt_reports_actual_query_failure_without_source_gate() -> None:
     class Audit:
         @staticmethod
         def require_success(*, dataset: str, trade_date: date):
-            raise DataUnavailableError("refresh unavailable")
+            pytest.fail("consumer must not ask source acceptance")
+
+    queried = []
+    def unavailable_connection():
+        queried.append(True)
+        raise RuntimeError("market table unavailable")
 
     provider = DailyTradingContextProvider(
-        conn_factory=lambda: pytest.fail("market.stk_limit must not be queried when refresh is unavailable"),
+        conn_factory=unavailable_connection,
         audit_repository=Audit(),
     )
     result = provider.load_stk_limit_authority_attempt(symbols=["000001.SZ"], trade_date=TRADE_DATE)
     assert result["availability"] == "UNAVAILABLE"
     assert result["rows"] == []
+    assert result["unavailable_reason"] == "RuntimeError"
+    assert queried == [True]
 
 
 def test_stk_limit_attempt_uses_one_exact_set_based_query() -> None:

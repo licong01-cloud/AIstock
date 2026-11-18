@@ -228,7 +228,9 @@ class LstmSpoShadowSource:
             self._verify_original(connection, native["publication"], native)
             extra = receipt["price"]["input_readiness"]
             current = extra_input_capture(connection, extra["session_dates"])
-            if sha(extra) != sha(current):
+            verify_partition_refs(extra["partition_refs"], current["partition_refs"])
+            verify_partition_refs(extra["benchmark"]["partition_refs"], current["benchmark"]["partition_refs"])
+            if _extra_content_sha(extra) != _extra_content_sha(current):
                 raise InputReadinessError("重排序实际输入或分区版本在计算后变化")
 
     def finance(self, prediction):
@@ -344,8 +346,14 @@ def verify_native_liveness(connection, repo, bindings):
             raise InputReadinessError("原生策略包冻结版本或准入状态已变化")
 
 
+def _extra_content_sha(capture):
+    """Compare consumed content, not optional producer verification metadata."""
+    return sha({**{k: v for k, v in capture.items() if k not in {"partition_refs", "benchmark"}},
+        "benchmark": {k: v for k, v in capture["benchmark"].items() if k != "partition_refs"}})
+
+
 def extra_input_capture(connection, dates):
-    """Certify the consumed benchmark close slice, without certifying other indices."""
+    """Capture the required benchmark close slice without source recertification."""
     from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
     from backend.services.data_integrity.contracts import finite_number
 
@@ -371,9 +379,6 @@ def extra_input_capture(connection, dates):
     for day in dates:
         row = by_key.get(("index_daily", day), {})
         revision = row.get("data_revision")
-        if (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0
-                or row.get("scope_version") != SCOPE_VERSION or row.get("rule_version") != RULE_VERSION):
-            raise InputReadinessError("沪深300输入缺少当前分区版本", context={"dataset": "index_daily", "fact_date": day})
         index_refs.append(dict(dataset="index_daily", fact_date=day, data_revision=revision,
             validation_id=row.get("validation_id"), scope_version=SCOPE_VERSION, rule_version=RULE_VERSION,
             global_validation_status=row.get("validation_status"), validated_revision=row.get("validated_revision")))

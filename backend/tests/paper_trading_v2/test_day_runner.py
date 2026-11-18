@@ -951,7 +951,7 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     assert cash_rows[0]["portfolio_id"] == portfolio.portfolio_id
     assert cash_rows[0]["run_id"] == result.run.run_id
     assert paper_repo.snapshots[result.run.run_id].nav > 0
-    assert [call["dataset"] for call in refresh_audit.calls] == ["suspend_d", "stk_limit"]
+    assert refresh_audit.calls == []
     report = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -996,7 +996,7 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     ]
     assert event_types == [
         "RUN_STARTED",
-        "DATA_READY",
+        "DATA_INPUTS_BOUND",
         "SIGNAL_GENERATED",
         "TRADABILITY_FILTERED",
         "TARGETS_GENERATED",
@@ -2202,12 +2202,11 @@ def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
         "strategy_package_manifest",
         "trading_calendar",
         "run_date_available",
-        "suspend_d_refresh",
-        "stk_limit_refresh",
         "selection_runtime",
         "rebalance",
         "minute_market_data",
     }
+    assert not {"suspend_d_refresh", "stk_limit_refresh"} & {check.check_name for check in result.checks}
 
 
 def test_selection_cutoff_helper_injects_previous_trading_day_for_auto_generate() -> None:

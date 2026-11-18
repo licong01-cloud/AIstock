@@ -19,7 +19,6 @@ from backend.services.advisory_forward.evaluation import (
     AdvisoryForwardEvaluationMarketSource,
     build_forward_model_evaluation,
 )
-from backend.services.advisory_forward.errors import AdvisoryForwardModelEvaluationError
 from backend.services.advisory_forward.repository import (
     RETRYABLE_MODEL_OBSERVATION_REASON_CODES,
     AdvisoryForwardPGRepository,
@@ -454,7 +453,6 @@ class AdvisoryForwardService:
         )
         cost_policy = prediction.get("cost_policy")
         benchmark = str(cost_policy.get("benchmark_instrument") or "") if isinstance(cost_policy, Mapping) else ""
-        self._require_evaluation_market_audit(evaluation_as_of)
         market = self.evaluation_market_source.load(
             symbols=symbols,
             benchmark_instrument=benchmark,
@@ -488,25 +486,6 @@ class AdvisoryForwardService:
             "new_outcome_count": len(built.new_outcomes),
             "unresolved_outcome_count": len(built.unresolved_observation_ids),
         }
-
-    def _require_evaluation_market_audit(self, trade_date: date) -> None:
-        refresh_audit = getattr(self.program_service.selection_service, "refresh_audit", None)
-        require_success = getattr(refresh_audit, "require_success", None)
-        if not callable(require_success):
-            raise AdvisoryForwardModelEvaluationError(
-                "forward model evaluation requires dataset refresh audit authority",
-                reason_code=REASON_MARKET_UNAVAILABLE,
-                context={"trade_date": trade_date.isoformat()},
-            )
-        for dataset in ("kline_daily_raw", "adj_factor", "stk_limit", "suspend_d", "index_daily"):
-            try:
-                require_success(dataset=dataset, trade_date=trade_date)
-            except Exception as exc:
-                raise AdvisoryForwardModelEvaluationError(
-                    "forward model evaluation dataset refresh audit is not successful",
-                    reason_code=REASON_MARKET_UNAVAILABLE,
-                    context={"dataset": dataset, "trade_date": trade_date.isoformat()},
-                ) from exc
 
     def _publication_due(self, now: datetime) -> bool:
         return self.calendar.is_trading_day(now.date()) and (

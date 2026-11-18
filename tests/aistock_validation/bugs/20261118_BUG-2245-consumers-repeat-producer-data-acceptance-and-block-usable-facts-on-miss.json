@@ -1,0 +1,530 @@
+{
+  "actual": "Several consumers require canonical/provider success before reading; unchanged facts can be rejected for missing metadata or changed validation_id; Paper live can wait solely for audit; Advisory rechecks validation certification repeatedly",
+  "allowed_write_scope": [
+    "backend/tests/advisory_model_first/test_forward_scheduler.py",
+    "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+    "backend/services/advisory_program.py",
+    "backend/services/advisory_forward/service.py",
+    "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+    "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+    "backend/tests/test_daily_data_integrity_inputs.py",
+    "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
+    "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+    "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+    "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+    "backend/services/simulation_data/daily_context_provider.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/simulation_signal/strategy_package_selection.py",
+    "backend/services/hmm_data_source/daily_input.py",
+    "backend/services/data_integrity/inputs.py",
+    "backend/services/data_integrity/consumers.py",
+    "backend/services/data_integrity/service.py",
+    "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+    "tests/aistock_validation/bugs/20261118_BUG-2245-consumers-repeat-producer-data-acceptance-and-block-usable-facts-on-miss.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2245",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-18T04:31:05.360946Z",
+  "description": "Several consumers require canonical/provider success before reading; unchanged facts can be rejected for missing metadata or changed validation_id; Paper live can wait solely for audit; Advisory rechecks validation certification repeatedly",
+  "design_compliance_001": {
+    "business_semantics": "Only user-approved validation ownership changed; no model, strategy, stock pool, execution clock or threshold changes. Design sections 4.2/5.1/8 updated.",
+    "complete_scope": "All audited consumer require_success call sites removed; producer/quality monitoring retained. Runtime effectiveness remains pending user restart, not claimed complete.",
+    "no_silent_failure": "Actual fact read errors remain UNAVAILABLE/errors; missing metadata never becomes VALID; required-field and identity negative controls retained.",
+    "no_unapproved_gates": "No new consumer gates, approval framework, backfills, retries or dependencies added."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261118-80754681a036",
+      "timestamp": "2026-11-18T04:31:05.360946Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Consumer reads published facts directly; bind content revision once and preserve identity; missing validation metadata is not a data error; only changed data, actual read errors and existing business safety fail",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/services/advisory_program.py",
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/data_integrity/service.py",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/simulation_data/daily_context_provider.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_live_session.py",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+      "tests/aistock_validation/bugs/20261118_BUG-2245-consumers-repeat-producer-data-acceptance-and-block-usable-facts-on-miss.json"
+    ],
+    "added_files": [
+      "backend/tests/test_consumer_data_access_contract.py"
+    ],
+    "changed_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/advisory_model_first/lstm_spo_shadow_source_v1.py",
+      "backend/services/advisory_program.py",
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/data_integrity/service.py",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/simulation_data/daily_context_provider.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
+      "backend/tests/advisory_model_first/test_lstm_spo_shadow_v1.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_live_session.py",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+      "tests/aistock_validation/bugs/20261118_BUG-2245-consumers-repeat-producer-data-acceptance-and-block-usable-facts-on-miss.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_data/daily_context_provider.py",
+        "backend/services/paper_trading_v2/readiness.py",
+        "backend/services/paper_trading_v2/day_runner.py",
+        "backend/services/paper_trading_v2/live_session.py",
+        "backend/services/selection_center/service.py",
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/services/hmm_data_source/daily_input.py",
+        "backend/services/hmm_risk/risk_l2_database_inference.py",
+        "backend/services/data_integrity/inputs.py",
+        "backend/services/data_integrity/consumers.py",
+        "backend/services/data_integrity/service.py",
+        "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+        "backend/tests/test_consumer_data_access_contract.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "hmm",
+        "platform.api",
+        "platform.db",
+        "hmm.risk",
+        "docs.architecture",
+        "validation.module_quality",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_data/daily_context_provider.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/paper_trading_v2/readiness.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/services/paper_trading_v2/day_runner.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/services/paper_trading_v2/live_session.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/services/selection_center/service.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/services/simulation_signal/strategy_package_selection.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/hmm_data_source/daily_input.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/risk_l2_database_inference.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/data_integrity/inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/consumers.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_integrity/service.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/tests/test_consumer_data_access_contract.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical",
+        "low",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_data/daily_context_provider.py",
+        "backend/services/paper_trading_v2/readiness.py",
+        "backend/services/paper_trading_v2/day_runner.py",
+        "backend/services/paper_trading_v2/live_session.py",
+        "backend/services/selection_center/service.py",
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/services/hmm_data_source/daily_input.py",
+        "backend/services/hmm_risk/risk_l2_database_inference.py",
+        "backend/services/data_integrity/inputs.py",
+        "backend/services/data_integrity/consumers.py",
+        "backend/services/data_integrity/service.py",
+        "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+        "backend/tests/test_consumer_data_access_contract.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_data/daily_context_provider.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/service.py",
+      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+      "backend/tests/test_consumer_data_access_contract.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_data/daily_context_provider.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/data_integrity/consumers.py",
+      "backend/services/data_integrity/service.py",
+      "docs/architecture/daily_data_integrity_calendar_and_readiness_f2_design_20261027.md",
+      "backend/tests/test_consumer_data_access_contract.py"
+    ]
+  },
+  "first_seen_at": "2026-11-18T04:31:05.360946Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7322,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7322",
+  "last_seen_at": "2026-11-18T04:31:05.360946Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "related_source_fix": "BUG-2248 / PR #7327 / ce817815ce1c873dd8d5a896e34d2cb18ff9b0eb separates the existing HMM runtime readback route; inherited from origin/main, not reimplemented here.",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/test_daily_data_integrity_inputs.py backend/tests/simulation_runtime/test_daily_trading_context.py -q",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "paper_v2_backend",
+    "platform_api_backend",
+    "hmm_data_source_backend",
+    "hmm_risk_pr_slice"
+  ],
+  "review_rounds": [
+    "R1 correctness: removed source-receipt gates in LocalSIM, Paper v2, Selection, HMM daily and Advisory; repeated validation metadata is excluded from content binding. Producer validation, honest UNKNOWN/INCOMPLETE monitoring and monthly publisher checks remain.",
+    "R2 compatibility/negative controls: actual missing or invalid required prices, duplicate data, true revision drift, PIT/package identity, causal clocks and execution policy checks remain strict. Legacy frozen bindings are not rewritten; fact provenance never claims known publication time.",
+    "R3 performance/coverage: constant set-based fact queries drop from five to three; no new fact scans, provider calls, retries or per-symbol SQL. Final related matrix: 354 passed, 1 skipped, one obsolete audit-short-circuit expectation then fixed; focused final 3 passed. Separate HMM module 44 passed and merged.",
+    "R4 real DEV readback: existing DEV 5433, readonly transaction, 001205.SZ/2026-05-08 pre_close=15.30 exactly matches direct facts with zero audit calls. No database writes, dataset changes, account execution or process control.",
+    "R5 broader CI review: LSTM benchmark post-compute comparison also included producer validation IDs in its hash. Split optional provenance from actual values/window/revision comparisons; four stale source-gate expectations updated. Focused 11 passed, complete benchmark slice 37 passed; actual price/missing/window/revision negative controls remain.",
+    "R6 first CI: all other plans exitstatus=0, including simulation_core_l2 1718 items. Advisory had four stale benchmark expectations (fixed) plus a scheduler thread teardown timeout that passes in isolation; isolate its opt-in notification environment, do not relax lock/timeout assertions or change scheduler behavior."
+  ],
+  "risk_area": "bug",
+  "root_cause": "Business readers treated provider/canonical acceptance metadata as read permission, conflated revalidation IDs with content revisions, and used zero newly written rows to hide existing facts. Data acceptance belongs to ingestion/backfill/release, not every consumer access.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded changed DailyTradingContextProvider against existing DEV readonly 5433: 001205.SZ/2026-05-08 pre_close=15.30, all three prices equal direct facts, audit_queries=0, database_write=false; 80 input-contract regressions passed",
+      "python -m pytest backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py -q -> 37 passed; isolated process; optional source metadata ignored, actual price/window/revision negative controls passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Consumers repeat producer data acceptance and block usable facts on missing validation receipts",
+  "trigger_condition": {
+    "fingerprint": "80754681a0361ec1c4ebbbe9",
+    "source_event_id": "FE-20261118-80754681a036"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "paper_v2",
+        "platform_api",
+        "hmm_data_source",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "paper_v2_backend",
+        "platform_api_backend",
+        "hmm_data_source_backend",
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "paper_v2",
+          "platform_api",
+          "hmm_data_source",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "paper_v2_backend",
+          "platform_api_backend",
+          "hmm_data_source_backend",
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

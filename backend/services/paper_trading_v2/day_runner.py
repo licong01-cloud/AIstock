@@ -361,8 +361,8 @@ class PaperTradingDayRunner:
                 )
             self.repository.save_run_event(
                 run_id=run.run_id,
-                event_type="DATA_READY",
-                message="required paper v2 datasets are ready",
+                event_type="DATA_INPUTS_BOUND",
+                message="paper v2 input requirements bound; quality validation is producer-owned",
                 context={"datasets": data_ready},
             )
             if portfolio.broker_backend == "minqmt_sim":
@@ -864,11 +864,11 @@ class PaperTradingDayRunner:
         )
         runtime_profile = parse_selection_runtime_profile(runtime_config)
         if requirements["requires_suspend_status"] or runtime_profile.tradability.exclude_suspended:
-            status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-            ready.append(self._refresh_status_context("suspend_d", status))
+            ready.append({"dataset": "suspend_d", "trade_date": trade_date.isoformat(),
+                          "source_audit_required": False, "validation_owner": "data_preparation"})
         if requirements["requires_limit_price"]:
-            status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
-            ready.append(self._refresh_status_context("stk_limit", status))
+            ready.append({"dataset": "stk_limit", "trade_date": trade_date.isoformat(),
+                          "source_audit_required": False, "validation_owner": "data_preparation"})
         return ready
 
     def _require_minqmt_data_ready(
@@ -887,8 +887,8 @@ class PaperTradingDayRunner:
         ]
         runtime_profile = parse_selection_runtime_profile(runtime_config)
         if runtime_profile.tradability.exclude_suspended:
-            status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-            ready.append(self._refresh_status_context("suspend_d", status))
+            ready.append({"dataset": "suspend_d", "trade_date": trade_date.isoformat(),
+                          "source_audit_required": False, "validation_owner": "data_preparation"})
         return ready
 
     @staticmethod

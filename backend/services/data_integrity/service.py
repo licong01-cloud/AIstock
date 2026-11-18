@@ -169,8 +169,7 @@ class DailyIntegrityService:
                 "decision_at": now.isoformat(), "as_of": now.isoformat(), "consumer": consumer.upper(),
                 "binding_id": binding_id, "source_kind": "DATABASE_CURRENT"}
         with self.repository.transaction(readonly=True) as conn:
-            if not schema_installed(conn):
-                raise IntegritySchemaUnavailable("daily integrity migration is pending")
+            ledger_available = schema_installed(conn)
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT manifest_json,manifest_sha256,package_status FROM strategy_pkg.package WHERE package_id=%s", (binding_id,))
                 record = cur.fetchone()
@@ -203,7 +202,7 @@ class DailyIntegrityService:
                 dates = sorted(r[0] for r in cur.fetchall())
             if len(dates) != dependencies.window_trading_days or dates[-1] != day:
                 return {**base, **project_readiness(None, [], {}, pit_binding=asdict(pit), reason="official_input_window_unresolved")}
-            rows = self.repository.partitions(conn, dates[0], dates[-1])
+            rows = self.repository.partitions(conn, dates[0], dates[-1]) if ledger_available else []
             scope_options = {}
             if consumer.upper() == "ADVISORY":
                 from .advisory_scope import resolve_scope
@@ -214,7 +213,8 @@ class DailyIntegrityService:
                 scope_options = {"input_scope": scope, "members": members}
             result = project_readiness(dependencies, dates, {(r["trade_date"], r["dataset"]): r for r in rows},
                                        pit_binding=asdict(pit), **scope_options)
-            daily = self._day(day, *self._read(conn, day, day), now)
+            daily = (self._day(day, *self._read(conn, day, day), now) if ledger_available else
+                     {"all_sync_complete": False, "daily_integrity_id": None, "revision": None})
             return {**base, **result, "all_sync_complete": daily["all_sync_complete"],
                     "manifest_sha256": manifest.manifest_sha256,
                     "daily_integrity_id": daily["daily_integrity_id"], "revision": daily["revision"]}

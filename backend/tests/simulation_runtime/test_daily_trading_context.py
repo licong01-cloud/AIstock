@@ -121,7 +121,7 @@ def test_0910_materializes_exact_raw_authority_with_constant_query_count() -> No
         release_identity="release:hash",
     )
 
-    assert audit.calls == [("stk_limit", TRADE_DATE), ("suspend_d", TRADE_DATE)]
+    assert audit.calls == []
     assert len(conn.queries) == 3
     assert context.sources["stk_limit"]["source"] == "market.stk_limit"
     assert context.symbols["000001.SZ"].up_limit == 10.77
@@ -130,6 +130,33 @@ def test_0910_materializes_exact_raw_authority_with_constant_query_count() -> No
     statuses = DailyTradingContextProvider.to_pre_trade_statuses(context)
     assert statuses["000001.SZ"]["daily_trading_context"]["context_hash"] == context.context_hash
     assert statuses["600000.SH"]["reason_code"] == "SUSPENDED_BY_SUSPEND_D"
+
+
+def test_real_facts_are_read_without_any_source_acceptance_query() -> None:
+    class AuditMustNotBeRead:
+        def require_success(self, **kwargs):
+            raise AssertionError("consumer must not validate source receipts")
+
+    conn = FakeConn()
+    provider = _provider(conn, AuditMustNotBeRead())
+    attempt = provider.load_stk_limit_authority_attempt(symbols=list(SYMBOLS), trade_date=TRADE_DATE)
+    assert attempt["availability"] == "AVAILABLE"
+    assert len(attempt["rows"]) == len(SYMBOLS)
+    assert attempt["refresh_identity"].startswith("facts_")
+    assert len(conn.queries) == 1
+
+
+def test_actual_limit_query_failure_is_not_success_or_an_audit_error() -> None:
+    from contextlib import contextmanager
+    @contextmanager
+    def failed_connection():
+        raise RuntimeError("database unavailable")
+        yield
+    provider = DailyTradingContextProvider(conn_factory=failed_connection, audit_repository=FakeAuditRepository())
+    attempt = provider.load_stk_limit_authority_attempt(symbols=list(SYMBOLS), trade_date=TRADE_DATE)
+    assert attempt['availability'] == 'UNAVAILABLE'
+    assert attempt['unavailable_reason'] == 'RuntimeError'
+    assert attempt['refresh_identity'] is None and attempt['rows'] == []
 
 
 def test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch() -> None:
@@ -363,7 +390,7 @@ def test_daily_context_readback_rejects_hash_drift() -> None:
 
 
 def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
-    """Explicit DEV rollback proof: two readiness probes plus three facts."""
+    """Explicit DEV rollback proof: three facts, zero consumer audit probes."""
 
     if os.getenv("AISTOCK_DEV_DB_E2E") != "1":
         pytest.skip("existing DEV rollback-DML validation requires explicit AISTOCK_DEV_DB_E2E=1")
@@ -475,8 +502,7 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
         audit = DataRefreshAuditRepository(conn_factory=lambda: counted)
         legacy = audit.get_latest_status(dataset="stk_limit", trade_date=trade_date)
         assert legacy is not None and legacy.failure_category == "canonical_partition_missing"
-        with pytest.raises(DataUnavailableError, match="waiting for dataset refresh"):
-            load_context(symbols)
+        assert set(load_context(symbols).symbols) == set(symbols)
 
         # Consumer-contract fixture for these synthetic DEV rows, not a claim
         # that a future real-market partition has passed producer validation.
@@ -510,8 +536,8 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
         for requested in (symbols[:1], symbols):
             counted.queries.clear()  # Count only the consumer load, excluding fixture preparation.
             context = load_context(requested)
-            assert len(counted.queries) == 5
-            assert sum("dataset_date_refresh_audit" in query for query in counted.queries) == 2
+            assert len(counted.queries) == 3
+            assert sum("dataset_date_refresh_audit" in query for query in counted.queries) == 0
             assert sum("FROM market.stk_limit" in query for query in counted.queries) == 1
             assert sum("FROM market.suspend_d" in query for query in counted.queries) == 1
             assert sum("FROM market.stock_st" in query for query in counted.queries) == 1
@@ -535,10 +561,9 @@ def test_dev_daily_context_query_budget_is_dataset_constant() -> None:
                     {**valid, **changed, "trade_date": trade_date},
                 )
             counted.queries.clear()
-            with pytest.raises(DataUnavailableError, match="waiting for dataset refresh"):
-                load_context(symbols)
-            assert len(counted.queries) == 1
-            assert "dataset_date_refresh_audit" in counted.queries[0]
+            assert set(load_context(symbols).symbols) == set(symbols)
+            assert len(counted.queries) == 3
+            assert not any("dataset_date_refresh_audit" in query for query in counted.queries)
     finally:
         raw_conn.rollback()
         try:

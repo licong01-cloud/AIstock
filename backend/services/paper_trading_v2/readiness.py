@@ -213,17 +213,10 @@ class PaperTradingReadinessService:
             latest_cash = float(config.pop("_miniqmt_latest_cash"))
             total_equity = float(config.pop("_miniqmt_total_equity"))
         else:
-            requirements = PaperTradingDayRunner._data_requirements_for_policy(
+            PaperTradingDayRunner._data_requirements_for_policy(
                 execution_policy_json,
                 package_id=manifest.package_id,
             )
-            if requirements["requires_suspend_status"] or runtime_profile.tradability.exclude_suspended:
-                status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-                checks.append(self._audit_check("suspend_d_refresh", status))
-            if requirements["requires_limit_price"]:
-                status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
-                checks.append(self._audit_check("stk_limit_refresh", status))
-
             current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
             price_check = self._ensure_current_prices_for_existing_positions(
                 config=config,
@@ -463,11 +456,6 @@ class PaperTradingReadinessService:
                 },
             )
         ]
-        runtime_profile = parse_selection_runtime_profile(runtime_config)
-        if runtime_profile.tradability.exclude_suspended:
-            status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-            checks.append(self._audit_check("suspend_d_refresh", status))
-
         broker = self.minqmt_broker_factory(
             **miniqmt_broker_kwargs_for_portfolio(self.repository, portfolio, package_id=manifest.package_id),
         )
