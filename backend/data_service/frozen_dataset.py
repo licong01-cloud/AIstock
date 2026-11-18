@@ -416,13 +416,18 @@ class FrozenDataset:
         frames, observed = [], []
         for symbol in sorted(set(members)):
             self._symbol(symbol)
+            directory = (self.root / prefix / symbol.lower()).resolve(strict=True)
+            if not directory.is_relative_to(self.root) or not directory.is_dir():
+                raise FrozenDatasetError("daily model directory escapes frozen root")
             columns = {}
             for field in fields:
                 relative = prefix + symbol.lower() + "/" + field + ".day.bin"
                 pin = self._day_model_pins.get(relative)
                 if pin is None:
                     raise FrozenDatasetError("daily model producer pin missing", component=relative)
-                path = inside(self.root, relative)
+                path = directory / (field + ".day.bin")
+                if path.is_symlink():
+                    path = inside(self.root, relative)
                 before = stamp(path)
                 payload = path.read_bytes()
                 if (hashlib.sha256(payload).hexdigest() != pin.get("sha256")
@@ -454,6 +459,25 @@ class FrozenDataset:
                                    "row_count": len(frame), "producer_manifest_sha256": self.binding["files"]["manifest"]["sha256"],
                                    "file_pins_sha256": digest(observed), "verified_file_count": len(observed)})
         return frame
+
+    def filter_model_history(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Apply original per-date instrument spans before fitted processors."""
+        dates = frame.index.get_level_values("datetime").to_numpy()
+        groups = frame.groupby(level="instrument", sort=False).indices
+        keep = np.zeros(len(frame), dtype=bool)
+        for symbol, first, last in self._pool:
+            positions = groups.get(symbol.upper())
+            if positions is not None:
+                selected_dates = dates[positions]
+                keep[positions] |= ((selected_dates >= np.datetime64(first))
+                                    & (selected_dates <= np.datetime64(last)))
+        result = frame.loc[keep].copy()
+        self.assert_unchanged()
+        self.read_receipts.append({"component": "day_selection_universe", "read_purpose": "original_model_history",
+                                   "input_rows": len(frame), "row_count": len(result),
+                                   "mask_sha256": hashlib.sha256(keep.tobytes()).hexdigest(),
+                                   "file_sha256": self.binding["files"]["day_selection_universe"]["sha256"]})
+        return result
 
     def suspension_rows(self, symbols: list[str], start: date, end: date):
         if start > end or start < self.calendar[0] or end > self.calendar[-1]:

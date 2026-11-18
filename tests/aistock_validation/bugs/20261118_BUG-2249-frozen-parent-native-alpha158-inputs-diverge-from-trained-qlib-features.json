@@ -37,7 +37,10 @@
     "F:/Dev/AIstock/tmp/handoff/qe-parent-representative-longtask-20261117/parent_fresh_input_validation_v1.json",
     "F:/Dev/AIstock/tmp/handoff/qe-parent-representative-longtask-20261117/parent_alpha_calendar_parity_v1.json",
     "F:/Dev/AIstock/tmp/handoff/qe-parent-representative-longtask-20261117/parent_repaired_versions_v1.json",
-    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_final_prelaunch_v1.json"
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_final_prelaunch_v1.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_cached_matrix_diagnostic_v2.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_matrix10_residual_v1.json",
+    "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_pytorch_batch_smoke_v1.json"
   ],
   "expected": "Recompute original frozen model inputs with exact instrument/date alignment and original Qlib feature semantics; preserve models, fitted processors, weights, manifests and immutable prior results.",
   "file_scope_contract": {
@@ -140,7 +143,7 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7331",
   "implementation_review": {
     "design_compliance_001": {
-      "no_partial_or_mock_delivery": "Source input chain complete; real model-score comparison remains explicitly pending and is not called accepted.",
+      "no_partial_or_mock_delivery": "Source input restoration is complete and tested on actual frozen files/models. Full16-model native consumption, per-seed aggregation/selection effects and production readiness are separately pending; no partial result is called complete.",
       "no_silent_failure_or_fake_success": "Missing assets, original32 closures and historical original fingerprint remain UNKNOWN or explicitly incomplete; every failed probe preserved.",
       "no_unapproved_business_change": "Restore original inputs and reference mask only; no model fit, factor change, aggregation change, target/fee/window change or repeated account.",
       "no_unapproved_gate_or_control": "New gates/approval/RBAC/CI plans/resource thresholds=0; no service control, production writes, promotion, deletion or retirement bypass."
@@ -153,20 +156,23 @@
       "Read the producer-pinned static projection and retain derived values/NA without a second live precomputation.",
       "Read producer-SHA-verified Qlib OHLCV bins for Alpha158, with their exact trading-calendar positions; no invented fill of missing H5 rows.",
       "Two distinct source views are explicit; missing/conflicting declared asset pins fail without switching data or recomputing a substitute.",
-      "Original weights, fitted processors, factor source, seed averaging, rank and terminal IC weights are unchanged; new input-repair DEV manifests are separate."
+      "Original weights, fitted processors, factor source, seed averaging, rank and terminal IC weights are unchanged; new input-repair DEV manifests are separate.",
+      "Original per-date canonical instrument intervals are applied before fitted processing and TS sampling, including recent qualification and re-entry; current-day membership never legitimizes earlier rows.",
+      "Preserve serialized GeneralPTNN inference batch size; directory resolution reused per instrument while every actual bin still verifies its producer SHA."
     ],
     "independent_review": false,
     "perspectives": [
       "input_and_numerical_correctness",
       "completeness_regression_and_operational_safety"
     ],
-    "scope_note": "Source input restoration and real file/Qlib oracle checks pass. Full parent consumer/model-score and production activation remain separate, explicitly pending; no full parent repair completion claim.",
-    "status": "AUTHOR_REVIEW_PASS_SOURCE_REAL_NATIVE_FINAL_PENDING",
+    "scope_note": "Five fixed-model/date diagnostics precede16 full fresh native consumer validations. Cached-matrix diagnostic does not claim full raw-input regeneration. Numerical residual is a reported finding, not a new unapproved approval or execution gate; no production admission/promotion/activation is executed.",
+    "status": "AUTHOR_REVIEW_PASS_FULL_NATIVE_PARENT_CONSUMERS_PLANNED",
     "validation": [
-      "Final related six-file test matrix: 69 passed, 3 optional-environment skips",
-      "Ruff and git diff --check passed; python -m nox -s l0 passed",
-      "Fresh real frozen static/price view and known 000663/2026-05-20 NA verified",
-      "Independent installed Qlib oracle:14 actual stocks x20 features, 518 rows; matching NA and numerical tolerance; zero new models"
+      "Final related six-file matrix after PIT and batching corrections: 70 passed, 4 optional Windows environment skips.",
+      "WSL runtime has no pytest; actual installed PyTorch 2.10.0 CPU batch/order smoke passes without installing dependencies.",
+      "Ruff, git diff --check and final L0 pass.",
+      "Real fixed-model cached-input diagnostic:4914 exact score keys, exact Top20 sequence; maximum absolute score residual3.7908554e-5, mean3.22638e-7, Pearson0.999999999981. These retained residuals are not called bitwise equivalence.",
+      "All16 original model/processor/reference-panel workspaces composed and hash checked with zero forecast calls."
     ]
   },
   "last_seen_at": "2026-11-18T06:19:03.312106Z",
@@ -190,7 +196,8 @@
     "business_smoke_scope": "Existing frozen selection artifact readback checks API regression only; corrected native inputs require separate real DEV fresh-process receipts.",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9",
     "fresh_process_evidence": [
-      "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_alpha_calendar_parity_v1.json"
+      "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_matrix10_residual_v1.json",
+      "F:\\Dev\\AIstock\\tmp\\handoff\\qe-parent-representative-longtask-20261117\\parent_pytorch_batch_smoke_v1.json"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",

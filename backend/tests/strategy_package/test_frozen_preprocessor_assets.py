@@ -337,6 +337,31 @@ def test_frozen_projection_is_not_overwritten_by_live_precomputation(monkeypatch
         assert calls == [True] and (actual.db_derived == 99.).all()
 
 
+def test_native_pytorch_uses_saved_inference_batch_size_and_original_order(monkeypatch):
+    from types import SimpleNamespace
+    from backend import inference_engine
+    import numpy as np
+    torch = pytest.importorskip("torch")
+
+    class Network(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.batch_lengths = []
+
+        def forward(self, values):
+            self.batch_lengths.append(len(values))
+            return values.sum(dim=(1, 2))
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    network = Network()
+    source = np.arange(30, dtype=np.float32).reshape(5, 3, 2)
+    frame = pd.DataFrame(source[:, -1, :])
+    actual = inference_engine.predict_scores(SimpleNamespace(batch_size=2, device="cpu"), network,
+                                             "pytorch", frame, sequence_data=source)
+    assert network.batch_lengths == [2, 2, 1]
+    np.testing.assert_array_equal(actual, source.sum(axis=(1, 2)))
+
+
 @pytest.mark.parametrize("names", [["missing"], ["factor_a", "factor_a"], [], [None]])
 def test_declared_observation_contract_never_uses_a_default_reference(names):
     from backend import inference_engine

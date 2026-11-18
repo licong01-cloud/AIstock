@@ -177,6 +177,22 @@ def test_daily_model_history_never_falls_back_to_h5_without_producer_pin(tmp_pat
         dataset.daily_model_history([SYMBOL], DAYS[0], DAYS[1])
 
 
+def test_model_history_obeys_each_days_original_pit_spans_before_sequence(tmp_path):
+    dataset = FrozenDataset(freeze_dataset_binding(make_dataset(tmp_path)),
+                            consumer_scope="ADVISORY", run_id="historical-membership")
+    dataset._pool = ((SYMBOL, str(DAYS[1]), str(DAYS[2])),
+                     (HALT, str(DAYS[0]), str(DAYS[0])), (HALT, str(DAYS[2]), str(DAYS[2])))
+    index = pd.MultiIndex.from_product([pd.to_datetime(DAYS), [SYMBOL, HALT]], names=["datetime", "instrument"])
+    frame = pd.DataFrame({"raw": [1., 2., 3., np.nan, 5., 6.]}, index=index)
+    before = frame.copy(deep=True)
+    actual = dataset.filter_model_history(frame)
+    assert actual.index.tolist() == [(pd.Timestamp(DAYS[0]), HALT), (pd.Timestamp(DAYS[1]), SYMBOL),
+                                     (pd.Timestamp(DAYS[2]), SYMBOL), (pd.Timestamp(DAYS[2]), HALT)]
+    assert actual.raw.tolist() == [2., 3., 5., 6.]
+    pd.testing.assert_frame_equal(frame, before)
+    assert dataset.read_receipts[-1]["read_purpose"] == "original_model_history"
+
+
 def make_monthly_dataset(root):
     """Tiny real files in the monthly v4 producer's path-indexed layout."""
     profile_path = make_dataset(root)

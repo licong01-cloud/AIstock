@@ -517,20 +517,26 @@ def predict_scores(
                     raise ValueError("frozen QE sequence input does not match the scored feature schema")
                 if not np.isfinite(x_values).all():
                     raise ValueError("frozen QE sequence input contains non-finite values")
-            x_tensor = torch.tensor(x_values, dtype=torch.float32)
-
             model_type_name = type(inner_model).__name__
             is_seq = any(kw in model_type_name for kw in ["GRU", "LSTM", "RNN", "Sequence", "Recurrent"])
-            if is_seq and sequence_data is None:
-                x_tensor = x_tensor.unsqueeze(1)
-
-            if torch.cuda.is_available():
-                x_tensor = x_tensor.cuda()
-            elif hasattr(model, "device"):
-                x_tensor = x_tensor.to(model.device)
-
-            output = inner_model(x_tensor)
-            scores = output.cpu().numpy()
+            # GeneralPTNN.predict uses its persisted batch size. Preserve that
+            # inference contract rather than changing the reduction kernels by
+            # sending the complete stock population in one new batch.
+            batch_size = getattr(model, "batch_size", None)
+            if batch_size is not None and (not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0):
+                raise ValueError("saved pytorch inference batch size is invalid")
+            batch_size = batch_size or max(1, len(X))
+            batches = []
+            for first in range(0, len(X), batch_size):
+                x_tensor = torch.tensor(x_values[first:first + batch_size], dtype=torch.float32)
+                if is_seq and sequence_data is None:
+                    x_tensor = x_tensor.unsqueeze(1)
+                if torch.cuda.is_available():
+                    x_tensor = x_tensor.cuda()
+                elif hasattr(model, "device"):
+                    x_tensor = x_tensor.to(model.device)
+                batches.append(inner_model(x_tensor).cpu().numpy())
+            scores = np.concatenate(batches) if batches else np.empty(0, dtype=np.float32)
 
             if len(scores.shape) == 3:
                 scores = scores[:, -1, :]
@@ -2266,7 +2272,7 @@ class InferenceEngine:
             alpha_history = df_history
             alpha_reader = getattr(self.input_session, "model_alpha_reader", None)
             if alpha_reader is not None:
-                alpha_history = alpha_reader(universe, start_date.date(), actual_date.date())
+                alpha_history = alpha_reader(computation_members, start_date.date(), actual_date.date())
             if sequence_length > 1:
                 alpha_subset = self._compute_alpha158_sequence(alpha_history, alpha158_feats, sequence_length)
             else:
@@ -2368,6 +2374,10 @@ class InferenceEngine:
 
         # 7. 模型预测（使用提取的模块级函数）
         timings.mark("feature_assembly_validation")
+        history_filter = getattr(self.input_session, "model_history_filter", None)
+        if history_filter is not None:
+            df_factors_combined = history_filter(df_factors_combined)
+            df_today = df_factors_combined.loc[_safe_get_datetime_level(df_factors_combined) == actual_date]
         df_today = _apply_saved_qe_infer_processors(
             df_factors_combined if sequence_length > 1 else df_today,
             task_dir=task_dir,

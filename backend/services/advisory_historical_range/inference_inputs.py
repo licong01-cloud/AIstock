@@ -80,6 +80,7 @@ class InferenceInputSession:
         self.price_reader: Callable | None = None
         self.model_price_reader: Callable | None = None
         self.model_alpha_reader: Callable | None = None
+        self.model_history_filter: Callable | None = None
         self.static_builder: Callable | None = None
         self.model_static_builder: Callable | None = None
         self.model_universe_reader: Callable | None = None
@@ -446,6 +447,7 @@ def file_input_session(*, consumer_scope: str, run_id: str, binding: dict[str, A
         # rebuild its derived values or row domain from the individual tables.
         session.model_static_builder = dataset.static_factors
         session.model_alpha_reader = dataset.daily_model_history
+        session.model_history_filter = dataset.filter_model_history
     else:
         # Explicit legacy H5-only bindings remain supported, with no new pin
         # inferred or claimed. A declared projection never falls back here.
