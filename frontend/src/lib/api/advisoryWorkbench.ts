@@ -14,6 +14,36 @@ export type Decision = { symbol: string; stock_name?: string | null; episode_id:
 export type Page<T> = Envelope & { items: T[]; total_count: number; limit: number; offset: number };
 export type DailyPage = Page<DailyItem> & { status: string; data_date?: string; summary: { in_scope: number; new: number; continuing: number; removed: number; unknown_change: number; observation: number; outside_pending: number; outside_exit?: number; unknown: number; previous_count: number | null; comparison_known: boolean } | null; latest?: Version | null };
 export type EpisodeDetail = Page<Decision> & { episode: Episode };
+export type MinuteStopAlert = {
+  alert_id: string;
+  episode_id: string;
+  symbol: string;
+  stock_name: string | null;
+  membership: "IN_SCOPE" | "OUTSIDE_PENDING";
+  status: "TRIGGERED" | "NOT_TRIGGERED" | "UNVERIFIED";
+  reason_code: string | null;
+  entry_price: number | null;
+  trigger_price: number | null;
+  triggered_at: string | null;
+  observed_through: string | null;
+  coverage: "COMPLETE" | "INCOMPLETE";
+  observed_bars: number;
+  expected_bars?: number;
+  first_trigger_verified?: boolean;
+  return_bps?: number;
+  sellability: "T1_RESTRICTED" | "SUSPENSION_RECORDED" | "UNVERIFIED";
+};
+export type MinuteStopAlerts = {
+  program_id: string;
+  target_date: string;
+  list_version_id: string;
+  checked_at: string;
+  status: string;
+  eligible_count: number;
+  evaluated_count: number;
+  stop_loss_bps?: number;
+  items: MinuteStopAlert[];
+};
 export type Readiness = { program_id: string; data_date: string; generated_at: string; status: string; items: Array<{ consumer_ready?: boolean; prediction_ready?: boolean; all_sync_complete?: boolean; reason?: string; reason_code?: string; status?: string; daily_integrity_id?: string | null; revision?: number }>; errors: Array<{ message: string }> };
 export type ShadowPrediction = { symbol?: string; ts_code?: string; instrument?: string; stock_code?: string; selection_effective_rank?: number; advisory_rank?: number; selected?: boolean; native_rank?: number; parent_rank?: number; policy_rank?: number; candidate_rank?: number; rank?: number; native_selected?: boolean; policy_selected?: boolean; change?: string; valuation_status?: string; net_bps?: number | null; delta_contribution_bps?: number | null; [key: string]: unknown };
 export type ShadowEvaluation = { status: string; delta_bps?: number | null; native_net_bps?: number | null; specialist_net_bps?: number | null; native_unknown_slots?: number | null; specialist_unknown_slots?: number | null; native_cash_slots?: number | null; specialist_cash_slots?: number | null };

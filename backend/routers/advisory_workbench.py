@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.advisory_workbench.projection import WorkbenchError
 from backend.services.advisory_workbench.service import WorkbenchService
+from backend.services.advisory_workbench.stop_alerts import MinuteStopAlerts
 from backend.services.advisory_workbench.quotes import quote_service
 from backend.services.advisory_workbench.recommendations import RecommendationReturns
 from backend.services.advisory_workbench.brief import BriefService
@@ -131,6 +132,18 @@ def program(program_id: str, target_date: date | None = None, mode: Literal['ful
     if mode == 'brief':
         return invoke(BriefService().program, program_id, target_date=target_date.isoformat() if target_date else None)
     return invoke(service.program, program_id, target_date=target_date.isoformat() if target_date else None, **filters)
+
+
+def get_stop_alerts():
+    return MinuteStopAlerts()
+
+
+@router.get("/programs/{program_id}/minute-stop-alerts")
+def minute_stop_alerts(
+    program_id: str, target_date: date, list_version_id: str = Query(..., min_length=1, max_length=160),
+    service=Depends(get_stop_alerts),
+):
+    return invoke(service.get, program_id, target_date=target_date, list_version_id=list_version_id)
 
 
 @router.get("/programs/{program_id}/daily")
