@@ -1986,9 +1986,30 @@ def _aggregate_parent_leg_input_context(
                     "leg_requested_trade_date": str(candidate["requested_trade_date"]),
                 },
             )
+        calendar_dataset_id = candidate["calendar_source"]
+        if candidate["calendar_source"] == "FROZEN_DATASET_FILES":
+            # InferenceEngine records the dataset identifier separately from
+            # the file transport source. Keep its original hash and require
+            # the same complete frozen binding across seeds and parent legs.
+            file_binding_hash = raw_context.get("frozen_file_binding_hash")
+            if (
+                not isinstance(file_binding_hash, str)
+                or len(file_binding_hash) != 64
+                or any(c not in "0123456789abcdef" for c in file_binding_hash)
+                or candidate["calendar_version"] != file_binding_hash
+            ):
+                raise DataUnavailableError(
+                    "MULTI_ALPHA leg frozen file calendar binding is invalid",
+                    context={
+                        "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                        "leg_id": leg_id,
+                    },
+                )
+            calendar_dataset_id = "dataset_files.day_calendar"
+            candidate["frozen_file_binding_hash"] = file_binding_hash
         expected_calendar_identity_hash = _canonical_sha256(
             {
-                "dataset_id": candidate["calendar_source"],
+                "dataset_id": calendar_dataset_id,
                 "effective_trade_date": candidate["effective_trade_date"],
                 "calendar_version": candidate["calendar_version"],
                 "calendar_source": candidate["calendar_source"],
