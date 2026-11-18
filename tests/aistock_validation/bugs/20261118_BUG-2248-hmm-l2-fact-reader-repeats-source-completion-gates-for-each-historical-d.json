@@ -90,7 +90,13 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py::test_completion_does_not_recertify_prepared_facts -q",
+  "root_cause": "Forward database_daily readers re-required source audit success for each historical input date; historical verdict carrier validation also rejected the new fact-snapshot provenance. Producer acceptance is not consumer read permission.",
+  "review_rounds": [
+    "R1: historical and forward completion reads execute zero source acceptance queries; historical_as_known_verified remains false.",
+    "R2: corrected legacy carrier compatibility; frozen bundle hash, actual feature completeness, causal cutoff and model identity are unchanged.",
+    "R3: final direct module 44 passed, Ruff and L0 passed; real twenty-feature parity and wrong-child-probability rejection remain covered. No database writes, training or process control."
+  ],
   "required_verification": [
     "l0",
     "hmm_risk_pr_slice"
