@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2255",
-  "closed_at": null,
+  "closed_at": "2026-11-18T18:00:43.109781Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -214,11 +214,33 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_note": "After the user reloads, verify source identity and existing policy readback. Real admission for prepared cohorts requires a newly approved prepared batch; do not resubmit revision 359 or launch synthetic production work.",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2255/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2255",
+      "business_smoke_semantic": {
+        "contract_id": "qe_batch_execution_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "871cf48733f170d661c0e4a1ff63882c135296af190f42b77ede1b462a7f1f4d",
+      "expected_identity": "af9b4132c4794ea0cd44217c88183e1a5b836256",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T18:00:00.981682Z",
+      "mode": "read_only",
+      "observed_identity": "af9b4132c4794ea0cd44217c88183e1a5b836256",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d0843eb15cc2b6b650da194316c0bd1f6d07af37f6a672b7f5b9774ed66b45ae",
+      "receipt_sha256": "03b36491d637bdb5ed5c229a63da7ad4e1badf2e1316523390f53a13567e0f23",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a94510471cca50c3adea9c3d1d092b87b4dc92b48c7b11c85a0ef4326979dc63",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -250,7 +272,7 @@
     ],
     "validation_evidence_digest": "365030b81afcb5bad0fdbf475368b4ef29021ee752d4766a6b446dbec8227cd0"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -261,7 +283,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=c6798fe1d8c68c7c commit=0cb95c3780f7808366e5fc14330d0440ef23966f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
-    "validation-receipt: id=5f8d89ddf0f8d374 commit=0cb95c3780f7808366e5fc14330d0440ef23966f kind=pytest plan=direct status=passed command=`pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -k prepared_workspace` result=`11 passed`"
+    "validation-receipt: id=5f8d89ddf0f8d374 commit=0cb95c3780f7808366e5fc14330d0440ef23966f kind=pytest plan=direct status=passed command=`pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -k prepared_workspace` result=`11 passed`",
+    "python -m nox -s l0 -> passed"
   ],
   "verification_budget": {
     "budget": "light",
