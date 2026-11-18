@@ -1120,8 +1120,10 @@ rules:
       - backend/tests/simulation_runtime/test_localsim_successor_schema.py
       - scripts/localsim_product_validation.py
       - scripts/prepare_localsim_successor_cutover.py
+      - scripts/verify_localsim_corrected_ledger.py
       - backend/tests/scripts/test_localsim_product_validation.py
       - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
+      - backend/tests/scripts/test_verify_localsim_corrected_ledger.py
       - frontend/src/app/simulation/localsim/**
       - frontend/src/lib/simulation/localsim/**
       - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
