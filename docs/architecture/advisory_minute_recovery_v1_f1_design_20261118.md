@@ -43,7 +43,7 @@
 
 ## 4. Scope / Architecture / P4精确实现与资源
 
-精确tracked写范围：本F1、原蓝图、原接续计划；`backend/services/advisory_model_first/minute_recovery_v1.py`（纯测量/列合同）；`minute_recovery_inputs_v1.py`（冻结来源、D切片与阶段）；`backend/tests/advisory_model_first/test_minute_recovery_v1.py`；`scripts/advisory_minute_recovery.py`（显式离线CLI）。共7文件，新增范围先更新任务记录。
+精确tracked写范围：本F1、原蓝图、原接续计划；`backend/services/advisory_model_first/minute_recovery_v1.py`（纯测量/列合同）；`minute_recovery_inputs_v1.py`（冻结来源、D切片与阶段）；`backend/tests/advisory_model_first/test_minute_recovery_v1.py`；`scripts/advisory_minute_recovery.py`（显式离线CLI）；`scripts/ci_change_classifier.py`（仅将新CLI映射到既有荐股测试通道）。共8文件。后者是P4验收发现的必要CI登记，已先记入task.json，不增加生产门禁或研究方向。
 
 复用FrozenDataset及原stat lease/metadata pins、旧分钟纯聚合、D1纯计算和`economic_entry_pipeline.publish_stage/read_stage`，不修改公共叶。只允许`preregistered/prepared`两个阶段，记录本地源码闭包及输入内容身份；没有train/evaluate子命令，也不调用原study的prepare/run。复用publisher仅作原子写入，不调用其标签/训练入口。
 
@@ -80,16 +80,16 @@ CLI读取已存在父study，核对原plan/manifest链及输入sha后按显式�
 
 ## 7. Design Acceptance Matrix
 
-P3只验收详细设计与既有P1/P2依据；以下`DESIGN_VERIFIED_P4_NOT_RUN`不表示源码、全人口数值或P5已完成。P4后在本表更新实际测试/工件引用，不另建验收文档。
+P3设计已由PR #7342合入；下表为P4真实输入及工程验收，源码CI/合入状态另记task.json和对应PR。全部引用绑定§12的同一prepared stage；不表示P5模型或经济效果已完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-981 | §2/§4，计划minute_recovery_inputs_v1.py | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/p1_receipt.json | DESIGN_VERIFIED_P4_NOT_RUN | none |
-| F-982 | §3，计划minute_recovery_v1.py | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/measurement_spec.json | DESIGN_VERIFIED_P4_NOT_RUN | none |
-| F-983 | §3，计划两个新叶 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/p2_receipt.json | DESIGN_VERIFIED_P4_NOT_RUN | none |
-| F-984 | §4，计划冻结D切片与预算 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/p1_receipt.json | DESIGN_VERIFIED_P4_NOT_RUN | none |
-| F-985 | §4，计划CLI与原publisher | artifact: docs/architecture/advisory_minute_recovery_v1_f1_design_20261118.md | DESIGN_VERIFIED_P4_NOT_RUN | none |
-| F-986 | §5/§8，计划全人口、第二实现与源码审核 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | DESIGN_VERIFIED_P4_NOT_RUN | none |
+| F-981 | backend/services/advisory_model_first/minute_recovery_inputs_v1.py:load_source/validate_population | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study/prepared/receipt.json | VERIFIED_P4_INPUTS | none |
+| F-982 | backend/services/advisory_model_first/minute_recovery_v1.py:recovery_features | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/p4_independent_receipt.json | VERIFIED_P4_INPUTS | none |
+| F-983 | backend/services/advisory_model_first/minute_recovery_inputs_v1.py:attach | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/p4_independent_receipt.json | VERIFIED_P4_INPUTS | none |
+| F-984 | backend/services/advisory_model_first/minute_recovery_inputs_v1.py:Budget/read_minutes | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study/prepared/receipt.json | VERIFIED_P4_INPUTS | none |
+| F-985 | scripts/advisory_minute_recovery.py; minute_recovery_inputs_v1.py:prepare | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_P4_INPUTS | none |
+| F-986 | backend/tests/advisory_model_first/test_minute_recovery_v1.py; §12 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_P4_INPUTS | none |
 
 ## 8. Verification Plan / Design compliance / Production gates
 
@@ -101,15 +101,26 @@ DESIGN-COMPLIANCE-001逐项：不把零fit输入工程当训练模型；不吞�
 
 ## 9. Non-goals
 
-P0-P4 excludes financial labels, fitted models, performance screening, new datasets, production runtime integration, service operations, DB writes and notifications. P5 is a separately authorized proposal, not a deliverable of this task.
+P0～P4不含金融标签、模型训练、收益筛选、新数据集、生产接入、服务操作、DB写入或通知。P5仍是另需具体授权的后续提案。
 
 ## 10. Implementation Plan
 
-1. Complete three design review passes and the F1 validator; merge this design before implementing P4.
-2. Implement pure measurement, frozen source reader, immutable stage publication and explicit offline CLI within the seven-file scope.
-3. Verify direct numerical, identity, missingness, resource and retry contracts; prepare all 26,200 original slots and independently recalculate the new measurements.
-4. Perform three source review passes, repair findings, validate the final acceptance matrix, and merge with required checks green. Record exact artifacts and source SHAs in task.json.
+1. 完成三轮设计审核和F1检查，先合入设计再实现P4（PR #7342已完成）。
+2. 按§4实现纯测量、冻结读取、不可变阶段和离线CLI。
+3. 验证数值、身份、缺失、资源和恢复合同；提取全部26,200槽，由第二实现复核。
+4. 三轮源码审核修复、验收矩阵及必需CI通过后合入；精确工件与源码SHA写入task.json。
 
 ## 11. Risks / failure modes
 
-Historical predictions and reconstructed prices do not establish historical PIT availability. Distinct path measurements do not establish alpha. Optional auction clocks can leave old control columns missing; these remain missing, while the new core-clock measurements use the frozen 240-slot definition. Resource exhaustion or source drift fails the stage; incomplete observations remain explicit UNKNOWN rows. The future matched comparison still changes model capacity and uses previously consumed research history; neither a positive input audit nor a future exploratory result establishes independent confirmation.
+历史预测和重建行情不证明历史PIT；不同路径测量不证明Alpha。可选竞价锚缺失可使旧控制列缺失，保留NaN；新测量坚持240核心槽定义。资源超限或源漂移直接失败，观察不完整保留UNKNOWN。未来匹配比较仍改变模型容量，并使用已消费历史，不能冒充独立确认。源码静态导入闭包采取保守校验；其他依赖修改也会拒绝恢复，必须使用记录中的冻结源码树，不能改工件身份迁就当前main。
+
+## 12. P4真实验收与恢复入口（2026-11-18）
+
+工件根`X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study`，prepared stage SHA256=`89a1754f5fd09c4161316f5e8120c892a8ce1bc60271eecce0fcc7dba17111b9`。完整2024-07-04～2026-08-28的524D/26,200槽及原18列顺序、dtype、分数、排名均保留，输出约15.54MB。
+
+- 可测量26,159槽（99.84%）：7,225已恢复、18,861未恢复、73无回撤。41个UNKNOWN分布于40D，其中28槽全部核心close未知、13槽缺一个核心close；不丢槽、不填0。484D的50槽路径完整（92.37%），这是输入分母，不是成熟收益日期数。
+- 原旧控制列仍可能缺失：首段收益14,005槽缺失，16段成交量占比各6,390槽缺失，具体每列分母在receipt中。未用全样本统计填补；P5若获准必须按§5的train-only合同处理。
+- 提取174.20秒、分钟读取126,172,140字节、全过程采样峰值RSS388,583,424字节、数值线程上限2。独立算术读取25,234,428字节、50.98秒，对全部状态和183,113个有限值验证，最大差异0、NaN一致，close消费片段hash匹配。
+- 新进程精确恢复24.67秒，返回`EXACT_ARTIFACT_RETRY_VERIFIED`及同一stage SHA，未重新计算特征。31个直接测试覆盖测量、身份、未来价格/金融标签毒值、源变化、内容篡改、预算、发布恢复及CLI/CI路由；实际分次验证记录和当前HEAD CI保存在task.json/PR。
+
+恢复使用`F:/Dev/AIstock_worktrees/advisory-minute-recovery-source-20261118`的冻结源码（精确commit见task.json）；CLI为`python scripts/advisory_minute_recovery.py --source-study X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/study/advmultitop10_6c632adf532818cfcd059113 --output-root X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study`。读取已有输入无需重启服务。P0～P4新增金融fit=0，历史累计269＋1旧index不变；P5预算仍0，没有可激活模型或100bps收益结论。

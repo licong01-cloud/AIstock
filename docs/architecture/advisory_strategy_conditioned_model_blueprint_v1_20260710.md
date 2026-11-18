@@ -2854,7 +2854,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ### 16.0 当前唯一任务队列与真实断点（2026-11-18 接续）
 
-本节是当前路线的唯一入口，详细步骤和覆盖数据维护在[接续计划§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)。2026-11-18用户已授权执行P0～P4，起点为PR #7337合入`5d6bf1b235e17f316cc16c28298888958ab3a23b`。P0/P1/P2已完成，具体[分钟回撤修复F1](advisory_minute_recovery_v1_f1_design_20261118.md)进入P3设计审核；P4实现尚未运行，金融fit仍0，技术可用不等于Alpha成立。
+本节是当前路线的唯一入口，详细步骤维护在[接续计划§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)。2026-11-18授权的P0～P4已完成输入工程验收：P3设计PR #7342先合入，P4全524D/26,200槽提取、第二算术和新进程恢复通过，实际工件及源码交付状态见[分钟回撤修复F1§12](advisory_minute_recovery_v1_f1_design_20261118.md)。当前下一步为具体P5配对实验提案，金融fit授权仍0；技术可用不等于Alpha成立。
 
 - **已完成与关闭**：ID1272按原规则负面关闭，累计269实际fit＋1旧index，剩余/追加训练预算0。54字段模型轮换、同伴、h64、尺度和已关闭分钟候选不改名重做；它们的失败不证明所有分钟结构都无效。
 - **确认的真实终态**：V2因2026-11-10、11-11不可恢复漏捕获，已于11月12日固化`NOT_EVALUABLE_CAPTURE_GAP`。原150D研究不再等待成熟或换日续接；P20自然描述性观察与正式确认分开，旧V2材料不借给新候选。
