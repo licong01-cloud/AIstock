@@ -23,7 +23,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2251",
-  "closed_at": null,
+  "closed_at": "2026-11-18T12:17:38.569892Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,58 +34,58 @@
     "authorization": "User requested replacing all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; no service-control authorization.",
     "dev_receipt": {
       "bug_id": "BUG-2251",
-      "target": "aistock-pg-dev/aistock_dev",
-      "source_merge": "bb21f12d363b040a692a439eed9a494ccd48bb13",
-      "migration_sha256": "e71bc52433895d627daa98b18dd918221758833ada0629f70fa5c66d798f4d77",
-      "passed": true,
-      "transaction": "rolled_back",
-      "real_model_calls": 0,
-      "timestamp": "2026-11-18T08:12:24.924482+00:00",
       "input_bytes": "Committed Git blob inserted twice in DEV rollback transaction; byte input bypasses Windows text-mode newline translation",
-      "note": "Initial worktree-byte hash differed only by CRLF; exact merged blob independently revalidated before production. DEV fixture data rolled back; sequence allocations are not rolled back."
+      "migration_sha256": "e71bc52433895d627daa98b18dd918221758833ada0629f70fa5c66d798f4d77",
+      "note": "Initial worktree-byte hash differed only by CRLF; exact merged blob independently revalidated before production. DEV fixture data rolled back; sequence allocations are not rolled back.",
+      "passed": true,
+      "real_model_calls": 0,
+      "source_merge": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+      "target": "aistock-pg-dev/aistock_dev",
+      "timestamp": "2026-11-18T08:12:24.924482+00:00",
+      "transaction": "rolled_back"
     },
     "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
-    "production_status": "applied_and_readback_verified",
-    "production_target": "timescaledb/aistock",
-    "scope": "LLM current model bindings and selection; no business/usage-history writes",
     "production_receipt": {
-      "bug_id": "BUG-2251",
-      "source_merge": "bb21f12d363b040a692a439eed9a494ccd48bb13",
-      "migration_sha256": "e71bc52433895d627daa98b18dd918221758833ada0629f70fa5c66d798f4d77",
-      "target": "timescaledb/aistock",
-      "dev_passed": true,
-      "applied": true,
-      "timestamp": "2026-11-18T08:13:09.649042+00:00",
-      "real_model_calls": 0,
-      "services_restarted": false,
-      "authorization": "User instruction to replace all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; target matched current backend catalog; no unrelated business/history writes.",
-      "readback": {
-        "database": "aistock",
-        "flash_models": [
-          {
-            "id": 13,
-            "full_model_id": "deepseek/deepseek-v4-flash",
-            "active": true
-          }
-        ],
-        "direct_exp_gen": "deepseek/deepseek-v4-flash",
-        "assistant": "deepseek-v4-flash",
-        "historical_pro_active": false
-      },
-      "remaining_pro_configurations": 0,
       "api_readback": {
         "active_flash": true,
         "active_pro": false,
         "direct_exp_gen": "deepseek-v4-flash",
-        "runtime_identity": {
-          "status": "ready",
-          "merge_commit": "b975b7dc0e46536cd39fc679bb373f3d9ee243f7"
-        },
         "policy_endpoint_status": 404,
-        "runtime_acceptance": "pending_user_restart"
-      }
+        "runtime_acceptance": "pending_user_restart",
+        "runtime_identity": {
+          "merge_commit": "b975b7dc0e46536cd39fc679bb373f3d9ee243f7",
+          "status": "ready"
+        }
+      },
+      "applied": true,
+      "authorization": "User instruction to replace all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; target matched current backend catalog; no unrelated business/history writes.",
+      "bug_id": "BUG-2251",
+      "dev_passed": true,
+      "migration_sha256": "e71bc52433895d627daa98b18dd918221758833ada0629f70fa5c66d798f4d77",
+      "readback": {
+        "assistant": "deepseek-v4-flash",
+        "database": "aistock",
+        "direct_exp_gen": "deepseek/deepseek-v4-flash",
+        "flash_models": [
+          {
+            "active": true,
+            "full_model_id": "deepseek/deepseek-v4-flash",
+            "id": 13
+          }
+        ],
+        "historical_pro_active": false
+      },
+      "real_model_calls": 0,
+      "remaining_pro_configurations": 0,
+      "services_restarted": false,
+      "source_merge": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+      "target": "timescaledb/aistock",
+      "timestamp": "2026-11-18T08:13:09.649042+00:00"
     },
-    "rdagent_api_readback": "9000 model selection projection: no DeepSeek Pro configuration found; no external configuration or services changed"
+    "production_status": "applied_and_readback_verified",
+    "production_target": "timescaledb/aistock",
+    "rdagent_api_readback": "9000 model selection projection: no DeepSeek Pro configuration found; no external configuration or services changed",
+    "scope": "LLM current model bindings and selection; no business/usage-history writes"
   },
   "description": "Replace shared DeepSeek Pro defaults and active direct_exp_gen binding with deepseek-v4-flash. Guard explicit model overrides at request boundaries; preserve historical usage. Add exact shared-client ownership mapping before implementation. No service control or live model calls.",
   "events": [
@@ -327,9 +327,12 @@
     "executor": "active_agent",
     "rounds": [
       "Correctness: normalize Pro at final wire; preserve other vendors, prefixes and historical usage; verification refuses to certify Pro using Flash responses.",
-      "Completeness/regression: all currently found active Pro bindings included; real DEV migration and repeat-run checks rolled back; no services, real LLM requests or business data modified."
+      "Completeness/regression: all currently found active Pro bindings included; real DEV migration and repeat-run checks rolled back; no services, real LLM requests or business data modified.",
+      "Runtime correctness: canonical read-only health, frozen process identity and strict DeepSeek policy semantics passed; expected source merge retained and origin_main_descendant proof accepted observed 5f55b1b5d099292b727f87bd81cf0f015236a3de; no model calls or process control.",
+      "Close-sync completeness/regression: durable summary binds receipt, runtime contract, catalog, probe and identity-proof digests; original source and DEV/production migration receipts preserved. DESIGN-COMPLIANCE-001: no partial delivery, silent error/fake success, unapproved semantic change or added approval gate. Prior source validation reused; no source test rerun."
     ],
-    "runtime_acceptance": "pending_user_restart"
+    "runtime_acceptance": "passed",
+    "runtime_acceptance_receipt_sha256": "278fd28aad088f61489e781aff40f21727ed9eb632832f9d582d78c342c62a26"
   },
   "risk_area": "bug",
   "runtime_contract": {
@@ -345,10 +348,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2251/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2251",
+      "business_smoke_semantic": {
+        "contract_id": "deepseek_flash_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "d968655f45889bc6b1fdc1a324bd1b15d792a5438d30f39fa82ce007c22c8c13",
+      "expected_identity": "bb21f12d363b040a692a439eed9a494ccd48bb13",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T12:16:13.218978Z",
+      "mode": "read_only",
+      "observed_identity": "5f55b1b5d099292b727f87bd81cf0f015236a3de",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "74f704b0e24d5103344bf17cbfcdfbd27377afbe3be1759d629e802ee6f8ede9",
+      "receipt_sha256": "278fd28aad088f61489e781aff40f21727ed9eb632832f9d582d78c342c62a26",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "88cc9ff2cd9817ebf962cbec52438800489b29657d528682840dab48576247f4",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -382,7 +407,7 @@
     ],
     "validation_evidence_digest": "f09532a6f36572b1a07c6c43ff658863ca3775c0a351e2f5bdf977b0a192bc13"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "platform"
   ],
@@ -391,11 +416,13 @@
     "fingerprint": "0c41d95a93774d32d6f01634",
     "source_event_id": "FE-20261118-0c41d95a9377"
   },
+  "updated_at": "2026-11-18T12:18:39.495491+00:00",
   "validation_evidence": [
     "validation-receipt: id=3e5efe4efbc4f216 commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
     "validation-receipt: id=d5481b37f7d8ca86 commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
     "validation-receipt: id=b708117f4cb4c53e commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
-    "validation-receipt: id=427774b4e5442b2a commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/infra/test_deepseek_config.py -q` result=`passed`"
+    "validation-receipt: id=427774b4e5442b2a commit=7b0076b417ff0e0a8265168b4ff8faa322522ef5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/infra/test_deepseek_config.py -q` result=`passed`",
+    "canonical post-restart-verify BUG-2251 backend-main expected bb21f12d363b040a692a439eed9a494ccd48bb13 -> passed; readonly policy ready, remaining_pro_configurations=0, live_model_called=false"
   ],
   "verification_budget": {
     "budget": "standard",
@@ -516,6 +543,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "updated_at": "2026-11-18T08:14:52.008421+00:00"
+  }
 }
