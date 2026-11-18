@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2250",
-  "closed_at": null,
+  "closed_at": "2026-11-18T06:58:35Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -193,8 +193,8 @@
   },
   "first_seen_at": "2026-11-18T06:26:22.626684Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5adc6edde92a2b3e03263a137c0bbc2872432940",
+  "fixed_at": "2026-11-18T06:58:35Z",
   "github_issue_number": 7333,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7333",
   "implementation_review": {
@@ -240,6 +240,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7335",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -259,6 +260,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -268,7 +270,34 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2250",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3860a97c680ec9d9",
+    "recorded_at": "2026-11-18T06:59:26.650762Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "affc31694bb693cc6e9c346d0963b9002bc59845",
+    "source_merge_commit": "5adc6edde92a2b3e03263a137c0bbc2872432940",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7335",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/scripts/test_nightly_session_runner.py backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q -> passed (192 tests)",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed",
+      "python -m nox -s l0 -- <7 explicit task files> -> passed",
+      "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2250 --module validation -> passed",
+      "ruff check changed Python files -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "b9238d41f39d7fb97b78919a845c3a598dc06ed9cbcb27273bc15fcbb6885c21"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -277,6 +306,15 @@
     "fingerprint": "f7b2590efd1b5040c502cce3",
     "source_event_id": "FE-20261118-f7b2590efd1b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/scripts/test_nightly_session_runner.py backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q -> passed (192 tests)",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed",
+    "python -m nox -s l0 -- <7 explicit task files> -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2250 --module validation -> passed",
+    "ruff check changed Python files -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
