@@ -1,5 +1,17 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: deepseek_shared_model_policy
+    priority: 150
+    include:
+      - backend/infra/deepseek_config.py
+      - backend/infra/deepseek_client.py
+      - deepseek_client.py
+      - backend/tests/infra/test_deepseek_config.py
+    primary_module: platform.api
+    impact_modules: [platform.config]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Shared model resolution and OpenAI request boundaries, directly exercised by platform_api_backend without live model requests or credential files.
   - rule_id: qe_existing_task_followup_tool
     priority: 146
     include:

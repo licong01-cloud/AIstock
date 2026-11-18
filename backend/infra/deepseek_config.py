@@ -1,19 +1,20 @@
 """DeepSeek model and credential resolution helpers.
 
-The resolver keeps DeepSeek V4 Pro as the only default model for new backend
+The resolver keeps DeepSeek V4 Flash as the default model for new backend
 callers and records credential sources without exposing secret values.
 """
 
 from __future__ import annotations
 
 import os
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 
-DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
-DEFAULT_DEEPSEEK_LITELLM_MODEL = "deepseek/deepseek-v4-pro"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEFAULT_DEEPSEEK_LITELLM_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
@@ -75,6 +76,22 @@ def _clean(value: Any) -> str:
     return str(value or "").strip().strip("\"'")
 
 
+def enforce_deepseek_model_policy(model: str) -> str:
+    """Replace DeepSeek Pro selections, preserving routing prefixes and other models.
+
+    Applied at request boundaries as well as config resolution so old DB values,
+    environment overrides and caller-supplied models cannot restore Pro usage.
+    This does not read credentials or rewrite historical usage records.
+    """
+    selected = _clean(model)
+    prefix, separator, name = selected.rpartition("/")
+    name = name if separator else selected
+    if re.fullmatch(r"deepseek(?:[-_.][a-z0-9]+)*[-_.]pro(?:[-_.:][a-z0-9._:-]+)?", name, re.IGNORECASE):
+        logging.getLogger(__name__).warning("DeepSeek Pro selection remapped by Flash-only policy")
+        return f"{prefix}/{DEFAULT_DEEPSEEK_MODEL}" if separator else DEFAULT_DEEPSEEK_MODEL
+    return selected
+
+
 def redact_secret_text(text: Any) -> str:
     """Return text with common API keys, auth headers, and DB URLs removed."""
 
@@ -96,10 +113,12 @@ def _read_aistock_env() -> dict[str, str]:
     try:
         from backend.config_manager_compat import ConfigManager
     except Exception:
+        logging.getLogger(__name__).warning("DeepSeek local credential source unavailable; trying next source")
         return {}
     try:
         return ConfigManager().read_env()
     except Exception:
+        logging.getLogger(__name__).warning("DeepSeek local credential source unavailable; trying next source")
         return {}
 
 
@@ -119,6 +138,7 @@ def _resolve_from_db(
         try:
             from backend.db.pg_pool import get_conn as get_conn_fn  # type: ignore[assignment]
         except Exception:
+            logging.getLogger(__name__).warning("DeepSeek DB credential adapter unavailable")
             return None
 
     try:
@@ -147,6 +167,7 @@ def _resolve_from_db(
                 )
                 row = cursor.fetchone()
     except Exception:
+        logging.getLogger(__name__).warning("DeepSeek DB credential lookup unavailable")
         return None
 
     if not row:
@@ -181,7 +202,7 @@ def resolve_deepseek_config(
     log evidence should use ``as_safe_dict()``.
     """
 
-    target_model = _clean(model) or DEFAULT_DEEPSEEK_MODEL
+    target_model = enforce_deepseek_model_policy(_clean(model) or DEFAULT_DEEPSEEK_MODEL)
     env_key, env_key_source = _env_first(("DEEPSEEK_API_KEY",))
     env_base, env_base_source = _env_first(("DEEPSEEK_BASE_URL",))
 

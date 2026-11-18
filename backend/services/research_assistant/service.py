@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import jsonschema
 
 from backend.mcp.tool_manifest import TOOL_MANIFEST, TOOL_MANIFEST_BY_NAME
-from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL, resolve_deepseek_config
+from backend.infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL, enforce_deepseek_model_policy, resolve_deepseek_config
 from backend.services.validation.pipeline_center import ValidationPipelineCenterService
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
@@ -1004,6 +1004,7 @@ def _git_output(args: list[str]) -> str | None:
             timeout=2,
         )
     except Exception:
+        logger.warning("Research Assistant git metadata unavailable")
         return None
     if result.returncode != 0:
         return None
@@ -1730,6 +1731,7 @@ def _response_choice_finish_reason(response: Any) -> str | None:
     try:
         choice = response.choices[0]
     except Exception:
+        logger.warning("LLM finish reason unavailable: response has no readable choice")
         return None
     return str(getattr(choice, "finish_reason", "") or "").strip() or None
 
@@ -2202,6 +2204,7 @@ class ResearchAssistantLlmClient:
             completion_kwargs["tool_choice"] = tool_choice or "auto"
         if max_tokens is not None:
             completion_kwargs["max_tokens"] = max_tokens
+        model_id = enforce_deepseek_model_policy(model_id)
         response = litellm.completion(model=model_id, messages=provider_messages, temperature=temperature, **completion_kwargs)
         duration_ms = int((perf_counter() - start) * 1000)
         choice = response.choices[0]

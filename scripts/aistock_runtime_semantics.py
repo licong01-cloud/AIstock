@@ -568,6 +568,25 @@ def _validate_qe_multi_alpha_archive_status(payload: Any) -> tuple[str, str | No
     return "passed", None, facts
 
 
+def _validate_deepseek_flash_policy(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    expected = {
+        "schema_version": "deepseek_flash_policy_v1",
+        "default_model": "deepseek-v4-flash",
+        "pro_override_model": "deepseek-v4-flash",
+        "prefixed_pro_override_model": "deepseek/deepseek-v4-flash",
+        "remaining_pro_configurations": 0,
+        "status": "ready",
+        "live_model_called": False,
+    }
+    valid = isinstance(payload, dict) and all(
+        type(payload.get(key)) is type(value) and payload.get(key) == value
+        for key, value in expected.items()
+    )
+    return ("passed", None, expected) if valid else (
+        "failed", "DeepSeek Flash policy or current model bindings are not effective", {}
+    )
+
+
 def _validate_health_ok(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Health endpoints must report ok=true or an explicitly healthy status."""
     if not isinstance(payload, dict):

@@ -8,7 +8,18 @@
     "backend/routers/rdagent_llm_config_endpoints.py",
     "backend/tests/infra/test_deepseek_config.py",
     "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
-    "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json"
+    "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+    "backend/infra/deepseek_config.py",
+    "backend/infra/deepseek_client.py",
+    "deepseek_client.py",
+    "backend/routers/llm_config.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py",
+    "docs/operations/deepseek_flash_policy_runbook.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2251",
@@ -31,18 +42,52 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql"
-    ],
-    "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "backend/infra/deepseek_client.py",
+      "backend/infra/deepseek_config.py",
+      "backend/routers/llm_config.py",
+      "backend/routers/rdagent_llm_config_endpoints.py",
       "backend/services/quantevolver/llm_client.py",
       "backend/services/rdagent_llm_config_client.py",
       "backend/services/research_assistant/service.py",
-      "backend/routers/rdagent_llm_config_endpoints.py",
-      "backend/tests/infra/test_deepseek_config.py"
+      "backend/tests/infra/test_deepseek_config.py",
+      "deepseek_client.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+      "docs/operations/deepseek_flash_policy_runbook.md"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+      "docs/operations/deepseek_flash_policy_runbook.md"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261118_BUG-2251-deepseek-pro-configuration-must-migrate-to-flash-and-reject-pro-at-reque.json",
+      "backend/infra/deepseek_client.py",
+      "backend/infra/deepseek_config.py",
+      "backend/routers/llm_config.py",
+      "backend/routers/rdagent_llm_config_endpoints.py",
+      "backend/services/quantevolver/llm_client.py",
+      "backend/services/rdagent_llm_config_client.py",
+      "backend/services/research_assistant/service.py",
+      "backend/tests/infra/test_deepseek_config.py",
+      "deepseek_client.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+      "docs/operations/deepseek_flash_policy_runbook.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -216,11 +261,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/llm/deepseek-policy",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/infra/test_deepseek_config.py -q -> passed; fresh isolated test process exercised shared resolver, SDK call overrides, QE numeric/legacy/default, RD-Agent payloads, assistant final wire and no-charge policy endpoint; real model calls=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/deepseek_flash_policy_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -358,5 +412,35 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "database_config_migration": {
+    "file": "backend/db/migrations/replace_deepseek_pro_with_flash_20261118.sql",
+    "dev_receipt": {
+      "bug_id": "BUG-2251",
+      "target": "aistock-pg-dev/aistock_dev",
+      "migration_sha256": "0f597991d2e4b797fe926b3a40cdfa69303f555b895974501ec386a82ff8f0a4",
+      "passed": true,
+      "transaction": "rolled_back",
+      "live_model_calls": 0,
+      "note": "Existing DEV database; original assistant-table DDL in rollback transaction; PostgreSQL sequence allocation is not rolled back."
+    },
+    "production_target": "timescaledb/aistock",
+    "production_status": "pending_merged_source",
+    "scope": "LLM current model bindings and selection; no business/usage-history writes",
+    "authorization": "User requested replacing all current AIstock DeepSeek Pro model configuration with deepseek-v4-flash; no service-control authorization."
+  },
+  "review_results": {
+    "executor": "active_agent",
+    "rounds": [
+      "Correctness: normalize Pro at final wire; preserve other vendors, prefixes and historical usage; verification refuses to certify Pro using Flash responses.",
+      "Completeness/regression: all currently found active Pro bindings included; real DEV migration and repeat-run checks rolled back; no services, real LLM requests or business data modified."
+    ],
+    "design_compliance": {
+      "partial_or_placeholder": false,
+      "silent_error_or_fake_success": false,
+      "unapproved_semantic_change": false,
+      "unapproved_gate_or_manual_control": false
+    },
+    "runtime_acceptance": "pending_user_restart"
   }
 }

@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+import logging
 import openai
 
-from .deepseek_config import DEFAULT_DEEPSEEK_MODEL, redact_secret_text, resolve_deepseek_config
+from .deepseek_config import DEFAULT_DEEPSEEK_MODEL, enforce_deepseek_model_policy, redact_secret_text, resolve_deepseek_config
 
 
 class DeepSeekClient:
@@ -39,7 +40,7 @@ class DeepSeekClient:
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ) -> str:
-        model_to_use = model or self.model
+        model_to_use = enforce_deepseek_model_policy(model or self.model)
         if self.client is None:
             return "API调用失败: DeepSeek API key is not configured"
 
@@ -1075,7 +1076,8 @@ class DeepSeekClient:
                                 f"({avg_change['change']:+.2f}, {avg_change['change_pct']:+.2f}%)"
                             )
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).warning("Chip weighted-average change is unavailable: invalid data format")
+                            chip_text += "\n???????????????????"
 
                     conc_changes = change_analysis.get("concentration_changes", {})
                     if isinstance(conc_changes, dict) and conc_changes:

@@ -1,4 +1,5 @@
 import openai
+from backend.infra.deepseek_config import enforce_deepseek_model_policy
 import json
 from typing import Dict, List, Any, Optional
 import config
@@ -7,7 +8,7 @@ class DeepSeekClient:
     """DeepSeek API客户端"""
     
     def __init__(self, model="deepseek-chat"):
-        self.model = model
+        self.model = enforce_deepseek_model_policy(model)
         self.client = openai.OpenAI(
             api_key=config.DEEPSEEK_API_KEY,
             base_url=config.DEEPSEEK_BASE_URL
@@ -17,7 +18,7 @@ class DeepSeekClient:
                  temperature: float = 0.7, max_tokens: int = 2000) -> str:
         """调用DeepSeek API"""
         # 使用实例的模型，如果没有传入则使用默认模型
-        model_to_use = model or self.model
+        model_to_use = enforce_deepseek_model_policy(model or self.model)
         
         # 对于 reasoner 模型，自动增加 max_tokens
         if "reasoner" in model_to_use.lower() and max_tokens <= 2000:
@@ -513,5 +514,5 @@ class DeepSeekClient:
             else:
                 # 如果无法解析JSON，返回文本响应
                 return {"decision_text": response}
-        except:
+        except Exception:
             return {"decision_text": response}
