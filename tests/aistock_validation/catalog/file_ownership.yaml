@@ -1,5 +1,15 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: qe_existing_task_followup_tool
+    priority: 146
+    include:
+      - scripts/qe_task_followup.py
+      - backend/tests/quantevolver/test_qe_task_followup.py
+    primary_module: qe.core
+    impact_modules: []
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: Read-only offline follow-up of explicitly named existing QE tasks reuses qe_read_backend; no task submission, runtime service, DB write, new gate or required CI check.
   - rule_id: qe_terminal_prediction_replay
     priority: 125
     include:
