@@ -31,17 +31,49 @@
     "https://github.com/licong01-cloud/AIstock/actions/runs/44155117997"
   ],
   "expected": "600s catalog budgets; complete same-run isolated receipt intake; bounded real DeepSeek diagnosis using authentic code intelligence context; precise old-run cleanup without active jobs.",
+  "external_follow_up": [
+    {
+      "delete_orphan_http": 403,
+      "force_cancel_http": 409,
+      "head": "6817b4ae87b3cee979a411dbf2a71e56eea0f021",
+      "jobs": 0,
+      "kind": "github_orphan_run",
+      "normal_cancel_http": 409,
+      "run_id": 43096131580,
+      "scope": "Exact legacy run only; automatic identity rules preserved; no active job touched.",
+      "status": "blocked_by_github_api",
+      "workflow": "codeql.yml"
+    },
+    {
+      "http_status": 402,
+      "kind": "deepseek_provider",
+      "live_probe_receipt": "tmp/issue_workflow/BUG-2250/live-test-plan-advice.json",
+      "model": "deepseek-v4-flash",
+      "required_action": "Service account owner must verify billing/quota; no model result or successful inference claimed.",
+      "status": "provider_rejected_request"
+    }
+  ],
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_session_runner.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2250-nightly-timeout-budget-and-failure-intake-lose-llm-context-and-scoped-re.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/nightly.yml",
-      "scripts/ci_failure_issue_summary.py",
-      "tests/aistock_validation/catalog/test_plans.yaml",
       "backend/tests/scripts/test_ci_failure_issue_summary.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "backend/tests/scripts/test_nightly_session_runner.py"
+      "backend/tests/scripts/test_nightly_session_runner.py",
+      "scripts/ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2250-nightly-timeout-budget-and-failure-intake-lose-llm-context-and-scoped-re.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
@@ -159,6 +191,35 @@
   "fixed_at": null,
   "github_issue_number": 7333,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7333",
+  "implementation_review": {
+    "design_compliance_001": {
+      "no_business_semantic_change": true,
+      "no_partial_claim": "Source fixes complete; GitHub orphan and HTTP402 external follow-up explicitly pending.",
+      "no_silent_error": "Warnings and deterministic failure intake preserved.",
+      "no_unapproved_gate": true
+    },
+    "reviewer": "active_agent_self_review",
+    "rounds": [
+      {
+        "findings_fixed": [
+          "Keep one scoped row per witnessed session; preserve unproven sessions and independent DR failures.",
+          "Execute live advice in the self-hosted CI environment; publish exact same-run advice without a second call."
+        ],
+        "kind": "correctness",
+        "result": "passed"
+      },
+      {
+        "checks": [
+          "600-second catalog budgets reach runner execution.",
+          "Receipt run/commit/session mismatch and missing/invalid files remain visible warnings.",
+          "Off mode does not invoke or consume live advice; no new jobs, gates, graph refresh, business changes or service control.",
+          "189 related regression tests plus 2 final CLI tests, explicit 7-file L0, catalog integrity and Ruff passed."
+        ],
+        "kind": "completeness_regression",
+        "result": "passed"
+      }
+    ]
+  },
   "last_seen_at": "2026-11-18T06:26:22.626684Z",
   "module": "validation",
   "non_goals": [
@@ -179,10 +240,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -310,57 +373,6 @@
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
-    }
-  },
-  "external_follow_up": [
-    {
-      "kind": "github_orphan_run",
-      "run_id": 43096131580,
-      "workflow": "codeql.yml",
-      "head": "6817b4ae87b3cee979a411dbf2a71e56eea0f021",
-      "jobs": 0,
-      "normal_cancel_http": 409,
-      "force_cancel_http": 409,
-      "delete_orphan_http": 403,
-      "status": "blocked_by_github_api",
-      "scope": "Exact legacy run only; automatic identity rules preserved; no active job touched."
-    },
-    {
-      "kind": "deepseek_provider",
-      "model": "deepseek-v4-flash",
-      "live_probe_receipt": "tmp/issue_workflow/BUG-2250/live-test-plan-advice.json",
-      "http_status": 402,
-      "status": "provider_rejected_request",
-      "required_action": "Service account owner must verify billing/quota; no model result or successful inference claimed."
-    }
-  ],
-  "implementation_review": {
-    "reviewer": "active_agent_self_review",
-    "rounds": [
-      {
-        "kind": "correctness",
-        "result": "passed",
-        "findings_fixed": [
-          "Keep one scoped row per witnessed session; preserve unproven sessions and independent DR failures.",
-          "Execute live advice in the self-hosted CI environment; publish exact same-run advice without a second call."
-        ]
-      },
-      {
-        "kind": "completeness_regression",
-        "result": "passed",
-        "checks": [
-          "600-second catalog budgets reach runner execution.",
-          "Receipt run/commit/session mismatch and missing/invalid files remain visible warnings.",
-          "Off mode does not invoke or consume live advice; no new jobs, gates, graph refresh, business changes or service control.",
-          "189 related regression tests plus 2 final CLI tests, explicit 7-file L0, catalog integrity and Ruff passed."
-        ]
-      }
-    ],
-    "design_compliance_001": {
-      "no_partial_claim": "Source fixes complete; GitHub orphan and HTTP402 external follow-up explicitly pending.",
-      "no_silent_error": "Warnings and deterministic failure intake preserved.",
-      "no_business_semantic_change": true,
-      "no_unapproved_gate": true
     }
   }
 }
