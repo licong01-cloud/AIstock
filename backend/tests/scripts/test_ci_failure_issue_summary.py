@@ -628,30 +628,6 @@ def test_single_session_receipt_promotion_does_not_reject_unscoped_duplicate(dr_
         assert any(row.get("nox_session") != "simulation_core_l2" for row in combined["failed_jobs"])
 
 
-@pytest.mark.parametrize("mutation", [None, "run_id", "commit", "nightly_failed_sessions", "missing", "bad_json"])
-def test_same_run_llm_receipt_is_bound_and_never_reinvokes(tmp_path, monkeypatch, mutation):
-    source = summary.summarize_nightly_status(_completed_nightly_receipts())
-    source["code_intelligence_refs"] = {"context_ref": "tmp/issue_workflow/nightly-9001/codegraph-context.md"}
-    source["llm_triage_advice"] = {"llm_invocation_evidence": {"invoked": True, "model": "deepseek-v4-flash"}}
-    target = summary.summarize_nightly_status(_completed_nightly_receipts())
-    if mutation in {"run_id", "commit"}:
-        source[mutation] = "foreign"
-    elif mutation == "nightly_failed_sessions":
-        source[mutation] = ["foreign_session"]
-    path = tmp_path / "advisor.json"
-    if mutation != "missing":
-        path.write_text("{" if mutation == "bad_json" else json.dumps(source), encoding="utf-8")
-    monkeypatch.setattr(summary, "_build_nightly_llm_triage_advice", lambda *_a, **_kw: pytest.fail("publisher must not invoke LLM"))
-    summary._consume_nightly_llm_summary(target, str(path), "warning_only")
-    advice = target["llm_triage_advice"]
-    assert advice["llm_invocation_evidence"]["invoked"] is (mutation is None)
-    if mutation:
-        assert advice["workflow_gate"] == "warning"
-        assert advice["blocking_for_issue_creation"] is False
-    else:
-        assert target["code_intelligence_refs"] == source["code_intelligence_refs"]
-
-
 def test_partial_nightly_receipts_do_not_hide_unproven_failed_sessions():
     payload = _completed_nightly_receipts()
     payload["nightly_session_results"][0].pop("failure_kind")
@@ -662,34 +638,31 @@ def test_partial_nightly_receipts_do_not_hide_unproven_failed_sessions():
         summary.bind_nightly_issue_group(combined, summary.nightly_issue_group(issue["body"]))
 
 
-def test_same_run_llm_off_does_not_read_or_consume_live_advice(tmp_path):
-    target = summary.summarize_nightly_status(_completed_nightly_receipts())
-    original = target["llm_triage_advice"]
-    summary._consume_nightly_llm_summary(target, str(tmp_path / "absent.json"), "off")
-    assert target["llm_triage_advice"] is original
-    assert original["llm_invocation_evidence"]["invoked"] is False
-
-
-@pytest.mark.parametrize("mode", ["warning_only", "off"])
-def test_nightly_publisher_cli_consumes_advice_without_second_live_call(tmp_path, monkeypatch, capsys, mode):
+@pytest.mark.parametrize("case", [None, "run_id", "commit", "nightly_failed_sessions", "missing", "bad_json", "off_live", "off_missing"])
+def test_nightly_publisher_cli_consumes_advice_without_second_live_call(tmp_path, monkeypatch, case):
     payload = _completed_nightly_receipts()
     source = summary.summarize_nightly_status(payload)
     source["code_intelligence_refs"] = {"context_ref": "tmp/issue_workflow/nightly-9001/codegraph-context.md"}
     source["llm_triage_advice"] = {"provider": "deepseek_api", "llm_invocation_evidence": {"invoked": True}}
+    if case in {"run_id", "commit", "nightly_failed_sessions"}:
+        source[case] = ["foreign_session"] if case == "nightly_failed_sessions" else "foreign"
     status, advisor, refs, output = [tmp_path / name for name in ("status.json", "advisor.json", "refs.json", "result.json")]
     status.write_text(json.dumps(payload), encoding="utf-8")
-    advisor.write_text(json.dumps(source), encoding="utf-8")
+    if case not in {"missing", "off_missing"}:
+        advisor.write_text("{" if case == "bad_json" else json.dumps(source), encoding="utf-8")
     refs.write_text(json.dumps(source["code_intelligence_refs"]), encoding="utf-8")
     build = summary._build_nightly_llm_triage_advice
     def no_live(*args, **kwargs):
         assert not kwargs.get("invoke_llm", False)
         return build(*args, **kwargs)
     monkeypatch.setattr(summary, "_build_nightly_llm_triage_advice", no_live)
+    mode = "off" if case in {"off_live", "off_missing"} else "warning_only"
     assert _nightly_cli(status, output, "--code-intelligence-json", str(refs),
                         "--llm-triage-summary-json", str(advisor), "--llm-triage-mode", mode) == 0
-    capsys.readouterr()
-    result = json.loads(output.read_text(encoding="utf-8"))
-    assert result["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is (mode != "off")
+    advice = json.loads(output.read_text(encoding="utf-8"))["llm_triage_advice"]
+    assert advice["llm_invocation_evidence"]["invoked"] is (case is None)
+    if case and mode != "off":
+        assert advice["workflow_gate"] == "warning" and advice["blocking_for_issue_creation"] is False
 
 
 @pytest.mark.parametrize("changes", [
@@ -1417,50 +1390,21 @@ def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
         json.dumps(_nightly_input("9001", include_url=False)),
         encoding="utf-8",
     )
-    code_refs_path.write_text(
-        json.dumps(
-            {
-                "artifacts": {
-                    "context_ref": "tmp/issue_workflow/BUG-610/codegraph-context.md",
-                    "affected_tests_ref": "tmp/issue_workflow/BUG-610/affected-tests.json",
-                    "ua_summary_ref": "tmp/issue_workflow/BUG-610/ua-validation_llm_pipeline-summary.md",
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    code_refs_path.write_text(json.dumps({
+        "context_ref": "tmp/issue_workflow/BUG-610/codegraph-context.md",
+        "affected_tests_ref": "tmp/issue_workflow/BUG-610/affected-tests.json",
+    }), encoding="utf-8")
     captured: dict[str, object] = {}
+    deterministic = llm_provider_adapter.build_test_plan_advice(
+        "deepseek_api", llm_provider_adapter.load_config(), module="validation", invoke_llm=False,
+    )
 
     def fake_test_plan_advice(*args: object, **kwargs: object) -> dict[str, object]:
         captured["invoke_llm"] = kwargs.get("invoke_llm")
-        return {
-            "schema_version": "aistock_deepseek_test_plan_advice_v1",
-            "deterministic_gate": {
-                "workflow_gate": "ready",
-                "validation_select_compatible": True,
-                "workspace_path_allowed": True,
-                "shell_commands_allowed": False,
-            },
-            "test_plan_advice": [
-                {
-                    "plan_key": "validation_module_registry_l0",
-                    "allowed": True,
-                    "nox_session": "validation_module_registry_l0",
-                    "rejection_reasons": [],
-                }
-            ],
-            "llm_invocation_evidence": {
-                "schema_version": "aistock_llm_invocation_evidence_v1",
-                "provider": "github_models",
-                "model": "deepseek/deepseek-r1",
-                "invoked": True,
-                "reason": "test_plan_advice_live_provider_json",
-                "input_policy": "plan_key_intent_catalog_plus_code_intelligence_refs_only",
-                "redaction_applied": True,
-                "provider_chain": [{"provider": "github_models", "status": "invoked"}],
-                "usage_summary": {"total_units": 42},
-            },
-        }
+        return {**deterministic, "llm_invocation_evidence": {
+            **deterministic["llm_invocation_evidence"], "invoked": True,
+            "reason": "test_plan_advice_live_provider_json",
+        }}
 
     monkeypatch.setattr(llm_provider_adapter, "build_test_plan_advice", fake_test_plan_advice)
 

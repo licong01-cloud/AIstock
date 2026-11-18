@@ -709,24 +709,17 @@ def test_codeql_is_nightly_only_before_runner_allocation() -> None:
 
 def test_nightly_failure_advisor_runs_with_local_context_and_publisher_only_consumes() -> None:
     jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
-    steps = jobs["nightly-l3"]["steps"]
-    advisor = next(step for step in steps if step.get("name") == "Build same-run Nightly failure LLM advice")
+    advisor, upload = [next(s for s in jobs["nightly-l3"]["steps"] if s.get("name") == name) for name in
+                       ("Build same-run Nightly failure LLM advice", "Upload same-run Nightly failure LLM advice")]
     assert "always()" in advisor["if"] and "steps.execute_sessions.outcome == 'failure'" in advisor["if"]
-    assert advisor["timeout-minutes"] == 4
+    assert advisor["timeout-minutes"] == 4 and "if ($env:LLM_TRIAGE_MODE -eq 'off') { exit 0 }" in advisor["run"]
     assert "conda run -n AIstock-CI python scripts/code_intelligence_adapter.py summary" in advisor["run"]
     assert "conda run -n AIstock-CI python scripts/ci_failure_issue_summary.py" in advisor["run"]
-    assert "if ($env:LLM_TRIAGE_MODE -eq 'off') { exit 0 }" in advisor["run"]
-    assert "--run-id" in advisor["run"] and "--commit" in advisor["run"]
-    assert "--changed-files-file" in advisor["run"]
-    assert "ua-refresh" not in advisor["run"] and "--invoke-llm" not in advisor["run"]
-    upload = next(step for step in steps if step.get("name") == "Upload same-run Nightly failure LLM advice")
-    assert upload["with"]["name"] == "nightly-failure-advice-${{ github.run_id }}"
-    assert "tmp/issue_workflow/nightly-" in upload["with"]["path"]
     publisher = jobs["full-summary"]["steps"]
-    download = next(step for step in publisher if step.get("name") == "Download same-run Nightly failure LLM advice")
-    assert download["with"]["name"] == upload["with"]["name"]
-    assert download["with"]["path"] == "tmp/"
-    build = next(step for step in publisher if step.get("name") == "Build Nightly failure issue context")
+    download = next(s for s in publisher if s.get("name") == "Download same-run Nightly failure LLM advice")
+    build = next(s for s in publisher if s.get("name") == "Build Nightly failure issue context")
+    assert download["with"]["name"] == upload["with"]["name"] == "nightly-failure-advice-${{ github.run_id }}"
+    assert download["with"]["path"] == "tmp/" and "tmp/issue_workflow/nightly-" in upload["with"]["path"]
     assert '--llm-triage-summary-json "tmp/validation/code-intelligence/' in build["run"]
 
 

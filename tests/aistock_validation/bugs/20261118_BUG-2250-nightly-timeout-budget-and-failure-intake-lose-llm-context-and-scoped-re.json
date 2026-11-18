@@ -25,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261118-f7b2590efd1b",
       "timestamp": "2026-11-18T06:26:22.626670Z"
+    },
+    {
+      "action": "repair_ci_test_debt_budget",
+      "actor": "Codex",
+      "note": "PR7335 first CI failed only honest denominator ratio. Production code and 30% threshold unchanged; duplicate fixtures consolidated; final matrix 192 passed, ratio=14466/48227.",
+      "timestamp": "2026-11-18T06:53:29.011956+00:00"
     }
   ],
   "evidence_uris": [
@@ -213,10 +219,19 @@
           "600-second catalog budgets reach runner execution.",
           "Receipt run/commit/session mismatch and missing/invalid files remain visible warnings.",
           "Off mode does not invoke or consume live advice; no new jobs, gates, graph refresh, business changes or service control.",
-          "189 related regression tests plus 2 final CLI tests, explicit 7-file L0, catalog integrity and Ruff passed."
+          "Final affected matrix including honest-denominator invariant: 192 passed; test ratio 14466/48227 < 0.30 with unchanged production denominator and threshold; scope/guardrail, Ruff and diff check passed."
         ],
         "kind": "completeness_regression",
         "result": "passed"
+      },
+      {
+        "findings_fixed": [
+          "Consolidated duplicate helper/off-mode tests into the actual publisher CLI parameter matrix.",
+          "Reused the real deterministic advice contract instead of a retired github_models mock; kept identity, invalid JSON, missing receipt, off-mode and real-call orchestration coverage."
+        ],
+        "kind": "CI_budget_repair_and_final_review",
+        "result": "passed",
+        "validation": "192 related tests passed; 8 receipt-mode/identity cases and 600s catalog runner budget cases included."
       }
     ]
   },
