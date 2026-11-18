@@ -1,18 +1,23 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { read, type Episode } from "@/lib/api/advisoryWorkbench";
 import { bps, day, gain, number, text, time } from "./workbench/shared";
+import { QuoteContext as Context, SnapshotQuoteProvider, type Quote, type Quotes } from "./QuoteSnapshot";
+export { QuoteRefresh } from "./QuoteSnapshot";
 
-type Recommendation = { segment_id: string | null; start_date: string | null; end_date: string | null; consecutive_days?: number | null; known_through_date?: string | null; base_price: number | null; end_price: number | null; return_bps: number | null; valuation_date?: string | null; state: string; reason_code: string | null };
-type Quote = { symbol: string; price: number | null; kind: string; trade_date: string | null; observed_at: string; reason_code?: string | null; today_return_bps?: number | null; recommendation?: Recommendation };
-type Quotes = Record<string, Quote>;
-const Context = createContext<{ items: Quotes; register: (symbol: string) => () => void }>({ items: {}, register: () => () => undefined });
 const canonical = (symbol: string) => symbol.trim().toUpperCase().replace(/^(SH|SZ|BJ)(\d{6})$/, "$2.$1");
 const valid = (symbol: string) => /^\d{6}\.(SH|SZ|BJ)$/.test(canonical(symbol));
 const kindText: Record<string, string> = { LIVE: "实时", PAUSED: "午间最新成交", CLOSE: "最近收盘", STALE_CLOSE: "较早收盘", NO_TRADES: "暂无成交快照" };
 const reasonText: Record<string, string> = { CALENDAR_UNAVAILABLE: "交易日历不可用", TDX_TIMEOUT: "TDX行情超时", TDX_PRICE_MISSING: "TDX暂无有效价格", TDX_CLOSE_MISSING: "TDX暂无收盘价", TDX_DUPLICATE_SYMBOL: "TDX代码重复", QUOTE_BUSY: "行情繁忙，稍后重试", RETURN_READ_UNAVAILABLE: "行情或名单身份不可用，请刷新" };
 
-export function QuoteProvider({ children, programId, listVersionId }: { children: ReactNode; programId?: string; listVersionId?: string | null }) {
+type ProviderProps = { children: ReactNode; programId?: string; listVersionId?: string | null; mode?: "live" | "snapshot" };
+export function QuoteProvider({ mode = "live", ...props }: ProviderProps) {
+  return mode === "snapshot"
+    ? <SnapshotQuoteProvider key={JSON.stringify([props.programId || null, props.listVersionId || null])} {...props} />
+    : <LiveQuoteProvider {...props} />;
+}
+
+function LiveQuoteProvider({ children, programId, listVersionId }: ProviderProps) {
   const counts = useRef(new Map<string, number>());
   const [symbols, setSymbols] = useState("");
   const [items, setItems] = useState<Quotes>({});
@@ -85,27 +90,40 @@ export function QuoteProvider({ children, programId, listVersionId }: { children
 
 function useQuote(symbol: string) {
   symbol = canonical(symbol);
-  const { items, register } = useContext(Context);
+  const { items, register, snapshot } = useContext(Context);
+  const manual = !!snapshot;
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const node = ref.current;
     if (!node || !valid(symbol)) return;
     let release: (() => void) | undefined;
+    if (manual) {
+      const ancestors: HTMLDetailsElement[] = [];
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (parent instanceof HTMLDetailsElement) ancestors.push(parent);
+      }
+      const update = () => {
+        if (ancestors.every(details => details.open)) release ??= register(symbol);
+        else { release?.(); release = undefined; }
+      };
+      update(); ancestors.forEach(details => details.addEventListener("toggle", update));
+      return () => { ancestors.forEach(details => details.removeEventListener("toggle", update)); release?.(); };
+    }
     const observer = new IntersectionObserver(entries => {
       if (entries[0].isIntersecting) { release ??= register(symbol); }
       else { release?.(); release = undefined; }
     }, { rootMargin: "200px" });
     observer.observe(node);
     return () => { observer.disconnect(); release?.(); };
-  }, [symbol, register]);
-  return { ref, quote: items[symbol] };
+  }, [symbol, register, manual]);
+  return { ref, quote: items[symbol], manual };
 }
 
 export function QuoteCell({ symbol }: { symbol: string }) {
-  const { ref, quote } = useQuote(symbol);
+  const { ref, quote, manual } = useQuote(symbol);
   const unavailable = !valid(symbol) ? "证券代码待核验" : !quote ? "读取行情中…" : reasonText[quote.reason_code || ""] || "TDX行情暂不可用";
   return <span ref={ref} data-testid="advisory-current-price" style={{ display: "inline-block", minWidth: 100 }}>
-    {quote?.price != null ? <><strong>¥{number(quote.price, 2)}</strong><small style={{ display: "block" }}>{kindText[quote.kind] || "TDX快照"} · {day(quote.trade_date)}</small><small style={{ display: "block" }}>获取 {time(quote.observed_at)}</small></> : <><span>—</span><small style={{ display: "block" }}>{unavailable}</small></>}
+    {quote?.price != null ? <><strong>¥{number(quote.price, 2)}</strong><small style={{ display: "block" }}>{manual && quote.kind === "LIVE" ? "盘中快照" : kindText[quote.kind] || "TDX快照"} · {day(quote.trade_date)}</small><small style={{ display: "block" }}>获取 {time(quote.observed_at)}</small>{quote.snapshot_error && <small>更新失败 · 上次快照</small>}</> : <><span>—</span><small style={{ display: "block" }}>{unavailable}</small></>}
   </span>;
 }
 
