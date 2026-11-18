@@ -49,6 +49,14 @@
   ],
   "expected": "冻结工作区批次复用正式 QE 注册和节点容量协调，CPU 训练和纯回放最多 4，WSL GPU 安全同批最多 2；每个回放仅依赖本 seed 的已验证预测；同计划查重、保留失败和恢复路径，现有任务不改绑，无新 DB 迁移或人工审批。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_prepared_workspace_batch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2255-qe.json"
+    ],
     "added_files": [
       "backend/services/quantevolver/qe_prepared_workspace_batch.py",
       "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py"
@@ -56,9 +64,12 @@
     "changed_files": [
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_execution_reservation.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/services/quantevolver/qe_prepared_workspace_batch.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261118_BUG-2255-qe.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_active_execution_capacity.py",
@@ -196,12 +207,16 @@
       "Existing DEV PostgreSQL READ ONLY ran the repository SQL with six CTE cases. A matching GPU cohort keeps 2; mixed modes, foreign cohorts, changed intent and an exclusive neighbor stay 1. Receipt tmp/issue_workflow/BUG-2255/dev-prepared-cohorts.json."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "After the user reloads, verify source identity and existing policy readback. Real admission for prepared cohorts requires a newly approved prepared batch; do not resubmit revision 359 or launch synthetic production work.",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
