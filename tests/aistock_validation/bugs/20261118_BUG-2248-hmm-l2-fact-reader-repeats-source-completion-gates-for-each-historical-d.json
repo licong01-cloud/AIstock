@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2248",
-  "closed_at": null,
+  "closed_at": "2026-11-18T07:10:42.301196Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -119,10 +119,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2248/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2248",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_risk_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "46eb808aa821138c63594e26ce6a5220612c3ad1ed8242d144fa27ba7dbaed10",
+      "expected_identity": "ce817815ce1c873dd8d5a896e34d2cb18ff9b0eb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-18T07:09:12.712432Z",
+      "mode": "read_only",
+      "observed_identity": "b975b7dc0e46536cd39fc679bb373f3d9ee243f7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "49dff7a7a9c5ad91dc64d1ba6c7b10b8a33f1d222818c92e51b0dd3ddb0bf0a3",
+      "receipt_sha256": "a2ee7884e2ad9f67cb4e435c01978435f2965712fae5c7ba88abaf0ce19282c0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1073df978a29e9a5ce8b71c684dec05baf6a6ef9250ed499df0a1731350eeaa8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -154,7 +176,7 @@
     ],
     "validation_evidence_digest": "944ca1780d70226d302b925cff5f37aee1ae828ffddfefb461aa6bba44d61224"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -165,7 +187,9 @@
   },
   "validation_evidence": [
     "validation-receipt: id=70f2fd6068a2fc0d commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_risk_l2_database_inference.py -q` result=`44 passed`",
-    "validation-receipt: id=6cb015f7e783436c commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/hmm_risk/risk_l2_database_inference.py backend/tests/hmm_risk/test_risk_l2_database_inference.py` result=`passed`"
+    "validation-receipt: id=6cb015f7e783436c commit=f820861f86736a73e6aabaa60c7dfcd2c4cdf574 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/hmm_risk/risk_l2_database_inference.py backend/tests/hmm_risk/test_risk_l2_database_inference.py` result=`passed`",
+    "post-restart-verify BUG-2248 backend-main b975b7dc0e46536cd39fc679bb373f3d9ee243f7 -> passed; runtime_identity_match=true; read-only business smoke passed",
+    "post-restart-verify BUG-2248 -> passed; source merge expected, deployed origin/main descendant verified; health identity business smoke passed; read-only"
   ],
   "verification_budget": {
     "budget": "standard",
