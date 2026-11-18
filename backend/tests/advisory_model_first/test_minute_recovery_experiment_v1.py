@@ -216,3 +216,18 @@ def test_all_forecasts_published_before_eval_and_exact_retry_never_refits(tmp_pa
     interrupted.claim("fold1_matched")
     with pytest.raises(ValueError,match="interrupted unpublished fit"):
         pipe.forecasts(interrupted,frame,Reader(),p,progress=lambda e:None)
+
+
+@pytest.mark.skipif(Path("X:/").drive != "X:",reason="Windows explicit-drive output contract")
+def test_initial_execution_requires_clean_declared_commit(monkeypatch):
+    calls=[]
+    def git(args,**kwargs):
+        calls.append(args)
+        return "a"*40 if "rev-parse" in args else " M unreviewed.py"
+    monkeypatch.setattr(pipe.subprocess,"check_output",git)
+    monkeypatch.setattr(pipe,"source_metadata",lambda *a:pytest.fail("read input before source check"))
+    with pytest.raises(ValueError,match="clean checkout"):
+        pipe.run(feature_root="X:/explicit-source-f1",source_root="X:/explicit-source-f2",
+                 output_root="X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/unpublished-source-check-fixture",
+                 source_commit="a"*40)
+    assert len(calls)==2

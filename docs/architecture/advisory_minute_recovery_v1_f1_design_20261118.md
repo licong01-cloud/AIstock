@@ -94,10 +94,10 @@ P3设计已由PR #7342合入；下表为P4真实输入及工程验收，源码CI
 | F-984 | backend/services/advisory_model_first/minute_recovery_inputs_v1.py:Budget/read_minutes | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study/prepared/receipt.json | VERIFIED_P4_INPUTS | none |
 | F-985 | scripts/advisory_minute_recovery.py; minute_recovery_inputs_v1.py:prepare | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_P4_INPUTS | none |
 | F-986 | backend/tests/advisory_model_first/test_minute_recovery_v1.py; §12 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_P4_INPUTS | none |
-| F-987 | minute_recovery_experiment_v1.py:train/predict; §13 | artifact: backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
-| F-988 | minute_recovery_pipeline_v1.py:FinanceReader/forecasts; §13 | artifact: backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
-| F-989 | minute_recovery_experiment_v1.py:comparison/summarize; §13 | artifact: backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
-| F-990 | minute_recovery_pipeline_v1.py:Study/run; §13 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
+| F-987 | minute_recovery_experiment_v1.py:train/predict; §13 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/p5_independent_receipt.json | VERIFIED_EXPERIMENT_CLOSED_NEGATIVE | none |
+| F-988 | minute_recovery_pipeline_v1.py:FinanceReader/forecasts; §13 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/experiment/forecasts/trained/manifest.json | VERIFIED_EXPERIMENT_CLOSED_NEGATIVE | none |
+| F-989 | minute_recovery_experiment_v1.py:comparison/summarize; §13 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/experiment/evaluated/report.json | VERIFIED_EXPERIMENT_CLOSED_NEGATIVE | none |
+| F-990 | minute_recovery_pipeline_v1.py:Study/run; §13 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_EXPERIMENT_CLOSED_NEGATIVE | none |
 
 ## 8. Verification Plan / Design compliance / Production gates
 
@@ -145,4 +145,24 @@ P0～P4不含金融标签、模型训练、收益筛选、新数据集、生产�
 - 一次评价：原生Top10为主、B为辅，开发2025-04～09、扩展2025-10～2026-08分别报告，并汇总原D/成熟D/三臂共同完整D、费用、干预、UNKNOWN、最差10%尾部、季度/折和换入换出收益分解。三臂共用完整D仅用于配对，不掩盖各自未知槽。10D circular block、10000次、seed20261118，保留每段原日期轴/缺洞；按§5判定，两段均达100bps且区间/覆盖/风险通过才支持新确认设计，否则负面关闭或证据不足。它们均非生产模型验收。
 - 性能与验证：同一进程2数值线程、采样RSS≤2GiB、每次执行≤1800秒、总输出≤200MiB；不重新读取全窗口分钟数据。直接测试覆盖D/H未来毒值、CASH/UNKNOWN、相同训练编码、18次预算、预测先冻结、恢复不fit及原日期轴。真实执行后第二实现复算预测/排名、净费用、分母、收益分解、置信区间及判定；源码至少三轮当前Agent审核，F1/CI/合入与研究经济结论分开。生产DB、服务、通知、模型激活及清理仍不包含。
 
-执行前尚未读取本轮经济结果；拟验收索引F-987～F-990在实际完成后更新同表，不新增结果说明文件。
+协议与代码在读取本轮经济结果前冻结为`a4b776e81be3d6e9aff73d694e6e2ddd6e519c83`。实际结果见下节；源码交付最终commit/CI/合入身份另记task.json，后续仅更新文档，不改变该执行源码或结果。
+
+## 14. P5～P7真实终态（2026-11-18）
+
+终态为`CLOSED_NEGATIVE_EXACT_CANDIDATE`，evaluated stage SHA256=`2e0185009b27d4cb4cbf349bb415e08930a28ed1a8f11f99eefe26e7d476fcf7`。18次物理fit均有STARTED/FINISHED及不可变模型/预测，无最终重训，旧269＋本轮18＝累计287金融fit，另1旧index，剩余预算0。该精确修复块候选关闭，不追加seed/模型或改名复活；不能从这一结果推导所有分钟信息均无用。
+
+| 报告段 | 原D / 成熟D / 三臂完整D | B+F对原生净增量bps | 95%日期块区间bps | B+F对B净增量bps |
+| --- | --- | --- | --- | --- |
+| 开发2025-04～09 | 126 / 126 / 116 | +10.689743 | [-51.311415, +71.871194] | -4.837152 |
+| 扩展2025-10～2026-08 | 219 / 214 / 206 | -48.006355 | [-122.118115, +22.430745] | -2.440663 |
+| 全部 | 345 / 340 / 322 | -26.861177 | [-80.499904, +24.086365] | -3.303994 |
+
+按三臂共同完整322D，原生、B、B+F的5TD扣费批次均值分别+117.121351、+93.564169、+90.260175bps；它们是重叠批次均值，不能当累计账户收益或独立样本。B+F绝对均值为正也不满足业务主目标，扩展段相对原生为负，且两段均未达到100bps。覆盖分别92.06%/96.26%；最差10%尾部变化+49.74/-19.67bps、额外UNKNOWN为负，风险指标未单独触发停止，关闭来自原定增量规则。2026Q3相对原生-300.34bps也保留在季度报告中，不据此事后缩短区间。
+
+旧2025-09窗口末端250槽在后折按同一估值叶恢复已成熟标签，不能把这个修复误记为候选增益。窗口结束的2026-08后5个D共250槽仍IMMATURE；其余65个评价金融UNKNOWN、50个明确CASH均保留。原41个分钟UNKNOWN槽不丢弃，未知槽仍保留原rank。
+
+真实执行52.31秒，数值线程2，峰值采样RSS402,595,840字节，输出约6.53MB，没有重新读取分钟数组。第二实现复核18个模型的训练编码、34,418个有限分数（最大差1.71e-13bps）、全部排名（差异0）、16,885条可用费用换算、50条现金、345D批次、所有窗口/季度/折的收益分解及10000次区间，结论一致。新进程恢复17.40秒，同一stage SHA、没有FIT_FINISHED事件或新增claim；18次预算没有重复消耗。
+
+第二实现首次检查出现两项脚本错误：NumPy float32标量未先转float64、费用换算遗漏D参考坐标到T开盘的observed_gap因子；均在原脚本修正并保留失败记录，实验代码/工件/容差未改、未追加fit。最终算术PASS回执为`p5_independent_receipt.json`。
+
+工程交付保留可复用特征、固定配对训练/预测、成熟度修复、经济评价和恢复能力；18个研究模型均不具备激活资格。旧V2终态不重启，独立确认、生产接入、数据扩容及新方向均未执行。后续只可先复盘业务目标与现成P9等未覆盖问题，任何新候选和真实fit仍需另行具体规划/授权。
