@@ -703,6 +703,122 @@ def test_legacy_partition_requires_real_complete_job_and_physical_validation():
     assert bad.state == PartitionState.INCOMPLETE and bad.counts[-1].invalid == 1
 
 
+def _legacy_dated_attempt(day):
+    return {'attempt_id': 'dsa-completed-date', 'dataset': 'suspend_d', 'data_source': 'tushare',
+        'target_date': day, 'target_scope': {'query_mode': 'by_date'}, 'job_id': 'job-legacy',
+        'status': 'reconciled', 'trigger_source': 'tushare_sync_engine',
+        'finished_at': datetime(2026, 10, 19, 12, 0, 1, tzinfo=timezone.utc),
+        'rows_observed': 1, 'error_message': None, 'context_json': {'quality_status': 'ok'}}
+
+
+def test_legacy_completed_date_survives_later_parent_timeout():
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import SUSPEND_D
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'suspend_d', 'suspend_d')
+    job.update(status='timeout', summary={'dataset': 'suspend_d', 'start_date': str(day),
+        'end_date': '2026-10-22', 'error': 'scheduler_stale_running_reconciliation'})
+    facts = [{'ts_code': '000001.SZ', 'trade_date': day, 'suspend_type': 'S', 'suspend_timing': None}]
+    attempt = _legacy_dated_attempt(day)
+    result = legacy_completion_result(SUSPEND_D, day, 0, source, job, facts, attempt=attempt)
+    assert result.state == PartitionState.VALID
+    assert result.checks['legacy_partition_attempt_id'] == attempt['attempt_id']
+    assert result.checks['legacy_parent_job_status'] == 'timeout'
+    assert result.checks['historical_vintage_proven'] is False
+    assert source['metadata'] == {'mode': 'by_date', 'tushare_api': 'suspend_d'}
+    assert job['status'] == 'timeout'
+
+
+@pytest.mark.parametrize('mutation', ['wrong_day', 'wrong_job', 'wrong_dataset', 'wrong_provider',
+    'wrong_mode', 'wrong_trigger', 'failed', 'missing_finish', 'old_finish', 'count_mismatch',
+    'bool_count', 'quality_failure', 'error', 'new_revision', 'changed_source', 'partial_source',
+    'wrong_job_range', 'missing_attempt', 'missing_job'])
+def test_legacy_partition_attempt_never_masks_unproven_scope(mutation):
+    from backend.services.data_integrity.legacy_validation import legacy_completion_result
+    from backend.services.tushare_dataset_specs import SUSPEND_D
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'suspend_d', 'suspend_d')
+    job['status'] = 'timeout'
+    attempt, revision = _legacy_dated_attempt(day), 0
+    if mutation == 'wrong_day':
+        attempt['target_date'] = date(2026, 10, 20)
+    elif mutation == 'wrong_job':
+        attempt['job_id'] = 'other-job'
+    elif mutation == 'wrong_dataset':
+        attempt['dataset'] = 'stock_st'
+    elif mutation == 'wrong_provider':
+        attempt['data_source'] = 'physical_audit_seed'
+    elif mutation == 'wrong_mode':
+        attempt['target_scope'] = {'query_mode': 'by_period'}
+    elif mutation == 'wrong_trigger':
+        attempt['trigger_source'] = 'manual'
+    elif mutation == 'failed':
+        attempt['status'] = 'retry'
+    elif mutation == 'missing_finish':
+        attempt['finished_at'] = None
+    elif mutation == 'old_finish':
+        attempt['finished_at'] = datetime(2026, 10, 18, tzinfo=timezone.utc)
+    elif mutation == 'count_mismatch':
+        attempt['rows_observed'] = 0
+    elif mutation == 'bool_count':
+        attempt['rows_observed'] = True
+    elif mutation == 'quality_failure':
+        attempt['context_json']['quality_status'] = 'low_coverage'
+    elif mutation == 'error':
+        attempt['error_message'] = 'query failed'
+    elif mutation == 'new_revision':
+        revision = 1
+    elif mutation == 'changed_source':
+        source['metadata']['integrity_observed_revision'] = 0
+    elif mutation == 'partial_source':
+        source['metadata']['pagination_complete'] = False
+    elif mutation == 'wrong_job_range':
+        job['summary']['end_date'] = '2026-10-18'
+    elif mutation == 'missing_attempt':
+        attempt = None
+    elif mutation == 'missing_job':
+        job = None
+    result = legacy_completion_result(SUSPEND_D, day, revision, source, job,
+        [{'ts_code': '000001.SZ', 'trade_date': day, 'suspend_type': 'S', 'suspend_timing': None}], attempt=attempt)
+    assert result.state == PartitionState.UNVERIFIED
+
+
+@pytest.mark.parametrize('variant', ['good', 'latest_attempt_failed', 'missing_fact', 'invalid_semantics'])
+def test_native_legacy_date_attempt_is_exact_and_preserves_physical_checks(monkeypatch, variant):
+    from backend.services.data_integrity import validation
+    from backend.services.data_integrity.catalog import Obligation
+    day = date(2026, 10, 19)
+    source, job = _legacy_completion(day, 'suspend_d', 'suspend_d')
+    job['status'] = 'timeout'
+    attempt = _legacy_dated_attempt(day)
+    facts = [{'ts_code': '000001.SZ', 'trade_date': day, 'suspend_type': 'S', 'suspend_timing': None}]
+    if variant == 'latest_attempt_failed':
+        attempt['status'] = 'retry'
+    elif variant == 'missing_fact':
+        facts = []
+    elif variant == 'invalid_semantics':
+        facts[0]['suspend_timing'] = 'not-a-time'
+    queries = []
+    def read(_conn, query, parameters=()):
+        queries.append((str(query), parameters))
+        if 'dataset_date_refresh_audit' in str(query):
+            return [source]
+        if 'ingestion_jobs' in str(query):
+            return [job]
+        if 'data_sync_attempts' in str(query):
+            assert parameters == ('suspend_d', day, 'job-legacy')
+            assert 'LIMIT 1' in str(query) and 'NULLS LAST' in str(query)
+            return [attempt]
+        return facts
+    monkeypatch.setattr(validation, 'rows', read)
+    result = validation.PhysicalValidator().validate(None,
+        Obligation('suspend_d', 'event', '17:00'), day, 0)
+    assert result.state == {'good': PartitionState.VALID,
+        'latest_attempt_failed': PartitionState.UNVERIFIED,
+        'missing_fact': PartitionState.INCOMPLETE, 'invalid_semantics': PartitionState.INCOMPLETE}[variant]
+    assert len(queries) == 4
+
+
 @pytest.mark.parametrize('mutation', ['failed_job', 'incomplete_batches', 'wrong_dataset', 'wrong_day',
     'wrong_job_id', 'missing_job', 'seed', 'partial_query', 'query_error', 'new_revision', 'bound_other_revision'])
 def test_legacy_completion_never_relaxes_unknown_or_changed_scope(mutation):

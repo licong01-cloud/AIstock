@@ -24,26 +24,43 @@ def _unknown(reason, checks):
         (CheckCounts('contract_check', 1, 0, 0, 0, 0, 1),), checks, reason=reason)
 
 
-def _complete_job(spec, day, source, job):
+def _source_scope(spec, day, source, job):
     if not source or not job or source.get('data_source') != 'tushare':
         return False
     metadata, summary = source.get('metadata') or {}, job.get('summary') or {}
-    stats = summary.get('stats') or {}
     if (source.get('dataset') != spec.name or source.get('trade_date') != day
             or source.get('status') != 'success' or source.get('quality_status') not in {'ok', 'empty_valid'}
             or metadata.get('tushare_api') != spec.tushare_api or metadata.get('mode') != spec.query_mode.value
             or metadata.get('audit_from_target_table') or metadata.get('provider_scan')
             or metadata.get('integrity_observed_revision') is not None
             or any(metadata.get(k) is False for k in ('pagination_complete', 'provider_query_scope_complete'))
-            or job.get('status') != 'success' or not source.get('job_id')
+            or not source.get('job_id')
             or str(job.get('job_id')) != str(source['job_id'])
-            or summary.get('dataset') != spec.name or stats.get('dataset') != spec.name
-            or str(stats.get('job_id')) != str(source['job_id'])
-            or summary.get('error') or stats.get('error')):
+            or summary.get('dataset') != spec.name):
         return False
     try:
         if not date.fromisoformat(summary['start_date']) <= day <= date.fromisoformat(summary['end_date']):
             return False
+        count = source.get('row_count')
+        if type(count) is not int or count < 0:
+            return False
+        if spec.name in _DATED and spec.row_limit > 0 and count >= spec.row_limit:
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _complete_job(spec, day, source, job):
+    if not _source_scope(spec, day, source, job):
+        return False
+    metadata, summary = source.get('metadata') or {}, job.get('summary') or {}
+    stats = summary.get('stats') or {}
+    if (job.get('status') != 'success' or stats.get('dataset') != spec.name
+            or str(stats.get('job_id')) != str(source['job_id'])
+            or summary.get('error') or stats.get('error')):
+        return False
+    try:
         total, success, failed = (stats[k] for k in ('total_batches', 'success_batches', 'failed_batches'))
         if (any(type(value) is not int for value in (total, success, failed))
                 or total <= 0 or success != total or failed != 0):
@@ -62,18 +79,39 @@ def _complete_job(spec, day, source, job):
                 return False
         elif spec.name not in _DATED:
             return False
-        count = source.get('row_count')
-        if type(count) is not int or count < 0:
-            return False
-        # A legacy single-date query at its cap is not proof of pagination.
-        if spec.name in _DATED and spec.row_limit > 0 and count >= spec.row_limit:
-            return False
     except (KeyError, TypeError, ValueError):
         return False
     return True
 
 
-def legacy_completion_result(spec, day, revision, source, job, actual):
+def _complete_dated_attempt(spec, day, source, job, attempt):
+    """A committed date is independent of later dates in its parent job.
+
+    Only the native exact-date completion can replace whole-job success. Never
+    infer a date from aggregate counters, a table count or a period query.
+    """
+    if (spec.name not in _DATED or spec.query_mode.value != 'by_date'
+            or not _source_scope(spec, day, source, job) or not attempt):
+        return False
+    if (not attempt.get('attempt_id') or attempt.get('dataset') != spec.name
+            or attempt.get('data_source') != 'tushare' or attempt.get('target_date') != day
+            or (attempt.get('target_scope') or {}).get('query_mode') != 'by_date'
+            or str(attempt.get('job_id')) != str(source['job_id'])
+            or attempt.get('status') != 'reconciled'
+            or attempt.get('trigger_source') != 'tushare_sync_engine'
+            or attempt.get('error_message')
+            or (attempt.get('context_json') or {}).get('quality_status') not in {'ok', 'empty_valid'}
+            or type(attempt.get('rows_observed')) is not int
+            or attempt['rows_observed'] != source['row_count']):
+        return False
+    try:
+        return (attempt.get('finished_at') is not None and source.get('refreshed_at') is not None
+                and attempt['finished_at'] >= source['refreshed_at'])
+    except TypeError:
+        return False
+
+
+def legacy_completion_result(spec, day, revision, source, job, actual, *, attempt=None):
     """Return current-content validation, preserving any unproven source scope.
 
     Revision zero is the pre-tracking compatibility case. A changed tracked
@@ -114,9 +152,15 @@ def legacy_completion_result(spec, day, revision, source, job, actual):
     if spec.name in _REFERENCES - {'etf_basic_snapshots'}:
         # Current reference rows are useful facts, but not an old dated snapshot.
         return _unknown('historical_reference_scope_unproven', checks)
-    if revision != 0 or not _complete_job(spec, day, source, job):
+    whole_job = _complete_job(spec, day, source, job)
+    dated_attempt = not whole_job and _complete_dated_attempt(spec, day, source, job, attempt)
+    if revision != 0 or not (whole_job or dated_attempt):
         return _unknown('historical_reference_scope_unproven' if spec.name in _REFERENCES
                         else 'historical_source_query_unproven', checks)
+    if dated_attempt:
+        checks.update(coverage_basis='completed_legacy_date_attempt_current_database_partition',
+                      legacy_partition_attempt_id=attempt['attempt_id'],
+                      legacy_parent_job_status=job.get('status'))
     expected = source['row_count']
     if len(actual) > expected:
         return _unknown('legacy_partition_count_changed', checks)
@@ -145,11 +189,12 @@ def legacy_completion_result(spec, day, revision, source, job, actual):
     if spec.name in _FINANCIAL:
         checks['query_periods'] = source['metadata']['periods']
     return ValidationResult(PartitionState.VALID, (coverage, physical,
-        CheckCounts('completed_legacy_query', 1, 1, 0, 0, 0, 0)), checks)
+        CheckCounts('completed_legacy_date_query' if dated_attempt else 'completed_legacy_query',
+                    1, 1, 0, 0, 0, 0)), checks)
 
 
 def validate_legacy_partition(conn, obligation, day, revision, observed, *, read):
-    """One bounded query for facts and one for the exact retained producer job."""
+    """Bounded fact/job reads; exact-date attempt only when parent is incomplete."""
     from psycopg2 import sql
     from backend.services.tushare_dataset_specs import DATASET_REGISTRY
     from .provider import announcement_spec
@@ -181,4 +226,13 @@ def validate_legacy_partition(conn, obligation, day, revision, observed, *, read
     if source and source.get('job_id'):
         jobs = read(conn, 'SELECT job_id,status,summary FROM market.ingestion_jobs WHERE job_id=%s',
                     (source['job_id'],))
-    return legacy_completion_result(spec, day, revision, source, jobs[0] if jobs else None, actual)
+    job = jobs[0] if jobs else None
+    attempts = []
+    if (spec.name in _DATED and spec.query_mode.value == 'by_date'
+            and _source_scope(spec, day, source, job) and not _complete_job(spec, day, source, job)):
+        attempts = read(conn, """SELECT t.dataset,t.data_source,t.target_date,t.target_scope,a.*
+            FROM market.data_sync_targets t JOIN market.data_sync_attempts a USING(target_id)
+            WHERE t.dataset=%s AND t.data_source='tushare' AND t.target_date=%s AND a.job_id=%s
+            ORDER BY a.finished_at DESC NULLS LAST,a.created_at DESC LIMIT 1""", (dataset, day, source['job_id']))
+    return legacy_completion_result(spec, day, revision, source, job, actual,
+                                    attempt=attempts[0] if attempts else None)
