@@ -31,3 +31,5 @@
 .metricDefinition h4{margin:0;color:#182433;font-size:13px}.metricDefinition p{color:#475569}
 .metricDefinition dl{margin:12px 0 0}.metricDefinition dl>div+div{margin-top:10px}.metricDefinition dt{color:#64748b;font-size:11px}.metricDefinition dd{margin:2px 0 0;color:#334155}
 @media(max-width:650px){.metricDialog{width:calc(100vw - 20px);max-height:88dvh}.metricDialogHeader{padding:12px}.metricDialogIntro{padding:4px 12px}.metricSearch{padding:8px 12px 16px}.metricGuideBody{padding:0 12px 16px}.metricGuideGrid{grid-template-columns:minmax(0,1fr)}.shell .metricHelpButton{width:24px;min-width:24px;height:24px;flex-basis:24px}}
+
+.quoteToolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px;margin:14px 0;border:1px solid var(--wb-border,#e0e7f1);border-radius:9px;background:var(--wb-card,#fff);font-size:12px;color:#64748b}.quoteToolbar>div{min-width:0}.quoteToolbar strong{color:#334155;margin-right:12px}.quoteToolbar small{overflow-wrap:anywhere}.quoteToolbar small[role=alert]{color:#946419}.quoteToolbar button{flex-shrink:0;min-height:36px}

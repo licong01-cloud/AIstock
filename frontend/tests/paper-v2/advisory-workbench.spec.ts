@@ -19,7 +19,7 @@ function episode(index: number, p = "lstm") {
   return { episode_id: `episode-${index}`, symbol: index < 2 ? "600001.SH" : `600${String(index).padStart(3, "0")}.SH`, stock_name: index < 2 ? "重复入选股票" : `历史股票 ${index + 1}`, status: "EXITED", signal_date: "2026-10-12", effective_entry_date: "2026-10-13", effective_exit_date: "2026-10-20", exit_signal_date: "2026-10-19", entry_price: 18.5, exit_price: 17.8, current_rank: null, entry_rank: 1, exit_reason: index % 2 ? "STOP_LOSS" : "TAKE_PROFIT", holding_trading_days: 5, performance_state: "SETTLED", performance_reason_code: null, return_bps: index % 2 ? -410 : 620, return_kind: "REALIZED", progress: "ENDED", mark_date: "2026-10-27", mark_price: 17.8, source: index === 40 ? "UNKNOWN" : "FORWARD", binding_version_id: `${p}-binding`, metric_as_of_trade_date: "2026-10-27" };
 }
 const stocks = Array.from({ length: 8 }, (_, i) => ({ symbol: `60010${i}.SH`, stock_name: `当日股票 ${String.fromCharCode(65 + i)}`, episode_id: [0, 2, 6].includes(i) ? null : `episode-${i}`, rank: i + 1, membership: "IN_SCOPE", change: [0, 2, 6].includes(i) ? "NEW" : "CONTINUING", progress: [0, 2, 6].includes(i) ? "PENDING_ENTRY" : "TRACKING", consecutive_days: [0, 2, 6].includes(i) ? 1 : i + 1, reference_price: 42.18, reference_date: "2026-10-27", episode: [0, 2, 6].includes(i) ? undefined : { ...episode(i), status: "ACTIVE", progress: "TRACKING", return_kind: "UNREALIZED" } }));
-type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean; business?: "complete" | "unknown" | "immature"; businessMissed?: boolean };
+type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean; delayedRemoved?: boolean; quoteFailure?: "network" | "identity"; quotePrice?: number; business?: "complete" | "unknown" | "immature"; businessMissed?: boolean };
 function businessShadow(mode: NonNullable<State["business"]>, missed = false) {
   const complete = mode === "complete", unknown = mode === "unknown";
   const evaluation = { status: complete ? "COMPLETE" : unknown ? "UNKNOWN" : "IMMATURE_OR_PENDING", native_net_bps: complete || unknown ? 200 : null, specialist_net_bps: complete ? 400 : null, delta_bps: complete ? 200 : null, native_unknown_slots: unknown ? 0 : complete ? 0 : null, specialist_unknown_slots: unknown ? 1 : complete ? 0 : null, native_cash_slots: complete ? 0 : null, specialist_cash_slots: complete ? 0 : null };
@@ -60,9 +60,11 @@ async function setup(page: Page, state: State) {
     if (state.hold && p === "lstm" && !view) await state.hold;
     if (!view) return json(route, { ...summary(p), program_id: state.wrongIdentity ? "wrong" : p });
     if (view === "returns") {
+      if (state.quoteFailure === "network") return json(route, { detail: "Quote temporarily unavailable" }, 503);
+      if (state.quoteFailure === "identity") return json(route, { schema_version: "advisory_display_quotes_v1", return_schema_version: "advisory_recommendation_returns_v1", program_id: "wrong", list_version_id: "wrong", items: {} });
       if (state.dense) await new Promise(resolve => setTimeout(resolve, 200));
       const symbols = (url.searchParams.get("symbols") || "").split(",");
-      return json(route, { schema_version: "advisory_display_quotes_v1", return_schema_version: "advisory_recommendation_returns_v1", program_id: p, list_version_id: url.searchParams.get("list_version_id"), items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, today_return_bps: symbol === "600102.SH" ? null : 500, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null,
+      return json(route, { schema_version: "advisory_display_quotes_v1", return_schema_version: "advisory_recommendation_returns_v1", program_id: p, list_version_id: url.searchParams.get("list_version_id"), items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : state.quotePrice ?? 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, today_return_bps: symbol === "600102.SH" ? null : 500, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null,
         recommendation: { segment_id: `${p}-${symbol}`, start_date: "2026-10-26", base_price: 42.18, known_through_date: target, end_date: symbol.startsWith("6002") ? target : null, end_price: symbol.startsWith("6002") ? 43 : null, return_bps: symbol === "600102.SH" ? null : symbol.startsWith("6002") ? 194.405 : 1000, state: symbol.startsWith("6002") ? "ENDED" : "RECOMMENDED", valuation_date: target, reason_code: symbol === "600102.SH" ? "QUOTE_NOT_VALID_FOR_SEGMENT" : null } }])) });
     }
     if (view === "readiness") return json(route, { program_id: p, data_date: "2026-10-27", status: "AVAILABLE", items: [{ consumer_ready: false, all_sync_complete: false }], errors: [] });
@@ -82,6 +84,7 @@ async function setup(page: Page, state: State) {
     if (view === "daily") {
       if (p === "parent") return json(route, { ...envelope(p), status: "NO_CURRENT_LIST", items: [], total_count: 0, limit, offset, summary: null });
       const group = url.searchParams.get("group") || "IN_SCOPE";
+      if (state.delayedRemoved && group === 'REMOVED') await new Promise(resolve => setTimeout(resolve, 120));
       let items = group === "IN_SCOPE" ? stocks : group === "REMOVED" || group === "OUTSIDE_PENDING" ? ["I", "J"].map((name, i) => ({ ...stocks[i], symbol: `60020${i}.SH`, stock_name: `移出股票 ${name}`, membership: "OUTSIDE_PENDING", change: "REMOVED", progress: "WAITING_REVIEW", reason_code: "PENDING_TARGET_OPEN_REVIEW" })) : [];
       if (state.dense && group === 'IN_SCOPE') items = Array.from({ length: 25 }, (_, i) => ({ ...stocks[i % stocks.length], symbol: `600${100 + i}.SH`, stock_name: `密集名单 ${i + 1}`, rank: i + 1 }));
       const change = url.searchParams.get("change"), q = url.searchParams.get("q");
@@ -182,19 +185,126 @@ test("real archived historical replay rejects malformed evidence identity", asyn
   expect(state.seen.filter(url => /\/(quotes|returns)\?/.test(url))).toEqual([]);
 });
 
-test('dense recommendation rows do not refetch on quote-induced height changes', async ({ page }) => {
+test('detail quote snapshot loads the whole page once and ignores scroll focus and timers', async ({ page }) => {
+  await page.clock.install();
   const state: State = { seen: [], dense: true };
   await page.setViewportSize({ width: 1700, height: 900 });
   await setup(page, state);
   await page.goto('/paper-v2/advisory?program_id=lstm');
-  const row = main(page).getByRole('row').filter({ has: page.getByRole('button', { name: '密集名单 12', exact: true }) });
+  await page.clock.runFor(500);
+  const row = main(page).getByRole('row').filter({ has: page.getByRole('button', { name: '密集名单 20', exact: true }) });
+  await expect(row.getByTestId('advisory-current-price')).toContainText('¥46.40');
+  const reads = () => state.seen.filter(url => url.includes('/returns?'));
+  const initial = reads().length;
+  const requested = reads().flatMap(url => new URL(url.slice(4), 'http://test').searchParams.get('symbols')!.split(','));
+  expect(new Set(requested).size).toBe(requested.length);
+  expect(requested).toContain('600119.SH');
   await row.scrollIntoViewIfNeeded();
   await expect(row.getByTestId('advisory-recommendation-return')).toContainText('+10.00%');
-  // Observe real layout/IntersectionObserver callbacks; do not fake the visibility contract.
-  await page.waitForTimeout(5500);
-  const reads = state.seen.filter(url => url.includes('/returns?'));
-  expect(reads.length, 'initial visibility stabilization must not become a request loop').toBeLessThanOrEqual(6);
+  await page.evaluate(() => { window.scrollTo(0, 0); window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.clock.runFor(60100);
+  expect(reads()).toHaveLength(initial);
   await expect(row.getByTestId('advisory-recommendation-return')).toContainText('+10.00%');
+});
+
+test('detail quote snapshot reuses visited pages and refreshes only the current page', async ({ page }) => {
+  const state: State = { seen: [], dense: true }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const list = main(page).locator('section').filter({ has: page.getByRole('heading', { name: '当日推荐名单', exact: true }) }).first();
+  await expect(list.getByTestId('advisory-current-price').first()).toContainText('¥46.40');
+  const reads = () => state.seen.filter(url => url.includes('/returns?'));
+  const initial = reads().length;
+  await list.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(list.getByTestId('advisory-current-price').first()).toContainText('¥46.40');
+  expect(reads()).toHaveLength(initial + 1);
+  const newSymbols = new URL(reads().at(-1)!.slice(4), 'http://test').searchParams.get('symbols')!.split(',');
+  expect(newSymbols).toEqual(Array.from({ length: 5 }, (_, i) => `600${120 + i}.SH`));
+  await list.getByRole('button', { name: '上一页', exact: true }).click();
+  await expect(list.getByRole('button', { name: '密集名单 1', exact: true })).toBeVisible();
+  await page.waitForTimeout(150);
+  expect(reads()).toHaveLength(initial + 1);
+  state.quotePrice = 50;
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
+  await expect(list.getByTestId('advisory-current-price').first()).toContainText('¥50.00');
+  expect(reads()).toHaveLength(initial + 2);
+  expect(reads().at(-1)).not.toContain('600120.SH');
+});
+
+test('detail quote snapshot coalesces delayed groups without refetching in-flight symbols', async ({ page }) => {
+  const state: State = { seen: [], dense: true, delayedRemoved: true }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  await expect(main(page).getByTestId('advisory-current-price').first()).toContainText('¥46.40');
+  await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  const reads = state.seen.filter(url => url.includes('/returns?'));
+  const requested = reads.flatMap(url => new URL(url.slice(4), 'http://test').searchParams.get('symbols')!.split(','));
+  expect(requested).toHaveLength(22);
+  expect(new Set(requested).size).toBe(22);
+  expect(requested).toContain('600119.SH'); expect(requested).toContain('600200.SH');
+});
+
+test('detail quote snapshot keeps old values on transient refresh failure and supports retry', async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const price = main(page).getByTestId('advisory-current-price').first();
+  await expect(price).toContainText('¥46.40');
+  state.quoteFailure = 'network';
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
+  await expect(price).toContainText('¥46.40');
+  await expect(price).toContainText('更新失败 · 上次快照');
+  await expect(main(page).getByTestId('advisory-quote-toolbar').getByRole('alert')).toContainText('保留上次快照');
+  state.quoteFailure = undefined; state.quotePrice = 50;
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
+  await expect(price).toContainText('¥50.00');
+  await expect(price).not.toContainText('更新失败');
+});
+
+test('detail quote snapshot isolates historical versions and supports manual refresh there', async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  await expect(main(page).getByTestId('advisory-current-price').first()).toContainText('¥46.40');
+  await main(page).getByRole('button', { name: '历史名单', exact: true }).click();
+  state.quotePrice = 50;
+  await main(page).getByRole('button', { name: `查看${target}名单版本lstm-history-0`, exact: true }).click();
+  await expect(main(page).getByTestId('advisory-current-price').first()).toContainText('¥50.00');
+  await expect(main(page).getByTestId('advisory-recommendation-return').first()).toContainText('已结束');
+  state.quotePrice = 55;
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
+  await expect(main(page).getByTestId('advisory-current-price').first()).toContainText('¥55.00');
+  await main(page).getByRole('button', { name: '返回历史名单目录', exact: false }).click();
+  state.quotePrice = 60;
+  await main(page).getByRole('button', { name: `查看${target}名单版本lstm-history-1`, exact: true }).click();
+  await expect(main(page).getByTestId('advisory-current-price').first()).toContainText('¥60.00');
+  const reads = state.seen.filter(url => url.includes('/returns?'));
+  expect(reads.some(url => url.includes('list_version_id=lstm-history-0'))).toBe(true);
+  expect(reads.at(-1)).toContain('list_version_id=lstm-history-1');
+});
+
+test('detail quote snapshot rejects a mismatched security instead of retaining its old returns', async ({ page }) => {
+  const state: State = { seen: [] }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const row = main(page).getByRole('row').filter({ has: page.getByRole('button', { name: '当日股票 A', exact: true }) });
+  await expect(row.getByTestId('advisory-current-price')).toContainText('¥46.40');
+  await page.route('**/advisory/workbench/programs/lstm/returns?**', async route => {
+    const url = new URL(route.request().url()), symbols = url.searchParams.get('symbols')!.split(',');
+    await json(route, { schema_version: 'advisory_display_quotes_v1', return_schema_version: 'advisory_recommendation_returns_v1', program_id: 'lstm', list_version_id: url.searchParams.get('list_version_id'), items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol: '999999.SH', price: 999, observed_at: stamp, recommendation: { return_bps: 99999 } }])) });
+  });
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
+  await expect(row.getByTestId('advisory-current-price')).not.toContainText('¥46.40');
+  await expect(row.getByTestId('advisory-recommendation-return')).not.toContainText('+10.00%');
+  await expect(row.getByTestId('advisory-current-price')).toContainText('行情或名单身份不可用');
+});
+
+test('detail quote snapshot toolbar fits mobile and exposes acquisition time', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setup(page, { seen: [] }); await page.goto('/paper-v2/advisory?program_id=lstm');
+  const toolbar = main(page).getByTestId('advisory-quote-toolbar');
+  await expect(main(page).getByTestId('advisory-current-price').first()).toContainText('¥46.40');
+  await expect(toolbar).toContainText('本页最近获取：2026');
+  await expect(toolbar.getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  const size = await toolbar.evaluate(node => ({ width: node.getBoundingClientRect().width, client: node.clientWidth, scroll: node.scrollWidth }));
+  expect(size.width).toBeLessThanOrEqual(390); expect(size.scroll).toBeLessThanOrEqual(size.client + 1);
+  await expect(page.locator('body')).not.toContainText('盘中实时');
+  await page.screenshot({ path: testInfo.outputPath('snapshot-mobile.png'), fullPage: true });
 });
 
 test("recommendation returns include new stocks without an episode and keep process returns separate", async ({ page }) => {
@@ -233,7 +343,7 @@ test("quote request failures remain visible and do not hide recommendation rows"
   await expect(row.getByRole("button", { name: "当日股票 A", exact: true })).toBeVisible();
 });
 
-test("polling removes previous returns when the pinned response identity changes", async ({ page }) => {
+test("manual quote refresh removes previous returns when the pinned response identity changes", async ({ page }) => {
   await page.clock.install();
   await setup(page, { seen: [] });
   await page.goto('/paper-v2/advisory?program_id=lstm');
@@ -243,7 +353,7 @@ test("polling removes previous returns when the pinned response identity changes
   await page.route('**/advisory/workbench/programs/lstm/returns?**', async route => {
     await json(route, { schema_version: 'advisory_display_quotes_v1', return_schema_version: 'advisory_recommendation_returns_v1', program_id: 'wrong-program', list_version_id: 'wrong-list', items: {} });
   });
-  await page.clock.runFor(15100);
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
   await expect(row.getByTestId('advisory-recommendation-return')).toContainText('推荐涨跌暂不可用');
   await expect(row.getByTestId('advisory-recommendation-return')).not.toContainText('+10.00%');
   await expect(row.getByRole('button', { name: '当日股票 A', exact: true })).toBeVisible();
