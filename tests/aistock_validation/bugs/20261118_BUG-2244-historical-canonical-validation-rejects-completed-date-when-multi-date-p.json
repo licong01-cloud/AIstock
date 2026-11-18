@@ -27,9 +27,38 @@
     "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/production-readonly.json",
     "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/production-fixed-readonly.json",
     "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/dev-validation.json",
-    "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/production-validation-plan.json"
+    "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/production-validation-plan.json",
+    "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/delivery.json",
+    "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/final-public-readback.json"
   ],
   "expected": "Reuse exact-date native completion when independently proven, validate current physical facts once and publish through existing fenced canonical flow",
+  "historical_validation_delivery": {
+    "schema_version": "suspend_d_history_validation_delivery_summary_v1",
+    "production_target": "127.0.0.1:5432/aistock",
+    "authorization_scope_sha256": "e37e77b72fea7845f2c38e7ca68bdb885ff9a172f25e2e2668914d205f5286c6",
+    "production_application": "applied_native_VALIDATE_ONLY_89_dates",
+    "public_require_success_pass": 105,
+    "public_require_success_blocked": 0,
+    "fact_rows_unchanged": 1042,
+    "provider_audits_unchanged": 89,
+    "existing_verdicts_reused_unchanged": 16,
+    "production_fact_write": false,
+    "dataset_change": false,
+    "source_fetch": false,
+    "account_execution": false,
+    "service_control": false,
+    "delivery_file_ref": {
+      "path": "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/delivery.json",
+      "size_bytes": 3354,
+      "sha256": "7a72810bf7d3cba3cbc9fa9d21e91324412872e461b8cb24f74f403a0700b5cf"
+    },
+    "public_readback_file_ref": {
+      "path": "X:/AIstock_temp/DATA_PREPARATION/localsim-canonical-history-20261118/final-public-readback.json",
+      "size_bytes": 63700,
+      "sha256": "cb5eef4569e0c2f18cbbe786f5b017eb46b2e93f45d942769e0c19ead8eef158"
+    },
+    "remaining_runtime_state": "pending_user_restart; data_admission_unblocked_without_service_control"
+  },
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/data_integrity/legacy_validation.py",
