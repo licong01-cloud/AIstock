@@ -86,7 +86,7 @@ def test_consumed_keys_must_match_every_session_once(db, change):
 
 
 @pytest.mark.parametrize("change", ["missing_pin", "duplicate_pin", "revision_unknown", "old_rule", "stock_invalid"])
-def test_current_revision_and_stock_contracts_are_required(db, change):
+def test_quality_metadata_does_not_gate_actual_benchmark_facts(db, change):
     index = next(r for r in db.pins if r["dataset"] == "index_daily")
     if change == "missing_pin":
         db.pins.remove(index)
@@ -98,8 +98,12 @@ def test_current_revision_and_stock_contracts_are_required(db, change):
         index["rule_version"] = "obsolete"
     else:
         db.pins[0]["validation_status"] = "UNVERIFIED"
-    with pytest.raises(InputReadinessError):
-        source.extra_input_capture(db.conn, db.days)
+    if change == "duplicate_pin":
+        with pytest.raises(InputReadinessError):
+            source.extra_input_capture(db.conn, db.days)
+    else:
+        captured = source.extra_input_capture(db.conn, db.days)
+        assert captured['benchmark']['valid'] == 20
 
 
 def test_window_is_the_authoritative_twenty_sessions_ending_on_d(db):
@@ -137,7 +141,7 @@ def test_post_compute_rechecks_same_scope_values_and_revision(db, monkeypatch, c
     native = {"publication": {"list_version_id": "frozen"}, "baseline_bindings_sha256": source.sha(bindings)}
     receipt = {"price": {"input_readiness": extra}, "baseline_input_bindings": bindings,
                "native_source_reference": native}
-    if change == "none":
+    if change in {"none", "validation"}:
         reader.verify_capture(receipt)
     else:
         with pytest.raises(InputReadinessError):

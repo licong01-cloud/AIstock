@@ -1,6 +1,7 @@
 {
   "actual": "Several consumers require canonical/provider success before reading; unchanged facts can be rejected for missing metadata or changed validation_id; Paper live can wait solely for audit; Advisory rechecks validation certification repeatedly",
   "allowed_write_scope": [
+    "backend/tests/advisory_model_first/test_lstm_spo_benchmark_scope.py",
     "backend/services/advisory_program.py",
     "backend/services/advisory_forward/service.py",
     "backend/tests/advisory_model_first/test_forward_model_evaluation.py",
@@ -355,7 +356,8 @@
     "R1 correctness: removed source-receipt gates in LocalSIM, Paper v2, Selection, HMM daily and Advisory; repeated validation metadata is excluded from content binding. Producer validation, honest UNKNOWN/INCOMPLETE monitoring and monthly publisher checks remain.",
     "R2 compatibility/negative controls: actual missing or invalid required prices, duplicate data, true revision drift, PIT/package identity, causal clocks and execution policy checks remain strict. Legacy frozen bindings are not rewritten; fact provenance never claims known publication time.",
     "R3 performance/coverage: constant set-based fact queries drop from five to three; no new fact scans, provider calls, retries or per-symbol SQL. Final related matrix: 354 passed, 1 skipped, one obsolete audit-short-circuit expectation then fixed; focused final 3 passed. Separate HMM module 44 passed and merged.",
-    "R4 real DEV readback: existing DEV 5433, readonly transaction, 001205.SZ/2026-05-08 pre_close=15.30 exactly matches direct facts with zero audit calls. No database writes, dataset changes, account execution or process control."
+    "R4 real DEV readback: existing DEV 5433, readonly transaction, 001205.SZ/2026-05-08 pre_close=15.30 exactly matches direct facts with zero audit calls. No database writes, dataset changes, account execution or process control.",
+    "R5 broader CI review: LSTM benchmark post-compute comparison also included producer validation IDs in its hash. Split optional provenance from actual values/window/revision comparisons; four stale source-gate expectations updated. Focused 11 passed, complete benchmark slice 37 passed; actual price/missing/window/revision negative controls remain."
   ],
   "risk_area": "bug",
   "root_cause": "Business readers treated provider/canonical acceptance metadata as read permission, conflated revalidation IDs with content revisions, and used zero newly written rows to hide existing facts. Data acceptance belongs to ingestion/backfill/release, not every consumer access.",

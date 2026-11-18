@@ -228,7 +228,9 @@ class LstmSpoShadowSource:
             self._verify_original(connection, native["publication"], native)
             extra = receipt["price"]["input_readiness"]
             current = extra_input_capture(connection, extra["session_dates"])
-            if sha(extra) != sha(current):
+            verify_partition_refs(extra["partition_refs"], current["partition_refs"])
+            verify_partition_refs(extra["benchmark"]["partition_refs"], current["benchmark"]["partition_refs"])
+            if _extra_content_sha(extra) != _extra_content_sha(current):
                 raise InputReadinessError("重排序实际输入或分区版本在计算后变化")
 
     def finance(self, prediction):
@@ -344,8 +346,14 @@ def verify_native_liveness(connection, repo, bindings):
             raise InputReadinessError("原生策略包冻结版本或准入状态已变化")
 
 
+def _extra_content_sha(capture):
+    """Compare consumed content, not optional producer verification metadata."""
+    return sha({**{k: v for k, v in capture.items() if k not in {"partition_refs", "benchmark"}},
+        "benchmark": {k: v for k, v in capture["benchmark"].items() if k != "partition_refs"}})
+
+
 def extra_input_capture(connection, dates):
-    """Certify the consumed benchmark close slice, without certifying other indices."""
+    """Capture the required benchmark close slice without source recertification."""
     from backend.services.data_integrity.catalog import SCOPE_VERSION, RULE_VERSION
     from backend.services.data_integrity.contracts import finite_number
 
