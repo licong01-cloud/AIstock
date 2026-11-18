@@ -1,7 +1,7 @@
 # 已有分钟回撤修复输入与跨期排序研究 F1
 
-日期：2026-11-18；范围：Advisory / model_first，P0～P4离线输入能力。
-依据：[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)及[长任务§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)。本设计先合入，再实施P4；P5金融训练授权仍0。
+日期：2026-11-18；范围：Advisory / model_first，P0～P4离线输入及P5～P7单次配对实验。
+依据：[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)及[长任务§11](../analysis/advisory_lstm_next_research_plan_20261107.md#minute-path-long-task)。P0～P4已合入；用户随后“开始执行下一步任务”承接此前明确的九折两臂最多18fit提案，具体执行补充见§13。§1～§12中的零训练状态保留为P4交付时的事实，当前授权与实耗只以§13及task.json为准。
 
 ## 1. Background / Goal / Feature Card
 
@@ -77,6 +77,10 @@ CLI读取已存在父study，核对原plan/manifest链及输入sha后按显式�
 | F-984 | 有界D切片、2GiB/2线程/200MB预算、源不变及真实读取证据 |
 | F-985 | 原子不可变阶段、新进程同输入复用、源/代码漂移拒绝，无金融执行入口 |
 | F-986 | 真实全人口特征、第二算术路径、故障合同、多轮审核/源码交付与P5零授权分态 |
+| F-987 | 九折同KEY/目标/编码/支持、train-only参数、原rank保留及最多18物理fit |
+| F-988 | D/H投影后解码金融标签，修复旧窗口尾端IMMATURE，全部预测冻结后一次评价 |
+| F-989 | 完整D轴配对、扣费收益、分段/季度/折/风险/100bps判定及第二算术 |
+| F-990 | 不可变协议/阶段、STARTED/FINISHED恢复、源码身份/资源/自审/CI及生产分态 |
 
 ## 7. Design Acceptance Matrix
 
@@ -90,6 +94,10 @@ P3设计已由PR #7342合入；下表为P4真实输入及工程验收，源码CI
 | F-984 | backend/services/advisory_model_first/minute_recovery_inputs_v1.py:Budget/read_minutes | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study/prepared/receipt.json | VERIFIED_P4_INPUTS | none |
 | F-985 | scripts/advisory_minute_recovery.py; minute_recovery_inputs_v1.py:prepare | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_P4_INPUTS | none |
 | F-986 | backend/tests/advisory_model_first/test_minute_recovery_v1.py; §12 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | VERIFIED_P4_INPUTS | none |
+| F-987 | minute_recovery_experiment_v1.py:train/predict; §13 | artifact: backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
+| F-988 | minute_recovery_pipeline_v1.py:FinanceReader/forecasts; §13 | artifact: backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
+| F-989 | minute_recovery_experiment_v1.py:comparison/summarize; §13 | artifact: backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
+| F-990 | minute_recovery_pipeline_v1.py:Study/run; §13 | artifact: X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/task.json | IMPLEMENTATION_VERIFIED_BEFORE_REAL_RUN | none |
 
 ## 8. Verification Plan / Design compliance / Production gates
 
@@ -124,3 +132,17 @@ P0～P4不含金融标签、模型训练、收益筛选、新数据集、生产�
 - 新进程精确恢复24.67秒，返回`EXACT_ARTIFACT_RETRY_VERIFIED`及同一stage SHA，未重新计算特征。31个直接测试覆盖测量、身份、未来价格/金融标签毒值、源变化、内容篡改、预算、发布恢复及CLI/CI路由；实际分次验证记录和当前HEAD CI保存在task.json/PR。
 
 恢复使用`F:/Dev/AIstock_worktrees/advisory-minute-recovery-source-20261118`的冻结源码（精确commit见task.json）；CLI为`python scripts/advisory_minute_recovery.py --source-study X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/study/advmultitop10_6c632adf532818cfcd059113 --output-root X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/study`。读取已有输入无需重启服务。P0～P4新增金融fit=0，历史累计269＋1旧index不变；P5预算仍0，没有可激活模型或100bps收益结论。
+
+## 13. P5～P7执行补充：单一18fit配对实验
+
+2026-11-18用户在上述P4交付及明确的18fit提案后指令继续下一步；本轮执行该单一实验、一次评价与交付，不追加候选、调参、seed、最终重训或确认窗口。既有task.json的p5节点记录授权、实际fit及源码/工件SHA，不覆写P4记录。当前执行根为`X:/AIstock_temp/ADVISORY/minute-recovery-20261118-v1/experiment`；若执行前发生技术失败，原目录及失败原因保留，新协议另记精确恢复根，不能覆盖或赠送fit。
+
+本轮tracked范围8文件：本F1、原接续计划、原蓝图；新增`backend/services/advisory_model_first/minute_recovery_experiment_v1.py`、`minute_recovery_pipeline_v1.py`、`backend/tests/advisory_model_first/test_minute_recovery_experiment_v1.py`、`scripts/advisory_minute_recovery_experiment.py`；既有`scripts/ci_change_classifier.py`只增加该CLI到已有荐股通道的映射。P4特征代码、输入和源码封存不改。
+
+- 协议：保持§5的九个两月块、Ridge和55/60字段，截止日期按原官方日历投影到块首D之前最后交易日。共同训练KEY为该截止前D且第五session H已成熟、金融标签可用或明确CASH、P4共同支持成立的全部槽。按支持槽内D中心化，目标同样中心化；每D总样本权重相同并归一到均值1。整列训练缺失则两臂共同停用该基础列；其它列按训练中位数/缺失位/IQR→std→1编码，逐字段验证两臂基础参数一致。未知槽预测NaN、原rank保留，稳定按预测值/原rank破同分。
+- 标签：复用原研究prepared/train_finance与evaluated/finance，两文件和manifest在协议冻结前只核对身份。每次解码先按包、D范围和H≤该折截止过滤；H与原官方D+5核对。旧文件中已经成熟但仍标IMMATURE的行，使用既有`finance_inputs`、同一冻结binding和原估值叶补算，仅读取到当前截止的日频/限制/停牌信息；不替换已确定的原标签、不把UNKNOWN改现金，不读2026-08-28之后价格。评价阶段才解码截至该日的完整评价标签。旧窗口尾端缺标签不能静默丢掉。
+- 阶段：每折训练金融输入prepared、两臂各一个trained模型及预测，全部18个完成后发布forecasts/trained；再发布评价金融输入和evaluated。每次真正Ridge.fit之前独占写STARTED，完成阶段后写FINISHED；已开始未发布拒绝自动重训，已发布重试只验收/恢复同工件。无额外final模型。协议绑定P4 stage、金融文件、原binding、当前源commit、源码静态闭包和环境版本，变化拒绝续跑。
+- 一次评价：原生Top10为主、B为辅，开发2025-04～09、扩展2025-10～2026-08分别报告，并汇总原D/成熟D/三臂共同完整D、费用、干预、UNKNOWN、最差10%尾部、季度/折和换入换出收益分解。三臂共用完整D仅用于配对，不掩盖各自未知槽。10D circular block、10000次、seed20261118，保留每段原日期轴/缺洞；按§5判定，两段均达100bps且区间/覆盖/风险通过才支持新确认设计，否则负面关闭或证据不足。它们均非生产模型验收。
+- 性能与验证：同一进程2数值线程、采样RSS≤2GiB、每次执行≤1800秒、总输出≤200MiB；不重新读取全窗口分钟数据。直接测试覆盖D/H未来毒值、CASH/UNKNOWN、相同训练编码、18次预算、预测先冻结、恢复不fit及原日期轴。真实执行后第二实现复算预测/排名、净费用、分母、收益分解、置信区间及判定；源码至少三轮当前Agent审核，F1/CI/合入与研究经济结论分开。生产DB、服务、通知、模型激活及清理仍不包含。
+
+执行前尚未读取本轮经济结果；拟验收索引F-987～F-990在实际完成后更新同表，不新增结果说明文件。
