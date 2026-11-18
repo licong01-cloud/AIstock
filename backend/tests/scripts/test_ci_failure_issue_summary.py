@@ -608,6 +608,90 @@ def test_completed_nightly_receipts_round_trip_into_each_issue_without_foreign_d
         assert job["nightly_diagnostic_source"]["commit"] == "a" * 40
 
 
+@pytest.mark.parametrize("dr_failed", [False, True])
+def test_single_session_receipt_promotion_does_not_reject_unscoped_duplicate(dr_failed):
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"] = payload["nightly_session_results"][1:]
+    if dr_failed:
+        payload["statuses"]["drValidate"] = "failure"
+    combined = summary.summarize_nightly_status(payload)
+    rows = [row for row in combined["failed_jobs"] if row.get("nox_session") == "simulation_core_l2"]
+    assert len(rows) == 1
+    assert rows[0]["nightly_diagnostic_session"] == "simulation_core_l2"
+    issue = next(p for p in summary.build_github_issue_payloads(combined) if "paper_v2_selection_center" in p["title"])
+    scoped = summary.bind_nightly_issue_group(combined, summary.nightly_issue_group(issue["body"]))
+    assert len(scoped["failed_jobs"]) == 1
+    assert scoped["failed_jobs"][0]["nightly_diagnostic_source"] == rows[0]["nightly_diagnostic_source"]
+    assert scoped["failed_jobs"][0]["error_signature"] == rows[0]["error_signature"]
+    if dr_failed:
+        assert combined["nightly_statuses"]["dr_validate"] == "failure"
+        assert any(row.get("nox_session") != "simulation_core_l2" for row in combined["failed_jobs"])
+
+
+@pytest.mark.parametrize("mutation", [None, "run_id", "commit", "nightly_failed_sessions", "missing", "bad_json"])
+def test_same_run_llm_receipt_is_bound_and_never_reinvokes(tmp_path, monkeypatch, mutation):
+    source = summary.summarize_nightly_status(_completed_nightly_receipts())
+    source["code_intelligence_refs"] = {"context_ref": "tmp/issue_workflow/nightly-9001/codegraph-context.md"}
+    source["llm_triage_advice"] = {"llm_invocation_evidence": {"invoked": True, "model": "deepseek-v4-flash"}}
+    target = summary.summarize_nightly_status(_completed_nightly_receipts())
+    if mutation in {"run_id", "commit"}:
+        source[mutation] = "foreign"
+    elif mutation == "nightly_failed_sessions":
+        source[mutation] = ["foreign_session"]
+    path = tmp_path / "advisor.json"
+    if mutation != "missing":
+        path.write_text("{" if mutation == "bad_json" else json.dumps(source), encoding="utf-8")
+    monkeypatch.setattr(summary, "_build_nightly_llm_triage_advice", lambda *_a, **_kw: pytest.fail("publisher must not invoke LLM"))
+    summary._consume_nightly_llm_summary(target, str(path), "warning_only")
+    advice = target["llm_triage_advice"]
+    assert advice["llm_invocation_evidence"]["invoked"] is (mutation is None)
+    if mutation:
+        assert advice["workflow_gate"] == "warning"
+        assert advice["blocking_for_issue_creation"] is False
+    else:
+        assert target["code_intelligence_refs"] == source["code_intelligence_refs"]
+
+
+def test_partial_nightly_receipts_do_not_hide_unproven_failed_sessions():
+    payload = _completed_nightly_receipts()
+    payload["nightly_session_results"][0].pop("failure_kind")
+    combined = summary.summarize_nightly_status(payload)
+    assert {job["nox_session"] for job in combined["failed_jobs"]} == {"advisory_modeling_backend", "simulation_core_l2"}
+    issue = next(p for p in summary.build_github_issue_payloads(combined) if "advisory" in p["title"])
+    with pytest.raises(ValueError, match="session-isolated"):
+        summary.bind_nightly_issue_group(combined, summary.nightly_issue_group(issue["body"]))
+
+
+def test_same_run_llm_off_does_not_read_or_consume_live_advice(tmp_path):
+    target = summary.summarize_nightly_status(_completed_nightly_receipts())
+    original = target["llm_triage_advice"]
+    summary._consume_nightly_llm_summary(target, str(tmp_path / "absent.json"), "off")
+    assert target["llm_triage_advice"] is original
+    assert original["llm_invocation_evidence"]["invoked"] is False
+
+
+@pytest.mark.parametrize("mode", ["warning_only", "off"])
+def test_nightly_publisher_cli_consumes_advice_without_second_live_call(tmp_path, monkeypatch, capsys, mode):
+    payload = _completed_nightly_receipts()
+    source = summary.summarize_nightly_status(payload)
+    source["code_intelligence_refs"] = {"context_ref": "tmp/issue_workflow/nightly-9001/codegraph-context.md"}
+    source["llm_triage_advice"] = {"provider": "deepseek_api", "llm_invocation_evidence": {"invoked": True}}
+    status, advisor, refs, output = [tmp_path / name for name in ("status.json", "advisor.json", "refs.json", "result.json")]
+    status.write_text(json.dumps(payload), encoding="utf-8")
+    advisor.write_text(json.dumps(source), encoding="utf-8")
+    refs.write_text(json.dumps(source["code_intelligence_refs"]), encoding="utf-8")
+    build = summary._build_nightly_llm_triage_advice
+    def no_live(*args, **kwargs):
+        assert not kwargs.get("invoke_llm", False)
+        return build(*args, **kwargs)
+    monkeypatch.setattr(summary, "_build_nightly_llm_triage_advice", no_live)
+    assert _nightly_cli(status, output, "--code-intelligence-json", str(refs),
+                        "--llm-triage-summary-json", str(advisor), "--llm-triage-mode", mode) == 0
+    capsys.readouterr()
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is (mode != "off")
+
+
 @pytest.mark.parametrize("changes", [
     {"duration_seconds": 1}, {"return_code": 0}, {"timeout_seconds": 0},
     {"duration_seconds": float("nan")}, {"duration_seconds": True},

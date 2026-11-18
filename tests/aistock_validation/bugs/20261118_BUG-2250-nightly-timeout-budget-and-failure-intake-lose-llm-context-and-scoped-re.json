@@ -311,5 +311,56 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "external_follow_up": [
+    {
+      "kind": "github_orphan_run",
+      "run_id": 43096131580,
+      "workflow": "codeql.yml",
+      "head": "6817b4ae87b3cee979a411dbf2a71e56eea0f021",
+      "jobs": 0,
+      "normal_cancel_http": 409,
+      "force_cancel_http": 409,
+      "delete_orphan_http": 403,
+      "status": "blocked_by_github_api",
+      "scope": "Exact legacy run only; automatic identity rules preserved; no active job touched."
+    },
+    {
+      "kind": "deepseek_provider",
+      "model": "deepseek-v4-flash",
+      "live_probe_receipt": "tmp/issue_workflow/BUG-2250/live-test-plan-advice.json",
+      "http_status": 402,
+      "status": "provider_rejected_request",
+      "required_action": "Service account owner must verify billing/quota; no model result or successful inference claimed."
+    }
+  ],
+  "implementation_review": {
+    "reviewer": "active_agent_self_review",
+    "rounds": [
+      {
+        "kind": "correctness",
+        "result": "passed",
+        "findings_fixed": [
+          "Keep one scoped row per witnessed session; preserve unproven sessions and independent DR failures.",
+          "Execute live advice in the self-hosted CI environment; publish exact same-run advice without a second call."
+        ]
+      },
+      {
+        "kind": "completeness_regression",
+        "result": "passed",
+        "checks": [
+          "600-second catalog budgets reach runner execution.",
+          "Receipt run/commit/session mismatch and missing/invalid files remain visible warnings.",
+          "Off mode does not invoke or consume live advice; no new jobs, gates, graph refresh, business changes or service control.",
+          "189 related regression tests plus 2 final CLI tests, explicit 7-file L0, catalog integrity and Ruff passed."
+        ]
+      }
+    ],
+    "design_compliance_001": {
+      "no_partial_claim": "Source fixes complete; GitHub orphan and HTTP402 external follow-up explicitly pending.",
+      "no_silent_error": "Warnings and deterministic failure intake preserved.",
+      "no_business_semantic_change": true,
+      "no_unapproved_gate": true
+    }
   }
 }

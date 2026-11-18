@@ -140,7 +140,7 @@ plans:
     writes_artifacts: false
     writes_business_state: false
     runner_enabled: true
-    max_duration_seconds: 180
+    max_duration_seconds: 600
     evidence_kinds: [pytest, compileall]
   - plan_key: position_timing_first_release
     title: Position timing human-advice first-release UI and aggregate local gate
@@ -1444,7 +1444,7 @@ plans:
     writes_artifacts: false
     writes_business_state: false
     runner_enabled: true
-    max_duration_seconds: 300
+    max_duration_seconds: 600
     evidence_kinds: [pytest, compileall]
   - plan_key: localsim_control_plane_ui
     title: LocalSIM workbench and native control plane mocked UI contracts

@@ -2086,6 +2086,23 @@ def summarize_nightly_status(
         payload, run_id=effective_run_id, commit=effective_commit,
         statuses=statuses, run_url=effective_run_url,
     ) if statuses.get("nightly_l3") in NIGHTLY_FAILURE_STATUSES else []
+    # The status aggregate is not a second session witness. In a single-session
+    # failure it has the same nox_session as the scoped receipt, which makes
+    # exact Issue intake reject the valid receipt on the preceding unscoped row.
+    failed_jobs = [job]
+    if receipt_jobs:
+        failed_jobs = list(receipt_jobs)
+        witnessed = {row["nox_session"] for row in receipt_jobs}
+        missing_sessions = [session for session in failed_sessions if session not in witnessed]
+        if missing_sessions:
+            failed_jobs.append(_nightly_job_from_statuses(
+                statuses, run_url=effective_run_url, failed_sessions=missing_sessions,
+            ))
+        other_statuses = {key: value for key, value in statuses.items() if key != "nightly_l3"}
+        if _nightly_failed_keys(other_statuses):
+            failed_jobs.insert(0, _nightly_job_from_statuses(
+                other_statuses, run_url=effective_run_url, runner_health=runner_health,
+            ))
     summary = finalize_summary(
         {
             "schema_version": "aistock_ci_failure_summary_v1",
@@ -2098,7 +2115,7 @@ def summarize_nightly_status(
             "branch": effective_branch,
             "commit": effective_commit,
             "manual_summary": title,
-            "failed_jobs": [job, *receipt_jobs] if failed_keys else [],
+            "failed_jobs": failed_jobs if failed_keys else [],
             "extraction_errors": [] if failed_keys else ["nightly status payload did not include a failing stage"],
             "nightly_statuses": statuses,
             "nightly_fingerprint": fingerprint,
@@ -2130,6 +2147,37 @@ def summarize_nightly_status(
         summary["failure_event"] = build_failure_event(summary)
         summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
+
+
+def _consume_nightly_llm_summary(summary: dict[str, Any], path: str, mode: str | None) -> None:
+    """Consume an immutable same-run advisor result without another API call."""
+    if mode == "off":
+        return
+    try:
+        source = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        if (not isinstance(source, dict)
+                or source.get("run_id") != summary.get("run_id")
+                or source.get("commit") != summary.get("commit")
+                or not re.fullmatch(r"[0-9a-f]{40}", str(source.get("commit") or ""))
+                or set(source.get("nightly_failed_sessions") or []) != set(summary.get("nightly_failed_sessions") or [])):
+            raise ValueError("Nightly LLM summary run/commit/session identity mismatch")
+        advice = source.get("llm_triage_advice")
+        refs = source.get("code_intelligence_refs")
+        if not isinstance(advice, dict) or not isinstance(refs, dict) or not refs:
+            raise ValueError("Nightly LLM summary lacks advice or code intelligence references")
+        evidence = advice.get("llm_invocation_evidence")
+        if not isinstance(evidence, dict) or not isinstance(evidence.get("invoked"), bool):
+            raise ValueError("Nightly LLM summary lacks invocation evidence")
+        summary["code_intelligence_refs"] = refs
+        summary["llm_triage_advice"] = advice
+    except (OSError, ValueError, TypeError) as exc:
+        summary["llm_triage_advice"] = {
+            "workflow_gate": "warning", "blocking_for_issue_creation": False,
+            "fallback_used": True, "fallback_reason": str(exc),
+            "llm_invocation_evidence": {
+                "invoked": False, "reason": "same_run_llm_advice_unavailable", "redaction_applied": True,
+            },
+        }
 
 
 def summarize_actions_run(
@@ -2703,6 +2751,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-markdown-output")
     parser.add_argument("--github-issue-payload-output")
     parser.add_argument("--code-intelligence-json")
+    parser.add_argument("--llm-triage-summary-json", help="Consume the exact same-run self-hosted advisor receipt; never re-invoke from the publisher.")
     parser.add_argument("--llm-triage-mode", choices=["off", "warning_only", "opt_in_auto_file"])
     parser.add_argument("--llm-auto-file-opt-in", action="store_true", default=None)
     parser.add_argument(
@@ -2867,7 +2916,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--run-id, --manual-summary, --nightly-status-json, or --log-file is required")
 
     summary["code_intelligence_refs"] = _code_intelligence_refs_from_file(args.code_intelligence_json)
-    if summary["code_intelligence_refs"]:
+    if args.llm_triage_summary_json:
+        _consume_nightly_llm_summary(summary, args.llm_triage_summary_json, args.llm_triage_mode)
+    elif summary["code_intelligence_refs"]:
         invoke_llm_triage = args.llm_triage_mode in {"warning_only", "opt_in_auto_file"} or bool(args.llm_auto_file_opt_in)
         summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary, invoke_llm=invoke_llm_triage)
     if "llm_guarded_rollout_gate" not in summary or args.llm_triage_mode or args.llm_auto_file_opt_in:

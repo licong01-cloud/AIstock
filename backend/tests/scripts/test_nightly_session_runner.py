@@ -25,6 +25,22 @@ def test_catalog_budget_is_honored_but_never_exceeds_total_deadline(tmp_path):
     assert 0 < observed[-1] <= 60
 
 
+def test_nightly_timeout_repairs_flow_from_catalog_into_execution_budget(tmp_path):
+    import yaml
+
+    catalog = yaml.safe_load(Path("tests/aistock_validation/catalog/test_plans.yaml").read_text(encoding="utf-8"))
+    plans = catalog["test_plans"] if "test_plans" in catalog else catalog["plans"]
+    for session in ("simulation_core_l2", "position_timing_backend"):
+        plan = next(row for row in plans if row.get("nox_session") == session)
+        assert plan["max_duration_seconds"] == 600
+        observed = []
+        runner.run_sessions([session], output_json=tmp_path / f"{session}.json", output_md=tmp_path / f"{session}.md",
+                            session_timeout_seconds=1200, total_timeout_seconds=1200,
+                            session_budgets={session: plan["max_duration_seconds"]},
+                            executor=lambda _s, timeout, *_a: observed.append(timeout) or dict(session=session, result="success", duration_seconds=0))
+        assert observed == [600]
+
+
 @pytest.mark.parametrize("budget", [0, -1, True, 1.5, "1800"])
 def test_invalid_catalog_budget_fails_closed(tmp_path, budget):
     path = tmp_path / "plan.json"
