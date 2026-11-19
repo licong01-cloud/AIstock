@@ -74,6 +74,68 @@ def _payload(*, purpose: str = "research", status: str = "completed", annualized
     }
 
 
+def _frozen_replay_payload() -> dict:
+    p = _payload()
+    p.update(source_system="qe", source_id="replay-experiment", experiment_id="replay-experiment",
+             source_sub_id="Loop1", loop_id="Loop1", run_type="single_experiment", model_type=None, factor_list=[])
+    cfg = p["config"]
+    cfg.update(model={"model_id": None}, factor_list=[])
+    flags = cfg["runtime_flags"]
+    flags.update({"random_seed": 123, "research_study": "frozen-research", "_qe_active_dataset_summary": {
+        "release_id": "qe_hmm_full_v2_20260831", "dataset_manifest_sha256": "a" * 64},
+        "_qe_direct_v2_dataset_binding": {"release_id": "qe_hmm_full_v2_20260831"},
+        "frozen_run_provenance": {"study": "frozen-research", "arm": "af", "fit": 0, "predict": 0, "account": 1,
+            "seed": 123, "rows": 2765884, "data_sha256": "a" * 64, "score_sha256": "b" * 64,
+            "af_run_id": "original-af", "af_score_sha256": "c" * 64, "contract_sha256": "d" * 64},
+    })
+    flags["_qe_run_registration"].update(run_kind="single", task_id=p["task_id"], loop_index=1)
+    p["metrics"].update(n_trading_days=565, final_nav=19651507.8)
+    return p
+
+
+def test_registered_model_free_frozen_score_replay_is_archivable() -> None:
+    p = _frozen_replay_payload()
+    assert classify_qe_result(p).value_class == QEValueClass.C
+    assert build_business_identity(p)["model_type"] is None
+    decision = _archive_status_from_policy(source_type="experiment", source_id=p["source_id"],
+        source_sub_id=p["loop_id"], source_status="completed", payload=p, run_ids=[])
+    assert decision["eligible"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("data_sha256", "3" * 64), ("score_sha256", "missing"), ("af_score_sha256", "invalid"),
+     ("seed", 2024), ("rows", 0), ("fit", 1), ("predict", 1), ("account", True), ("arm", "blend")],
+)
+def test_frozen_replay_provenance_inconsistent_remains_pending(field, value) -> None:
+    p = _frozen_replay_payload()
+    p["config"]["runtime_flags"]["frozen_run_provenance"][field] = value
+    assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
+
+
+def test_frozen_replay_requires_matching_registration_and_account_output() -> None:
+    p = _frozen_replay_payload()
+    p["config"]["runtime_flags"]["_qe_run_registration"]["task_id"] = "another-task"
+    assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
+    p = _frozen_replay_payload()
+    del p["metrics"]["n_trading_days"]
+    assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
+
+
+def test_frozen_graph_blend_requires_sources_and_keeps_exact_score_identity() -> None:
+    p = _frozen_replay_payload()
+    prov = p["config"]["runtime_flags"]["frozen_run_provenance"]
+    prov.update(arm="blend", af_source_run="original-af", af_source_score_sha256="c" * 64,
+                af_share=.75, gat_share=.25, gat_sources=[{"task_id": "g1", "loop_index": i, "sha256": "5" * 64}
+                                                        for i in (2, 4, 6)])
+    assert classify_qe_result(p).archive_eligible
+    other = deepcopy(p)
+    other["config"]["runtime_flags"]["frozen_run_provenance"]["score_sha256"] = "7" * 64
+    assert classify_qe_result(p).business_identity_sha256 != classify_qe_result(other).business_identity_sha256
+    prov["gat_sources"][0]["loop_index"] = 4
+    assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
+
+
 class _Repo:
     def __init__(self, survivor: str | None = None) -> None:
         self.survivor = survivor

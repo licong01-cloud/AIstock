@@ -109,10 +109,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "A fresh Python interpreter loaded the modified Archive classifier from this worktree. Three completed AF sources were read through QEArchiveSourceAssembler, cross-checked against the original 2,765,884-key consumption receipts and previewed through the existing backfill candidate processor with write=False. All three classified as valid class C. No warehouse write or worker submission. Receipt tmp/issue_workflow/BUG-2256/fresh-control-preview.json.",
+      "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py --disable-warnings --maxfail=1 passed 38 cases, including source, dataset, account, coverage and model-free identity regressions."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_note": "After the user reloads backend-main, verify the merged runtime identity, then read the business state via POST /api/v1/qe-archive/source-status for 0e9e0a17, cbf56d2f and a13df024. Require each source to be archive-eligible or have its original valid Archive run ID. The generic Archive health response alone does not establish this fix. Scoped backfill and any experiment dispatch retain their own authorization and readback.",
     "provisional": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",

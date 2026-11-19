@@ -9,6 +9,7 @@ publication and workspace cleanup are separate steps.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -464,11 +465,104 @@ def _identity_complete(payload: Mapping[str, Any], identity: Mapping[str, Any]) 
             factors_or_model = True  # A real model-free target asset is the source identity.
     dataset_identity = bool(identity.get("dataset_release_id") or identity.get("dataset_manifest_sha256"))
     registration = _registration(payload)
+    if not factors_or_model:
+        factors_or_model = _registered_frozen_score_replay(payload, config, identity, registration)
     formal_registration = str(registration.get("purpose") or "").strip().lower() in FORMAL_PURPOSES
     # Legacy formal records predate dataset-profile registration. They remain
     # classifiable when their captured config is non-empty; new registered
     # records fail closed if the dataset identity is absent.
     return source_identity and bool(config) and factors_or_model and (dataset_identity or not formal_registration)
+
+
+def _registered_frozen_score_replay(
+    payload: Mapping[str, Any],
+    config: Mapping[str, Any],
+    identity: Mapping[str, Any],
+    registration: Mapping[str, Any],
+) -> bool:
+    """Recognize the registered source of a model-less, completed score replay."""
+    flags = _mapping(config.get("runtime_flags"))
+    provenance = _mapping(flags.get("frozen_run_provenance"))
+    dataset = _mapping(flags.get("_qe_active_dataset_summary"))
+    binding = _mapping(flags.get("_qe_direct_v2_dataset_binding"))
+    manifest = provenance.get("data_sha256")
+    release = dataset.get("release_id")
+    seed = provenance.get("seed")
+    task = payload.get("task_id")
+    loop_index = registration.get("loop_index")
+    metrics = _metrics(payload)
+    days = metrics.get("n_trading_days")
+    if not (
+        payload.get("source_system") == "qe"
+        and payload.get("run_type") == "single_experiment"
+        and str(payload.get("status") or "").strip().lower() in SUCCESS_STATUSES
+        and registration.get("schema_version") == "qe_run_registration_v1"
+        and registration.get("run_kind") == "single"
+        and registration.get("purpose") == "research"
+        and _nonempty_text(task)
+        and registration.get("task_id") == task
+        and type(loop_index) is int and loop_index > 0
+        and payload.get("loop_id") in (f"Loop{loop_index}", f"{task}_Loop{loop_index}")
+        and type(seed) is int and seed == registration.get("random_seed") == flags.get("random_seed")
+        and _nonempty_text(provenance.get("study")) and provenance["study"] == flags.get("research_study")
+        and type(provenance.get("rows")) is int and provenance["rows"] > 0
+        and all(type(provenance.get(key)) is int and provenance[key] == value
+                for key, value in (("fit", 0), ("predict", 0), ("account", 1)))
+        and type(days) is int and days > 0
+        and _finite_metric(metrics.get("final_nav"))
+        and _sha256_text(provenance.get("score_sha256"))
+        and _sha256_text(manifest) and manifest == dataset.get("dataset_manifest_sha256") == identity.get("dataset_manifest_sha256")
+        and _nonempty_text(release) and release == registration.get("dataset_release_id") == binding.get("release_id")
+    ):
+        return False
+    return _frozen_score_sources(provenance)
+
+
+def _frozen_score_sources(provenance: Mapping[str, Any]) -> bool:
+    if "gat_sources" in provenance:
+        sources = provenance["gat_sources"]
+        weights = (provenance.get("af_share"), provenance.get("gat_share"))
+        if not (
+            provenance.get("arm") == "blend"
+            and _nonempty_text(provenance.get("af_source_run"))
+            and _sha256_text(provenance.get("af_source_score_sha256"))
+            and all(_finite_metric(weight) and 0 < weight < 1 for weight in weights)
+            and math.isclose(sum(weights), 1.0, rel_tol=0.0, abs_tol=1e-12)
+            and isinstance(sources, list) and sources
+        ):
+            return False
+        seen = set()
+        for source in sources:
+            if not (isinstance(source, Mapping) and _nonempty_text(source.get("task_id"))
+                    and type(source.get("loop_index")) is int and source["loop_index"] > 0
+                    and _sha256_text(source.get("sha256"))):
+                return False
+            key = (source["task_id"], source["loop_index"])
+            if key in seen:
+                return False
+            seen.add(key)
+        return True
+    # The original AF/TCN controls and blends use the earlier source fields.
+    arm = provenance.get("arm")
+    return bool(
+        _nonempty_text(provenance.get("af_run_id"))
+        and _sha256_text(provenance.get("af_score_sha256"))
+        and _sha256_text(provenance.get("contract_sha256"))
+        and (arm == "af" or (arm == "blend" and _nonempty_text(provenance.get("tcn_task_id"))
+                            and _sha256_text(provenance.get("tcn_score_sha256"))))
+    )
+
+
+def _nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _sha256_text(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _finite_metric(value: Any) -> bool:
+    return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
 def _registration(payload: Mapping[str, Any]) -> dict[str, Any]:
