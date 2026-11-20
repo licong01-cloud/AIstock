@@ -8,22 +8,32 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 if __package__:
-    from .qe_wsl_workload_guard import GIB, MEMORY_BYTES, SWAP_BYTES, JOB_SWAP_BYTES, PEAK_BYTES, SCHEMA
+    from . import qe_wsl_workload_guard as _profile
 else:  # Standalone deployment uses the inspected adjacent standard-library-only guard.
     import importlib.util
 
     _spec = importlib.util.spec_from_file_location("qe_resource_profile", Path(__file__).with_name("qe_wsl_workload_guard.py"))
     _profile = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_profile)
-    GIB, MEMORY_BYTES, SWAP_BYTES, JOB_SWAP_BYTES, PEAK_BYTES, SCHEMA = (
-        getattr(_profile, name) for name in ("GIB", "MEMORY_BYTES", "SWAP_BYTES", "JOB_SWAP_BYTES", "PEAK_BYTES", "SCHEMA")
-    )
+
+GIB, MEMORY_BYTES, SWAP_BYTES, JOB_SWAP_BYTES, PEAK_BYTES, SCHEMA = (
+    getattr(_profile, name) for name in ("GIB", "MEMORY_BYTES", "SWAP_BYTES", "JOB_SWAP_BYTES", "PEAK_BYTES", "SCHEMA")
+)
+
+
+def control_units(profile):
+    ram, swap = profile
+    limits = f"MemoryAccounting=yes\nMemoryHigh=infinity\nMemoryMax={ram}G\nMemorySwapMax={swap}G\nMemoryLow=512M\n"
+    return {
+        "/etc/systemd/system/qe-control.slice": "[Unit]\nDescription=QE control API only\n\n[Slice]\n" + limits,
+        "/etc/systemd/system/rdagent-qe-api.service.d/70-qe-control.conf": "[Service]\nSlice=qe-control.slice\n" + limits,
+    }
 
 UNITS = {
-    "/etc/systemd/system/qe-control.slice": "[Unit]\nDescription=QE control API only\n\n[Slice]\nMemoryAccounting=yes\nMemoryHigh=infinity\nMemoryMax=2G\nMemorySwapMax=1G\nMemoryLow=512M\n",
-    "/etc/systemd/system/rdagent-qe-api.service.d/70-qe-control.conf": "[Service]\nSlice=qe-control.slice\nMemoryAccounting=yes\nMemoryHigh=infinity\nMemoryMax=2G\nMemorySwapMax=1G\nMemoryLow=512M\n",
+    **control_units(_profile.CONTROL_PROFILE_GIB),
     "/etc/systemd/user/qe-training.slice": "[Unit]\nDescription=QE isolated workloads; API excluded\n\n[Slice]\nMemoryAccounting=yes\nMemoryHigh=infinity\nMemoryMax=56G\nMemorySwapMax=32G\n",
 }
 TRAINING_UNIT = "/etc/systemd/user/qe-training.slice"
@@ -46,7 +56,8 @@ def plan():
             "user restarts local8001 to load wrapped submissions",
         ],
         "limits": {
-            "api_memory_gib": 2,
+            "api_memory_gib": _profile.CONTROL_PROFILE_GIB[0],
+            "api_swap_gib": _profile.CONTROL_PROFILE_GIB[1],
             "training_memory_gib": MEMORY_BYTES // GIB,
             "training_swap_gib": SWAP_BYTES // GIB,
             "job_swap_gib": JOB_SWAP_BYTES // GIB,
@@ -64,13 +75,50 @@ def plan():
                 "inspect existing training unit SHA and drain/reconcile old workers",
                 "run --upgrade-training-profile --apply --expected-training-unit-sha256 <SHA>",
                 "operator reloads only the lc999 user systemd manager and applies MemoryHigh=infinity MemoryMax=56G MemorySwapMax=32G to qe-training.slice",
-                "read back all three training limits; API/control limits stay2G/1G",
+                "read back all three training limits; inspect the independent API/control profile",
                 "user restarts local8001 to load source; WSL9000 need not restart",
                 "fresh Composer confirms v2 envelope, original command SHA and two/four capacity",
                 "verify real overlap/throughput using the next authorized jobs; no duplicate training for this purpose",
             ],
         },
     }
+
+
+def upgrade_control_profile(*, root=Path("/")):
+    """Upgrade the two known units; a retry also accepts a previously updated member."""
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise RuntimeError("qe_wsl_install_requires_explicit_WSL_root")
+    old = control_units(_profile.LEGACY_CONTROL_PROFILE_GIB)
+    current = {}
+    for name in old:
+        path = root / name.lstrip("/")
+        if any(p.is_symlink() for p in (path, *path.parents) if p != root):
+            raise RuntimeError("qe_wsl_control_unit_symlink: " + name)
+        current[name] = path.read_bytes()
+        if current[name] not in (old[name].encode(), UNITS[name].encode()):
+            raise RuntimeError("qe_wsl_unknown_control_unit_no_overwrite: " + name)
+    hashes = {}
+    for name, before in current.items():
+        path = root / name.lstrip("/")
+        after = UNITS[name].encode()
+        if before != after:
+            stream = tempfile.NamedTemporaryFile(dir=path.parent, delete=False)
+            temporary = Path(stream.name)
+            try:
+                with stream:
+                    temporary.chmod(path.stat().st_mode & 0o777)
+                    stream.write(after)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if path.read_bytes() != before:
+                    raise RuntimeError("qe_wsl_control_unit_changed_during_upgrade: " + name)
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        if path.read_bytes() != after:
+            raise RuntimeError("qe_wsl_control_profile_readback_failed: " + name)
+        hashes[name] = hashlib.sha256(after).hexdigest()
+    return {"state": "CONTROL_FILES_VERIFIED_LIVE_READBACK_REQUIRED", "sha256": hashes, "service_control": False}
 
 
 def upgrade_training_profile(expected_sha, *, root=Path("/")):
@@ -167,9 +215,17 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--apply", action="store_true")
     p.add_argument("--expected-api-unit-sha256")
-    p.add_argument("--upgrade-training-profile", action="store_true")
+    upgrades = p.add_mutually_exclusive_group()
+    upgrades.add_argument("--upgrade-training-profile", action="store_true")
+    upgrades.add_argument("--upgrade-control-profile", action="store_true")
     p.add_argument("--expected-training-unit-sha256")
     args = p.parse_args()
+    if args.upgrade_control_profile:
+        if args.expected_api_unit_sha256 or args.expected_training_unit_sha256:
+            p.error("control upgrade only accepts the exact published control unit versions")
+        result = upgrade_control_profile() if args.apply else control_units(_profile.CONTROL_PROFILE_GIB)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     if args.upgrade_training_profile and args.expected_api_unit_sha256:
         p.error("training upgrade never changes the API unit")
     if args.apply and args.upgrade_training_profile and not args.expected_training_unit_sha256:

@@ -148,7 +148,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Windows QE submission wrapper embedded guard SHA256 27fdca39ed84ed968c3912dd294902a94391bdded7cae3c5a1a95e5237f65fc8 and preserved the scientific command. Fresh WSL system Python read the live control cgroup and migrated an isolated copy of both original units to 4/4 twice. 43 focused tests passed. No experiment submitted.",
+      "tmp/issue_workflow/BUG-2271/fresh-process-evidence.json"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
