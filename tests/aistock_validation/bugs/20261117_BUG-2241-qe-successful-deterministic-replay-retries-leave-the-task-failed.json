@@ -125,8 +125,8 @@
   },
   "first_seen_at": "2026-11-17T06:30:49.825738Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "52089733b8827e5e2c3665e3300ded2715fe4fbe",
+  "fixed_at": "2026-11-17T07:09:04Z",
   "github_issue_number": 7309,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7309",
   "last_seen_at": "2026-11-17T06:30:49.825738Z",
@@ -134,6 +134,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7310",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -158,6 +159,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -169,7 +171,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2241",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ce5991f53770312e",
+    "recorded_at": "2026-11-17T07:10:52.938904Z",
+    "runtime_contract_digest": "ee979dd83752fd8fb119526f5220f5371a226ee5aca88337018f7b8e06e06677",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "11eabc825b5f3dfd0042ec37e1e8d334c379e070",
+    "source_merge_commit": "52089733b8827e5e2c3665e3300ded2715fe4fbe",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7310",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/quantevolver/qe_custom_evo_outcome.py backend/services/quantevolver/qe_evolution_service.py backend/tests/unified_engine/test_qe_custom_evo_status.py tests/aistock_validation/bugs/20261117_BUG-2241-qe-successful-deterministic-replay-retries-leave-the-task-failed.json -> passed"
+    ],
+    "validation_evidence_digest": "ba1ff8914dafbcffc29449eb6cf38c2cf72e2f9b9ae9076176058b22cdd890b3"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe"
   ],
@@ -178,6 +201,9 @@
     "fingerprint": "bc22ebf8bd480d1c7ac575ac",
     "source_event_id": "FE-20261117-bc22ebf8bd48"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/quantevolver/qe_custom_evo_outcome.py backend/services/quantevolver/qe_evolution_service.py backend/tests/unified_engine/test_qe_custom_evo_status.py tests/aistock_validation/bugs/20261117_BUG-2241-qe-successful-deterministic-replay-retries-leave-the-task-failed.json -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
