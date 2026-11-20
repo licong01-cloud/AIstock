@@ -1686,6 +1686,7 @@ def simulation_core_l2(session: nox.Session) -> None:
         "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
         "backend/tests/qmt_strategy_ledger/test_repository.py",
         "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
+        "backend/tests/test_data_quality_smoke_env.py",
         "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py",
         "-q",
         "-p",

@@ -710,6 +710,7 @@ def test_advisory_and_localsim_pr_keeps_automatic_contract_coverage() -> None:
         "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
         "backend/tests/qmt_strategy_ledger/test_repository.py",
         "backend/tests/infra/test_qmt_client_contract.py",
+        "backend/tests/test_data_quality_smoke_env.py",
         "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
     ]
 

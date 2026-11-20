@@ -165,6 +165,7 @@ def test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regre
     assert "backend/tests/advisory_phase1/test_stage_trace.py" in tail
     assert "backend/tests/qmt_strategy_ledger/test_repository.py" in tail
     assert "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py" in tail
+    assert "backend/tests/test_data_quality_smoke_env.py" in tail
     assert not any("miniqmt" in target for target in tail)
     assert len(direct) == 2
 

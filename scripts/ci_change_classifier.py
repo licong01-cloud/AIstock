@@ -257,6 +257,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "backend/infra/deepseek_client.py": ("platform_api_backend",),
     "deepseek_client.py": ("platform_api_backend",),
     "backend/tests/infra/test_deepseek_config.py": ("platform_api_backend",),
+    "backend/tests/test_data_quality_smoke_env.py": ("simulation_core_l2",),
 
     "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
     "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
