@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-import pytest
 
 from backend.services.simulation_runtime.models import (
-    RuntimeReleaseValidationState,
     SimulationReleaseBinding,
-    StrategyRuntimeRelease,
 )
 from backend.services.simulation_data.daily_context import (
     SimulationBrokerBackend,

@@ -59,13 +59,13 @@ from backend.tests.simulation_runtime.test_lifecycle_scheduler import (
     SimulationLifecycleScheduler,
     _candidate_rows,
     _CapturingDailyTradingContextProvider,
-    _deterministic_scheduler_now,
+    _deterministic_scheduler_now,  # noqa: F401 - retain the shared autouse fixture
     _frozen_manifest,
     _make_test_binding,
     _make_test_release,
     _managed_buy_request,
     _miniqmt_event_loop_test_scheduler,
-    _miniqmt_runtime_repository_test_only,
+    _miniqmt_runtime_repository_test_only,  # noqa: F401 - retain the shared autouse fixture
     _miniqmt_two_strategy_scheduler,
     _position_context,
     _qmt_account,

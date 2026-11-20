@@ -8,12 +8,10 @@ import pytest
 from backend.services.paper_trading_v2.auto_run import (
     AutoRunCoordinator,
     compute_auto_run_config_sha256,
-    miniqmt_account_group_id,
     normalize_auto_run_config,
 )
-from backend.services.paper_trading_v2.day_runner import miniqmt_account_slot_context
 from backend.services.simulation_data.contracts import MinuteDataSource
-from backend.services.paper_trading_v2.models import PaperSessionMode, PaperSessionStatus
+from backend.services.paper_trading_v2.models import PaperSessionMode
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.scheduler import PaperTradingV2SessionScheduler
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService

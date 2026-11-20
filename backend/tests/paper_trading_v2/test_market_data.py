@@ -14,7 +14,6 @@ from backend.services.simulation_data.daily_context_provider import (
 )
 from backend.services.simulation_data.tdx_causal_minute import (
     fetch_tdx_realtime_quotes,
-    quote_tradability_evidence,
 )
 from backend.services.simulation_data.contracts import (
     DailySuspendStatus,

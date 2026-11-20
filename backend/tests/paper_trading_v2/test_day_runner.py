@@ -66,7 +66,6 @@ from backend.services.trading_core.models import (
     OrderEventType,
     OrderSide,
     OrderStatus,
-    OrderType,
     PositionLot,
     RunStatus,
 )

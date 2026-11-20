@@ -14,7 +14,6 @@ from backend.infra.qmt_client import (
     QMTStatus,
     XtQuantQMTClient,
     _quote_staleness_evidence,
-    build_qmt_order_diagnostic,
 )
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, miniqmt_broker_kwargs_for_portfolio
 from backend.services.paper_trading_v2.auto_run import miniqmt_account_group_id

@@ -10,7 +10,6 @@ from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import (
     PaperTradingV2PortfolioService,
-    VNPY_STYLE_TEMPLATE_POLICY_PREFIX,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.errors import RuntimeConfigInvalidError

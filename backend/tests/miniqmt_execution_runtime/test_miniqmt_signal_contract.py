@@ -10,7 +10,6 @@ from backend.services.simulation_runtime import (
     AlphaSignalItem,
     ExecutionPathNotCanonicalError,
     MiniQMTExecutionRuntimeRequest,
-    OperatorCommand,
     StrategySlotTarget,
 )
 from backend.services.trading_core.errors import RuntimeConfigInvalidError

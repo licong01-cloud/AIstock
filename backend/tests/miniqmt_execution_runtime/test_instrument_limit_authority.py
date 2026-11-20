@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
@@ -10,7 +9,7 @@ from backend.services.simulation_data.daily_context_provider import (
     DailyTradingContextProvider,
     PreTradeTradabilityProvider,
 )
-from backend.services.simulation_runtime.decision import ExecutionPlanCompiler, TradingRuleService
+from backend.services.simulation_runtime.decision import TradingRuleService
 from backend.services.simulation_runtime.miniqmt_daily_limit_authority import (
     MINIQMT_NO_DAILY_LIMIT_RULE_VERSION,
     MiniQMTDailyLimitAuthorityProvider,
@@ -26,7 +25,7 @@ from backend.services.simulation_data.daily_context import (
 from backend.services.simulation_runtime.scheduler import (
     ProductionSimulationRunContextProvider,
 )
-from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import DataUnavailableError
 
 
 TRADE_DATE = date(2026, 8, 26)
