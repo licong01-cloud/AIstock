@@ -22,6 +22,10 @@ from .localsim_replay import local_sim_calendar_snapshot_sha256
 RECOVERY_KEY = "localsim_replay_recovery_v1"
 RECOVERY_SCHEMA = "localsim_replay_recovery_v1"
 PRESELECTION_RECOVERY_KEY = "localsim_preselection_recovery_v1"
+OBSERVATION_PANEL_SIGNATURE_ERROR = (
+    "LocalSimReferencedAssetResolver._source_from_package_assets() got an unexpected keyword argument 'observation_panel'"
+)
+OBSERVATION_PANEL_RECOVERY_REASON = "LOCALSIM_OBSERVATION_PANEL_SIGNATURE_REPAIRED"
 RETIREMENT_KEY = "localsim_memory_handle_retirement_v1"
 ECONOMIC_TABLES = ("run", "orders", "order_events", "fills", "cash_ledger", "positions", "daily_snapshots")
 ROLLED_BACK_LOCAL_SIM_FAILURES = frozenset({
@@ -78,8 +82,12 @@ def validate_replay_recovery_check(payload: Any) -> tuple[str, str | None, dict[
             from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
 
             if (check.run_id is not None
-                    or re.fullmatch(r"simrun_[0-9a-f]{16}", native.get("candidate_run_id", "")) is None
-                    or re.fullmatch(r"[0-9a-f]{64}", native.get("pit_runtime_config_sha256", "")) is None):
+                    or re.fullmatch(r"simrun_[0-9a-f]{16}", native.get("candidate_run_id", "")) is None):
+                raise ValueError("preselection recovery needs its original candidate")
+            if native.get("recovery_reason") == OBSERVATION_PANEL_RECOVERY_REASON:
+                return "passed", None, {"ready": True, "zero_economic_effects": True,
+                                        "recovery_phase": "PRESELECTION", "recovery_reason": OBSERVATION_PANEL_RECOVERY_REASON}
+            if re.fullmatch(r"[0-9a-f]{64}", native.get("pit_runtime_config_sha256", "")) is None:
                 raise ValueError("preselection PIT recovery needs its original candidate and frozen config")
             lease = SelectionPitRuntimeLease.from_mapping(native.get("pit_runtime_lease")).require_trade_date(check.trade_date)
             return "passed", None, {"ready": True, "zero_economic_effects": True,
@@ -525,8 +533,10 @@ class LocalSimReplayRecoveryService:
         context = job.get("failure_context") or {}
         pit_failure = (job["failure_code"] == "CanonicalPitRuntimeError"
                        and context.get("message") == "supplied canonical PIT lease differs from live pointer")
+        observation_panel_failure = (job["failure_code"] == "TypeError"
+                                     and context.get("message") == OBSERVATION_PANEL_SIGNATURE_ERROR)
         if (job["status"] != "FAILED_TERMINAL"
-                or (not pit_failure and job["failure_code"] != "TimeoutExpired")
+                or not (pit_failure or observation_panel_failure or job["failure_code"] == "TimeoutExpired")
                 or context.get("trade_date") != job["next_trade_date"]):
             self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
         if (snapshot["account"].get("status") != "ACTIVE"
@@ -546,6 +556,9 @@ class LocalSimReplayRecoveryService:
                 or snapshot.get("evidence_hash") is not None):
             self._invalid("LOCALSIM_REPLAY_RECOVERY_PRESELECTION_ABSENCE_UNPROVEN")
         require_no_economic_effects({}, snapshot["economic_counts"], now=self.clock())
+        if observation_panel_failure:
+            return {"recovery_phase": "PRESELECTION", "candidate_run_id": absence["run_id"],
+                    "recovery_reason": OBSERVATION_PANEL_RECOVERY_REASON}
         if pit_failure:
             from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
             from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService

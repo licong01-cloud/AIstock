@@ -102,6 +102,39 @@ def test_no_run_timeout_recovers_only_after_native_zero_effect_and_path_readback
     assert str(calls[0]["witness"]).replace("\\", "/").startswith("X:/AIstock_temp/LOCALSIM/")
 
 
+@pytest.mark.parametrize("fault,reason", [
+    (None, None), ("another_type_error", "FAILURE_UNSUPPORTED"),
+    ("wrong_day", "FAILURE_UNSUPPORTED"), ("daily_run_present", "PRESELECTION_ABSENCE_UNPROVEN"),
+    ("fill_present", "ECONOMIC_FACTS_PRESENT"),
+])
+def test_saved_observation_panel_failure_recovers_only_with_exact_signature_and_no_effects(fault, reason):
+    snapshot = _preselection_snapshot()
+    snapshot["job"]["failure_code"] = "TypeError"
+    context = snapshot["job"]["failure_context"]
+    context["message"] = (
+        "LocalSimReferencedAssetResolver._source_from_package_assets() got an unexpected keyword argument 'observation_panel'"
+    )
+    if fault == "another_type_error":
+        context["message"] = context["message"].replace("observation_panel", "reference_factor_set")
+    elif fault == "wrong_day":
+        context["trade_date"] = "2026-01-20"
+    elif fault == "daily_run_present":
+        snapshot["preselection_absence"]["account_day_runs"] = [{"run_id": "other"}]
+    elif fault == "fill_present":
+        snapshot["economic_counts"]["fills"] = 1
+    original = deepcopy(snapshot)
+    service, market_calls = _service(snapshot)
+    check = service.inspect("replay-original")
+    assert not market_calls and snapshot == original
+    if reason:
+        assert not check.ready and check.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_" + reason]
+    else:
+        assert check.ready and check.run_id is None
+        assert check.native_input["candidate_run_id"] == snapshot["preselection_absence"]["run_id"]
+        assert validate_replay_recovery_check(check.model_dump(mode="json"))[0] == "passed"
+        assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
+
+
 def _pit_preselection_recovery():
     from backend.tests.simulation_runtime.test_strategy_package_selection_service import _frozen_pit_release_case
     from backend.tests.simulation_runtime.test_localsim_native_context import _bundle, _canonical_profile
@@ -193,7 +226,12 @@ def test_saved_pit_recovery_preserves_identity_and_failure_boundaries(fault):
 
 
 @pytest.mark.skipif(os.getenv("AISTOCK_DEV_DB_E2E") != "1", reason="guarded existing DEV database only")
-def test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev():
+@pytest.mark.parametrize("failure_code, message, day_index", [
+    ("CanonicalPitRuntimeError", "supplied canonical PIT lease differs from live pointer", 1),
+    ("TypeError", "LocalSimReferencedAssetResolver._source_from_package_assets() "
+                  "got an unexpected keyword argument 'observation_panel'", 0),
+])
+def test_saved_preselection_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev(failure_code, message, day_index):
     from contextlib import contextmanager
     from uuid import uuid4
 
@@ -263,10 +301,10 @@ def test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_de
         job = coordinator.create_job(simulation_account_id=account.account_id, release_id=release.release_id,
             binding_id=binding.binding_id, start_trade_date=days[0], end_trade_date=days[-1], trading_days=days,
             historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64, created_by=marker)
-        context = {"trade_date": str(days[1]), "message": "supplied canonical PIT lease differs from live pointer"}
+        context = {"trade_date": str(days[day_index]), "message": message}
         job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
-            update={"status": "FAILED_TERMINAL", "completed_trade_date": days[0], "next_trade_date": days[1],
-                "failure_code": "CanonicalPitRuntimeError", "failure_context": context}, updated_at=now)
+            update={"status": "FAILED_TERMINAL", "completed_trade_date": days[0] if day_index else None,
+                "next_trade_date": days[day_index], "failure_code": failure_code, "failure_context": context}, updated_at=now)
         resolver.binding = current
         source = SimpleNamespace(historical_source_id=job.historical_source_id,
             historical_source_sha256=job.historical_source_sha256, trading_days=days, current_trading_date=now.date())
