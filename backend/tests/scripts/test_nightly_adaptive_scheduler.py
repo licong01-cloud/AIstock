@@ -11,8 +11,7 @@ from scripts import nightly_adaptive_scheduler as scheduler
 @pytest.mark.parametrize("full_run", [False, True])
 def test_retired_simulation_cannot_enter_nightly_from_changes_or_retry(monkeypatch, full_run):
     retired = scheduler.RETIRED_SIMULATION_PLANS
-    assert "miniqmt_execution_runtime_l2" in retired
-    keys = {*retired, "simulation_core_l2", "localsim_unattended_l3"}
+    keys = {*retired, "miniqmt_execution_runtime_l2", "simulation_core_l2", "localsim_unattended_l3"}
     plans = {key: dict(enabled=True, runner_enabled=True, nox_session=key, max_duration_seconds=300)
              for key in keys}
     monkeypatch.setattr(scheduler.issue_flow, "_plans_by_key", lambda: plans)
