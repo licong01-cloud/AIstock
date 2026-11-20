@@ -28,8 +28,12 @@ class AdvisoryNotificationTransport(NotificationService):
             self.config = dict(self.config)
             url = os.getenv('AISTOCK_ADVISORY_FEISHU_WEBHOOK_URL', '').strip()
             valid = _valid_feishu_webhook(url)
+            details = os.getenv('AISTOCK_ADVISORY_FEISHU_DETAILS_ENABLED', '').strip().lower() in {
+                '1', 'true', 'yes', 'on'
+            }
             self.config.update(
                 advisory_feishu_completion_only=True,
+                advisory_feishu_details=details,
                 advisory_feishu_configuration_error=(
                     None if valid else 'FEISHU_WEBHOOK_URL_INVALID' if url
                     else 'FEISHU_WEBHOOK_URL_MISSING'
@@ -39,6 +43,19 @@ class AdvisoryNotificationTransport(NotificationService):
                 webhook_url=url if valid else '',
                 webhook_signing_secret=os.getenv('AISTOCK_ADVISORY_FEISHU_SIGNING_SECRET', ''),
             )
+            if details and not all(os.getenv(k, '').strip() for k in (
+                'AISTOCK_ADVISORY_FEISHU_APP_ID', 'AISTOCK_ADVISORY_FEISHU_APP_SECRET',
+                'AISTOCK_ADVISORY_FEISHU_CHAT_ID',
+            )):
+                self.config.update(webhook_url='',
+                                   advisory_feishu_configuration_error='FEISHU_DETAILS_CONFIGURATION_MISSING')
+
+    def detail_delivery(self):
+        from .feishu_sheets import DetailSheetDelivery, FeishuSheetsClient
+        return DetailSheetDelivery(FeishuSheetsClient(*(
+            os.getenv('AISTOCK_ADVISORY_FEISHU_' + k, '').strip()
+            for k in ('APP_ID', 'APP_SECRET', 'CHAT_ID')
+        )))
 
     def send_external_message(self, channel: str, subject: str, message: str) -> bool:
         """Explicit external acceptance; never use the legacy UI fallback."""
@@ -75,6 +92,9 @@ class AdvisoryNotificationTransport(NotificationService):
         try:
             response = self._post_webhook(data)
             code = response.json().get(success_key) if response.status_code == 200 else None
+            if (webhook_type == 'feishu' and self.config.get('advisory_feishu_details')
+                    and type(code) is not int):
+                raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_OUTCOME_UNKNOWN')
             return type(code) is int and code == 0
         except Exception:
             # A requests exception can contain the secret webhook URL.

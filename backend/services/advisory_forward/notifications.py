@@ -8,7 +8,9 @@ from datetime import datetime, time
 from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
-from .notification_repository import AdvisoryNotificationRepository, FEISHU_COMPLETION_ROUTE
+from .notification_repository import (
+    AdvisoryNotificationRepository, FEISHU_COMPLETION_ROUTE, FEISHU_DETAIL_ROUTE,
+)
 
 CN = ZoneInfo('Asia/Shanghai')
 
@@ -118,10 +120,11 @@ def completion_events_for_day(now, target, rows):
 
 
 class AdvisoryNotificationService:
-    def __init__(self, repository=None, transport=None, now_provider=None):
+    def __init__(self, repository=None, transport=None, now_provider=None, detail_builder=None):
         self.repository = repository
         self.transport = transport
         self.now_provider = now_provider or (lambda: datetime.now(CN))
+        self.detail_builder = detail_builder
 
     def run_once(self):
         # Do not import/configure the shared transport or borrow a connection when off.
@@ -132,6 +135,8 @@ class AdvisoryNotificationService:
             self.transport = AdvisoryNotificationTransport()
         channels = configured_channels(self.transport.config)
         completion_only = bool(self.transport.config.get('advisory_feishu_completion_only'))
+        details = completion_only and bool(self.transport.config.get('advisory_feishu_details'))
+        route = FEISHU_DETAIL_ROUTE if details else FEISHU_COMPLETION_ROUTE
         completion_status = None
         if completion_only:
             completion_status = {
@@ -146,6 +151,8 @@ class AdvisoryNotificationService:
             result = {'status': 'NOT_CONFIGURED'}
             if completion_status:
                 result['feishu_completion'] = completion_status
+                if details:
+                    result['feishu_detail_sheet'] = completion_status
             return result
         if self.repository is None:
             self.repository = AdvisoryNotificationRepository()
@@ -160,26 +167,61 @@ class AdvisoryNotificationService:
         queued = sum(self.repository.enqueue(e, ch, now) for e in events for ch in legacy_channels)
         if completion_only and 'webhook' in channels:
             completed = completion_events_for_day(now, target, rows)
-            queued += sum(self.repository.enqueue(e, 'webhook', now) for e in completed)
+            if details and completed:
+                from .notification_details import DetailDeliveryError, DetailSnapshotBuilder
+                event = completed[0]
+                # Preserve the existing daily key across both Feishu modes. A mode
+                # change cannot create a second daily row or rewrite its frozen payload.
+                event['payload']['delivery_route'] = route
+                if not self.repository.detail_event_exists(event['event_key'], now.date()):
+                    try:
+                        builder = self.detail_builder or DetailSnapshotBuilder()
+                        event['payload']['detail_snapshot'] = builder.build(now, target, rows)
+                        event['payload']['sheet_delivery_state'] = {}
+                        event['payload']['subject'] = f'AIstock 荐股详情｜{target}'
+                        queued += self.repository.enqueue(event, 'webhook', now)
+                    except Exception as exc:
+                        completion_status = {'status': 'DETAIL_SNAPSHOT_FAILED', 'reason_code': (
+                            exc.code if isinstance(exc, DetailDeliveryError) else 'DETAIL_SNAPSHOT_EXCEPTION'
+                        )}
+                else:
+                    completion_status = {'status': 'EVENT_ALREADY_RECORDED', 'event_key': event['event_key']}
+            else:
+                queued += sum(self.repository.enqueue(e, 'webhook', now) for e in completed)
             if completed:
-                completion_status = {'status': 'EVENT_READY', 'event_key': completed[0]['event_key']}
+                if not completion_status or completion_status['status'] == 'WAITING_COMPLETION':
+                    completion_status = {'status': 'EVENT_READY', 'event_key': completed[0]['event_key']}
         results = []
         for _ in range(4):
             claim_time = self.now_provider().astimezone(CN)
             row = self.repository.claim(claim_time, channels,
-                webhook_route=FEISHU_COMPLETION_ROUTE) if completion_only else self.repository.claim(claim_time, channels)
+                webhook_route=route) if completion_only else self.repository.claim(claim_time, channels)
             if row is None:
                 break
             try:
-                accepted = self.transport.send_external_message(
-                    row['channel'], row['payload']['subject'], row['payload']['message']) is True
+                if row['channel'] == 'webhook' and row['payload'].get('delivery_route') == FEISHU_DETAIL_ROUTE:
+                    accepted = self.transport.detail_delivery().deliver(
+                        row['payload'],
+                        lambda state: self.repository.checkpoint_detail(
+                            row, state, self.now_provider().astimezone(CN)),
+                        lambda subject, message: self.transport.send_external_message('webhook', subject, message),
+                    ) is True
+                else:
+                    accepted = self.transport.send_external_message(
+                        row['channel'], row['payload']['subject'], row['payload']['message']) is True
                 error = None if accepted else 'EXTERNAL_DELIVERY_NOT_ACCEPTED'
-            except Exception:
-                accepted, error = False, 'EXTERNAL_DELIVERY_EXCEPTION'
+            except Exception as exc:
+                from .notification_details import DetailDeliveryError
+                accepted, error = False, exc.code if isinstance(exc, DetailDeliveryError) else 'EXTERNAL_DELIVERY_EXCEPTION'
             state = self.repository.finish(row, accepted=accepted,
                 now=self.now_provider().astimezone(CN), error_code=error)
-            results.append({'event_key': row['event_key'], 'channel': row['channel'], 'status': state})
+            result_row = {'event_key': row['event_key'], 'channel': row['channel'], 'status': state}
+            if error:
+                result_row['reason_code'] = error
+            results.append(result_row)
         result = {'status': 'PROCESSED', 'queued': queued, 'deliveries': results}
         if completion_status:
             result['feishu_completion'] = completion_status
+            if details:
+                result['feishu_detail_sheet'] = completion_status
         return result

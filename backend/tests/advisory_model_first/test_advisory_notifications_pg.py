@@ -9,7 +9,7 @@ import psycopg2
 import pytest
 
 from backend.services.advisory_forward.notification_repository import (
-    AdvisoryNotificationRepository, FEISHU_COMPLETION_ROUTE,
+    AdvisoryNotificationRepository, FEISHU_COMPLETION_ROUTE, FEISHU_DETAIL_ROUTE,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -167,3 +167,49 @@ def test_real_completion_route_isolates_both_switch_directions_and_preserves_ret
     assert not repo.enqueue(completed, 'webhook', now)
     # Email is still claimable regardless of the webhook route setting.
     assert repo.claim(now, ['email'], webhook_route=FEISHU_COMPLETION_ROUTE)['event_key'] == email['event_key']
+
+
+def test_real_detail_checkpoint_immutable_snapshot_lease_expiry_and_route(dev):
+    conn, _ = dev
+    repo, now = repo_on(conn), datetime.now(timezone.utc)
+    e = event(now)
+    e['payload'].update(delivery_route=FEISHU_DETAIL_ROUTE, detail_snapshot={'frozen': 'unchanged'},
+                        sheet_delivery_state={})
+    assert repo.enqueue(e, 'webhook', now)
+    assert repo.detail_event_exists(e['event_key'], now.date())
+    assert repo.claim(now, ['webhook']) is None
+    assert repo.claim(now, ['webhook'], webhook_route=FEISHU_COMPLETION_ROUTE) is None
+    row = repo.claim(now, ['webhook'], webhook_route=FEISHU_DETAIL_ROUTE)
+    repo.checkpoint_detail(row, {'create_started': True}, now+timedelta(seconds=110))
+    assert row['payload']['detail_snapshot'] == {'frozen': 'unchanged'}
+    assert row['payload']['sheet_delivery_state']['create_started']
+    assert repo.claim(now+timedelta(seconds=121), ['webhook'], webhook_route=FEISHU_DETAIL_ROUTE) is None
+    bad = dict(row, payload=dict(row['payload'], detail_snapshot={'mutated': True}))
+    with pytest.raises(RuntimeError, match='LEASE_LOST'):
+        repo.checkpoint_detail(bad, {}, now+timedelta(seconds=111))
+    expired = now+timedelta(seconds=231)
+    with pytest.raises(RuntimeError, match='LEASE_LOST'):
+        repo.checkpoint_detail(row, {}, expired)
+    with pytest.raises(RuntimeError, match='LEASE_LOST'):
+        repo.finish(row, accepted=True, now=expired)
+    reclaimed = repo.claim(expired, ['webhook'], webhook_route=FEISHU_DETAIL_ROUTE)
+    assert reclaimed['lease_token'] != row['lease_token']
+    with pytest.raises(RuntimeError, match='LEASE_LOST'):
+        repo.checkpoint_detail(row, {}, expired)
+    repo.checkpoint_detail(reclaimed, {'document_token': 'DEV_TEST_ONLY'}, expired)
+    assert repo.finish(reclaimed, accepted=True, now=expired) == 'SENT'
+    completion = dict(e, payload=dict(e['payload'], delivery_route=FEISHU_COMPLETION_ROUTE))
+    assert not repo.enqueue(completion, 'webhook', expired)
+    assert repo.claim(expired, ['webhook'], webhook_route=FEISHU_COMPLETION_ROUTE) is None
+
+
+def test_real_detail_mode_does_not_send_second_notice_after_completion_sent(dev):
+    conn, _ = dev
+    repo, now = repo_on(conn), datetime.now(timezone.utc)
+    e = event(now)
+    e['payload'].update(delivery_route=FEISHU_COMPLETION_ROUTE)
+    assert repo.enqueue(e, 'webhook', now)
+    row = repo.claim(now, ['webhook'], webhook_route=FEISHU_COMPLETION_ROUTE)
+    repo.finish(row, accepted=True, now=now)
+    assert repo.detail_event_exists('new-detail-event', now.date())
+    assert repo.claim(now, ['webhook'], webhook_route=FEISHU_DETAIL_ROUTE) is None

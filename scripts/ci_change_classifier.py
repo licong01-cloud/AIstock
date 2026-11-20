@@ -268,6 +268,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
     "scripts/advisory_p0k_build_training_request.py": ("advisory_modeling_backend",),
+    "scripts/advisory_feishu_details.py": ("advisory_modeling_backend",),
     "scripts/wsl/advisory_p0k_train.py": ("advisory_modeling_backend",),
     "scripts/advisory_p0l_build_training_request.py": ("advisory_modeling_backend",),
     "scripts/wsl/advisory_p0l_train.py": ("advisory_modeling_backend",),
