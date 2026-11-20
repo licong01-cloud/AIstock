@@ -79,6 +79,26 @@ def test_policy_migration_keeps_immutable_assets_and_complete_execution_configur
     assert frozen_localsim_profile(release) == frozen_localsim_profile(base)
 
 
+def test_replay_source_replacement_keeps_frozen_clocks_and_validates_dataset(tmp_path, monkeypatch):
+    from backend.services.advisory_historical_range import input_source_plan as sources
+    from backend.tests.advisory_historical_range.test_input_source_plan import CALENDAR, _plan, _snapshot
+
+    before = _plan(consumer="LOCALSIM", run="original")
+    file_source = _snapshot(tmp_path)
+    after = _plan("FILE_THEN_DATABASE", file_source, consumer="LOCALSIM", run="successor")
+    migration._validate_replay_source_replacement(before, after)
+    assert after["first_database_day"] == CALENDAR[-1]
+
+    shifted = _plan("FILE_THEN_DATABASE", file_source, days=after["days"][1:],
+                    consumer="LOCALSIM", run="successor")
+    with pytest.raises(InvalidStateTransitionError, match="original days, clocks and PIT policy"):
+        migration._validate_replay_source_replacement(before, shifted)
+
+    monkeypatch.setattr(sources, "freeze_file_source", lambda **_: {**file_source, "minute_days": []})
+    with pytest.raises(InvalidStateTransitionError, match="differs from the pinned dataset"):
+        migration._validate_replay_source_replacement(before, after)
+
+
 @pytest.mark.parametrize("tamper", ["top_k", "policy", "missing_lease"])
 def test_effective_policy_does_not_relax_source_profile_or_selection_identity(tamper):
     repository, original = _old_bundle()

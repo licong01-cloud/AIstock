@@ -89,7 +89,9 @@ def freeze_file_source(*, profile_path=None, binding=None, root_override=None,
             raise SourcePlanError("SOURCE_COMPONENT_COVERAGE_MISSING", owner="Data", component="suspend_meta")
         pin = content_pin(dataset.root, pin["path"], expected=pin["sha256"])
         suspend = json.loads(inside(dataset.root, pin["path"]).read_bytes())
-        metadata["suspend_meta"] = suspend
+        # The pinned file owns the partition index. Only coverage crosses the
+        # source-plan transport, even for large monthly producer manifests.
+        metadata["suspend_meta"] = {key: suspend[key] for key in ("start", "end")}
         minute_days = sorted({line[:10] for line in dataset.file("minute_calendar").read_text(
             encoding="utf-8-sig").splitlines() if line.strip()})
         dataset.assert_unchanged()
@@ -213,6 +215,10 @@ def build_source_plan(*, mode: str, consumer_scope: str, run_id: str, days: list
         # Supplied metadata must still be the authority's bytes, not an edited
         # coverage claim attached to an otherwise valid binding. No H5 recopy
         # or rehash: this checks the small pinned metadata/calendar only.
+        # Older frozen plans may contain the entire suspension index. Preserve
+        # those plans on read and project only the next plan's wire payload.
+        suspend = file["metadata"]["suspend_meta"]
+        file["metadata"]["suspend_meta"] = {key: suspend[key] for key in ("start", "end")}
         observed = freeze_file_source(binding=file["binding"], consumer_scope=consumer_scope, run_id=run_id)
         if observed != file:
             raise SourcePlanError("SOURCE_FILE_METADATA_DRIFT", owner="Data")

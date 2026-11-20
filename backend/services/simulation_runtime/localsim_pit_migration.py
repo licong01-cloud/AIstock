@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -29,12 +30,13 @@ from backend.services.simulation_signal.strategy_package_selection import Strate
 from backend.services.trading_core.errors import InvalidStateTransitionError, RuntimeConfigInvalidError, TradingCoreError
 
 from .localsim_file_inputs import FILE_BINDING_KEY, resolve_replay_source
+from .localsim_input_source_plan import PLAN_KEY, REQUEST_KEY, frozen_source_plan
 from .localsim_replay import LocalSimHistoricalDayRunner, LocalSimReplayCoordinator, local_sim_calendar_snapshot_sha256
 from .localsim_replay_recovery import require_no_economic_effects, economic_fact_counts
 from .models import SimulationBindingApprovalState, SimulationBrokerBackend, canonical_json_sha256
 from .repository import InMemorySimulationRuntimeRepository
 from .service import StrategyRuntimeReleaseService
-from .successor_models import LocalSimReplayStatus
+from .successor_models import LocalSimReplayStatus, SimulationAccountStatus
 from .successor_repository import LocalSimSuccessorRepository
 
 
@@ -49,6 +51,23 @@ class LocalSimPitMigrationRequest(BaseModel):
 
 def _fail(message: str, code: str) -> None:
     raise InvalidStateTransitionError(message, context={"reason_code": code})
+
+
+def _validate_replay_source_replacement(old_plan: dict | None, replacement: dict) -> None:
+    from backend.services.advisory_historical_range.input_source_plan import validate_source_plan, freeze_file_source
+
+    validate_source_plan(replacement, consumer_scope="LOCALSIM", run_id=replacement.get("run_id"))
+    if (old_plan is None or old_plan["mode"] != "DATABASE_ONLY" or replacement["mode"] != "FILE_THEN_DATABASE"
+            or old_plan["run_id"] == replacement["run_id"]
+            or replacement["routes"][0]["source"] != "DATASET_FILES" or replacement["first_database_day"] is None
+            or any(old_plan.get(key) != replacement.get(key) for key in (
+                "days", "trading_calendar", "native_policy"))):
+        _fail("The new source plan must keep the original days, clocks and PIT policy",
+              "LOCALSIM_REPLAY_SOURCE_REPLACEMENT_IDENTITY_MISMATCH")
+    if freeze_file_source(binding=replacement["file_source"]["binding"], consumer_scope="LOCALSIM",
+                          run_id=replacement["run_id"]) != replacement["file_source"]:
+        _fail("Replay source metadata differs from the pinned dataset",
+              "LOCALSIM_REPLAY_SOURCE_REPLACEMENT_DATASET_DRIFT")
 
 
 def _policy_identity(lease: dict[str, Any]) -> dict[str, Any]:
@@ -129,7 +148,6 @@ def build_pit_successor(*, base, binding, start: date, end: date | None,
     release and contributes to its identity and native inference cache key.
     """
     source_metadata = base.release_config_json.get("metadata") or {}
-    from .localsim_input_source_plan import PLAN_KEY
     if PLAN_KEY in source_metadata and metadata_transform is None:
         _fail("PIT migration requires an explicit new source plan; the frozen plan cannot be rebound",
               "LOCALSIM_PIT_FROZEN_SOURCE_PLAN_REBIND_REQUIRED")
@@ -183,13 +201,16 @@ def build_pit_successor(*, base, binding, start: date, end: date | None,
 
 
 class LocalSimPitMigrationService:
-    def __init__(self, *, conn_factory=None, source_authority=None, clock=None):
+    def __init__(self, *, conn_factory=None, source_authority=None, clock=None,
+                 replay_source_plan: dict[str, Any] | None = None, pit_authority_resolver=None):
         self.conn_factory = conn_factory or (lambda: get_conn(autocommit=False, manage_transaction=True))
         if source_authority is None:
             from .localsim_product_control import LocalSimHistoricalSourceAuthority
             source_authority = LocalSimHistoricalSourceAuthority()
         self.source_authority = source_authority
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.replay_source_plan = deepcopy(replay_source_plan)
+        self.pit_authority_resolver = pit_authority_resolver
 
     @staticmethod
     @contextmanager
@@ -205,7 +226,7 @@ class LocalSimPitMigrationService:
             return self._shared(conn)
 
         repo = LocalSimSuccessorRepository(conn_factory=factory)
-        resolver = CanonicalPitAuthorityResolver(connection_factory=factory)
+        resolver = self.pit_authority_resolver or CanonicalPitAuthorityResolver(connection_factory=factory)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             account = repo._select_account(cur, account_id, for_update=lock)
             scope = repo.resolve_ledger_scope_for_account(account_id)
@@ -266,6 +287,37 @@ class LocalSimPitMigrationService:
             cur.execute("SELECT * FROM paper_v2.simulation_daily_run WHERE strategy_id=%s AND trade_date >= %s "
                         "ORDER BY run_id" + suffix, (strategy, start))
             runs = [dict(row) for row in cur.fetchall()]
+            replacement = self.replay_source_plan
+            if replacement is not None:
+                if (job is None or account.status is not SimulationAccountStatus.PAUSED
+                        or job.completed_trade_date is not None or job.next_trade_date != job.start_trade_date
+                        or job.live_release_id or job.live_binding_id or job.activation_trade_date or runs):
+                    _fail("Replay source changes require a paused account before its first run",
+                          "LOCALSIM_REPLAY_SOURCE_REPLACEMENT_STATE_INVALID")
+                old_plan = frozen_source_plan(base, job=job)
+                _validate_replay_source_replacement(old_plan, replacement)
+                snapshot = repo._replay_recovery_snapshot(cur, job.replay_job_id, lock=lock)
+                absence = snapshot["preselection_absence"]
+                if absence is None:
+                    _fail("Existing daily execution prevents replacing the replay source",
+                          "LOCALSIM_REPLAY_SOURCE_REPLACEMENT_STATE_INVALID")
+                if lock:
+                    cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s)) AS locked",
+                                (absence["run_id"],))
+                    if not cur.fetchone()["locked"]:
+                        _fail("LocalSIM first-day execution is active", "LOCALSIM_PIT_DAY_LOCKED")
+                    snapshot = repo._replay_recovery_snapshot(cur, job.replay_job_id, lock=True)
+                if (snapshot["run"] is not None or snapshot["account_in_flight_runs"]
+                        or snapshot["preselection_absence"]["account_day_runs"]):
+                    _fail("Existing daily execution prevents replacing the replay source",
+                          "LOCALSIM_REPLAY_SOURCE_REPLACEMENT_STATE_INVALID")
+                require_no_economic_effects({}, snapshot["economic_counts"], now=self.clock())
+
+            def bind_replacement(metadata):
+                metadata.pop(REQUEST_KEY, None)
+                metadata[PLAN_KEY] = replacement
+                return metadata
+
             effects = []
             blockers = []
             for run in runs:
@@ -299,6 +351,8 @@ class LocalSimPitMigrationService:
                         "affected_bindings": [b.model_dump(mode="json") for b in affected],
                         "uncompleted_days": effects,
                         "authority": TypeAdapter(type(authority)).dump_python(authority, mode="json")}
+            if replacement is not None:
+                identity["replay_source_plan_sha256"] = replacement["plan_hash"]
             # timestamps are persisted identities, never generated probe times.
             digest = canonical_json_sha256(identity)
             evidence = {"schema_version": MIGRATION_KEY, "plan_sha256": digest,
@@ -311,7 +365,10 @@ class LocalSimPitMigrationService:
                     resolver=SimpleNamespace(resolve_live_binding=lambda: authority), evidence=evidence,
                     predecessor_id=job.replay_job_id if job else None,
                     package_lifecycle_reader=SimpleNamespace(get=lambda _: SimpleNamespace(**package)),
-                    explicit_migration=True)
+                    explicit_migration=True, metadata_transform=bind_replacement if replacement is not None else None)
+                if replacement is not None:
+                    frozen_source_plan(built[0])
+                    source = replace(source, historical_source_sha256=replacement["plan_hash"])
                 cutoff = self.source_authority.calendar.latest_trading_day_on_or_before(start - timedelta(days=1))
                 SelectionPitRuntimeLease.from_mapping(
                     built[0].release_config_json["metadata"][CANONICAL_PIT_RUNTIME_LEASE_KEY]).require_trade_date(cutoff)

@@ -869,7 +869,7 @@ class MultiAlphaLivePredictionProvider:
             return first
         # Reuse the existing PIT compatibility checks across seeds, then retain
         # every seed's read receipts and history-window lineage in the parent.
-        context = _aggregate_parent_leg_input_context(leg_executions=executions, requested_trade_date=cutoff_date or trade_date)
+        context = _aggregate_parent_leg_input_context(leg_executions=executions, requested_trade_date=trade_date)
         frames = {seed: execution.seed_frames[seed] for seed, execution in executions.items()}
         combined = _ensemble_seed_frames(
             frames, leg_id=leg_slice.leg_id, model_id=leg_slice.model_asset.model_id,
