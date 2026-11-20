@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from math import isfinite
 from typing import Any
 
@@ -19,7 +20,8 @@ from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.ledger import FeeModel
 
 from .localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
-from .localsim_file_inputs import frozen_file_binding
+from .localsim_file_inputs import current_file_dataset, frozen_file_binding
+from .localsim_input_source_plan import current_source_day, current_source_plan, day_route, frozen_source_plan
 from .models import canonical_json_sha256
 from .successor_models import SimulationAccountStatus, SimulationLedgerScopeKind
 
@@ -152,7 +154,29 @@ class LocalSimNativeAccountContext:
         return self.initial_capital
 
 
-def load_native_account_context(*, binding: Any, release: Any, repository: Any, manifest_loader: Any) -> LocalSimNativeAccountContext:
+def _native_market_data_source(release: Any, trade_date: date | None) -> MinuteDataSource:
+    saved_plan = frozen_source_plan(release)
+    scoped_plan = current_source_plan()
+    if saved_plan is None and scoped_plan is None:
+        return MinuteDataSource.DATASET_FILES if frozen_file_binding(release) else MinuteDataSource.DB_HISTORICAL
+    if (saved_plan is None or scoped_plan is None or scoped_plan["plan_hash"] != saved_plan["plan_hash"]
+            or trade_date is None or trade_date != current_source_day()):
+        raise RuntimeConfigInvalidError(
+            "LocalSIM execution requires the release's frozen replay day scope",
+            context={"reason_code": "LOCALSIM_EXECUTION_SOURCE_SCOPE_MISMATCH", "trade_date": str(trade_date)},
+        )
+    route = day_route(saved_plan, trade_date)
+    dataset = current_file_dataset()
+    if (dataset.identity if dataset is not None else None) != route["file_binding_hash"]:
+        raise RuntimeConfigInvalidError(
+            "LocalSIM execution dataset differs from its frozen day route",
+            context={"reason_code": "LOCALSIM_EXECUTION_SOURCE_FILE_BINDING_MISMATCH", "trade_date": str(trade_date)},
+        )
+    return MinuteDataSource.DATASET_FILES if route["source"] == "DATASET_FILES" else MinuteDataSource.DB_HISTORICAL
+
+
+def load_native_account_context(*, binding: Any, release: Any, repository: Any, manifest_loader: Any,
+                                trade_date: date | None = None) -> LocalSimNativeAccountContext:
     metadata = binding.binding_config_json.get("metadata") or {}
     account_id = str(metadata.get("localsim_account_id") or "")
     account = repository.get_account(account_id)
@@ -197,7 +221,7 @@ def load_native_account_context(*, binding: Any, release: Any, repository: Any, 
         initial_capital=float(account.initial_capital),
         frozen_manifest=manifest,
         profile=profile,
-        data_source=MinuteDataSource.DATASET_FILES if frozen_file_binding(release) else MinuteDataSource.DB_HISTORICAL,
+        data_source=_native_market_data_source(release, trade_date),
     )
 
 
