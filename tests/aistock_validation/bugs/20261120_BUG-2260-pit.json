@@ -1,0 +1,406 @@
+{
+  "actual": "service提交前recheck与repository事务内verify_current重复；Advisory直接比较完整global_pit，拒绝共享权威已证明兼容的滚动扩展。",
+  "allowed_write_scope": [
+    "backend/services/advisory_forward/service.py",
+    "backend/services/data_integrity/inputs.py",
+    "backend/services/selection_center/canonical_pit_runtime.py",
+    "backend/tests/advisory_model_first/test_forward_publication.py",
+    "backend/tests/advisory_model_first/test_forward_postgres.py",
+    "backend/tests/test_daily_data_integrity_inputs.py",
+    "backend/tests/selection_center/test_canonical_pit_runtime.py",
+    "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+    "tests/aistock_validation/bugs/20261120_BUG-2260-pit.json",
+    "backend/tests/advisory_model_first/test_forward_boundaries.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2260",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-20T06:12:58.025313Z",
+  "description": "service提交前recheck与repository事务内verify_current重复；Advisory直接比较完整global_pit，拒绝共享权威已证明兼容的滚动扩展。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261120-2eab8dbedc92",
+      "timestamp": "2026-11-20T06:12:58.025297Z"
+    },
+    {
+      "action": "expand_test_scope",
+      "actor": "Codex",
+      "note": "Removed success recheck moves revision rejection into commit_publication; update the existing fake-repository regression to exercise that boundary.",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00"
+    },
+    {
+      "action": "correctness_review",
+      "actor": "Codex",
+      "note": "Reviewed all three source changes: one locked commit-time final check; inference capture and error diagnosis retained; shared rolling proof on the same borrowed transaction; immutable PIT binding and input/evidence hashes retained. Fixed strict consumer-only identity handling. Source hashes match fresh-process regression evidence.",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00"
+    },
+    {
+      "action": "completeness_review",
+      "actor": "Codex",
+      "note": "Final acceptance matrix passed: verified rolling extension; missing/wrong prefix, generation/digest/member/partition/package/program/binding drift rejected; verified extension plus changed members/partition rejected; partial INSERT rollback, exact retry, second-session locks and inference error diagnosis passed. 150 targeted tests passed. Current-agent review, not independent review.",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00"
+    },
+    {
+      "action": "design_compliance_001",
+      "actor": "Codex",
+      "note": "All four checks passed against user acceptance: complete formal path with real DEV PG verification (inference stubbed to avoid training); failures explicit with UNKNOWN/UNAVAILABLE semantics retained; only requested PIT compatibility and duplicate-review removal changed; no new formal_training/QE/manual evidence gate, RBAC or approval flow. UPDATED3 registration and activation excluded.",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "正常发布仅在提交事务内最终复核一次；同权威同代次且历史前缀、使用日期成分和分区版本不变的滚动扩展可发布；其他漂移或并发绑定变化拒绝且无半成品和重复发布。保留实际特征与观测面板依赖，不新增formal_training或QE门槛。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2260-pit.json"
+    ],
+    "added_files": [
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py"
+    ],
+    "changed_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2260-pit.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_forward/service.py",
+        "backend/services/data_integrity/inputs.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/advisory_model_first/test_forward_publication.py",
+        "backend/tests/advisory_model_first/test_forward_postgres.py",
+        "backend/tests/test_daily_data_integrity_inputs.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "hmm",
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_forward/service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/data_integrity/inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/selection_center/canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_publication.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_postgres.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/test_daily_data_integrity_inputs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_forward/service.py",
+        "backend/services/data_integrity/inputs.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/advisory_model_first/test_forward_publication.py",
+        "backend/tests/advisory_model_first/test_forward_postgres.py",
+        "backend/tests/test_daily_data_integrity_inputs.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/data_integrity/inputs.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
+      "backend/tests/test_daily_data_integrity_inputs.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py"
+    ]
+  },
+  "first_seen_at": "2026-11-20T06:12:58.025313Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7380,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7380",
+  "last_seen_at": "2026-11-20T06:12:58.025313Z",
+  "module": "advisory.model_first",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "data_sync_autonomy_backend",
+    "paper_v2_backend",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "scheduler_status",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "fresh_process_evidence": [
+      "Fresh isolated Python pytest loaded this worktree tracked source; 150 passed, 1 fixture-import warning. Includes 17 new rollback-only existing DEV DB tests, 3 existing DEV recovery tests; no production writes/training/activation/process control. Final source SHA256: {\"backend/services/advisory_forward/service.py\": \"f87c476727ebc7dbcb97c0110fe649c4325bfce8ffcdd4d144f77d7b4136d8bc\", \"backend/services/data_integrity/inputs.py\": \"e4005ac5b5f770db51cf42ae655d024e207e82a50920d457a646005532feafaa\", \"backend/services/selection_center/canonical_pit_runtime.py\": \"5a664ae79f5e6a800901b59b850f182cb886be1b45e050b0ebea87ec2eae7a3e\"}",
+      "Direct regression receipt tmp/issue_workflow/BUG-2260/direct-regression.xml SHA256=03c75b3eeac3788e0ebd2c382e653c93f31f524fa6d1c99ae9f7212d5cd7ba62. Ruff and py_compile passed; git diff --check passed."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory.model_first"
+  ],
+  "title": "荐股正式发布重复输入复核与共享PIT滚动兼容规则不一致",
+  "trigger_condition": {
+    "fingerprint": "2eab8dbedc9266efccf062ce",
+    "source_event_id": "FE-20261120-2eab8dbedc92"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.model_first",
+        "platform_api",
+        "data_sync_autonomy",
+        "paper_v2",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "data_sync_autonomy_backend",
+        "paper_v2_backend",
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.model_first",
+          "platform_api",
+          "data_sync_autonomy",
+          "paper_v2",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "data_sync_autonomy_backend",
+          "paper_v2_backend",
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -372,12 +372,28 @@ def require_canonical_pit_generation_current(
     resolver = authority_resolver or CanonicalPitAuthorityResolver()
     try:
         current_binding = resolver.resolve_live_binding()
-        current = SelectionPitRuntimeLease.from_binding(current_binding)
     except Exception as exc:
         raise CanonicalPitGenerationDriftError(
             "canonical PIT authority cannot be re-read for generation validation",
             context={"expected_generation": lease.activation_generation},
         ) from exc
+    return require_compatible_canonical_pit_binding(
+        lease, current_binding=current_binding, authority_resolver=resolver,
+    )
+
+
+def require_compatible_canonical_pit_binding(
+    lease: SelectionPitRuntimeLease,
+    *,
+    current_binding: PitConsumerBinding,
+    authority_resolver: CanonicalPitAuthorityResolver,
+) -> SelectionPitRuntimeLease:
+    """Validate a pinned prefix against an already resolved authority; never rebind."""
+
+    try:
+        current = SelectionPitRuntimeLease.from_binding(current_binding)
+    except Exception as exc:
+        raise CanonicalPitGenerationDriftError("canonical PIT authority binding is invalid") from exc
     expected = _runtime_identity(lease)
     observed = _runtime_identity(current)
     # The policy/activation identity stays pinned. A maintenance-only extension
@@ -385,7 +401,7 @@ def require_canonical_pit_generation_current(
     # prefix unchanged. Never rewrite the saved lease or extend its date scope.
     if (observed != expected and observed[:8] == expected[:8]
             and current.coverage_start == lease.coverage_start and current.coverage_end >= lease.coverage_end):
-        verify_prefix = getattr(resolver, "verifies_rolling_predecessor", None)
+        verify_prefix = getattr(authority_resolver, "verifies_rolling_predecessor", None)
         if verify_prefix is not None:
             try:
                 if verify_prefix(current=current_binding, source_digest=lease.state_source_digest,

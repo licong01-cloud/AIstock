@@ -232,17 +232,17 @@ def test_scoped_gaps_use_shared_dated_source_aliases(monkeypatch):
 
 @pytest.mark.parametrize("changed", [False, True])
 def test_publish_recheck_independently_recomputes_scope(monkeypatch, changed):
-    from dataclasses import dataclass
+    from dataclasses import asdict, replace
+    import json
     from backend.services import canonical_equity_pit as pit_module
     from backend.services.data_integrity import advisory_scope, inputs
+    from backend.tests.selection_center.test_canonical_pit_runtime import _binding
     row, scope, project = scoped_missing_example()
     ready = project()
     ready.update(binding_id="pkg", manifest_sha256="a"*64, data_date=row["trade_date"])
+    pit = replace(_binding(generation=1, active=True), coverage_end=date.fromisoformat(row["trade_date"]))
+    ready["global_pit"] = json.loads(json.dumps(asdict(pit), default=str))
     binding = inputs.ready_binding(ready)
-
-    @dataclass
-    class Pit:
-        universe_key: str = "canonical"
 
     class Cursor:
         def __enter__(self): return self
@@ -253,7 +253,7 @@ def test_publish_recheck_independently_recomputes_scope(monkeypatch, changed):
     class Connection:
         def cursor(self): return Cursor()
 
-    monkeypatch.setattr(pit_module.CanonicalPitAuthorityResolver, "resolve_live_binding", lambda _: Pit())
+    monkeypatch.setattr(pit_module.CanonicalPitAuthorityResolver, "resolve_live_binding", lambda _: pit)
     monkeypatch.setattr(inputs, "partition_pins", lambda *a, **kw: [row])
     # Bind actual PIT scope identity, not a producer quality projection.
     monkeypatch.setattr(advisory_scope, "resolve_scope", lambda *a: (

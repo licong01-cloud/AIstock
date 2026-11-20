@@ -191,6 +191,11 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
         session, simulation_roots, selected[5:], _env(extra_env), workers=4,
     ):
         return
+    assistant_roots = ("backend/tests/research_assistant",)
+    if plan == "research_assistant_backend" and selected[:1] == assistant_roots and _run_nightly_pytest_shards(
+        session, assistant_roots, selected[1:], _env(extra_env), workers=2,
+    ):
+        return
     session.run(
         "python",
         "-m",
@@ -256,6 +261,10 @@ def _run_nightly_pytest_shards(
             ("test_generic_population_price_5td_pipeline_v1", 8),
         )
     } if plan == "advisory_modeling_backend" else {}
+    if plan == "research_assistant_backend":
+        # The first two-worker replay timed out in test_service.py after its
+        # peer finished in 178s. Keep the long service module on its own worker.
+        multipliers = {"backend/tests/research_assistant/test_service.py": 3}
     # 2026-11-20 Nightly JUnit timings show large files with fast tests and
     # small files with expensive LocalSIM replays. Use measured costs in the
     # same approximate units as byte-based estimates for unmeasured files.
@@ -308,6 +317,8 @@ def _run_nightly_pytest_shards(
             if temporary_path.parent != scratch_parent.resolve():
                 raise RuntimeError("offline fixture scratch escaped its owner directory")
             worker_env.update(dict.fromkeys(("TEMP", "TMP", "TMPDIR"), str(temporary_path)))
+            if plan == "research_assistant_backend":
+                worker_env["AISTOCK_ASSISTANT_PROMPT_CACHE_DIR"] = str(temporary_path / "assistant-prompts")
             worker_args.append(f"--basetemp={temporary_path / 'tests'}")
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", *files, *worker_args],
