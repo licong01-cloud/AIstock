@@ -31,14 +31,22 @@
   ],
   "expected": "保留原始观测面板与引用因子，在冻结模型的 LocalSIM 入口完成计算，既有终态需要单独核验原生恢复合同。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2262-localsim-alpha.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2262-localsim-alpha.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_replay_recovery.py",
@@ -141,24 +149,28 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_2d11fe38ea8488f8/recovery",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_cad2a3c16a6212e6/recovery",
     "fresh_process_evidence": [
       "Fresh source process prepared all 6 UPDATED3 and 10 OLD5 frozen seed workspaces from the original package assets and production release identities. Production PostgreSQL connection was read-only. Both original jobs passed the native recovery check for 2026-01-05 with no daily run or economic facts. Receipt SHA256 b1fd8aeaf0ea2bbce627ec15e92ba0550db79961239e5e3100c5cb9e19b00922.",
       "Existing DEV PostgreSQL verified first-day recovery with the exact TypeError, original job and cursor, rejected stale snapshot and held writer-lock, preserved the original failure receipt and zero economic facts, then rolled back. AISTOCK_DEV_DB_E2E=1 pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py -q: 136 passed."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_2d11fe38ea8488f8/recovery",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_cad2a3c16a6212e6/recovery"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
