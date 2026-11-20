@@ -140,3 +140,18 @@ def test_unavailable_global_authority_never_falls_back_to_legacy(monkeypatch):
     with pytest.raises(authority_module.CanonicalPitContractError, match="unavailable"):
         freeze_program_input_sources(request=request, date_plan=dates, frozen_programs=programs)
     assert before == [p.model_dump(mode="json") for p in programs]
+
+
+@pytest.mark.parametrize("policy", ["unknown-policy", [], {}])
+def test_invalid_frozen_policy_is_an_explicit_source_error(authority, policy):
+    request, programs, dates = _batch(count=1)
+    program = freeze_program_input_sources(request=request, date_plan=dates, frozen_programs=programs)[0]
+    payload = program.model_dump(mode="json")
+    plan = payload["selection_input_source_plan"]
+    plan["native_policy"]["pit_binding_policy"] = policy
+    plan["plan_hash"] = sources.digest({k: v for k, v in plan.items() if k != "plan_hash"})
+    payload["frozen_program_hash"] = None
+    invalid = type(program).model_validate(payload)
+    with pytest.raises(sources.SourcePlanError, match="SOURCE_TASK_PIT_POLICY_UNSUPPORTED"):
+        validate_program_source_plan(program=invalid)
+    assert authority == [1]

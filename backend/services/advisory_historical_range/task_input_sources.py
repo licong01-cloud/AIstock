@@ -48,7 +48,7 @@ def native_input_policy(program, *, global_pit=False):
 def uses_global_pit_source_plan(program):
     plan = program.selection_input_source_plan
     policy = plan["native_policy"].get("pit_binding_policy") if plan is not None else None
-    if policy not in {None, GLOBAL_PIT_BINDING_POLICY}:
+    if policy is not None and policy != GLOBAL_PIT_BINDING_POLICY:
         raise sources.SourcePlanError("SOURCE_TASK_PIT_POLICY_UNSUPPORTED")
     return policy == GLOBAL_PIT_BINDING_POLICY
 

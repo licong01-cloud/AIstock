@@ -33,40 +33,51 @@
     {
       "action": "correctness_review",
       "actor": "Codex",
-      "timestamp": "2026-11-20T07:50:19.269191+00:00",
-      "note": "Reviewed the four source files. New public omitted/null mode defaults to global DATABASE_ONLY; unknown modes still reject. One authority identity is deep-copied across a batch, with dated membership and canonical mark queries. The version marker is result identity, not an admission gate. No model/package/DB state writes were added."
+      "note": "Reviewed the four source files. New public omitted/null mode defaults to global DATABASE_ONLY; unknown modes still reject. One authority identity is deep-copied across a batch, with dated membership and canonical mark queries. The version marker is result identity, not an admission gate. No model/package/DB state writes were added.",
+      "timestamp": "2026-11-20T07:50:19.269191+00:00"
     },
     {
       "action": "completeness_review",
       "actor": "Codex",
-      "timestamp": "2026-11-20T07:50:19.269191+00:00",
-      "note": "85 distinct targeted tests passed, including actual HTTP route validation, multi-package one-resolution generation binding, canonical and legacy packages, old unversioned plan/query/hash preservation, original no-plan roundtrips, failed authority without fallback, invalid sources and changed uncommitted inputs. Original release cutoff limits and explicit file semantics retained. A fixture requiring X was rerun on an isolated X temporary root; production guard was not weakened. Current-agent review, not independent review."
+      "note": "85 distinct targeted tests passed, including actual HTTP route validation, multi-package one-resolution generation binding, canonical and legacy packages, old unversioned plan/query/hash preservation, original no-plan roundtrips, failed authority without fallback, invalid sources and changed uncommitted inputs. Original release cutoff limits and explicit file semantics retained. A fixture requiring X was rerun on an isolated X temporary root; production guard was not weakened. Current-agent review, not independent review.",
+      "timestamp": "2026-11-20T07:50:19.269191+00:00"
     },
     {
       "action": "design_compliance_001",
       "actor": "Codex",
-      "timestamp": "2026-11-20T07:50:19.269191+00:00",
-      "note": "All four acceptance checks passed against the requested global PIT repair: public entry wired to existing full source-plan pipeline; explicit failures and UNKNOWN/missing semantics retained; existing results and manifests not rewritten, original release limits retained; no new training/QE/manual evidence, RBAC, enablement or approval gate. Actual replay and backend restart remain outside this source repair."
+      "note": "All four acceptance checks passed against the requested global PIT repair: public entry wired to existing full source-plan pipeline; explicit failures and UNKNOWN/missing semantics retained; existing results and manifests not rewritten, original release limits retained; no new training/QE/manual evidence, RBAC, enablement or approval gate. Actual replay and backend restart remain outside this source repair.",
+      "timestamp": "2026-11-20T07:50:19.269191+00:00"
+    },
+    {
+      "action": "final_revision_review",
+      "actor": "Codex",
+      "note": "Final correctness/completeness review found malformed policy list/dict values could raise an untyped TypeError. Repaired to explicit SourcePlanError and added 3 passing cases. Total 88 distinct regressions passed; final source hashes recorded. Four design compliance checks remain passed. All changes limited to 4 runtime source files, one regression file and this BUG record.",
+      "timestamp": "2026-11-20T07:55:33.073496+00:00"
     }
   ],
   "evidence_uris": [],
   "expected": "新公开创建入口省略或null来源时统一DATABASE_ONLY全局PIT；显式文件模式保留冻结发布绑定；同批任务共享一次固定的全局PIT且成分/分区变化拒绝。旧任务恢复、hash、原PIT绑定不改，不回写package，不启用荐股、不训练、不重跑QE、不启动实际回放。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/api_models.py",
+      "backend/services/advisory_historical_range/input_source_plan.py",
+      "backend/services/advisory_historical_range/requirement_planner.py",
+      "backend/services/advisory_historical_range/task_input_sources.py",
+      "backend/tests/advisory_historical_range/test_global_pit_default.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2263-pit.json"
+    ],
     "added_files": [
       "backend/tests/advisory_historical_range/test_global_pit_default.py"
     ],
     "changed_files": [
       "backend/services/advisory_historical_range/api_models.py",
-      "backend/services/advisory_historical_range/task_input_sources.py",
       "backend/services/advisory_historical_range/input_source_plan.py",
       "backend/services/advisory_historical_range/requirement_planner.py",
-      "backend/services/advisory_historical_range/request_resolver.py",
-      "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
-      "backend/tests/advisory_historical_range/test_task_input_sources.py",
-      "backend/tests/advisory_historical_range/test_input_source_plan.py",
-      "backend/tests/advisory_historical_range/test_canonical_pit_package_requirements.py"
+      "backend/services/advisory_historical_range/task_input_sources.py",
+      "backend/tests/advisory_historical_range/test_global_pit_default.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2263-pit.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/api_models.py",
@@ -242,27 +253,30 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "object_liveness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
     "fresh_process_evidence": [
-      "Fresh isolated pytest loaded the task worktree: 82 direct regressions passed, then 3 added HTTP-entry cases passed (85 distinct cases). Production source unchanged between runs. No training, actual replay, production DB writes or process control. Source SHA256={\"backend/services/advisory_historical_range/api_models.py\": \"43283269023b1c6f7cc0bac4a5de6726d70469163789114fd29d8e5628a58d82\", \"backend/services/advisory_historical_range/input_source_plan.py\": \"2b3d9e3e164ef48b1564fb6c7492c64ad8674d65ffbc90dfee872ba6e26406d8\", \"backend/services/advisory_historical_range/requirement_planner.py\": \"e8e97f1de48ee10a95eb9d084479bc775a7a06cfff32f56105257e08a66fa688\", \"backend/services/advisory_historical_range/task_input_sources.py\": \"ecb871128cef1c2f70ceff2ceba9bc19c2d408d7d49ab83fa396b130627b1753\"}",
-      "Ruff, py_compile and git diff --check passed. tmp\\issue_workflow\\BUG-2263\\direct-regression.xml SHA256=e978dba15db014b6769b39f0b56b1163f4884fd914890c58922c67245e12fa3a; tmp\\issue_workflow\\BUG-2263\\http-regression.xml SHA256=51824e6e454efdd52914116615a3b87b46730cefafa3fa86e411a99717ad1942"
+      "Fresh isolated pytest: 82 direct regressions passed, then 3 HTTP-entry cases passed, then 3 review-repair error cases passed (88 distinct cases). The final one-line repair classifies malformed policy values as SourcePlanError; no training, actual replay, production DB writes or user process control. Final source SHA256={\"backend/services/advisory_historical_range/api_models.py\": \"43283269023b1c6f7cc0bac4a5de6726d70469163789114fd29d8e5628a58d82\", \"backend/services/advisory_historical_range/input_source_plan.py\": \"2b3d9e3e164ef48b1564fb6c7492c64ad8674d65ffbc90dfee872ba6e26406d8\", \"backend/services/advisory_historical_range/requirement_planner.py\": \"e8e97f1de48ee10a95eb9d084479bc775a7a06cfff32f56105257e08a66fa688\", \"backend/services/advisory_historical_range/task_input_sources.py\": \"acdf85b3787e7b34322a4e568be5e9da12f78e79e134125117bc67efd475cf49\"}",
+      "Ruff, py_compile and git diff --check passed on the final source. Receipts: tmp\\issue_workflow\\BUG-2263\\direct-regression.xml SHA256=e978dba15db014b6769b39f0b56b1163f4884fd914890c58922c67245e12fa3a; tmp\\issue_workflow\\BUG-2263\\http-regression.xml SHA256=51824e6e454efdd52914116615a3b87b46730cefafa3fa86e411a99717ad1942; tmp\\issue_workflow\\BUG-2263\\review-regression.xml SHA256=008274b2071112557a7a2ddf7ed77b17e9ccfacd9f92baa7189418892f46791a"
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
-    "business_smoke_contract_id": "object_liveness",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
