@@ -10,6 +10,7 @@ from backend.services.simulation_runtime.localsim_runtime_profile_repository imp
     InMemoryLocalSimRuntimeProfileRepository,
 )
 from backend.services.simulation_runtime.localsim_runtime_profile_service import LocalSimRuntimeProfileService
+from backend.services.simulation_runtime.models import assert_release_payload_boundary
 from backend.services.strategy_package.execution_policy import ValidatedExecutionPolicy
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import PackageStatusEvent
@@ -225,6 +226,37 @@ def test_product_authority_resolves_durable_receipt_profile_twap_and_tail() -> N
     evidence = resolved.release_validation_evidence()
     assert evidence["admission_receipt"]["payload"] == resolved.admission_receipt_payload
     assert evidence["runtime_profile"]["profile_version_id"] == version.profile_version_id
+
+
+def test_multi_alpha_admission_diagnostic_builds_release_evidence(monkeypatch) -> None:
+    package_repository, _, authority, profile_service = _services()
+    _, version = _create_profile_version(profile_service)
+    admission = authority.package_service.paper_simulation_admission("pkg_alpha", governance_limit=0)
+    checks = admission["asset_eligibility"]["checks"]
+    source_context = {"broker_backend": "local_sim", "runtime_variant": "release", "reason_code": "multi_alpha_signal_admission_passed"}
+    checks.append({
+        "name": "multi_alpha_signal_admission_passed",
+        "status": "PASS",
+        "severity": "hard",
+        "context": source_context,
+    })
+    monkeypatch.setattr(authority.package_service, "paper_simulation_admission", lambda *_args, **_kwargs: admission)
+
+    resolved = authority.resolve_product(
+        package_id="pkg_alpha", runtime_profile_version_id=version.profile_version_id,
+        execution_policy_version_id=package_repository.policy.policy_id,
+    )
+    evidence = resolved.release_validation_evidence()
+    assert_release_payload_boundary({"validation_evidence": evidence})
+    context = resolved.admission_receipt_payload["asset_eligibility"]["checks"][-1]["context"]
+    assert context == {
+        "checked_broker_backend": "local_sim", "runtime_variant": "release",
+        "reason_code": "multi_alpha_signal_admission_passed",
+    }
+    assert source_context["broker_backend"] == "local_sim"
+    context["broker_account_id"] = "foreign"
+    with pytest.raises(RuntimeConfigInvalidError, match="broker-binding fields"):
+        assert_release_payload_boundary({"validation_evidence": evidence})
 
 
 def test_profile_authority_materializes_exact_validated_variant_and_hmm_reference() -> None:
