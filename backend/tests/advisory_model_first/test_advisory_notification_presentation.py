@@ -104,6 +104,19 @@ def test_oversized_full_card_fails_without_top_n_fallback():
         mobile_card(data, URL)
 
 
+def test_empty_packages_are_still_reported_without_consuming_table_capacity():
+    data = payload(1)
+    source = data['detail_snapshot']['programs'][0]
+    data['detail_snapshot']['programs'] = [dict(copy.deepcopy(source), program_id=f'p{i}') for i in range(6)]
+    for p in data['detail_snapshot']['programs'][1:]:
+        p['cells'][1][2], p['cells'][1][6] = '观察', '待核验'
+    sealed(data)
+    card = mobile_card(data, URL)
+    assert '全部 6 个策略包' in text(card)
+    assert len([e for e in card['elements'] if e['tag'] == 'table']) == 1
+    assert text(card).count('本包暂无在荐或退出相关股票') == 5
+
+
 def test_removed_observation_exit_suggestion_pending_and_ordinary_watch_are_distinct():
     data = payload(5)
     rows = data['detail_snapshot']['programs'][0]['cells'][1:]

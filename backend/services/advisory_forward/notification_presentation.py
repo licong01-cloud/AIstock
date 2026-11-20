@@ -103,18 +103,22 @@ def mobile_card(payload, url):
     snapshot = validate_snapshot(payload['detail_snapshot'])
     document_url(url, urlsplit(url).path.rsplit('/', 1)[-1])
     programs = snapshot['programs']
-    if not programs or len(programs) > MAX_MOBILE_TABLES:
+    if not programs:
         raise DetailDeliveryError('FEISHU_MOBILE_FULL_TABLE_COUNT_LIMIT')
     elements = [dict(tag='div', text=dict(tag='plain_text', content=(
         ('【测试】历史名单样例，非新的荐股通知。\n' if payload['subject'].startswith('【测试】') else '') +
         f"决策日 {snapshot['decision_date']} · 目标日 {snapshot['target_date']}\n"
         f"全部 {len(programs)} 个策略包；表内含全量股票，每页10行可翻页。")))]
+    table_count = 0
     for p in programs:
         rows, counts = mobile_rows(p)
         heading = (display(p['program_name'], 80) + '\n' +
                    f"在荐 {counts['active']} · 移出/退出建议 {counts['exits']} · 其他待复核 {counts['pending']}")
         elements.extend([dict(tag='hr'), dict(tag='div', text=dict(tag='plain_text', content=heading))])
         if rows:
+            table_count += 1
+            if table_count > MAX_MOBILE_TABLES:
+                raise DetailDeliveryError('FEISHU_MOBILE_FULL_TABLE_COUNT_LIMIT')
             elements.append(dict(tag='table', page_size=10, row_height='middle',
                 columns=[dict(name=k, display_name=v, data_type='text', width='auto')
                          for k, v in [('s', '股票'), ('t', '状态'), ('v', '累计涨跌')]], rows=rows))
