@@ -9,7 +9,8 @@
     "backend/tests/test_daily_data_integrity_inputs.py",
     "backend/tests/selection_center/test_canonical_pit_runtime.py",
     "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
-    "tests/aistock_validation/bugs/20261120_BUG-2260-pit.json"
+    "tests/aistock_validation/bugs/20261120_BUG-2260-pit.json",
+    "backend/tests/advisory_model_first/test_forward_boundaries.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2260",
@@ -27,6 +28,30 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261120-2eab8dbedc92",
       "timestamp": "2026-11-20T06:12:58.025297Z"
+    },
+    {
+      "action": "expand_test_scope",
+      "actor": "Codex",
+      "note": "Removed success recheck moves revision rejection into commit_publication; update the existing fake-repository regression to exercise that boundary.",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00"
+    },
+    {
+      "action": "correctness_review",
+      "actor": "Codex",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00",
+      "note": "Reviewed all three source changes: one locked commit-time final check; inference capture and error diagnosis retained; shared rolling proof on the same borrowed transaction; immutable PIT binding and input/evidence hashes retained. Fixed strict consumer-only identity handling. Source hashes match fresh-process regression evidence."
+    },
+    {
+      "action": "completeness_review",
+      "actor": "Codex",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00",
+      "note": "Final acceptance matrix passed: verified rolling extension; missing/wrong prefix, generation/digest/member/partition/package/program/binding drift rejected; verified extension plus changed members/partition rejected; partial INSERT rollback, exact retry, second-session locks and inference error diagnosis passed. 150 targeted tests passed. Current-agent review, not independent review."
+    },
+    {
+      "action": "design_compliance_001",
+      "actor": "Codex",
+      "timestamp": "2026-11-20T06:25:46.160462+00:00",
+      "note": "All four checks passed against user acceptance: complete formal path with real DEV PG verification (inference stubbed to avoid training); failures explicit with UNKNOWN/UNAVAILABLE semantics retained; only requested PIT compatibility and duplicate-review removal changed; no new formal_training/QE/manual evidence gate, RBAC or approval flow. UPDATED3 registration and activation excluded."
     }
   ],
   "evidence_uris": [],
@@ -42,7 +67,8 @@
       "backend/tests/advisory_model_first/test_forward_publication.py",
       "backend/tests/advisory_model_first/test_forward_postgres.py",
       "backend/tests/test_daily_data_integrity_inputs.py",
-      "backend/tests/selection_center/test_canonical_pit_runtime.py"
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -167,7 +193,8 @@
       "backend/tests/advisory_model_first/test_forward_postgres.py",
       "backend/tests/test_daily_data_integrity_inputs.py",
       "backend/tests/selection_center/test_canonical_pit_runtime.py",
-      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py"
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -178,7 +205,8 @@
       "backend/tests/advisory_model_first/test_forward_postgres.py",
       "backend/tests/test_daily_data_integrity_inputs.py",
       "backend/tests/selection_center/test_canonical_pit_runtime.py",
-      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py"
+      "backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py"
     ]
   },
   "first_seen_at": "2026-11-20T06:12:58.025313Z",
@@ -207,17 +235,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh isolated Python pytest loaded this worktree tracked source; 150 passed, 1 fixture-import warning. Includes 17 new rollback-only existing DEV DB tests, 3 existing DEV recovery tests; no production writes/training/activation/process control. Final source SHA256: {\"backend/services/advisory_forward/service.py\": \"f87c476727ebc7dbcb97c0110fe649c4325bfce8ffcdd4d144f77d7b4136d8bc\", \"backend/services/data_integrity/inputs.py\": \"e4005ac5b5f770db51cf42ae655d024e207e82a50920d457a646005532feafaa\", \"backend/services/selection_center/canonical_pit_runtime.py\": \"5a664ae79f5e6a800901b59b850f182cb886be1b45e050b0ebea87ec2eae7a3e\"}",
+      "Direct regression receipt tmp/issue_workflow/BUG-2260/direct-regression.xml SHA256=03c75b3eeac3788e0ebd2c382e653c93f31f524fa6d1c99ae9f7212d5cd7ba62. Ruff and py_compile passed; git diff --check passed."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "business_smoke_contract_id": "scheduler_status",
+    "backend_restart_required": true
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

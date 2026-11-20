@@ -659,7 +659,6 @@ class AdvisoryForwardService:
                 "items": [list_item_to_dict(item) for item in items],
                 "input_readiness": summaries(input_bindings),
             }
-            self.input_readiness.recheck(input_bindings)
             committed = self.repository.commit_publication(
                 forward_run_id=str(persisted["forward_run_id"]),
                 expected_program_version=program.version,

@@ -27,6 +27,7 @@ from backend.services.selection_center.canonical_pit_runtime import (
     inherit_canonical_pit_runtime_binding,
     migrate_runtime_config_to_canonical_pointer,
     require_canonical_pit_generation_current,
+    require_compatible_canonical_pit_binding,
     validate_canonical_pit_runtime_profile,
 )
 from backend.services.selection_center.runtime_profile import (
@@ -232,6 +233,33 @@ def test_unverified_coverage_extension_still_fails_closed() -> None:
             frozen, authority_resolver=_Resolver(replace(_binding(generation=1, active=True),
                                                         coverage_end=date(2026, 8, 3))),
         )
+
+
+@pytest.mark.parametrize("damage", ["generation", "start", "shrink", "proof_false", "proof_error"])
+def test_shared_compatibility_rejects_drift_even_with_a_prefix_verifier(damage):
+    original = _binding(generation=1, active=True)
+    lease = SelectionPitRuntimeLease.from_binding(original)
+    changes = {
+        "generation": {"activation_generation": 2},
+        "start": {"coverage_start": date(2018, 8, 2)},
+        "shrink": {"coverage_end": date(2026, 7, 30)},
+    }.get(damage, {"coverage_end": date(2026, 8, 3), "state_source_digest": SHA_B})
+    calls = []
+
+    class Resolver(_Resolver):
+        def verifies_rolling_predecessor(self, **kwargs):
+            calls.append(kwargs)
+            if damage == "proof_error":
+                raise RuntimeError("authority proof unavailable")
+            return damage != "proof_false"
+
+    resolver = Resolver(replace(original, **changes))
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        require_compatible_canonical_pit_binding(
+            lease, current_binding=resolver.binding, authority_resolver=resolver,
+        )
+    assert resolver.calls == 0  # Caller owns the already resolved transaction snapshot.
+    assert bool(calls) == damage.startswith("proof_")
 
 
 @pytest.mark.parametrize(
