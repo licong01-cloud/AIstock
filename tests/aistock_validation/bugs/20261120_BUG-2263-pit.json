@@ -1,5 +1,5 @@
 {
-  "actual": "省略来源仍走旧legacy key，批次可重复固定不同权威；历史决策标记和包内release cutoff未与显式来源计划区分。",
+  "actual": "公开创建入口的隐式来源仍可走legacy分支；多包分别解析全局权威；决策标记优先包内旧PIT，且不同包的共享标记需求可能冲突。",
   "allowed_write_scope": [
     "backend/services/advisory_historical_range/api_models.py",
     "backend/services/advisory_historical_range/task_input_sources.py",
@@ -22,13 +22,31 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-11-20T07:34:48.641455Z",
-  "description": "省略来源仍走旧legacy key，批次可重复固定不同权威；历史决策标记和包内release cutoff未与显式来源计划区分。",
+  "description": "新公开历史回放创建入口省略或null来源时沿用旧PIT投影；显式来源计划已有全局PIT实现。修复新入口默认DATABASE_ONLY、同批任务共用一次固定权威，新增数据库计划的决策标记使用同一全局PIT和canonical查询合同；保留旧记录和显式文件回放身份。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261120-7831e8477a6a",
       "timestamp": "2026-11-20T07:34:48.641440Z"
+    },
+    {
+      "action": "correctness_review",
+      "actor": "Codex",
+      "timestamp": "2026-11-20T07:50:19.269191+00:00",
+      "note": "Reviewed the four source files. New public omitted/null mode defaults to global DATABASE_ONLY; unknown modes still reject. One authority identity is deep-copied across a batch, with dated membership and canonical mark queries. The version marker is result identity, not an admission gate. No model/package/DB state writes were added."
+    },
+    {
+      "action": "completeness_review",
+      "actor": "Codex",
+      "timestamp": "2026-11-20T07:50:19.269191+00:00",
+      "note": "85 distinct targeted tests passed, including actual HTTP route validation, multi-package one-resolution generation binding, canonical and legacy packages, old unversioned plan/query/hash preservation, original no-plan roundtrips, failed authority without fallback, invalid sources and changed uncommitted inputs. Original release cutoff limits and explicit file semantics retained. A fixture requiring X was rerun on an isolated X temporary root; production guard was not weakened. Current-agent review, not independent review."
+    },
+    {
+      "action": "design_compliance_001",
+      "actor": "Codex",
+      "timestamp": "2026-11-20T07:50:19.269191+00:00",
+      "note": "All four acceptance checks passed against the requested global PIT repair: public entry wired to existing full source-plan pipeline; explicit failures and UNKNOWN/missing semantics retained; existing results and manifests not rewritten, original release limits retained; no new training/QE/manual evidence, RBAC, enablement or approval gate. Actual replay and backend restart remain outside this source repair."
     }
   ],
   "evidence_uris": [],
@@ -224,17 +242,27 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh isolated pytest loaded the task worktree: 82 direct regressions passed, then 3 added HTTP-entry cases passed (85 distinct cases). Production source unchanged between runs. No training, actual replay, production DB writes or process control. Source SHA256={\"backend/services/advisory_historical_range/api_models.py\": \"43283269023b1c6f7cc0bac4a5de6726d70469163789114fd29d8e5628a58d82\", \"backend/services/advisory_historical_range/input_source_plan.py\": \"2b3d9e3e164ef48b1564fb6c7492c64ad8674d65ffbc90dfee872ba6e26406d8\", \"backend/services/advisory_historical_range/requirement_planner.py\": \"e8e97f1de48ee10a95eb9d084479bc775a7a06cfff32f56105257e08a66fa688\", \"backend/services/advisory_historical_range/task_input_sources.py\": \"ecb871128cef1c2f70ceff2ceba9bc19c2d408d7d49ab83fa396b130627b1753\"}",
+      "Ruff, py_compile and git diff --check passed. tmp\\issue_workflow\\BUG-2263\\direct-regression.xml SHA256=e978dba15db014b6769b39f0b56b1163f4884fd914890c58922c67245e12fa3a; tmp\\issue_workflow\\BUG-2263\\http-regression.xml SHA256=51824e6e454efdd52914116615a3b87b46730cefafa3fa86e411a99717ad1942"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "business_smoke_contract_id": "object_liveness",
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

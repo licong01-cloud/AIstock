@@ -13,6 +13,7 @@ from .selection_signal_kernel import SelectionSignalDayV1
 
 PLAN_SOURCE_ROLES = frozenset({"code_release", "package_runtime_assets", "hmm_frozen_evidence",
                                "selection_input_plan"})
+GLOBAL_PIT_BINDING_POLICY = "advisory_global_pit_v1"
 
 
 def _source_run_id(request, program, date_plan):
@@ -25,7 +26,7 @@ def _source_run_id(request, program, date_plan):
     })[:32]
 
 
-def native_input_policy(program):
+def native_input_policy(program, *, global_pit=False):
     from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION
     from backend.services.strategy_package.selection_computation import (
         parse_selection_runtime_profile_for_computation, selection_runtime_profile_sha256,
@@ -36,9 +37,20 @@ def native_input_policy(program):
         required.append("suspend")
     if profile.industry_blacklist:
         required.append("sector")
-    return {"policy_hash": selection_runtime_profile_sha256(profile),
+    policy = {"policy_hash": selection_runtime_profile_sha256(profile),
             "universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION,
             "reader_contract": sources.READER_CONTRACT, "required_components": required}
+    if global_pit:
+        policy["pit_binding_policy"] = GLOBAL_PIT_BINDING_POLICY
+    return policy
+
+
+def uses_global_pit_source_plan(program):
+    plan = program.selection_input_source_plan
+    policy = plan["native_policy"].get("pit_binding_policy") if plan is not None else None
+    if policy not in {None, GLOBAL_PIT_BINDING_POLICY}:
+        raise sources.SourcePlanError("SOURCE_TASK_PIT_POLICY_UNSUPPORTED")
+    return policy == GLOBAL_PIT_BINDING_POLICY
 
 
 def _days(date_plan, program):
@@ -57,11 +69,15 @@ def freeze_program_input_sources(*, request, date_plan, frozen_programs):
     snapshot = (None if mode == "DATABASE_ONLY" else sources.freeze_file_source(
         consumer_scope="ADVISORY", run_id="creation-" + request.user_request_semantic_hash))
     programs = []
+    runtime_pit_identity = None
     for program in frozen_programs:
         plan = sources.build_source_plan(mode=mode, consumer_scope="ADVISORY",
             run_id=_source_run_id(request, program, date_plan), days=_days(date_plan, program),
             trading_calendar=[str(day) for day in date_plan.ordered_trade_dates],
-            native_policy=native_input_policy(program), file_source=snapshot)
+            native_policy=native_input_policy(program, global_pit=mode == "DATABASE_ONLY"), file_source=snapshot,
+            runtime_pit_identity=runtime_pit_identity)
+        if runtime_pit_identity is None:
+            runtime_pit_identity = plan.get("runtime_pit_identity")
         payload = program.model_dump(mode="json")
         payload.update(selection_input_source_plan=plan, frozen_program_hash=None)
         programs.append(type(program).model_validate(payload))
@@ -74,7 +90,7 @@ def validate_program_source_plan(*, program, date_plan=None, request=None):
         return None
     plan = sources.validate_source_plan(plan, consumer_scope="ADVISORY", run_id=plan["run_id"])
     if (canonical_json_sha256(program.semantic_payload()) != program.frozen_program_hash
-            or plan["native_policy"] != native_input_policy(program)):
+            or plan["native_policy"] != native_input_policy(program, global_pit=uses_global_pit_source_plan(program))):
         raise sources.SourcePlanError("SOURCE_TASK_PROGRAM_IDENTITY_MISMATCH")
     if date_plan is not None and plan["days"] != _days(date_plan, program):
         raise sources.SourcePlanError("SOURCE_TASK_DATE_PLAN_MISMATCH")
