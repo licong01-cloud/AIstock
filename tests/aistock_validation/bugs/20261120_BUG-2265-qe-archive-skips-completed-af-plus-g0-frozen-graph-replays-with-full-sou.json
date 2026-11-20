@@ -28,12 +28,18 @@
   ],
   "expected": "Recognize the evidenced G0 graph-blend contract and permit idempotent selected-ID recovery with no replay or identity mutation.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/asset_lifecycle.py",
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2265-qe-archive-skips-completed-af-plus-g0-frozen-graph-replays-with-full-sou.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/qe_archive/asset_lifecycle.py",
-      "backend/tests/qe_archive/test_qe_asset_lifecycle.py"
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2265-qe-archive-skips-completed-af-plus-g0-frozen-graph-replays-with-full-sou.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/asset_lifecycle.py",
@@ -90,8 +96,8 @@
   },
   "first_seen_at": "2026-11-20T15:49:28.927456Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d53261e9135e80f7ad6206f923898ba259aa3767",
+  "fixed_at": "2026-11-20T15:58:37Z",
   "github_issue_number": 7395,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7395",
   "last_seen_at": "2026-11-20T15:49:28.927456Z",
@@ -99,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7397",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,7 +129,9 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "Verify backend-main loaded the merge and that source-status recognizes experiments 986acc94, 8461c089 and e44a9978 with their original valid run IDs. Existing SKIP ingest history is retained.",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -132,7 +141,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2265",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "26c78a7299f553e4",
+    "recorded_at": "2026-11-20T15:59:49.248025Z",
+    "runtime_contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8278b0835fda7dc39467c0025804b97f60ea84d7",
+    "source_merge_commit": "d53261e9135e80f7ad6206f923898ba259aa3767",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7397",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py -> passed (39 tests)"
+    ],
+    "validation_evidence_digest": "c0385488e957be48fddac7552455aaca58c141c28c7e02bf6127367a428fbb0b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -141,6 +172,10 @@
     "fingerprint": "13141e42736690468c230d02",
     "source_event_id": "FE-20261120-13141e427366"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py -> passed (39 tests)"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
