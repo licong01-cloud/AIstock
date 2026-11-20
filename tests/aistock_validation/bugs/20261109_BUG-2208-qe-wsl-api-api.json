@@ -21,6 +21,12 @@
   ],
   "created_at": "2026-11-09T09:44:06.079368Z",
   "description": "父组提前回收使API超时，静态GPU2并行未计内存。OOMPolicy=stop还存在训练OOM连带停止API风险。",
+  "design_compliance_review": {
+    "business_semantics": "exact original scientific command/files retained; only runtime envelope and memory admission added",
+    "no_partial_delivery": "source implementation complete; production segregation explicitly pending, not represented as operational acceptance",
+    "no_silent_errors": "invalid isolation, unknown liveness, changed command/hash, wrong kernel limits fail closed with original identities",
+    "no_unapproved_gates": "memory admission and API/worker segregation explicitly authorized by user2026-11-09; backend restart remains user-owned"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -34,6 +40,17 @@
   ],
   "expected": "训练内存压力不节流控制API；按内存预算等待准入，不伪装offline或重复提交；生成可核验部署方案，服务重启由用户执行。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261109_BUG-2208-qe-wsl-api-api.json"
+    ],
     "added_files": [
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
       "backend/services/quantevolver/qe_wsl_workload_guard.py",
@@ -44,9 +61,16 @@
     ],
     "changed_files": [
       "backend/services/quantevolver/qe_active_execution_capacity.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/services/quantevolver/qe_wsl_resource_isolation.py",
+      "backend/services/quantevolver/qe_wsl_workload_guard.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_guard.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261109_BUG-2208-qe-wsl-api-api.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_active_execution_capacity.py",
@@ -175,15 +199,17 @@
   },
   "first_seen_at": "2026-11-09T09:44:06.079368Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "726f17cc0845f8e538ed6ebb8295fbf85eb28cb0",
+  "fixed_at": "2026-11-09T10:38:45Z",
   "github_issue_number": 7173,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7173",
+  "implementation_status": "source_fixed_pending_CI_and_user_activation",
   "last_seen_at": "2026-11-09T09:44:06.079368Z",
   "module": "quantevolver",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7177",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -196,29 +222,56 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/dispatch/nodes",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python -B imported final isolated-worktree coordinator/helpers and wrapped30 real full-Composer payloads without transport, preserving original command/files. WSL native32MiB scopes verified normal/exit7, system-service-origin handoff, exec PID/PGID/SID preservation and exact owned-probe cancellation. Receipts tmp/issue_workflow/BUG-2208/fresh-process-evidence.json and native-lifecycle-receipt.json. Production segregation still pending drain and user activation; existing APIs/experiments/containers were not controlled."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/qe_wsl_resource_isolation_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/dispatch/nodes",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_notes": [
+    "2026-11-09: add coordinator protocol fixture boundary; actual runtime envelope integration remains tested in dedicated regression tests, no production opt-out.",
+    "Keep standalone worker/deployment helpers in QE module, replacing two planned scripts paths; no CI framework change. Exact own new files only moved within isolated worktree."
+  ],
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2208",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fa65af2e8f7b3d4c",
+    "recorded_at": "2026-11-09T10:40:16.392142Z",
+    "runtime_contract_digest": "372f4febd386cafeea85bf862b932bc33c2515991e31f5ce71f0d75ec25caa6d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d7e9dc1be57cfb9cb589697857a93bba7bf02989",
+    "source_merge_commit": "726f17cc0845f8e538ed6ebb8295fbf85eb28cb0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7177",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed; targeted changed-point pytest12 passed, related matrix109 passed10 skipped;30 fresh Composer envelopes and native scope/PID/cancellation probes verified; source CI verdict SUCCESS. Operational activation pending old-work drain and user restart."
+    ],
+    "validation_evidence_digest": "044e0351ad4e6f1c28774538fed45d7df1c9a8d80a015a081842c5b6fd3b890d"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -227,6 +280,9 @@
     "fingerprint": "8d203e28b7bb847de581b97d",
     "source_event_id": "FE-20261109-8d203e28b7bb"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed; targeted changed-point pytest12 passed, related matrix109 passed10 skipped;30 fresh Composer envelopes and native scope/PID/cancellation probes verified; source CI verdict SUCCESS. Operational activation pending old-work drain and user restart."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -334,16 +390,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_notes": [
-    "2026-11-09: add coordinator protocol fixture boundary; actual runtime envelope integration remains tested in dedicated regression tests, no production opt-out.",
-    "Keep standalone worker/deployment helpers in QE module, replacing two planned scripts paths; no CI framework change. Exact own new files only moved within isolated worktree."
-  ],
-  "implementation_status": "source_fixed_pending_CI_and_user_activation",
-  "design_compliance_review": {
-    "no_partial_delivery": "source implementation complete; production segregation explicitly pending, not represented as operational acceptance",
-    "no_silent_errors": "invalid isolation, unknown liveness, changed command/hash, wrong kernel limits fail closed with original identities",
-    "business_semantics": "exact original scientific command/files retained; only runtime envelope and memory admission added",
-    "no_unapproved_gates": "memory admission and API/worker segregation explicitly authorized by user2026-11-09; backend restart remains user-owned"
   }
 }
