@@ -31,14 +31,22 @@
   ],
   "expected": "The complete simulation_core_l2 selection finishes and preserves native continuation and zero-recompute retry assertions within the existing 600 second budget.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/simulation_execution/test_localsim_period_continuation.py",
+      "backend/tests/simulation_execution/test_localsim_period_research.py",
+      "backend/tests/simulation_execution/test_localsim_wait_budget_research.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2261-simulation-nightly-shard-stalls-on-repeated-wait-budget-fixture-preparat.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/simulation_execution/test_localsim_wait_budget_research.py",
-      "backend/tests/simulation_execution/test_localsim_period_research.py",
       "backend/tests/simulation_execution/test_localsim_period_continuation.py",
-      "noxfile.py"
+      "backend/tests/simulation_execution/test_localsim_period_research.py",
+      "backend/tests/simulation_execution/test_localsim_wait_budget_research.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2261-simulation-nightly-shard-stalls-on-repeated-wait-budget-fixture-preparat.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/simulation_execution/test_localsim_wait_budget_research.py",
@@ -166,10 +174,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
