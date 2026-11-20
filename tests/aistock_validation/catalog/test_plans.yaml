@@ -1570,24 +1570,6 @@ plans:
         - scripts/localsim_product_validation.py
         - scripts/prepare_localsim_successor_cutover.py
       no_match_reason: localsim_change_does_not_touch_schema_repository_or_dev_database_contract
-  - plan_key: miniqmt_execution_runtime_l2
-    title: Canonical MiniQMT event-loop runtime and durable tick-driver validation
-    module: miniqmt_execution_runtime
-    level: L2
-    command_key: nox_miniqmt_execution_runtime_l2
-    nox_session: miniqmt_execution_runtime_l2
-    ci_lane: backend
-    enabled: true
-    requires_backend: false
-    requires_frontend: false
-    allowed_backend_ports: []
-    allowed_frontend_ports: []
-    writes_database: false
-    writes_artifacts: false
-    writes_business_state: false
-    runner_enabled: true
-    max_duration_seconds: 300
-    evidence_kinds: [pytest, compileall]
   - plan_key: hmm_data_source_backend
     title: HMM data-source backend regression
     module: hmm
@@ -1632,32 +1614,6 @@ plans:
       allow_parallel: false
       timeout_seconds: 300
     validation_gap: Manual/nightly gate because L3/live or long-running validation must not be runner-enabled by default.
-  - plan_key: miniqmt_sim_stub_l3
-    title: MiniQMT SIM fake broker order sync and reconcile backend validation
-    module: paper_v2_selection_center
-    level: L3
-    command_key: nox_miniqmt_sim_stub_l3
-    nox_session: miniqmt_sim_stub_l3
-    enabled: true
-    execution_mode: delegated
-    requires_backend: false
-    requires_frontend: false
-    allowed_backend_ports: []
-    allowed_frontend_ports: []
-    writes_database: false
-    writes_artifacts: false
-    writes_business_state: false
-    runner_enabled: false
-    max_duration_seconds: 600
-    evidence_kinds: [pytest]
-    runtime_policy:
-      default_trigger: manual
-      allow_mcp_start: false
-      allow_github_actions: false
-      allow_local_manual: true
-      allow_parallel: false
-      timeout_seconds: 600
-    validation_gap: Manual/nightly gate because L3/live or long-running validation must not be runner-enabled by default.
   - plan_key: simulation_runtime_ops_ui
     title: Simulation Runtime read-only ops UI validation
     module: paper_v2_selection_center
@@ -1684,86 +1640,6 @@ plans:
       allow_parallel: false
       timeout_seconds: 600
     validation_gap: Manual/nightly gate because L3/live or long-running validation must not be runner-enabled by default.
-  - plan_key: simulation_dual_backend_l4
-    title: Dual backend simulation oracle validation without production services
-    module: paper_v2_selection_center
-    level: L4
-    command_key: nox_simulation_dual_backend_l4
-    nox_session: simulation_dual_backend_l4
-    enabled: true
-    execution_mode: delegated
-    requires_backend: false
-    requires_frontend: false
-    allowed_backend_ports: []
-    allowed_frontend_ports: []
-    writes_database: false
-    writes_artifacts: false
-    writes_business_state: false
-    runner_enabled: false
-    max_duration_seconds: 900
-    evidence_kinds: [pytest]
-    runtime_policy:
-      default_trigger: manual
-      allow_mcp_start: false
-      allow_github_actions: false
-      allow_local_manual: true
-      allow_parallel: false
-      timeout_seconds: 900
-    evidence_policy:
-      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
-      required_fields: [validation_run_id, shared_signal_oracle, localsim_result, miniqmt_stub_result]
-      artifact_retention_days: 90
-      max_log_excerpt_chars: 4000
-    validation_gap: UI and full-day soak evidence are still required before this plan becomes a merge gate.
-  - plan_key: miniqmt_sim_trading_hours_l5
-    title: MiniQMT SIM trading-hours controlled manual validation
-    module: paper_v2_selection_center
-    level: L5
-    command_key: nox_miniqmt_sim_trading_hours_l5
-    nox_session: miniqmt_sim_trading_hours_l5
-    enabled: true
-    execution_mode: operator
-    requires_backend: true
-    requires_frontend: false
-    allowed_backend_ports: [8012]
-    allowed_frontend_ports: []
-    writes_database: true
-    writes_artifacts: true
-    writes_business_state: true
-    requires_confirmation: true
-    runner_enabled: false
-    max_duration_seconds: 7200
-    evidence_kinds: [manual_l5, broker_statement, ledger_reconciliation]
-    resource_policy:
-      policy: validation_paper_account
-      creates_validation_resources: true
-      resource_types: [paper_portfolio, paper_session, paper_order, paper_fill, paper_ledger, validation_account, miniqmt_sim_order, miniqmt_sim_fill]
-      allowed_db_targets: [dev_db]
-      forbidden_db_targets: [prod_db]
-      validation_namespace_required: true
-      validation_run_id_required: true
-      cleanup_required: true
-      cleanup_policy:
-        strategy: manual_review
-        retain_evidence: true
-        retain_summary_days: 180
-        cleanup_failure_severity: P1
-    runtime_policy:
-      default_trigger: manual
-      allow_mcp_start: false
-      allow_github_actions: false
-      allow_local_manual: true
-      allow_parallel: false
-      requires_self_hosted_runner: true
-      requires_market_hours: true
-      requires_tdx: true
-      timeout_seconds: 7200
-    evidence_policy:
-      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
-      required_fields: [validation_run_id, manual_confirmation, broker_statement, ledger_reconciliation, cleanup_status]
-      artifact_retention_days: 180
-      max_log_excerpt_chars: 8000
-    validation_gap: Requires approved trading-hours MiniQMT SIM runbook and real broker evidence.
   - plan_key: model_registry_backend
     title: Model Registry backend tests
     module: model_registry

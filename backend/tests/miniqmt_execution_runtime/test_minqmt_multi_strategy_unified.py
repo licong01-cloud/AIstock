@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-import pytest
 
 from backend.services.simulation_runtime.models import (
-    RuntimeReleaseValidationState,
     SimulationReleaseBinding,
-    StrategyRuntimeRelease,
 )
 from backend.services.simulation_data.daily_context import (
     SimulationBrokerBackend,
@@ -59,21 +56,3 @@ def test_minqmt_simulation_release_bindings_carry_account_group_strategy_slots()
     assert {slot_a.strategy_slot_id, slot_b.strategy_slot_id} == {"slot_a", "slot_b"}
     assert {slot_a.broker_account_id, slot_b.broker_account_id} == {"62266303"}
     assert slot_a.binding_hash != slot_b.binding_hash
-
-
-def test_strategy_runtime_release_rejects_account_group_fields_in_alpha_core() -> None:
-    with pytest.raises(Exception, match="broker-binding fields"):
-        StrategyRuntimeRelease(
-            package_id="pkg_alpha",
-            manifest_sha256="manifest_hash",
-            runtime_profile_id="rp",
-            runtime_profile_version_id="rp_v1",
-            runtime_profile_sha256="rp_hash",
-            daily_strategy_profile_version_id="daily_v1",
-            execution_policy_version_id="exec_v1",
-            execution_policy_sha256="exec_hash",
-            tail_policy_version_id="tail_v1",
-            tail_policy_sha256="tail_hash",
-            release_config_json={"account_group_id": "ag_minqmt_62266303_sim"},
-            validation_state=RuntimeReleaseValidationState.SIM_PASSED,
-        )

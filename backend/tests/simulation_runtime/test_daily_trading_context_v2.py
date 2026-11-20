@@ -212,15 +212,6 @@ def test_localsim_v2_supports_tushare_and_tdx_mixed_source_hash_closed_context()
     assert readback.carrier_payload() == context.carrier_payload()
 
 
-def test_miniqmt_v2_accepts_only_direct_instrument_authority() -> None:
-    symbols = {"600000.SH": _fact_v2("600000.SH", authority=DailyLimitAuthorityV2.MINIQMT_INSTRUMENT_DETAIL_V1)}
-    context = _context_v2(SimulationBrokerBackend.MINIQMT_SIM, symbols)
-
-    assert context.sources.stk_limit is None
-    assert context.sources.tdx_reference is None
-    assert context.sources.miniqmt_instrument is not None
-
-
 def test_v2_preserves_no_limit_and_symbol_failed_facts_without_disappearing() -> None:
     symbols = {
         "600000.SH": _fact_v2(

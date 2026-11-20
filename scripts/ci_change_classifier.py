@@ -257,6 +257,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "backend/infra/deepseek_client.py": ("platform_api_backend",),
     "deepseek_client.py": ("platform_api_backend",),
     "backend/tests/infra/test_deepseek_config.py": ("platform_api_backend",),
+    "backend/tests/test_data_quality_smoke_env.py": ("simulation_core_l2",),
 
     "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
     "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
@@ -772,6 +773,10 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
     catalog = flow.validation_catalog_snapshot()
     plans = catalog.plans
     selection = flow.select_validation(paths, _catalog=catalog)
+    retired_files = {
+        rule["file"] for rule in (selection.get("ownership") or {}).get("matched_rules", [])
+        if (catalog.modules.get(rule["primary_module"]) or {}).get("validation_retired") is True
+    }
     budget_ownership = flow.match_changed_files(
         budget_scope_paths, _modules=catalog.modules, _rules=catalog.rules,
     ) if budget_scope_paths else {}
@@ -782,6 +787,9 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
     unmapped_files: list[str] = []
     file_backend_sessions: dict[str, list[str]] = {}
     for path in paths:
+        if path in retired_files:
+            mapped_files.append(path)
+            continue
         path_selection = flow.select_validation([path], _catalog=catalog)
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
         if _is_frontend_path(path):
@@ -839,6 +847,7 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
         "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
         "mapped_files": mapped_files,
+        "retired_files": sorted(retired_files),
         "unmapped_code_files": unmapped_files,
         "file_backend_sessions": file_backend_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
@@ -1082,8 +1091,9 @@ def classify_changed_files(
         blocking.append(
             "unmapped executable code must declare a direct CI test mapping: " + ", ".join(unmapped_code_files)
         )
+    retired_validation_files = catalog_selection["retired_files"]
     changed_test_plan_coverage = _changed_test_plan_coverage(
-        business_files,
+        [path for path in business_files if path not in retired_validation_files],
         repo_root=repo_root,
         file_backend_sessions=catalog_selection["file_backend_sessions"],
         frontend_test_targets=frontend_test_targets,
@@ -1124,6 +1134,8 @@ def classify_changed_files(
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if retired_validation_files:
+        reasons.append("catalog ownership excludes retired modules from active validation")
     if suppressed_plan_keys:
         reasons.append(
             "redundant validation plans were subsumed: "
@@ -1219,6 +1231,7 @@ def classify_changed_files(
         "suppressed_plan_keys": suppressed_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
+        "retired_validation_files": retired_validation_files,
         "frontend_required": frontend_required,
         "frontend_test_targets": frontend_test_targets,
         "frontend_files": frontend_files,

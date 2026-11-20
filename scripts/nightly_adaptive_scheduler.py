@@ -36,12 +36,11 @@ STATUS_FAILURE_MODULES = {
 BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
 CHANGE_FILE_ONLY_PLAN_KEYS = frozenset({"l0"})
 CHANGE_FILE_ONLY_SESSIONS = frozenset({"l0"})
-# miniQMT paper simulation is retired. Shared/LocalSIM and the independent
-# MiniQMT execution runtime remain eligible; historical failed receipts cannot
-# reintroduce the retired simulation lanes.
+# Historical retries and provider advice cannot reintroduce retired broker
+# lanes. Shared simulation and LocalSIM remain eligible.
 RETIRED_SIMULATION_PLANS = frozenset({
     "paper_v2_live", "miniqmt_sim_stub_l3", "miniqmt_sim_trading_hours_l5",
-    "simulation_dual_backend_l4",
+    "simulation_dual_backend_l4", "miniqmt_execution_runtime_l2",
 })
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
@@ -423,7 +422,7 @@ def exclude_retired_simulation_advice(advice: dict[str, Any]) -> dict[str, Any]:
         key = str(item.get("plan_key") or "")
         session = str(item.get("nox_session") or "")
         if key in RETIRED_SIMULATION_PLANS or session in RETIRED_SIMULATION_PLANS:
-            reason = "not_executed: retired miniQMT paper simulation; LocalSIM remains active"
+            reason = "not_executed: retired MiniQMT broker validation; LocalSIM remains active"
             item.update(allowed=False, deferred_reason=reason)
             exclusions[key] = reason
         queue.append(item)

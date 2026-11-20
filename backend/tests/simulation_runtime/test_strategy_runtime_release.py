@@ -9,7 +9,7 @@ from backend.services.simulation_runtime import (
     InMemorySimulationRuntimeRepository,
     StrategyRuntimeReleaseService,
 )
-from backend.services.simulation_runtime.models import StrategyRuntimeRelease
+from backend.services.simulation_runtime.models import RuntimeReleaseValidationState, StrategyRuntimeRelease
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.execution_policy import (
     compute_execution_policy_sha256,
@@ -245,3 +245,21 @@ def test_simulation_binding_admission_accepts_active_package_types_without_conte
 
     assert binding.package_id == package_id
     assert repository.get_simulation_release_binding(binding.binding_id) == binding
+
+
+def test_strategy_runtime_release_rejects_account_group_fields_in_alpha_core() -> None:
+    with pytest.raises(Exception, match="broker-binding fields"):
+        StrategyRuntimeRelease(
+            package_id="pkg_alpha",
+            manifest_sha256="manifest_hash",
+            runtime_profile_id="rp",
+            runtime_profile_version_id="rp_v1",
+            runtime_profile_sha256="rp_hash",
+            daily_strategy_profile_version_id="daily_v1",
+            execution_policy_version_id="exec_v1",
+            execution_policy_sha256="exec_hash",
+            tail_policy_version_id="tail_v1",
+            tail_policy_sha256="tail_hash",
+            release_config_json={"account_group_id": "ag_minqmt_62266303_sim"},
+            validation_state=RuntimeReleaseValidationState.SIM_PASSED,
+        )

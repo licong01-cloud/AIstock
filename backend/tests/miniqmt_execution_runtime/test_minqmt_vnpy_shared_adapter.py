@@ -3,16 +3,8 @@ from __future__ import annotations
 from datetime import date, timezone
 from typing import Any
 
-import pytest
 
 from backend.execution_algos.vnpy_style import VnpyAction
-from backend.services.simulation_runtime import (
-    ExecutionPlanCompiler,
-    LocalSimExecutionBridge,
-    RebalanceIntentService,
-    SimulationBrokerBackend,
-    TargetPositionService,
-)
 from backend.services.trading_core.miniqmt_vnpy_execution import (
     MiniQMTCancelResult,
     MiniQMTChildOrderHandle,
@@ -21,15 +13,7 @@ from backend.services.trading_core.miniqmt_vnpy_execution import (
     MiniQMTOrderStatus,
     UnifiedMiniQMTVnpyExecutionAdapter,
 )
-from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
-from backend.tests.simulation_runtime.test_target_rebalance_shared import (
-    FakeLocalSimBroker,
-    _current_positions,
-    _evidence,
-    _release_binding_repo,
-    _snapshot,
-)
 
 UTC = timezone.utc
 TRADE_DATE = date(2026, 5, 21)
@@ -146,54 +130,3 @@ def test_unified_adapter_preserves_rejected_child_raw_status_msg() -> None:
     status = result.diagnostic["child_orders"][0]["status"]
     assert status["raw_status"] == 57
     assert status["status_msg"].startswith("[COUNTER][260200]")
-
-
-def test_localsim_bridge_rejects_vnpy_plan_before_broker_submit() -> None:
-    release, binding, runtime_repo = _release_binding_repo(backend=SimulationBrokerBackend.LOCAL_SIM)
-    release = release.model_copy(
-        update={
-            "execution_policy_version_id": "vnpy_asset:SNIPER_MINIQMT",
-            "execution_policy_sha256": "sha_vnpy_local",
-            "release_config_json": {
-                **release.release_config_json,
-                "execution_policy": {
-                    "policy_version_id": "vnpy_asset:SNIPER_MINIQMT",
-                    "policy_sha256": "sha_vnpy_local",
-                    "policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}},
-                },
-            },
-        }
-    )
-    evidence = _evidence(release)
-    runtime_repo.save_daily_selection_evidence(evidence)
-    targets = TargetPositionService().build_target_positions(
-        selection_evidence=evidence,
-        signal_snapshot=_snapshot(),
-        runtime_release=release,
-        binding=binding,
-        current_positions=_current_positions("portfolio_shared"),
-    )
-    rebalance = RebalanceIntentService().build_order_intents(
-        package_id=release.package_id,
-        portfolio_id="portfolio_shared",
-        strategy_id=binding.strategy_id,
-        trade_date=TRADE_DATE,
-        current_positions=_current_positions("portfolio_shared"),
-        target_positions=targets,
-    )
-    plan = ExecutionPlanCompiler().compile_plan(
-        runtime_release=release,
-        binding=binding,
-        selection_evidence=evidence,
-        order_intents=rebalance.order_intents,
-        trading_rule_decisions=rebalance.trading_rule_decisions,
-        portfolio_id="portfolio_shared",
-    )
-    broker = FakeLocalSimBroker()
-
-    with pytest.raises(RuntimeConfigInvalidError, match="LocalSim cannot execute MiniQMT vn.py-style") as exc_info:
-        LocalSimExecutionBridge().submit_plan(plan=plan, broker=broker)  # type: ignore[arg-type]
-
-    assert broker.submitted == []
-    assert exc_info.value.context["broker_backend"] == "local_sim"
-    assert exc_info.value.context["inferred_algo_code"] == "SNIPER_MINIQMT"

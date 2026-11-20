@@ -162,7 +162,34 @@ def test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regre
     assert tail[:3] == ("python", "-m", "pytest")
     assert "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py" in tail
     assert "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py" in tail
+    assert "backend/tests/advisory_phase1/test_stage_trace.py" in tail
+    assert "backend/tests/qmt_strategy_ledger/test_repository.py" in tail
+    assert "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py" in tail
+    assert "backend/tests/test_data_quality_smoke_env.py" in tail
+    assert not any("miniqmt" in target for target in tail)
     assert len(direct) == 2
+
+
+def test_retired_broker_has_no_nox_or_validation_catalog_entry():
+    from backend.services.validation.catalog_integrity import CatalogIntegrityChecker
+    from backend.tests.conftest import collect_ignore
+    from scripts import ci_change_classifier as classifier
+    from scripts.nightly_adaptive_scheduler import RETIRED_SIMULATION_PLANS
+
+    plans = classifier.flow.validation_catalog_snapshot().plans
+    sessions = CatalogIntegrityChecker(repo_root=classifier.ROOT)._collect_nox_sessions()
+    retired = RETIRED_SIMULATION_PLANS - {"paper_v2_live"}
+    assert set(plans).isdisjoint(retired)
+    assert sessions.isdisjoint(retired)
+    assert "miniqmt_execution_runtime" in collect_ignore
+    targets, error = classifier._selected_nox_test_targets(
+        repo_root=classifier.ROOT, sessions=sorted(sessions),
+    )
+    assert error is None
+    assert all(
+        not target.startswith("backend/tests/miniqmt_execution_runtime")
+        for session_targets in targets.values() for target in session_targets
+    )
 
 
 def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeypatch):

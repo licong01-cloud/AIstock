@@ -1,20 +1,14 @@
+"""Broker-neutral alpha signal and operator command contracts."""
+
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
 import pytest
-from pydantic import ValidationError
 
-from backend.services.simulation_runtime import (
-    AlphaSignalBook,
-    AlphaSignalItem,
-    ExecutionPathNotCanonicalError,
-    MiniQMTExecutionRuntimeRequest,
-    OperatorCommand,
-    StrategySlotTarget,
-)
+from backend.services.simulation_runtime import AlphaSignalBook, AlphaSignalItem, OperatorCommand
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
-
 
 TRADE_DATE = date(2026, 6, 9)
 
@@ -49,22 +43,6 @@ def _signal_book(**overrides) -> AlphaSignalBook:
     return AlphaSignalBook(**payload)
 
 
-def _slot_target(book: AlphaSignalBook, **overrides) -> StrategySlotTarget:
-    payload = {
-        "account_group_id": "ag_minqmt_main_sim",
-        "strategy_slot_id": "slot_alpha_001",
-        "strategy_id": "strategy_alpha_001",
-        "package_id": book.package_id,
-        "alpha_signal_book_id": book.book_id,
-        "target_trade_date": book.trade_date,
-        "capital_allocation": 1_000_000,
-        "desired_weights": {"000001.SZ": 0.20},
-        "metadata": {"capacity_model": "funds_and_trading_rules_only"},
-    }
-    payload.update(overrides)
-    return StrategySlotTarget(**payload)
-
-
 def test_alpha_signal_book_is_canonical_and_broker_neutral() -> None:
     book = _signal_book()
 
@@ -90,44 +68,6 @@ def test_alpha_signal_book_rejects_broker_order_execution_and_native_fields(bad_
         _signal_book(**bad_payload)
 
     assert exc_info.value.context["forbidden_paths"]
-
-
-def test_runtime_request_accepts_multiple_slots_without_count_gate() -> None:
-    book_a = _signal_book()
-    book_b = _signal_book(package_id="pkg_alpha_signal_b", manifest_sha256="manifest_alpha_signal_b")
-    request = MiniQMTExecutionRuntimeRequest(
-        account_group_id="ag_minqmt_main_sim",
-        trade_date=TRADE_DATE,
-        alpha_signal_books=[book_a, book_b],
-        strategy_slot_targets=[
-            _slot_target(book_a, strategy_slot_id="slot_alpha_001", strategy_id="strategy_alpha_001"),
-            _slot_target(book_b, strategy_slot_id="slot_alpha_002", strategy_id="strategy_alpha_002"),
-        ],
-    )
-
-    assert request.runtime_owner == "MiniQMTExecutionRuntime"
-    assert len(request.strategy_slot_targets) == 2
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"runtime_owner": "LegacyMiniQMTSimBackend"},
-        {"metadata": {"path_owner": "MiniQMTExecutionBridge", "max_concurrent_packages": 2}},
-    ],
-)
-def test_runtime_request_rejects_noncanonical_path_and_fixed_strategy_count_gate(payload: dict) -> None:
-    book = _signal_book()
-    base = {
-        "account_group_id": "ag_minqmt_main_sim",
-        "trade_date": TRADE_DATE,
-        "alpha_signal_books": [book],
-        "strategy_slot_targets": [_slot_target(book)],
-    }
-    base.update(payload)
-
-    with pytest.raises((ExecutionPathNotCanonicalError, RuntimeConfigInvalidError, ValidationError)):
-        MiniQMTExecutionRuntimeRequest(**base)
 
 
 def test_operator_command_contract_requires_runtime_audit_inputs() -> None:

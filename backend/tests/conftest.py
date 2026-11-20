@@ -10,6 +10,10 @@ import asyncio
 
 import pytest
 
+# Retired broker tests are archived for historical reference.
+collect_ignore = ["miniqmt_execution_runtime"]
+
+
 # backend/ directory
 BACKEND_ROOT = Path(__file__).parent.parent
 if str(BACKEND_ROOT) not in sys.path:

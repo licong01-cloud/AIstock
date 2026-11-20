@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -216,28 +215,6 @@ def test_preview_rejects_main_board_and_chinext_non_100_share_buys() -> None:
         assert error.context["min_quantity"] == 100
         assert error.context["increment"] == 100
         assert error.context["canonical_quantity"] == 100
-
-
-def test_miniqmt_preflight_does_not_reintroduce_hard_coded_100_share_lot_gate() -> None:
-    scanned_files = [
-        REPO_ROOT / "backend/services/qmt_strategy_ledger/order_service.py",
-        REPO_ROOT / "backend/services/qmt_strategy_ledger/selection_order_builder.py",
-        REPO_ROOT / "backend/routers/qmt_strategy_ledger.py",
-        REPO_ROOT / "backend/routers/qmt.py",
-    ]
-    forbidden_patterns = [
-        re.compile(r"\b(?:quantity|order_volume|qty)\s*%\s*100\b"),
-        re.compile(r"\b100\s*%\s*(?:quantity|order_volume|qty)\b"),
-    ]
-
-    violations: list[str] = []
-    for path in scanned_files:
-        text = path.read_text(encoding="utf-8")
-        for pattern in forbidden_patterns:
-            if pattern.search(text):
-                violations.append(f"{path.relative_to(REPO_ROOT)} matches {pattern.pattern}")
-
-    assert violations == []
 
 
 def test_preview_accepts_sell_residuals_allowed_by_canonical_board_lot() -> None:

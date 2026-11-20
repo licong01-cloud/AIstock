@@ -217,36 +217,6 @@ def test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch() -> None
     assert frozen_limit_price_source == "market.stk_limit:frozen_daily_trading_context_v1"
 
 
-def test_missing_raw_pre_close_keeps_miniqmt_yuan_price_basis() -> None:
-    conn = FakeConn()
-    audit = FakeAuditRepository()
-
-    class NullPreCloseCursor(FakeCursor):
-        def execute(self, sql: str, params: tuple) -> None:
-            super().execute(sql, params)
-            if "FROM market.stk_limit" in sql:
-                self.rows = [(row[0], row[1], None, row[3], row[4]) for row in self.rows]
-
-    conn.cursor = lambda: NullPreCloseCursor(conn)  # type: ignore[method-assign]
-    context = _provider(conn, audit).load(
-        symbols=SYMBOLS,
-        trade_date=TRADE_DATE,
-        as_of_time=datetime(2026, 8, 21, 9, 10),
-        calendar_service_snapshot={"is_trading_day": True},
-        binding_identity="binding:hash",
-        package_identity="package:manifest",
-        release_identity="release:hash",
-        pre_close_quote_fetcher=lambda symbols: {
-            "000001.SZ": {"pre_close": 10.0, "time": "20260821091000"},
-            "600000.SH": {"pre_close": 8.0, "time": "20260821091000"},
-        },
-        pre_close_quote_source="MINIQMT_REALTIME.broker_quote.pre_close",
-    )
-
-    assert context.symbols["000001.SZ"].pre_close == 10.0
-    assert context.symbols["600000.SH"].pre_close == 8.0
-
-
 def test_missing_raw_pre_close_fails_closed_without_quote_authority() -> None:
     conn = FakeConn()
     audit = FakeAuditRepository()

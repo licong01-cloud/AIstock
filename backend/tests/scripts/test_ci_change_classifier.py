@@ -339,31 +339,6 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
         classification='targeted_ci_required', backend_required=True, backend_sessions=['paper_v2_backend'],
     )
 
-    miniqmt_payload = classifier.classify_changed_files(
-        ["backend/services/miniqmt_execution_runtime/runtime.py"],
-        repo_root=tmp_path,
-    )
-
-    assert miniqmt_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
-
-    miniqmt_test_payload = classifier.classify_changed_files(
-        ["backend/tests/miniqmt_execution_runtime/test_runtime.py"],
-        repo_root=tmp_path,
-    )
-
-    assert miniqmt_test_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
-
-    miniqmt_quote_ingress_payload = classifier.classify_changed_files(
-        [
-            "backend/infra/realtime_quote_subscriber.py",
-            "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
-        ],
-        repo_root=tmp_path,
-    )
-
-    assert miniqmt_quote_ingress_payload["backend_sessions"] == ["miniqmt_execution_runtime_l2"]
-    assert miniqmt_quote_ingress_payload["unmapped_code_files"] == []
-
     qe_payload = classifier.classify_changed_files(
         ["backend/services/quantevolver/qe_evolution_service.py"],
         repo_root=tmp_path,
@@ -680,10 +655,10 @@ def test_unified_monthly_worker_selects_its_direct_qlib_data_test(tmp_path: Path
     )
 
 
-def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
+def test_qmt_strategy_ledger_keeps_shared_contracts_when_retired_assets_change(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
-            "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+            "backend/execution_algos/vnpy_style/__init__.py",
             "backend/services/qmt_strategy_ledger/order_service.py",
             "backend/services/qmt_strategy_ledger/repository.py",
             "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
@@ -694,8 +669,63 @@ def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_se
 
     _assert_fields(payload,
         classification='targeted_ci_required', backend_required=True,
-        backend_sessions=['paper_v2_backend', 'miniqmt_execution_runtime_l2'], unmapped_code_files=[],
+        backend_sessions=['simulation_core_l2'], unmapped_code_files=[],
     )
+
+
+@pytest.mark.parametrize("path", [
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/tca_eod_observation.py",
+    "backend/infra/realtime_quote_subscriber.py",
+    "scripts/miniqmt_b0_quote_v2_pilot.py",
+    "backend/execution_algos/vnpy_style/__init__.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+    "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+    "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+])
+def test_retired_miniqmt_paths_are_mapped_outside_validation(path: str) -> None:
+    result = classifier.classify_changed_files([path])
+
+    _assert_fields(
+        result, workflow_gate="passed", static_gate_required=True,
+        backend_required=False, backend_sessions=[], unmapped_code_files=[],
+        unexecuted_test_files=[], backend_changed_test_files=[],
+    )
+    assert result["retired_validation_files"] == [path]
+    assert result["selected_plan_keys"] == []
+
+
+def test_advisory_and_localsim_pr_keeps_automatic_contract_coverage() -> None:
+    paths = [
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/services/selection_center/risk_policy.py",
+        "backend/services/selection_center/runtime_profile.py",
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/tests/advisory_model_first/test_forward_publication.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/selection_center/test_risk_policy.py",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+        "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+        "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+        "backend/tests/qmt_strategy_ledger/test_repository.py",
+        "backend/tests/infra/test_qmt_client_contract.py",
+        "backend/tests/test_data_quality_smoke_env.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+    ]
+
+    result = classifier.classify_changed_files(paths)
+
+    _assert_fields(result, workflow_gate="passed", unmapped_code_files=[], unexecuted_test_files=[])
+    assert set(result["backend_sessions"]) == {
+        "paper_v2_backend", "simulation_core_l2", "advisory_modeling_backend",
+        "platform_api_backend", "qmt_client_contract",
+    }
+    coverage = result["changed_test_plan_coverage"]
+    assert set(coverage["coverage"]) == set(paths[4:-1])
+    assert all(coverage["coverage"].values())
+    assert result["backend_changed_test_files"] == paths[4:-1]
+    assert result["retired_validation_files"] == paths[-1:]
 
 
 def test_qmt_client_selects_its_direct_contract_instead_of_unrelated_matrix(tmp_path: Path) -> None:
