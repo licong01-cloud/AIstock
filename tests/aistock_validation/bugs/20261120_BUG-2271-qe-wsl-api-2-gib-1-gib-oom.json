@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-11-20T17:46:57.170121Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "28baa5d8c40b13a7b848ee0c256bd6848e6914cd",
+  "fixed_at": "2026-11-20T18:11:11Z",
   "github_issue_number": 7408,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7408",
   "last_seen_at": "2026-11-20T17:46:57.170121Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7411",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -171,6 +172,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -182,7 +184,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2271",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1a04c6915d21e19d",
+    "recorded_at": "2026-11-20T18:11:38.441298Z",
+    "runtime_contract_digest": "0ab7dcfe725a28b4d109b2145c034dd20973585e06cd1fcbaa2346ab0c434661",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6ab21a0d67824f94c84e63b2118d6940e4adaf89",
+    "source_merge_commit": "28baa5d8c40b13a7b848ee0c256bd6848e6914cd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7411",
+    "validation_evidence": [
+      "python -m pytest -q backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py -> 43 passed",
+      "python -m nox -s l0 -- backend/services/quantevolver/qe_wsl_resource_isolation.py backend/services/quantevolver/qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py docs/operations/qe_wsl_resource_isolation_runbook.md tests/aistock_validation/bugs/20261120_BUG-2271-qe-wsl-api-2-gib-1-gib-oom.json -> passed: 5 files, 0 findings"
+    ],
+    "validation_evidence_digest": "61d275c87ad2d1e0c666c9f44eb754d9eb63f8da73bb3d3f89f6f4c7a8cc16e1"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -191,6 +215,10 @@
     "fingerprint": "fd5ee32f86168f8dcc1eeb0d",
     "source_event_id": "FE-20261120-fd5ee32f8616"
   },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_isolation.py -> 43 passed",
+    "python -m nox -s l0 -- backend/services/quantevolver/qe_wsl_resource_isolation.py backend/services/quantevolver/qe_wsl_workload_guard.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py docs/operations/qe_wsl_resource_isolation_runbook.md tests/aistock_validation/bugs/20261120_BUG-2271-qe-wsl-api-2-gib-1-gib-oom.json -> passed: 5 files, 0 findings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
