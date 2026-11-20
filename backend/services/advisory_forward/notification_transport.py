@@ -78,14 +78,7 @@ class AdvisoryNotificationTransport(NotificationService):
             success_key = 'errcode'
         elif webhook_type == 'feishu':
             data = {'msg_type': 'text', 'content': {'text': f'{subject}\n{message}'}}
-            secret = self.config.get('webhook_signing_secret')
-            if secret:
-                timestamp = str(int(time.time()))
-                key = (timestamp+'\n'+secret).encode('utf-8')
-                signature = base64.b64encode(hmac.new(key, digestmod=hashlib.sha256).digest()).decode('ascii')
-                data.update(timestamp=timestamp, sign=signature)
-            if len(json.dumps(data, allow_nan=False).encode('utf-8')) > 20 * 1024:
-                raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_TOO_LARGE')
+            self._prepare_feishu_request(data)
             success_key = 'code'
         else:
             return False
@@ -98,6 +91,34 @@ class AdvisoryNotificationTransport(NotificationService):
             return type(code) is int and code == 0
         except Exception:
             # A requests exception can contain the secret webhook URL.
+            raise ExternalNotificationDeliveryError('WEBHOOK_TRANSPORT_ERROR') from None
+
+    def _prepare_feishu_request(self, data):
+        """The same signing and actual JSON byte guard for text and detail cards."""
+        secret = self.config.get('webhook_signing_secret')
+        if secret:
+            timestamp = str(int(time.time()))
+            key = (timestamp+'\n'+secret).encode('utf-8')
+            signature = base64.b64encode(hmac.new(key, digestmod=hashlib.sha256).digest()).decode('ascii')
+            data.update(timestamp=timestamp, sign=signature)
+        if len(json.dumps(data, allow_nan=False).encode('utf-8')) > 20 * 1024:
+            raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_TOO_LARGE')
+        return data
+
+    def send_detail_card(self, card):
+        """Dedicated Advisory card; shared monitor/portfolio methods stay inherited."""
+        if not (self.config.get('advisory_feishu_details') and self.config.get('advisory_feishu_completion_only')
+                and self.config.get('webhook_enabled') and self.config.get('webhook_type') == 'feishu'
+                and self.config.get('webhook_url')):
+            return False
+        data = self._prepare_feishu_request({'msg_type': 'interactive', 'card': card})
+        try:
+            response = self._post_webhook(data)
+            code = response.json().get('code') if response.status_code == 200 else None
+            if type(code) is not int:
+                raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_OUTCOME_UNKNOWN')
+            return code == 0
+        except Exception:
             raise ExternalNotificationDeliveryError('WEBHOOK_TRANSPORT_ERROR') from None
 
     def _post_webhook(self, data: Dict):

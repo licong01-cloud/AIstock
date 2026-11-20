@@ -156,6 +156,7 @@ def validate_snapshot(snapshot):
 
 def workbook_tables(snapshot):
     validate_snapshot(snapshot)
+    from .notification_presentation import overview_table
     summary = [
         ['AIstock 荐股详情', '发送时冻结快照'], ['决策日', snapshot['decision_date']],
         ['目标交易日', snapshot['target_date']], ['快照生成时间', snapshot['captured_at']],
@@ -165,7 +166,7 @@ def workbook_tables(snapshot):
         ['快照 SHA256', snapshot['sha256']],
         ['策略包', '名单版本', '绑定版本', '列表快照', '行数'],
     ]
-    tables = [('使用说明', summary)]
+    tables = [('策略总览', overview_table(snapshot)), ('使用说明', summary)]
     for p in snapshot['programs']:
         # Stable suffix avoids duplicate/invalid worksheet names and makes recovery deterministic.
         short = re.sub(r'[\[\]:*?/\\]', '_', p['program_name'])[:45]

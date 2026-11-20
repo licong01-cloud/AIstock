@@ -201,7 +201,7 @@ def test_all_strategy_tabs_acl_and_single_message_then_resume_without_resend():
     data['detail_snapshot']['sha256'] = fingerprint({k: v for k, v in data['detail_snapshot'].items() if k != 'sha256'})
     remote, messages = Remote(), []
     assert delivery(remote, data, lambda *args: messages.append(args) or True)
-    assert remote.created == 1 and len(remote.worksheets) == 3 and len(remote.writes) == 3
+    assert remote.created == 1 and len(remote.worksheets) == 4 and len(remote.writes) == 4
     assert all(s.get('frozenRowCount') == 1 for s in remote.worksheets)
     assert remote.shared and 'https://my.feishu.cn/sheets/doc1' in messages[0][1]
     assert data['sheet_delivery_state']['message_accepted'] is True
@@ -219,7 +219,7 @@ def test_explicit_sent_test_repair_updates_same_document_without_another_message
         data['sheet_delivery_state'] = state
     assert DetailSheetDelivery(remote).deliver(data, checkpoint,
         lambda *_: pytest.fail('test repair must not send another message'), update_test_table=True)
-    assert remote.created == 1 and len(remote.writes) == 4
+    assert remote.created == 1 and len(remote.writes) == 6
     data['subject'] = 'AIstock 正式通知'
     with pytest.raises(DetailDeliveryError, match='TEST_UPDATE_REQUIRES'):
         DetailSheetDelivery(remote).deliver(data, checkpoint, lambda *_: True, update_test_table=True)
@@ -389,7 +389,8 @@ def test_service_queues_details_once_uses_separate_route_and_freezes_retry(monke
     transport = SimpleNamespace(
         config=dict(advisory_feishu_completion_only=True, advisory_feishu_details=True,
                     webhook_enabled=True, webhook_type='feishu', webhook_url='configured'),
-        detail_delivery=lambda: DetailSheetDelivery(Remote()), send_external_message=lambda *_: True)
+        detail_delivery=lambda: DetailSheetDelivery(Remote()), send_detail_card=lambda *_: True,
+        send_external_message=lambda *_: True)
     builder = SimpleNamespace(build=lambda *args: payload()['detail_snapshot'])
     service = AdvisoryNotificationService(Repo(), transport, lambda: NOW, builder)
     first = service.run_once()
