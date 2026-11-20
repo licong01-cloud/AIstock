@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2264",
-  "closed_at": null,
+  "closed_at": "2026-11-20T15:58:42.170811Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -127,8 +127,8 @@
   },
   "first_seen_at": "2026-11-20T09:00:13.967812Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "093741ef366607d986e55ce0581f86cea7a05d40",
+  "fixed_at": "2026-11-20T09:39:05Z",
   "github_issue_number": 7392,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7392",
   "last_seen_at": "2026-11-20T09:00:13.967812Z",
@@ -136,6 +136,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7393",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -164,9 +165,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/post-restart-BUG-2264-20261120T154947Z.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2264",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_cutover_readiness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "d63e2bd4f7df004236f974a627a01efee5d02d25ac0cb5c8c05d45282538c6ec",
+      "expected_identity": "093741ef366607d986e55ce0581f86cea7a05d40",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-20T15:49:49.473468Z",
+      "mode": "read_only",
+      "observed_identity": "093741ef366607d986e55ce0581f86cea7a05d40",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8048807a9a5678c50163b8481911f649061228a491e8185fadbc27caa1e923ff",
+      "receipt_sha256": "955f29aecf8f66d3ef0795d132e64badbcdbfacf850e1d714242d1f083a368cc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "fcd2519bdfd13f757303817e501d22ec9cbba7e020eb33fda23f4753235cc35f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -176,7 +200,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2264",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0871dfcee611fafa",
+    "recorded_at": "2026-11-20T09:40:13.622503Z",
+    "runtime_contract_digest": "d63e2bd4f7df004236f974a627a01efee5d02d25ac0cb5c8c05d45282538c6ec",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9040a14a1d2456e20147616d2cd3a3f18f5f0baf",
+    "source_merge_commit": "093741ef366607d986e55ce0581f86cea7a05d40",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7393",
+    "validation_evidence": [
+      "nox -s l0 -> passed (0 blocking findings)",
+      "pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_pit_migration.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/advisory_historical_range/test_input_source_plan.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py -q -> 130 passed with mounted X basetemp and existing DEV enabled"
+    ],
+    "validation_evidence_digest": "2ab70ee725678fbbdf2ec27612369bc18f2ada7c90b4e25c5af587c38b29f8f8"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -185,6 +231,10 @@
     "fingerprint": "d5a085ad7064eb58b5cb36a7",
     "source_event_id": "FE-20261120-d5a085ad7064"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed (0 blocking findings)",
+    "pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_pit_migration.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/advisory_historical_range/test_input_source_plan.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py -q -> 130 passed with mounted X basetemp and existing DEV enabled"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
