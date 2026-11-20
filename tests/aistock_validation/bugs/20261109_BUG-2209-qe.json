@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2209",
-  "closed_at": null,
+  "closed_at": "2026-11-09T13:58:47.215217Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -36,20 +36,23 @@
     "actual_changed_files": [
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/qe_workspace_client.py",
+      "backend/services/quantevolver/qe_wsl_workload_isolation.py",
+      "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
       "backend/tests/unified_engine/test_qe_prediction_replay.py",
       "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
       "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/qe_workspace_client.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py",
-      "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
-      "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json",
       "backend/services/quantevolver/qe_wsl_workload_isolation.py",
       "backend/tests/quantevolver/test_qe_wsl_workload_isolation.py",
-      "docs/operations/qe_wsl_resource_isolation_runbook.md"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py",
+      "docs/operations/qe_wsl_resource_isolation_runbook.md",
+      "tests/aistock_validation/bugs/20261109_BUG-2209-qe.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -154,8 +157,8 @@
   },
   "first_seen_at": "2026-11-09T13:20:45.780657Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ca233bf96234f8c4a510197da7e92a8e0f0bb2bb",
+  "fixed_at": "2026-11-09T13:51:13Z",
   "github_issue_number": 7180,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7180",
   "last_seen_at": "2026-11-09T13:20:45.780657Z",
@@ -163,6 +166,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7183",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -187,9 +191,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2209/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2209",
+      "business_smoke_semantic": {
+        "contract_id": "qe_workspace_preflight",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3398eb43e9860372b1dfb29e7bd4137a1171cccc5c9274f049e6db388569f601",
+      "contract_digest": "04ef919c2ba32d41ba40424ad8e40c8b49a4e50aa0cb0494aede518f9ed63592",
+      "expected_identity": "ca233bf96234f8c4a510197da7e92a8e0f0bb2bb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-09T13:54:37.187407Z",
+      "mode": "read_only",
+      "observed_identity": "ca233bf96234f8c4a510197da7e92a8e0f0bb2bb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0ef9e8652734f814067fd945cb1d92c51cb3e23cd1ad73e0a312498efdfe4e83",
+      "receipt_sha256": "542583c90182b9da446c5cc83ee9c87157575ce2300358d168f3b4269b213342",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "091db1806ee5f9e808506436100f905016529394de714ce2ad6d310408c5c1c3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -199,7 +226,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2209",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ccfd3f1c1fc12e7c",
+    "recorded_at": "2026-11-09T13:52:14.570628Z",
+    "runtime_contract_digest": "04ef919c2ba32d41ba40424ad8e40c8b49a4e50aa0cb0494aede518f9ed63592",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1c7c16d8eec9adc895b82e8c07671bcdaab69f72",
+    "source_merge_commit": "ca233bf96234f8c4a510197da7e92a8e0f0bb2bb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7183",
+    "validation_evidence": [
+      "validation-receipt: id=c1e0651b59361405 commit=1c7c16d8eec9adc895b82e8c07671bcdaab69f72 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=af3cb9751afac56a commit=1c7c16d8eec9adc895b82e8c07671bcdaab69f72 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py backend/tests/unified_engine/test_qe_prediction_replay.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py -q` result=`147 passed`",
+      "validation-receipt: id=05853ffcf0db39cb commit=1c7c16d8eec9adc895b82e8c07671bcdaab69f72 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q` result=`57 passed`"
+    ],
+    "validation_evidence_digest": "378ffe741852d7cbc656ff01eaf98ce4f25325b1732870e12a53c8d3b9e0a983"
+  },
   "source_validation": {
+    "additional_scope_reason": "Original LSTM recovery uses backtest-only model inference; source.backtest_only alone is not evidence of pure prediction replay. Fix only resource classification, preserving original commands and input hashes.",
     "design_compliance": {
       "business_semantics_unchanged": "PASS; source selection/SHA/size/recorder/PIT and original POST lifecycle unchanged",
       "no_silent_errors": "PASS; typed exhausted transport vs invalid contents and original cause",
@@ -212,10 +263,9 @@
     "review_passes": [
       "correctness: GET-only retry bound3; permanent error/cancellation/invalid content not retried",
       "completeness: catalog, recorder and raw prediction bytes covered; recorder before/after read typed errors preserved; fixed prediction bytes unchanged"
-    ],
-    "additional_scope_reason": "Original LSTM recovery uses backtest-only model inference; source.backtest_only alone is not evidence of pure prediction replay. Fix only resource classification, preserving original commands and input hashes."
+    ]
   },
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -224,6 +274,12 @@
     "fingerprint": "fcdc6a9dc981011116960868",
     "source_event_id": "FE-20261109-fcdc6a9dc981"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c1e0651b59361405 commit=1c7c16d8eec9adc895b82e8c07671bcdaab69f72 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=af3cb9751afac56a commit=1c7c16d8eec9adc895b82e8c07671bcdaab69f72 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/unified_engine/test_qe_workspace_preflight_read_retry.py backend/tests/unified_engine/test_qe_prediction_replay.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py -q` result=`147 passed`",
+    "validation-receipt: id=05853ffcf0db39cb commit=1c7c16d8eec9adc895b82e8c07671bcdaab69f72 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q` result=`57 passed`",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
