@@ -111,11 +111,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh-process official source assembly and selected-ID DEV backfill using the original three PROD payloads. All three valid warehouse rows verified and DEV transaction rolled back. Repeat in PROD dry-run with zero writes. Receipts: tmp/handoff/qe-af-g0-20261120/bug2265_dev.json and bug2265_preview.json.",
+      "pytest backend/tests/qe_archive/test_qe_asset_lifecycle.py: old implementation reproduced the exact failure; fixed suite passed 39 tests. Origins, original manifests and score identity preserved."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "Verify backend-main loaded the merge and that source-status recognizes experiments 986acc94, 8461c089 and e44a9978 with their original valid run IDs. Existing SKIP ingest history is retained.",
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
