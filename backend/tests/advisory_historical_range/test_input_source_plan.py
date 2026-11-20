@@ -16,7 +16,7 @@ POLICY = {"policy_hash": "a" * 64, "universe_key": "TEST_PIT", "rule_version": "
           "reader_contract": sources.READER_CONTRACT}
 
 
-def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY, monthly_metadata=False):
+def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY, monthly_metadata=False, suspension_index=None):
     profile_path = make_dataset(tmp_path)
     profile = json.loads(profile_path.read_bytes())
     path = tmp_path / "qe_dataset_manifest.json"
@@ -41,7 +41,10 @@ def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY, monthly_m
         file.write_text(json.dumps(meta), encoding="utf-8")
         manifest["components"][key]["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
     suspend = tmp_path / "suspend-meta.json"
-    suspend.write_text(json.dumps({**dates, "start": market_start or dates["start"]}), encoding="utf-8")
+    suspension_meta = {**dates, "start": market_start or dates["start"]}
+    if suspension_index is not None:
+        suspension_meta["partition_index"] = suspension_index
+    suspend.write_text(json.dumps(suspension_meta), encoding="utf-8")
     manifest["components"]["suspend_meta"] = {"path": suspend.name, "sha256": hashlib.sha256(suspend.read_bytes()).hexdigest()}
     manifest["components"]["sector_membership_spans"].update(dates)
     manifest["st_pit_manifest"] = {"universe_key": policy["universe_key"], "rule_version": policy["rule_version"], "cutoff_trade_date": CALENDAR[2]}
@@ -61,6 +64,20 @@ def _plan(mode="DATABASE_ONLY", snapshot=None, *, days=None, consumer="ADVISORY"
 
 def _clocks(row):
     return SelectionSignalDayV1(*(date.fromisoformat(row[k]) for k in ("decision_date", "data_cutoff", "target_trade_date")))
+
+
+def test_large_suspension_index_stays_in_pinned_file_and_legacy_metadata_can_extend(tmp_path):
+    snapshot = _snapshot(tmp_path, suspension_index="x" * (9 * 1024**2))
+    assert snapshot["metadata"]["suspend_meta"] == {"start": CALENDAR[0], "end": CALENDAR[2]}
+    pin = snapshot["suspend_meta_pin"]
+    assert hashlib.sha256((tmp_path / pin["path"]).read_bytes()).hexdigest() == pin["sha256"]
+    snapshot["metadata"]["suspend_meta"]["partition_index"] = "legacy payload"
+    plan = _plan("FILE_THEN_DATABASE", snapshot, consumer="LOCALSIM")
+    assert "partition_index" not in plan["file_source"]["metadata"]["suspend_meta"]
+    assert plan["file_source"]["suspend_meta_pin"] == pin
+    path = tmp_path / "source-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    assert sources.load_source_plan(path, consumer_scope="LOCALSIM", run_id="test-run") == plan
 
 
 @pytest.mark.parametrize("consumer", ["ADVISORY", "LOCALSIM"])

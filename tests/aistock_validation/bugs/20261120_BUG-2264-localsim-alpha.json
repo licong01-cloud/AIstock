@@ -1,8 +1,12 @@
 {
   "actual": "UPDATED3 和 OLD5 都是 0/212，原生回执 requested_trade_date=2026-01-05, effective_trade_date=score_trade_date=2025-12-31。",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/input_source_plan.py",
+    "backend/services/simulation_runtime/localsim_pit_migration.py",
     "backend/services/strategy_package/multi_alpha_live.py",
-    "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
+    "backend/tests/advisory_historical_range/test_input_source_plan.py",
+    "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+    "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
     "tests/aistock_validation/bugs/20261120_BUG-2264-localsim-alpha.json"
   ],
   "assigned_agent": null,
@@ -23,13 +27,23 @@
       "timestamp": "2026-11-20T09:00:13.967793Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "种子及父包聚合分别验证请求交易日和有效数据截止日，支持 LocalSIM 文件转数据库的日历边界。",
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-pause-retry-20261120T090302Z.json",
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-sealed-seed-validation-20261120T090939Z.json",
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-production-readonly-20261120T091604Z.json",
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-dev-rollback-20261120T091632Z.json",
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-file-seed-probe-20261120T091215Z.json"
+  ],
+  "expected": "种子及父包聚合分别验证请求交易日和有效数据截止日，支持 LocalSIM 文件转数据库的日历边界。 ????????????????????? FILE_THEN_DATABASE ???????????????? ????????????????? pin???????????",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/advisory_historical_range/input_source_plan.py",
+      "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/strategy_package/multi_alpha_live.py",
-      "backend/tests/strategy_package/test_multi_alpha_live_selection.py"
+      "backend/tests/advisory_historical_range/test_input_source_plan.py",
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -83,13 +97,21 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/services/advisory_historical_range/input_source_plan.py",
+      "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/strategy_package/multi_alpha_live.py",
-      "backend/tests/strategy_package/test_multi_alpha_live_selection.py"
+      "backend/tests/advisory_historical_range/test_input_source_plan.py",
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/advisory_historical_range/input_source_plan.py",
+      "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/services/strategy_package/multi_alpha_live.py",
-      "backend/tests/strategy_package/test_multi_alpha_live_selection.py"
+      "backend/tests/advisory_historical_range/test_input_source_plan.py",
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ]
   },
   "first_seen_at": "2026-11-20T09:00:13.967812Z",
@@ -107,7 +129,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -B -m pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py -k distinguishes -q",
   "required_verification": [
     "l0",
     "paper_v2_backend",
@@ -116,7 +138,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "The actual parent-leg caller fails the old implementation and passes the revised requested-day check. Hash-verified saved WSL receipts from 3 UPDATED3 and 5 OLD5 seeds aggregate to 4900 scores each, with request date 2026-01-05 and score/cutoff date 2025-12-31. No model recomputation. SHA256 93817d63ae843ba5828e212583ee86a05b2ebbf44b02153dc0ff0edcce29d542.",
+      "Candidate source exercised both real package identities in existing DEV using native transactional source replacement. It preserved account scope and predecessor, confirmed exact retry, then proved both successors absent after rollback. Both plans use 198 file days through 2026-10-30, and 14 DB days starting 2026-11-02. DEV receipt SHA256 1ed245cc761ca8bc8e613f8850a0e45137eda87fdb6c582dceaa873061377657.",
+      "Read-only production preflight built both source plans against the exact paused accounts, current canonical PIT state and the published October dataset. SHA256 6928759e563388784e66f68c8a0f6af52b4ce2bf1fb7d11fa4434627393407df.",
+      "The real October replay plan shrank from 18736373 bytes to 1156673 bytes by projecting only the suspension coverage bounds while retaining the exact original suspension metadata content pin and existing reader cap."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -126,7 +153,10 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

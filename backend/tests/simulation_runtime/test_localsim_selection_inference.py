@@ -36,6 +36,50 @@ from backend.services.simulation_runtime.localsim_selection_probe import _disk_b
 DAY = date(2026, 1, 5)
 
 
+@pytest.mark.parametrize("requested_date_matches", [True, False])
+def test_frozen_seed_ensemble_distinguishes_decision_date_from_cutoff(monkeypatch, requested_date_matches):
+    from backend.services.strategy_package import multi_alpha_live
+    from backend.services.strategy_package.live_inference import LiveInferenceResult
+    from backend.tests.strategy_package.test_multi_alpha_live_selection import _calendar_context
+
+    decision = date(2026, 1, 5)
+    cutoff = date(2025, 12, 31)
+    seeds = ("seed-1", "seed-2")
+    leg = SimpleNamespace(leg_id="LSTM", seed_run_ids=seeds,
+                          model_asset=SimpleNamespace(model_id="frozen"), parent_package_id="parent")
+    monkeypatch.setattr(multi_alpha_live, "_seed_leg_slices", lambda _: [
+        SimpleNamespace(seed_run_ids=(seed,)) for seed in seeds
+    ])
+
+    def infer(**kwargs):
+        seed = kwargs["leg_slice"].seed_run_ids[0]
+        result = LiveInferenceResult(scores=[], metadata={}, universe_count=4910, input_context={
+            "requested_trade_date": str(decision if requested_date_matches else cutoff),
+            "effective_trade_date": str(cutoff), "score_trade_date": str(cutoff),
+            "pit_mode": "canonical_v2_rolling_runtime", "universe_input_hash": "a" * 64,
+            **_calendar_context(trade_date=cutoff, window_start_date="2025-01-02", required_window=120),
+        })
+        frame = multi_alpha_live.pd.DataFrame({"trade_date": [str(cutoff)], "instrument": ["000001.SZ"],
+                                              "score": [1.0 if seed == seeds[0] else 3.0]})
+        return multi_alpha_live.ParentLegLiveInferenceResult(
+            seed_frames={seed: frame}, live_result=result, source=None, prepared=None,
+        )
+
+    provider = SimpleNamespace(_run_single_seed_live_inference=infer)
+    request = dict(manifest=SimpleNamespace(alpha_combination_policy=SimpleNamespace(method="frozen_weighted")),
+                   leg_slice=leg, trade_date=decision, cutoff_date=cutoff, runtime_config={}, inference_backend="wsl")
+    ensemble = multi_alpha_live.MultiAlphaLivePredictionProvider._run_parent_leg_live_inference
+    if not requested_date_matches:
+        with pytest.raises(DataUnavailableError, match="does not match the parent requested trade date"):
+            ensemble(provider, **request)
+        return
+    result = ensemble(provider, **request)
+    context = result.live_result.input_context["seed_input_context"]
+    assert context["requested_trade_date"] == str(decision)
+    assert context["effective_trade_date"] == context["score_trade_date"] == str(cutoff)
+    assert result.live_result.scores == [{"symbol": "000001.SZ", "score": 2.0}]
+
+
 def test_path_probe_timeout_is_retryable_and_does_not_expose_command(monkeypatch, tmp_path):
     from backend.services.simulation_runtime.localsim_selection_inference import probe_localsim_wsl_witness
 
