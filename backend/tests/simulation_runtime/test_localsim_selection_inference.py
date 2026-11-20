@@ -27,7 +27,7 @@ from backend.services.simulation_runtime.localsim_selection_signal import LocalS
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import FittedPreprocessorAsset, StrategyPackageCanonicalPitBindingV2
 from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, PackageAssetInvalidError
 from backend.tests.strategy_package.test_runtime_package_assets_batch2 import _ForbiddenConn, _frozen_manifest
 from scripts.strategy_package_live_inference import _atomic_json
 from backend.services.simulation_runtime.localsim_selection_probe import _disk_bytes
@@ -109,6 +109,46 @@ def test_native_metadata_and_frozen_assets_are_consumed_in_place(tmp_path, packa
     assert workspace.dataset_processor_path.is_relative_to(store.root)
     assert not list(scope.root.rglob("params.pkl")) and not list(scope.root.rglob("dataset"))
     assert "pit_identity" not in node_manifest
+
+
+@pytest.mark.parametrize("with_panel", [False, True])
+def test_native_multi_alpha_leg_preserves_model_order_and_frozen_observation_panel(tmp_path, with_panel):
+    store = LocalPackageAssetStore(tmp_path / "formal-test-store")
+    manifest = _frozen_manifest(store)
+    model_factor, reference_factor = manifest.factor_set
+    panel = {
+        "schema_version": "qe_observation_panel_v2", "panel_id": "frozen-panel",
+        "mode": "reference_factor_intersection", "reference_factor_names": ["factor_a", "factor_b"],
+    } if with_panel else None
+    scope = LocalSimInferenceScope("native-leg", tmp_path / "own-run", SelectionSignalDayV1(DAY, DAY, DAY), {})
+    resolver = LocalSimReferencedAssetResolver(asset_store=store, cache_root=scope.root / "assets")
+    token = LOCALSIM_INFERENCE_SCOPE.set(scope)
+    try:
+        source = resolver.load_source_for_strategy_package_leg(
+            manifest=manifest, package_id=manifest.package_id, leg_id="rolling-seed", model_asset=manifest.model_asset,
+            factor_set=[model_factor], runtime_assets=None, observation_panel=panel,
+            reference_factor_set=[model_factor, reference_factor] if with_panel else None,
+        )
+        workspace = resolver.prepare_workspace(package_id=manifest.package_id, manifest_sha256=manifest.manifest_sha256,
+                                               source=source, path_converter=win_to_wsl_path)
+        if with_panel:
+            conflicting = model_factor.model_copy(update={"sha256": reference_factor.sha256})
+            with pytest.raises(PackageAssetInvalidError, match="reference factor conflicts"):
+                resolver.load_source_for_strategy_package_leg(
+                    manifest=manifest, package_id=manifest.package_id, leg_id="rolling-seed",
+                    model_asset=manifest.model_asset, factor_set=[model_factor], runtime_assets=None,
+                    observation_panel=panel, reference_factor_set=[conflicting, reference_factor],
+                )
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
+    assert source.factor_names == workspace.factor_order == ["factor_a"]
+    assert workspace.model_params_path.is_relative_to(store.root)
+    assert json.loads(workspace.manifest_path.read_text(encoding="utf-8")).get("observation_panel") == panel
+    reference = workspace.factor_source_dir / "factor_b.py"
+    assert reference.is_file() is with_panel
+    assert ("factor_b.py" in workspace.factor_entry_path.read_text(encoding="utf-8")) is with_panel
+    if with_panel:
+        assert hashlib.sha256(reference.read_bytes()).hexdigest() == reference_factor.sha256
 
 
 def test_day_scopes_materialize_distinct_small_workspaces(tmp_path):

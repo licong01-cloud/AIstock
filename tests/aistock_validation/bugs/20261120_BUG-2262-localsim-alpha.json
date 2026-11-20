@@ -1,7 +1,9 @@
 {
   "actual": "两条任务 FAILED_TERMINAL，原生恢复入口报告 LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED，零经济入账。",
   "allowed_write_scope": [
+    "backend/services/simulation_runtime/localsim_replay_recovery.py",
     "backend/services/simulation_runtime/localsim_selection_inference.py",
+    "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
     "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
     "tests/aistock_validation/bugs/20261120_BUG-2262-localsim-alpha.json"
   ],
@@ -24,19 +26,24 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/first-attempt-20261120T064818Z.json"
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/first-attempt-20261120T064818Z.json",
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/fresh-source-prepare-20261120T070239Z.json"
   ],
   "expected": "保留原始观测面板与引用因子，在冻结模型的 LocalSIM 入口完成计算，既有终态需要单独核验原生恢复合同。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
+        "backend/services/simulation_runtime/localsim_replay_recovery.py",
         "backend/services/simulation_runtime/localsim_selection_inference.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
         "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
       ],
       "impacted_modules": [
@@ -46,7 +53,27 @@
       ],
       "matched_rules": [
         {
+          "file": "backend/services/simulation_runtime/localsim_replay_recovery.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
           "file": "backend/services/simulation_runtime/localsim_selection_inference.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
           "impact_modules": [
             "paper_v2",
             "miniqmt_execution_runtime"
@@ -70,18 +97,24 @@
         "critical"
       ],
       "suggested_scope": [
+        "backend/services/simulation_runtime/localsim_replay_recovery.py",
         "backend/services/simulation_runtime/localsim_selection_inference.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
         "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ]
   },
@@ -100,7 +133,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -B -m pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py -k native_multi_alpha_leg -q",
   "required_verification": [
     "l0",
     "simulation_core_l2"
@@ -108,7 +141,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh source process prepared all 6 UPDATED3 and 10 OLD5 frozen seed workspaces from the original package assets and production release identities. Production PostgreSQL connection was read-only. Both original jobs passed the native recovery check for 2026-01-05 with no daily run or economic facts. Receipt SHA256 b1fd8aeaf0ea2bbce627ec15e92ba0550db79961239e5e3100c5cb9e19b00922.",
+      "Existing DEV PostgreSQL verified first-day recovery with the exact TypeError, original job and cursor, rejected stale snapshot and held writer-lock, preserved the original failure receipt and zero economic facts, then rolled back. AISTOCK_DEV_DB_E2E=1 pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py -q: 136 passed."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -118,7 +154,11 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_2d11fe38ea8488f8/recovery",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_cad2a3c16a6212e6/recovery"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

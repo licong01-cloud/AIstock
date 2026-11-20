@@ -41,7 +41,8 @@ from backend.services.strategy_package.live_inference import (
     _single_model_asset_for_runtime,
     _write_inside_runtime_source,
 )
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.strategy_package.models import FactorAsset
+from backend.services.trading_core.errors import DataUnavailableError, PackageAssetInvalidError
 from .models import canonical_json_sha256
 from scripts.strategy_package_live_inference import _atomic_json
 
@@ -130,17 +131,24 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
         self._package_context: dict[str, Any] = {}
 
     def _source_from_package_assets(self, manifest, *, package_id, model_asset_override=None,
-                                    factor_set_override=None, runtime_assets_override=None, cache_namespace=None):
+                                    factor_set_override=None, runtime_assets_override=None, cache_namespace=None,
+                                    observation_panel: dict[str, Any] | None = None,
+                                    reference_factor_set: list[FactorAsset] | None = None):
         scope = own_scope()
         scope.stage = "native_asset_addressing"
         model = model_asset_override or _single_model_asset_for_runtime(manifest)
+        model_factors = manifest.factor_set if factor_set_override is None else factor_set_override
+        factors_by_name = {_runtime_factor_name(factor, package_id=package_id): factor for factor in model_factors}
+        factor_names = list(factors_by_name)
+        for factor in reference_factor_set or []:
+            name = _runtime_factor_name(factor, package_id=package_id)
+            if name in factors_by_name and factors_by_name[name].sha256 != factor.sha256:
+                raise PackageAssetInvalidError("reference factor conflicts with a frozen model factor")
+            factors_by_name[name] = factor
+
         root = scope.root / "workspaces" / uuid4().hex
         root.mkdir(parents=True)
-        factors = list(manifest.factor_set if factor_set_override is None else factor_set_override)
-        factor_names = []
-        for factor in factors:
-            name = _runtime_factor_name(factor, package_id=package_id)
-            factor_names.append(name)
+        for name, factor in factors_by_name.items():
             payload = self._read_package_asset_bytes(asset_ref=factor.asset_ref, expected_sha256=factor.sha256,
                                                     package_id=package_id, asset_kind="factor_code", logical_name=name)
             target = root / "factors" / (name + ".py")
@@ -159,9 +167,12 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
             "universe_policy": manifest.universe_policy.model_dump(mode="json") if manifest.universe_policy else None,
             "canonical_pit_binding": manifest.canonical_pit_binding.model_dump(mode="json") if manifest.canonical_pit_binding else None,
         }
+        custom_params = _manifest_runtime_custom_params(manifest, runtime_assets_override=runtime_assets_override)
+        if observation_panel is not None:
+            custom_params["observation_panel"] = dict(observation_panel)
         return QEExperimentRuntimeSource(
             experiment_id=_manifest_runtime_experiment_id(manifest), db_workspace_path=Path(), asset_workspace_path=root,
-            factor_names=factor_names, custom_params=_manifest_runtime_custom_params(manifest, runtime_assets_override=runtime_assets_override),
+            factor_names=factor_names, custom_params=custom_params,
             data_split=_manifest_runtime_data_split(evidence, backtest), model_params_origin="package_asset",
             source_workspace_type="strategy_package_asset_store", package_id=package_id, manifest_sha256=manifest.manifest_sha256,
         )
@@ -225,7 +236,11 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
                         allow_active_canonical_pointer=False).binding) != lease:
                 raise ValueError("LocalSIM source plan PIT identity differs from its release")
         order = self._build_factor_order(source=source, conf_path=self._resolve_conf_path(source))
-        factor_files = self._resolve_factor_files(root / "factors", order.dynamic_factors)
+        factors_dir = root / "factors"
+        factor_files = self._resolve_factor_files(factors_dir, order.dynamic_factors)
+        observation_panel = (source.custom_params or {}).get("observation_panel")
+        if observation_panel is not None:
+            factor_files.update(self._resolve_factor_files(factors_dir, observation_panel["reference_factor_names"]))
         weight = self._blob(model)
         processor = self._blob(model.preprocessor_asset) if model.preprocessor_asset else None
         factor_order_path, entry_path, manifest_path = root / "factor_order.json", root / "strategy_package_factor_entry.py", root / "manifest.json"
@@ -248,6 +263,7 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
             "native_package_identity": context,
             "canonical_pit_runtime_lease": lease.as_dict() if lease else None,
             **({"pit_identity": pit_identity} if pit_identity is not None else {}),
+            **({"observation_panel": observation_panel} if observation_panel is not None else {}),
         })
         return PreparedInferenceWorkspace(
             workspace_path=root, manifest_path=manifest_path, factor_order_path=factor_order_path, factor_entry_path=entry_path,
