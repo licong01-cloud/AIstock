@@ -11,6 +11,32 @@ from backend.services.advisory_forward.service import (
 from backend.services.advisory_program import ACTION_HOLD, ACTION_WAITING, AdvisoryCandidate, AdvisoryProgram
 
 
+def test_inference_failure_still_diagnoses_changed_inputs():
+    import pytest
+    from backend.services.data_integrity.inputs import InputReadinessError
+    from backend.tests.advisory_model_first.test_forward_boundaries import (
+        _Programs, _Ready, _Repository, _program as boundary_program,
+    )
+
+    programs = _Programs(boundary_program("advp_failure"))
+    def inference_failure(*_args, **_kwargs):
+        raise RuntimeError("inference failed")
+    programs.prepare_forward_selection = inference_failure
+    calls = []
+    class Readiness(_Ready):
+        def recheck(self, bindings):
+            calls.append(bindings)
+            raise InputReadinessError("input changed during inference")
+    repo = _Repository()
+    service = AdvisoryForwardService(repository=repo, program_service=programs,
+                                    input_readiness=Readiness(), model_service=SimpleNamespace())
+    with pytest.raises(InputReadinessError, match="input changed"):
+        service._publish(programs.program.program_id, decision_date=date(2026, 8, 14),
+                         target_date=date(2026, 8, 17))
+    assert len(calls) == 1 and repo.failure["waiting_data"] is True
+    assert repo.run["publication_status"] == "PENDING"
+
+
 class _DailyCalendar:
     def next_trading_day(self, value: date, *, inclusive: bool = False) -> date:
         assert not inclusive

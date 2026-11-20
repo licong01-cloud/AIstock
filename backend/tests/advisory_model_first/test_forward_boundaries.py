@@ -226,6 +226,9 @@ def test_waiting_never_calls_selection_and_revision_drift_never_publishes():
     for after_compute in (False, True):
         calls = []
         repo = _Repository()
+        def reject_commit(**_kwargs):
+            raise InputReadinessError("revised during model computation")
+        repo.commit_publication = reject_commit
         programs = _Programs(_program("advp_test"))
         original = programs.prepare_forward_selection
         def prepare(*args, **kwargs):
@@ -238,7 +241,7 @@ def test_waiting_never_calls_selection_and_revision_drift_never_publishes():
                     raise InputReadinessError("missing price partition")
                 return super().prepare(*args)
             def recheck(self, bindings):
-                raise InputReadinessError("revised during model computation")
+                raise AssertionError("typed publication failure must not repeat input review")
         service = AdvisoryForwardService(repository=repo, program_service=programs, input_readiness=Waiting(),
             model_service=SimpleNamespace(model_root=lambda: ""), calendar=_Calendar(),
             now_provider=lambda: datetime(2026, 8, 14, 16, 31, tzinfo=ZoneInfo("Asia/Shanghai")))

@@ -77,6 +77,13 @@ def verify_current(conn, bindings, *, lock=False):
     """Recheck on caller's short transaction, never during model computation."""
     from dataclasses import asdict
     from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver, CanonicalPitContractError, CANONICAL_PIT_AUTHORITY_ID
+    from backend.services.selection_center.canonical_pit_runtime import (
+        CANONICAL_PIT_RUNTIME_LEASE_SCHEMA,
+        CanonicalPitRuntimeError,
+        CanonicalPitGenerationDriftError,
+        SelectionPitRuntimeLease,
+        require_compatible_canonical_pit_binding,
+    )
     if lock:
         with conn.cursor() as cur:
             cur.execute("""SELECT p.authority_id FROM market.stock_universe_pit_authority_pointer p
@@ -89,14 +96,33 @@ def verify_current(conn, bindings, *, lock=False):
     @contextmanager
     def borrowed():
         yield conn
+    resolver = CanonicalPitAuthorityResolver(borrowed)
     try:
-        pit = json.loads(json.dumps(asdict(CanonicalPitAuthorityResolver(borrowed).resolve_live_binding()), default=str))
+        current_binding = resolver.resolve_live_binding()
+        pit = json.loads(json.dumps(asdict(current_binding), default=str))
     except CanonicalPitContractError as exc:
         raise InputReadinessError("发布时 PIT authority 已不可用") from exc
     for package_id, binding in bindings.items():
         check_binding(binding)
-        if package_id != binding["binding_id"] or pit != binding["global_pit"]:
+        if package_id != binding["binding_id"]:
             raise InputReadinessError("策略包或 PIT 绑定已改变")
+        pinned = dict(binding["global_pit"])
+        if "schema_version" in pinned:
+            raise InputReadinessError("PIT 消费绑定格式不受支持")
+        # Consumer-only identities must remain exact. The shared runtime rule
+        # handles the live authority/activation and proven historical prefix.
+        for key in ("snapshot_digest", "cutoff", "release_id", "reproduction_mode"):
+            if key not in pinned or pinned.pop(key) != pit[key]:
+                raise InputReadinessError("PIT 消费绑定已改变")
+        try:
+            lease = SelectionPitRuntimeLease.from_mapping({
+                **pinned, "schema_version": CANONICAL_PIT_RUNTIME_LEASE_SCHEMA,
+            })
+            require_compatible_canonical_pit_binding(
+                lease, current_binding=current_binding, authority_resolver=resolver,
+            ).require_trade_date(date.fromisoformat(binding["data_date"]))
+        except (CanonicalPitRuntimeError, CanonicalPitGenerationDriftError) as exc:
+            raise InputReadinessError("发布时 PIT 绑定已改变或无法证明兼容") from exc
         with conn.cursor() as cur:
             cur.execute("SELECT manifest_sha256,package_status FROM strategy_pkg.package WHERE package_id=%s" +
                         (" FOR SHARE" if lock else ""), (package_id,))
