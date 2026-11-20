@@ -29,13 +29,20 @@
   ],
   "expected": "显式 LocalSIM 历史计划按日按 Alpha 合并 WSL 请求，沿用现有共享缓存、冻结资产和数值聚合，逐种子严格校验输出、保持原来的账本输入合同。荐股和普通单模型路径行为保持。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2269-localsim-alpha-wsl.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/localsim_selection_inference.py",
       "backend/services/strategy_package/multi_alpha_live.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2269-localsim-alpha-wsl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_selection_inference.py",
@@ -136,11 +143,15 @@
       "Focused LocalSIM and Advisory regression matrix passed 100 cases. Revised batch identity cases passed 7 cases, covering control path, clocks, seed order and workspace identity."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
