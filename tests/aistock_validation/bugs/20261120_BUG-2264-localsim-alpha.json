@@ -32,7 +32,8 @@
     "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-sealed-seed-validation-20261120T090939Z.json",
     "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-production-readonly-20261120T091604Z.json",
     "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-dev-rollback-20261120T091632Z.json",
-    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-file-seed-probe-20261120T091215Z.json"
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-file-seed-probe-20261120T091215Z.json",
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2264-compact-file-seed-probe-20261120T091545Z.json"
   ],
   "expected": "种子及父包聚合分别验证请求交易日和有效数据截止日，支持 LocalSIM 文件转数据库的日历边界。 ????????????????????? FILE_THEN_DATABASE ???????????????? ????????????????? pin???????????",
   "file_scope_contract": {
@@ -142,7 +143,8 @@
       "The actual parent-leg caller fails the old implementation and passes the revised requested-day check. Hash-verified saved WSL receipts from 3 UPDATED3 and 5 OLD5 seeds aggregate to 4900 scores each, with request date 2026-01-05 and score/cutoff date 2025-12-31. No model recomputation. SHA256 93817d63ae843ba5828e212583ee86a05b2ebbf44b02153dc0ff0edcce29d542.",
       "Candidate source exercised both real package identities in existing DEV using native transactional source replacement. It preserved account scope and predecessor, confirmed exact retry, then proved both successors absent after rollback. Both plans use 198 file days through 2026-10-30, and 14 DB days starting 2026-11-02. DEV receipt SHA256 1ed245cc761ca8bc8e613f8850a0e45137eda87fdb6c582dceaa873061377657.",
       "Read-only production preflight built both source plans against the exact paused accounts, current canonical PIT state and the published October dataset. SHA256 6928759e563388784e66f68c8a0f6af52b4ce2bf1fb7d11fa4434627393407df.",
-      "The real October replay plan shrank from 18736373 bytes to 1156673 bytes by projecting only the suspension coverage bounds while retaining the exact original suspension metadata content pin and existing reader cap."
+      "The real October replay plan shrank from 18736373 bytes to 1156673 bytes by projecting only the suspension coverage bounds while retaining the exact original suspension metadata content pin and existing reader cap.",
+      "A real frozen OLD5 FUND seed completed strict WSL inference through October FILE_THEN_DATABASE on 2026-01-05 with 4900 finite scores and all four source receipt roles, without committing economic facts. SHA256 fd200b0b64bb468f3f341fb18ee3231d9817ba4cf8bbaa942503e7900013c395."
     ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
