@@ -1571,12 +1571,13 @@ plans:
         - scripts/prepare_localsim_successor_cutover.py
       no_match_reason: localsim_change_does_not_touch_schema_repository_or_dev_database_contract
   - plan_key: miniqmt_execution_runtime_l2
-    title: Canonical MiniQMT event-loop runtime and durable tick-driver validation
+    title: Retired MiniQMT broker execution and tick-driver contracts (manual only)
     module: miniqmt_execution_runtime
     level: L2
     command_key: nox_miniqmt_execution_runtime_l2
     nox_session: miniqmt_execution_runtime_l2
     ci_lane: backend
+    ci_enabled: false
     enabled: true
     requires_backend: false
     requires_frontend: false
@@ -1588,6 +1589,14 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 300
+    validation_gap: Retired MiniQMT broker-specific tests are retained for manual diagnosis only.
   - plan_key: hmm_data_source_backend
     title: HMM data-source backend regression
     module: hmm

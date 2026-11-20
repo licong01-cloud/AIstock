@@ -272,7 +272,6 @@ def _run_nightly_pytest_shards(
         f"backend/tests/{path}.py": seconds * 8_000
         for path, seconds in (
             ("simulation_runtime/test_lifecycle_scheduler", 7),
-            ("simulation_runtime/test_miniqmt_quote_activation", 6),
             ("simulation_execution/test_localsim_replay_performance", 62),
             ("simulation_execution/test_localsim_period_research", 141),
             ("simulation_execution/test_localsim_dual_mode_comparison", 64),
@@ -1195,13 +1194,12 @@ def qlib_data_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def qmt_client_contract(session: nox.Session) -> None:
-    """Run the direct QMT client diagnostics and timeout contracts."""
+    """Run QMT compatibility and read-side diagnostics without broker calls."""
 
     _run_pytest(
         session,
-        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_build_qmt_order_diagnostic_marks_stale_cancelable_and_bad_status_msg",
-        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_place_order_timeout_default_is_independent_from_query_timeout",
-        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_place_order_timeout_diagnostic_includes_retry_identity",
+        "backend/tests/infra/test_qmt_client_contract.py",
+        "backend/tests/routers/test_qmt_route_retirement.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1687,7 +1685,8 @@ def simulation_core_l2(session: nox.Session) -> None:
         "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
         "backend/tests/qmt_strategy_ledger/test_router_summary.py",
         "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
-        "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+        "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+        "backend/tests/qmt_strategy_ledger/test_repository.py",
         "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
         "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py",
         "-q",
@@ -1714,7 +1713,7 @@ def localsim_successor_core_dev_db(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
-    """Run the canonical MiniQMT event-loop runtime and durable tick-driver regression suite."""
+    """Manually run retired MiniQMT broker execution and compatibility tests."""
     session.run(
         "python",
         "-m",
@@ -1727,10 +1726,8 @@ def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
-        "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
         "backend/tests/miniqmt_execution_runtime",
-        "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
-        "backend/tests/qmt_strategy_ledger/test_repository.py",
+        "backend/tests/qmt_strategy_ledger",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1752,10 +1749,10 @@ def localsim_unattended_l3(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def miniqmt_sim_stub_l3(session: nox.Session) -> None:
-    """Run fake MiniQMT SIM order/sync/reconcile validation without real MiniQMT."""
+    """Manually run fake MiniQMT SIM order, sync and reconciliation tests."""
     _run_pytest(
         session,
-        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
         "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
         "backend/tests/qmt_strategy_ledger/test_sync_service.py",
         "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
@@ -1827,6 +1824,7 @@ def simulation_dual_backend_l4(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/simulation_runtime",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
         "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
         "backend/tests/qmt_strategy_ledger/test_sync_service.py",
         "backend/tests/qmt_strategy_ledger/test_reconciliation.py",

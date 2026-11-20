@@ -304,54 +304,6 @@ def test_scheduler_miniqmt_daily_context_never_calls_v1_stk_limit_loader() -> No
     }
 
 
-def test_execution_plan_and_recovery_read_back_exact_v2_context() -> None:
-    provider, _calls = _provider({symbol: _instrument_row(symbol) for symbol in SYMBOLS})
-    context = _load(provider)
-    statuses = provider.to_pre_trade_statuses(context)
-    decisions = [
-        SimpleNamespace(
-            decision_id=f"decision_{symbol}",
-            symbol=symbol,
-            price_limit_rule={"pre_trade_tradability": status},
-        )
-        for symbol, status in statuses.items()
-    ]
-    binding = SimpleNamespace(
-        binding_id="binding_miniqmt",
-        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-    )
-
-    carrier = ExecutionPlanCompiler._daily_trading_context_carrier(
-        binding=binding,
-        target_trade_date=TRADE_DATE,
-        trading_rule_decisions=decisions,
-    )
-    assert carrier == context.carrier_payload()
-    plan = SimpleNamespace(
-        plan_id="plan_miniqmt",
-        trading_rule_decisions=decisions,
-        plan_payload_json={"daily_trading_context": carrier},
-    )
-    recovered = ProductionSimulationRunContextProvider._frozen_pre_trade_tradability(plan)
-    assert set(recovered) == set(SYMBOLS)
-
-    corrupted = deepcopy(statuses[SYMBOLS[0]])
-    corrupted["daily_trading_context"]["source_evidence_hash"] = "f" * 64
-    bad_decisions = [
-        SimpleNamespace(
-            decision_id="decision_bad",
-            symbol=SYMBOLS[0],
-            price_limit_rule={"pre_trade_tradability": corrupted},
-        )
-    ]
-    with pytest.raises(RuntimeConfigInvalidError):
-        ExecutionPlanCompiler._daily_trading_context_carrier(
-            binding=binding,
-            target_trade_date=TRADE_DATE,
-            trading_rule_decisions=bad_decisions,
-        )
-
-
 @pytest.mark.parametrize(
     ("no_daily_limit", "last_price", "expected_reason", "expected_source"),
     (

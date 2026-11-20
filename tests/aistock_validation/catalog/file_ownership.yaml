@@ -1063,17 +1063,30 @@ rules:
     impact_modules: [paper_v2]
     layer: backend_test
     risk_level: critical
-    ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
-  - rule_id: miniqmt_current_three_shadow_inventory_cli
+    ownership_reason: Dedicated MiniQMT broker tests are owned by the retired runtime's local manual plan.
+  - rule_id: miniqmt_diagnostic_scripts
     priority: 96
     include:
       - scripts/miniqmt_current_three_inventory.py
-      - backend/tests/scripts/test_miniqmt_current_three_inventory.py
+      - scripts/miniqmt_b0_quote_v2_pilot.py
     primary_module: miniqmt_execution_runtime
     impact_modules: []
     layer: script
     risk_level: critical
-    ownership_reason: The K3 current-three inventory CLI is a read-only MiniQMT shadow evidence entrypoint and must select the canonical MiniQMT runtime plan.
+    ownership_reason: MiniQMT shadow inventory and B0 pilot scripts use the broker-specific manual plan.
+  - rule_id: miniqmt_broker_runtime_seams
+    priority: 97
+    include:
+      - backend/services/simulation_runtime/miniqmt_daily_limit_authority.py
+      - backend/services/simulation_runtime/miniqmt_kernel_product.py
+      - backend/services/simulation_runtime/miniqmt_quote_activation.py
+      - backend/services/simulation_runtime/miniqmt_quote_context.py
+      - backend/services/simulation_runtime/miniqmt_route_migration.py
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [simulation_runtime]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: These entrypoints implement the retired broker path. Shared caller and containment contracts belong to the simulation runtime.
   - rule_id: miniqmt_execution_kernel_migrations
     priority: 96
     include:
@@ -1087,7 +1100,6 @@ rules:
     priority: 96
     include:
       - backend/infra/realtime_quote_subscriber.py
-      - backend/tests/infra/test_realtime_quote_subscriber_leases.py
     primary_module: miniqmt_execution_runtime
     impact_modules: [paper_v2, qmt]
     layer: trading_infra
@@ -1138,7 +1150,6 @@ rules:
       - backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py
       - backend/tests/qmt_strategy_ledger/test_router_summary.py
       - backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py
-      - backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py
       - backend/tests/scripts/test_strategy_package_binding_refreeze.py
       - backend/tests/simulation_architecture/**
       - backend/tests/simulation_data/**
@@ -1164,6 +1175,8 @@ rules:
     priority: 85
     include:
       - backend/infra/qmt_client.py
+      - backend/tests/infra/test_qmt_client_contract.py
+      - backend/tests/routers/test_qmt_route_retirement.py
     primary_module: qmt
     impact_modules: [paper_v2]
     layer: trading_infra
@@ -1276,11 +1289,11 @@ rules:
       - backend/services/qmt_strategy_ledger/repository.py
       - backend/tests/qmt_strategy_ledger/test_order_service_preflight.py
       - backend/tests/qmt_strategy_ledger/test_repository.py
-    primary_module: miniqmt_execution_runtime
-    impact_modules: [paper_v2, simulation_runtime]
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
     layer: trading_ledger
     risk_level: critical
-    ownership_reason: Managed MiniQMT order preflight and strategy-ledger lot/cash authority are direct dependencies of runtime child submission and simulation reconciliation.
+    ownership_reason: The shared simulation scheduler and read-only strategy-ledger router use preflight and repository contracts independently of MiniQMT broker execution.
   - rule_id: trading_core_minute_execution
     priority: 85
     include:
@@ -2262,7 +2275,6 @@ rules:
     priority: 80
     include:
       - backend/tests/qmt_strategy_ledger/**
-      - backend/tests/routers/test_qmt_route_retirement.py
     primary_module: miniqmt_execution_runtime
     impact_modules: [simulation_runtime, paper_v2]
     layer: backend_test

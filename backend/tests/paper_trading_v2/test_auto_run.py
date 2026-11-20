@@ -85,33 +85,6 @@ def test_auto_run_config_hash_is_stable_and_uses_platform_defaults() -> None:
     assert local_config["broker"]["authority_source"] == "LOCAL_SIM_LEDGER"
 
 
-def test_create_minqmt_auto_run_portfolio_binds_account_and_creates_live_session() -> None:
-    service, paper_repo, package_id = _seed_service()
-
-    result = service.create_minqmt_auto_run_portfolio(
-        package_id=package_id,
-        portfolio_name="auto-run one",
-        initial_cash=100_000,
-        start_date=date(2024, 1, 2),
-        broker_account_id="acct-a",
-        top_k=10,
-        created_by="pytest",
-    )
-
-    portfolio = result["portfolio"]
-    session = result["session"]
-    binding = result["binding"]
-    assert portfolio.auto_run_enabled is True
-    assert portfolio.broker_backend == "minqmt_sim"
-    assert portfolio.data_source == MinuteDataSource.MINIQMT_REALTIME
-    assert binding.broker_account_id == "acct-a"
-    assert session.mode == PaperSessionMode.LIVE_ONLY
-    assert session.status == PaperSessionStatus.CREATED
-    assert session.live_data_source == MinuteDataSource.MINIQMT_REALTIME
-    assert paper_repo.list_active_sessions(portfolio.portfolio_id)[0].session_id == session.session_id
-    assert result["auto_run"]["config"]["runtime_profile"]["selection"]["top_k"] == 10
-
-
 def test_enable_auto_run_supports_existing_local_sim_portfolio_with_tdx_session() -> None:
     service, paper_repo, package_id = _seed_service()
     portfolio = _create_local_sim_portfolio(service, package_id)
@@ -133,59 +106,6 @@ def test_enable_auto_run_supports_existing_local_sim_portfolio_with_tdx_session(
     assert session.mode == PaperSessionMode.LIVE_ONLY
     assert session.live_data_source == MinuteDataSource.TDX_REALTIME
     assert paper_repo.list_active_sessions(portfolio.portfolio_id)[0].session_id == session.session_id
-
-
-def test_minqmt_auto_run_allows_same_account_strategy_slots() -> None:
-    service, paper_repo, package_id = _seed_service()
-    first = service.create_minqmt_auto_run_portfolio(
-        package_id=package_id,
-        portfolio_name="auto-run one",
-        initial_cash=100_000,
-        start_date=date(2024, 1, 2),
-        broker_account_id="acct-a",
-        create_session=False,
-    )
-    second = service.create_minqmt_auto_run_portfolio(
-        package_id=package_id,
-        portfolio_name="auto-run two",
-        initial_cash=80_000,
-        start_date=date(2024, 1, 2),
-        broker_account_id="acct-a",
-        create_session=False,
-    )
-
-    assert len(paper_repo.portfolios) == 2
-    first_binding = first["binding"]
-    second_binding = second["binding"]
-    assert first_binding.allocation_mode == "account_group_slots"
-    assert second_binding.allocation_mode == "account_group_slots"
-    assert first_binding.broker_account_id == second_binding.broker_account_id == "acct-a"
-    assert first_binding.account_group_id == second_binding.account_group_id == miniqmt_account_group_id("acct-a")
-    assert first_binding.strategy_slot_id == first["portfolio"].portfolio_id
-    assert second_binding.strategy_slot_id == second["portfolio"].portfolio_id
-    assert first_binding.strategy_slot_id != second_binding.strategy_slot_id
-    assert first["auto_run"]["config"]["broker"]["account_group_id"] == first_binding.account_group_id
-    assert second["auto_run"]["config"]["broker"]["strategy_slot_id"] == second_binding.strategy_slot_id
-
-
-def test_minqmt_auto_run_context_exposes_account_group_slot_for_runtime() -> None:
-    service, paper_repo, package_id = _seed_service()
-    result = service.create_minqmt_auto_run_portfolio(
-        package_id=package_id,
-        portfolio_name="auto-run one",
-        initial_cash=100_000,
-        start_date=date(2024, 1, 2),
-        broker_account_id="acct-a",
-        create_session=False,
-    )
-
-    context = miniqmt_account_slot_context(paper_repo, result["portfolio"])
-
-    assert context == {
-        "account_mode": "account_group_slots",
-        "account_group_id": miniqmt_account_group_id("acct-a"),
-        "strategy_slot_id": result["portfolio"].portfolio_id,
-    }
 
 
 def test_enable_auto_run_rejects_switching_active_binding_without_disable() -> None:

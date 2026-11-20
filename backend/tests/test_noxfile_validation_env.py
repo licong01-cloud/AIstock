@@ -162,7 +162,34 @@ def test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regre
     assert tail[:3] == ("python", "-m", "pytest")
     assert "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py" in tail
     assert "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py" in tail
+    assert "backend/tests/advisory_phase1/test_stage_trace.py" in tail
+    assert "backend/tests/qmt_strategy_ledger/test_repository.py" in tail
+    assert "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py" in tail
+    assert not any("miniqmt" in target for target in tail)
     assert len(direct) == 2
+
+
+def test_default_pr_nox_targets_do_not_collect_retired_broker_tests():
+    from scripts import ci_change_classifier as classifier
+
+    plans = classifier.flow.validation_catalog_snapshot().plans
+    sessions = classifier._backend_sessions_from_selection({"required_plans": list(plans)}, plans)
+    assert "miniqmt_execution_runtime_l2" not in sessions
+    targets, error = classifier._selected_nox_test_targets(
+        repo_root=classifier.ROOT, sessions=[*sessions, "miniqmt_execution_runtime_l2"],
+    )
+    assert error is None
+    retired_root = classifier.ROOT / "backend/tests/miniqmt_execution_runtime"
+    retired = [path.relative_to(classifier.ROOT).as_posix() for path in retired_root.rglob("test_*.py")]
+    assert retired
+    assert all(
+        not classifier._test_target_covers_path(target, path)
+        for session in sessions for target in targets[session] for path in retired
+    )
+    assert all(
+        any(classifier._test_target_covers_path(target, path) for target in targets["miniqmt_execution_runtime_l2"])
+        for path in retired
+    )
 
 
 def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeypatch):

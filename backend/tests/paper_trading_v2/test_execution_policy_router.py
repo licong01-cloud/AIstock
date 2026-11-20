@@ -85,24 +85,6 @@ def test_validate_policy_contract_rejects_invalid_vnpy_style_config() -> None:
     assert any(item.startswith("invalid_algo_config:") for item in blockers)
 
 
-def test_minqmt_portfolio_lists_vnpy_style_runtime_template_policies() -> None:
-    service, _manifest, portfolio = _service_and_portfolio(broker_backend="minqmt_sim")
-
-    rows = service.list_execution_policies(portfolio.portfolio_id)
-    templates = {
-        item["algo_code"]: item for item in rows if item.get("activation_policy_source") == "vnpy_style_asset_template"
-    }
-
-    assert set(templates) == set(VNPY_STYLE_ASSETS)
-    sniper = templates["SNIPER_MINIQMT"]
-    assert sniper["policy_id"] == f"{VNPY_STYLE_TEMPLATE_POLICY_PREFIX}SNIPER_MINIQMT"
-    assert sniper["validated_execution_policy_id"] == sniper["policy_id"]
-    assert sniper["runtime_selectable"] is True
-    assert sniper["matches_portfolio_manifest"] is True
-    assert sniper["policy_json"]["data_requirements"]["requires_broker_quote"] is True
-    assert sniper["source_attribution"]["upstream_source_file"].endswith("sniper_algo.py")
-
-
 def test_activate_vnpy_style_template_persists_policy_context() -> None:
     service, _manifest, portfolio = _service_and_portfolio(broker_backend="minqmt_sim")
 

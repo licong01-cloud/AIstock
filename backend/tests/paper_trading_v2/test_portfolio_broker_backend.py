@@ -78,24 +78,6 @@ def test_create_portfolio_local_sim_with_db_historical_explicit() -> None:
     assert portfolio.data_source == MinuteDataSource.DB_HISTORICAL
 
 
-def test_create_portfolio_minqmt_sim_with_miniqmt_realtime() -> None:
-    package_repo, manifest = _seed_paper_enabled_package()
-    paper_repo = InMemoryPaperTradingV2Repository()
-    portfolio = PaperTradingV2PortfolioService(
-        package_repository=package_repo,
-        repository=paper_repo,
-    ).create_portfolio(
-        package_id=manifest.package_id,
-        portfolio_name="minqmt_sim happy",
-        initial_cash=100_000,
-        start_date=date(2024, 1, 2),
-        data_source=MinuteDataSource.MINIQMT_REALTIME,
-        broker_backend="minqmt_sim",
-    )
-    assert portfolio.broker_backend == "minqmt_sim"
-    assert portfolio.data_source == MinuteDataSource.MINIQMT_REALTIME
-
-
 def test_create_portfolio_rejects_unknown_broker_backend() -> None:
     package_repo, manifest = _seed_paper_enabled_package()
     paper_repo = InMemoryPaperTradingV2Repository()
