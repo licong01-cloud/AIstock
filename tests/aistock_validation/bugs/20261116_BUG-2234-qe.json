@@ -7,6 +7,25 @@
     "tests/aistock_validation/bugs/20261116_BUG-2234-qe.json"
   ],
   "assigned_agent": null,
+  "author_review": {
+    "completeness_regression": {
+      "checks": [
+        "Both full source Composer/coordinator paths captured with no POST; WSL replay20GiB guard and bash syntax pass.",
+        "107 directly related tests pass, changed-file Ruff and L0 pass.",
+        "Frozen targets, active772 pins, daily/minute execution reference, fixed564day window, model-free/label NA semantics unchanged."
+      ],
+      "status": "PASS"
+    },
+    "correctness": {
+      "findings_repaired": [
+        "Native suffix keys retained exactly; actual frozen quotes reproduce old prefix failure.",
+        "Empty indicator frames retain absence; nonempty malformed indicators fail.",
+        "Raw reports/positions/indicators saved before derived analysis; failure never emits completion."
+      ],
+      "status": "PASS"
+    },
+    "reviewer": "author_two_perspectives_not_independent"
+  },
   "bug_id": "BUG-2234",
   "closed_at": null,
   "closure_requirements": [
@@ -16,6 +35,12 @@
   ],
   "created_at": "2026-11-16T17:55:24.314826Z",
   "description": "节点failed，KeyError count，QLib取价None；新消费者代码转换与冻结数据集不一致，单位测试未覆盖真实输入接口。",
+  "design_compliance_review": {
+    "no_partial_or_placeholder": "PASS_full_defect_closure_and_real_input_contract",
+    "no_silent_error_or_fake_success": "PASS_malformed_nonempty_fail_no_completion_raw_retained",
+    "no_unapproved_gate_rbac_or_control": "PASS_no_service_control_DB_schema_or_new_arms",
+    "no_unapproved_semantic_change": "PASS_only_key_alignment_and_missing_indicator_export_unchanged_weights_fees_window"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,13 +56,20 @@
   ],
   "expected": "按绑定数据集原生股票代码消费；完整账户和目标消费收据持久化；无订单指标保留NA，不把错误空仓包装成功；失败原件与恢复映射保留。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_absolute_target_record.py",
+      "backend/services/quantevolver/qe_absolute_targets.py",
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2234-qe.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/quantevolver/qe_absolute_targets.py",
       "backend/services/quantevolver/qe_absolute_target_record.py",
-      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+      "backend/services/quantevolver/qe_absolute_targets.py",
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
+      "tests/aistock_validation/bugs/20261116_BUG-2234-qe.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_absolute_targets.py",
@@ -114,8 +146,8 @@
   },
   "first_seen_at": "2026-11-16T17:55:24.314826Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e7961e53760ffc90a37c55a5f1ed334680e7a7a5",
+  "fixed_at": "2026-11-16T18:18:03Z",
   "github_issue_number": 7292,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7292",
   "last_seen_at": "2026-11-16T17:55:24.314826Z",
@@ -123,6 +155,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7293",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -135,28 +168,50 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
     "fresh_process_evidence": [
       "Independent process loads committed consumer 8c9dec62bd108c19b3f9bb3dca00bd4bf8ab2bc7; both real full Composer submissions captured before POST; real Qlib frozen772 native daily/minute quotes at first/last account dates and actual indicator_analysis pass; zero account/fit/predict/transport/service calls. receipt=tmp/handoff/qe-trend-parent-longtask-20261116/native_consumer_fresh_process_v1.json;sha256=05e6f5bd94822d924a4363b558340128cd1c393359e4c47b7083baf64d26fd6d"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba/custom-evo-config",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261117_002630_51ba",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2234",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6fedb01c1c01237e",
+    "recorded_at": "2026-11-16T18:18:55.331392Z",
+    "runtime_contract_digest": "ee979dd83752fd8fb119526f5220f5371a226ee5aca88337018f7b8e06e06677",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "99951ac3995a10252ea47a4fd941eac5d94a0f65",
+    "source_merge_commit": "e7961e53760ffc90a37c55a5f1ed334680e7a7a5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7293",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe"
   ],
@@ -165,6 +220,9 @@
     "fingerprint": "4b1d7b7a7905ccd2af3b3617",
     "source_event_id": "FE-20261116-4b1d7b7a7905"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -272,30 +330,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "author_review": {
-    "correctness": {
-      "status": "PASS",
-      "findings_repaired": [
-        "Native suffix keys retained exactly; actual frozen quotes reproduce old prefix failure.",
-        "Empty indicator frames retain absence; nonempty malformed indicators fail.",
-        "Raw reports/positions/indicators saved before derived analysis; failure never emits completion."
-      ]
-    },
-    "completeness_regression": {
-      "status": "PASS",
-      "checks": [
-        "Both full source Composer/coordinator paths captured with no POST; WSL replay20GiB guard and bash syntax pass.",
-        "107 directly related tests pass, changed-file Ruff and L0 pass.",
-        "Frozen targets, active772 pins, daily/minute execution reference, fixed564day window, model-free/label NA semantics unchanged."
-      ]
-    },
-    "reviewer": "author_two_perspectives_not_independent"
-  },
-  "design_compliance_review": {
-    "no_partial_or_placeholder": "PASS_full_defect_closure_and_real_input_contract",
-    "no_silent_error_or_fake_success": "PASS_malformed_nonempty_fail_no_completion_raw_retained",
-    "no_unapproved_semantic_change": "PASS_only_key_alignment_and_missing_indicator_export_unchanged_weights_fees_window",
-    "no_unapproved_gate_rbac_or_control": "PASS_no_service_control_DB_schema_or_new_arms"
   }
 }
