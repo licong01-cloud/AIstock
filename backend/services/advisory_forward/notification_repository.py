@@ -10,6 +10,7 @@ from psycopg2.extras import Json, RealDictCursor
 from backend.db.pg_pool import get_conn
 
 FEISHU_COMPLETION_ROUTE = 'advisory_feishu_completion_v1'
+FEISHU_DETAIL_ROUTE = 'advisory_feishu_detail_sheet_v1'
 
 
 class AdvisoryNotificationRepository:
@@ -60,8 +61,37 @@ class AdvisoryNotificationRepository:
                  Json(event['payload']), now, event['expires_at']))
             return cur.rowcount == 1
 
+    def detail_event_exists(self, event_key, day):
+        """Avoid re-reading lists/quotes every tick or a second notice after switching."""
+        with self.cursor() as cur:
+            cur.execute("""SELECT 1 FROM app.advisory_notification_delivery
+                WHERE channel='webhook' AND (event_key=%s OR
+                    (decision_date=%s AND status='SENT' AND payload->>'delivery_route'=%s)) LIMIT 1""",
+                (event_key, day, FEISHU_COMPLETION_ROUTE))
+            return cur.fetchone() is not None
+
+    def checkpoint_detail(self, row, state, now):
+        """Only remote progress is mutable; fence every operation and renew the lease."""
+        if row['payload'].get('delivery_route') != FEISHU_DETAIL_ROUTE or row['channel'] != 'webhook':
+            raise ValueError('ADVISORY_DETAIL_ROUTE_REQUIRED')
+        immutable = {k: v for k, v in row['payload'].items() if k != 'sheet_delivery_state'}
+        with self.cursor() as cur:
+            cur.execute("""UPDATE app.advisory_notification_delivery
+                SET payload=jsonb_set(payload,'{sheet_delivery_state}',%s::jsonb),
+                    lease_until=LEAST(expires_at,%s),updated_at=%s
+                WHERE event_key=%s AND channel='webhook' AND status='SENDING'
+                    AND lease_token=%s AND lease_until>%s AND expires_at>%s
+                    AND payload - 'sheet_delivery_state' = %s::jsonb
+                RETURNING payload""",
+                (Json(state), now+timedelta(seconds=120), now, row['event_key'], row['lease_token'],
+                 now, now, Json(immutable)))
+            saved = cur.fetchone()
+            if saved is None:
+                raise RuntimeError('ADVISORY_NOTIFICATION_LEASE_LOST')
+        row['payload'] = dict(saved['payload'])
+
     def claim(self, now, channels, *, webhook_route='legacy'):
-        if webhook_route not in {'legacy', FEISHU_COMPLETION_ROUTE}:
+        if webhook_route not in {'legacy', FEISHU_COMPLETION_ROUTE, FEISHU_DETAIL_ROUTE}:
             raise ValueError('ADVISORY_NOTIFICATION_WEBHOOK_ROUTE_INVALID')
         if not channels:
             return None
@@ -98,10 +128,12 @@ class AdvisoryNotificationRepository:
             cur.execute("""UPDATE app.advisory_notification_delivery SET status=%s,
                 lease_token=NULL,lease_until=NULL,sent_at=%s,last_error_code=%s,
                 available_at=%s,updated_at=%s
-                WHERE event_key=%s AND channel=%s AND status='SENDING' AND lease_token=%s""",
+                WHERE event_key=%s AND channel=%s AND status='SENDING' AND lease_token=%s
+                    AND (payload->>'delivery_route' IS DISTINCT FROM %s
+                         OR (lease_until>%s AND expires_at>%s))""",
                 (status, now if accepted else None, None if accepted else error_code,
                  retry_at if status == 'PENDING' else row['available_at'], now,
-                 row['event_key'], row['channel'], row['lease_token']))
+                 row['event_key'], row['channel'], row['lease_token'], FEISHU_DETAIL_ROUTE, now, now))
             if cur.rowcount != 1:
                 raise RuntimeError("ADVISORY_NOTIFICATION_LEASE_LOST")
         return status
