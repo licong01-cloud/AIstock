@@ -44,9 +44,12 @@ class _Repository:
         self,
         snapshots: dict[str, AdjFactorSnapshot],
         price_dates: dict[str, frozenset[dt.date]],
+        *,
+        delist_dates: dict[str, dt.date] | None = None,
     ) -> None:
         self.snapshots = snapshots
         self.price_dates = price_dates
+        self.delist_dates = delist_dates or {}
         self.staged: dict[str, AdjFactorSnapshot] = {}
         self.apply_calls = 0
         self.basis_normalizations: list[dict[str, Any]] = []
@@ -54,7 +57,8 @@ class _Repository:
     def list_symbol_scopes(self, *, end_date: dt.date, symbols: Sequence[str] | None = None) -> Sequence[SymbolScope]:
         requested = set(symbols or self.snapshots)
         return [
-            SymbolScope(symbol, min({self.snapshots[symbol].first_date, *self.price_dates[symbol]}))
+            SymbolScope(symbol, min({self.snapshots[symbol].first_date, *self.price_dates[symbol]}),
+                        self.delist_dates.get(symbol))
             for symbol in sorted(requested)
         ]
 
@@ -437,6 +441,47 @@ def test_reconcile_rejects_an_unbounded_nontrading_source_omission() -> None:
     assert repository.apply_calls == 0
 
 
+@pytest.mark.parametrize("restated", [False, True])
+def test_reconcile_preserves_post_delist_rows_without_requiring_provider_coverage(restated):
+    symbol = "600001.SH"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "3"), (DAY_2, "9")]))
+    provider_rows = _provider_rows(symbol, [(DAY_1, "4" if restated else "3")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1})}, delist_dates={symbol: DAY_1})
+
+    receipt = _reconciler(repository, _SequencedProvider({symbol: [provider_rows, provider_rows]})).reconcile(
+        end_date=DAY_3, independent=True,
+    )
+
+    assert receipt["failures"] == []
+    assert receipt["retained_nontrading_row_count"] == 0
+    assert receipt["retained_post_delist_rows"] == [
+        {"symbol": symbol, "trade_date": DAY_2.isoformat(), "delist_date": DAY_1.isoformat()},
+    ]
+    assert receipt["retained_post_delist_row_count"] == 1
+    assert repository.apply_calls == int(restated)
+    assert repository.snapshots[symbol].rows[-1] == local.rows[-1]
+
+
+@pytest.mark.parametrize("delist_date,traded_tail,error", [
+    (None, False, "unbounded or changed"),
+    (DAY_2, False, "unbounded or changed"),
+    (DAY_1, True, "omits a traded local date"),
+])
+def test_reconcile_does_not_bypass_required_history(delist_date, traded_tail, error):
+    symbol = "600001.SH"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "3"), (DAY_2, "9")]))
+    provider_rows = _provider_rows(symbol, [(DAY_1, "3")])
+    repository = _Repository(
+        {symbol: local}, {symbol: frozenset({DAY_1, DAY_2} if traded_tail else {DAY_1})},
+        delist_dates={symbol: delist_date} if delist_date else None,
+    )
+
+    with pytest.raises(AdjFactorHistoryReconcileError, match=error):
+        _reconciler(repository, _SequencedProvider({symbol: [provider_rows, provider_rows]})).reconcile(end_date=DAY_3)
+
+    assert repository.apply_calls == 0
+
+
 def test_reconcile_dry_run_reports_change_without_applying_it() -> None:
     symbol = "688109.SH"
     local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.5415"), (DAY_2, "1.5459")]))
@@ -735,8 +780,8 @@ class _TransactionCursor:
     def fetchall(self):
         sql = self.connection.sql[-1]
         # Model the query's provider population, not a strategy eligibility pool.
-        rows = [("000001.SZ", DAY_1), ("302132.SZ", DAY_1), ("600001.SH", DAY_1),
-                ("920196.BJ", DAY_1), ("200011.SZ", DAY_1), ("900901.SH", DAY_1)]
+        rows = [("000001.SZ", DAY_1, None), ("302132.SZ", DAY_1, None), ("600001.SH", DAY_1, DAY_2),
+                ("920196.BJ", DAY_1, None), ("200011.SZ", DAY_1, None), ("900901.SH", DAY_1, None)]
         if "'^(00|30)[0-9]{4}\\.SZ$'" in sql:
             return rows[:4]
         return rows
@@ -778,6 +823,7 @@ def test_adj_factor_scope_uses_a_share_provider_population_not_all_quotes():
     conn = _TransactionConnection(autocommit=False, in_transaction=False)
     scopes = PostgresAdjFactorHistoryRepository(conn).list_symbol_scopes(end_date=DAY_1)
     assert [scope.symbol for scope in scopes] == ["000001.SZ", "302132.SZ", "600001.SH", "920196.BJ"]
+    assert scopes[2].delist_date == DAY_2
     assert "stock_universe" not in conn.sql[-1]  # ST, delisted and aliases remain in history.
 
 
