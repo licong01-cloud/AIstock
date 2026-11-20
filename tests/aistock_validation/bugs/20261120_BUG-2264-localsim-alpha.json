@@ -37,6 +37,15 @@
   ],
   "expected": "种子及父包聚合分别验证请求交易日和有效数据截止日，支持 LocalSIM 文件转数据库的日历边界。 ????????????????????? FILE_THEN_DATABASE ???????????????? ????????????????? pin???????????",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/input_source_plan.py",
+      "backend/services/simulation_runtime/localsim_pit_migration.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/tests/advisory_historical_range/test_input_source_plan.py",
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2264-localsim-alpha.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_historical_range/input_source_plan.py",
@@ -44,9 +53,10 @@
       "backend/services/strategy_package/multi_alpha_live.py",
       "backend/tests/advisory_historical_range/test_input_source_plan.py",
       "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2264-localsim-alpha.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/multi_alpha_live.py",
@@ -139,6 +149,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
     "fresh_process_evidence": [
       "The actual parent-leg caller fails the old implementation and passes the revised requested-day check. Hash-verified saved WSL receipts from 3 UPDATED3 and 5 OLD5 seeds aggregate to 4900 scores each, with request date 2026-01-05 and score/cutoff date 2025-12-31. No model recomputation. SHA256 93817d63ae843ba5828e212583ee86a05b2ebbf44b02153dc0ff0edcce29d542.",
       "Candidate source exercised both real package identities in existing DEV using native transactional source replacement. It preserved account scope and predecessor, confirmed exact retry, then proved both successors absent after rollback. Both plans use 198 file days through 2026-10-30, and 14 DB days starting 2026-11-02. DEV receipt SHA256 1ed245cc761ca8bc8e613f8850a0e45137eda87fdb6c582dceaa873061377657.",
@@ -146,19 +157,22 @@
       "The real October replay plan shrank from 18736373 bytes to 1156673 bytes by projecting only the suspension coverage bounds while retaining the exact original suspension metadata content pin and existing reader cap.",
       "A real frozen OLD5 FUND seed completed strict WSL inference through October FILE_THEN_DATABASE on 2026-01-05 with 4900 finite scores and all four source receipt roles, without committing economic facts. SHA256 fd200b0b64bb468f3f341fb18ee3231d9817ba4cf8bbaa942503e7900013c395."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
