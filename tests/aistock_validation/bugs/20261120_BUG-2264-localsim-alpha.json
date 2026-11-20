@@ -127,8 +127,8 @@
   },
   "first_seen_at": "2026-11-20T09:00:13.967812Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "093741ef366607d986e55ce0581f86cea7a05d40",
+  "fixed_at": "2026-11-20T09:39:05Z",
   "github_issue_number": 7392,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7392",
   "last_seen_at": "2026-11-20T09:00:13.967812Z",
@@ -136,6 +136,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7393",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -165,6 +166,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -176,7 +178,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2264",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0871dfcee611fafa",
+    "recorded_at": "2026-11-20T09:40:13.622503Z",
+    "runtime_contract_digest": "d63e2bd4f7df004236f974a627a01efee5d02d25ac0cb5c8c05d45282538c6ec",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9040a14a1d2456e20147616d2cd3a3f18f5f0baf",
+    "source_merge_commit": "093741ef366607d986e55ce0581f86cea7a05d40",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7393",
+    "validation_evidence": [
+      "nox -s l0 -> passed (0 blocking findings)",
+      "pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_pit_migration.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/advisory_historical_range/test_input_source_plan.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py -q -> 130 passed with mounted X basetemp and existing DEV enabled"
+    ],
+    "validation_evidence_digest": "2ab70ee725678fbbdf2ec27612369bc18f2ada7c90b4e25c5af587c38b29f8f8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -185,6 +209,10 @@
     "fingerprint": "d5a085ad7064eb58b5cb36a7",
     "source_event_id": "FE-20261120-d5a085ad7064"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed (0 blocking findings)",
+    "pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_pit_migration.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/advisory_historical_range/test_input_source_plan.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py -q -> 130 passed with mounted X basetemp and existing DEV enabled"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
