@@ -5,7 +5,11 @@
     "backend/services/selection_center/canonical_pit_runtime.py",
     "backend/tests/selection_center/test_canonical_pit_runtime.py",
     "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
-    "tests/aistock_validation/bugs/20261120_BUG-2266-pit.json"
+    "tests/aistock_validation/bugs/20261120_BUG-2266-pit.json",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/risk_policy.py",
+    "backend/tests/selection_center/test_risk_policy.py",
+    "backend/tests/advisory_model_first/test_forward_publication.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2266",
@@ -149,7 +153,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "{\"activation_generation\": 1, \"authority_unchanged\": true, \"backend_restart\": false, \"coverage_end\": \"2026-11-20\", \"d_eligible_negative_actions_blocked\": 0, \"db_writes\": 0, \"decision_date\": \"2026-11-20\", \"new_fit\": 0, \"new_model_prediction\": 0, \"no_d_ineligible_additions\": true, \"observed_at\": \"2026-11-20T16:13:08.050238+00:00\", \"ordinary_t_coverage_still_rejected\": true, \"physical_future_events\": 2, \"readonly_transactions_enforced\": true, \"sample_symbols\": 3, \"schema\": \"advisory_pit_d_t_readonly_source_validation_v1\", \"source_sha256\": {\"backend/services/selection_center/canonical_pit_runtime.py\": \"435c953d095eeecf02cdec49927a37c487bc07dd69196d8127931742a6f3d0b5\", \"backend/services/selection_center/risk_policy.py\": \"5d1987e7a549eecca897cd4b243c6ee2461cb305eeffea29d75636aefaefd0d1\", \"backend/services/selection_center/runtime_profile.py\": \"756fc9a4d1207521fb3dc2073b63dc33a71a863b7d17e40f7fd295f15c3a9518\", \"backend/services/simulation_signal/strategy_package_selection.py\": \"2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca\"}, \"status\": \"PASS\", \"target_date\": \"2026-11-23\"}",
+      "Fresh isolated 200-test related regression matrix passed, including real formal forward entry and ordinary Paper canonical coverage. JUnit SHA256=ff057765199964d2bcf6f79534fa5c598eaec44fe7738d612a378c397eb6a6ae. Ruff and exact-source compile/scope/diff validation retained. No user backend restart, DB writes, inference or training."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -159,7 +166,13 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "business_smoke_contract_id": "object_liveness",
+    "backend_restart_required": true
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -287,5 +300,98 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "implementation_plan": [
+    "Validate existing Advisory D/T/fixed-cutoff/DAILY_DB_ONLY context at the shared coverage-date boundary; non-Advisory checks retain T.",
+    "Use the same D for initial frozen lease, internal canonical risk lookup and final evidence; keep selection target, ranking, HMM/artifact clock and identity unchanged.",
+    "Consume only canonical-authority future events already published as of D for known target-day risk removals; no source fetch, universe rebuild, synthetic future spans, or new candidates.",
+    "Split authority resolution failure from coverage/admission failure and preserve exact context.",
+    "Exercise actual forward Selection path, real risk provider and evidence emission with boundary, spoof, drift and compatibility tests.",
+    "Complete current-agent correctness and regression reviews; authorized source delivery continues, runtime activation awaits user restart."
+  ],
+  "review_notes": [
+    {
+      "round": 0,
+      "status": "PRE_IMPLEMENTATION_REVIEW",
+      "finding": "The first coverage guard is not the only affected site: canonical risk lookup and daily evidence also validate T. Current authority contains ST negative and restore events effective 2026-11-23 and announced 2026-11-20. Retain those published facts; do not invent future market data. Scope expanded before editing."
+    },
+    {
+      "round": 1,
+      "status": "CORRECTNESS_REVIEW_AND_RED_CONFIRMED",
+      "finding": "The formal forward-entry regression fails with the old Selection source restored in this isolated worktree: canonical coverage does not include target T. Candidate bytes restored exactly. Same new entry regression already passed on candidate. Known-target events preserve canonical source/rule, known_date<=D, terminal permanence and no D-universe additions. Ordinary target-day trading coverage unchanged.",
+      "candidate_selection_sha256": "2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca"
+    },
+    {
+      "round": 2,
+      "status": "FINAL_CORRECTNESS_AND_COMPLETENESS_PASS",
+      "finding": "200 related regressions passed once after stabilization. Real forward _publish -> real AdvisoryProgram prepare -> real SelectionCenter -> risk/evidence path covered with DI fixtures; old caller red proof retained. No branch of this fix emits fabricated successful data, broadens live trading coverage, adds approval/RBAC, changes fees/rank/holding period, or activates a package. Existing PIT generation/fingerprint and per-package identity guards retained. Normal non-Advisory source-event payload remains unchanged.",
+      "design_compliance_001": {
+        "complete_delivery": "All affected binding/risk/evidence sites and precise error cause implemented; runtime acceptance remains pending user restart.",
+        "no_silent_error": "Unknown visibility and lookup failures raise typed DataUnavailable; coverage errors preserve cause and dates.",
+        "business_semantics": "D-time native candidate pool and T-effective list kept; only already-published canonical actions consumed; no future coverage/IPO candidates fabricated.",
+        "no_unapproved_gate": "No new human/RBAC/gates or source rebuild requirements; existing fail-closed semantics retained."
+      },
+      "static_gates": "Ruff all changed Python files passed; AST parse passed; git diff --check passed; native nox -s l0 explicit nine-file scope passed with zero blockers."
+    }
+  ],
+  "validation_receipts": [
+    {
+      "schema": "advisory_pit_d_t_readonly_source_validation_v1",
+      "status": "PASS",
+      "observed_at": "2026-11-20T16:13:08.050238+00:00",
+      "decision_date": "2026-11-20",
+      "target_date": "2026-11-23",
+      "coverage_end": "2026-11-20",
+      "activation_generation": 1,
+      "authority_unchanged": true,
+      "readonly_transactions_enforced": true,
+      "physical_future_events": 2,
+      "sample_symbols": 3,
+      "d_eligible_negative_actions_blocked": 0,
+      "no_d_ineligible_additions": true,
+      "ordinary_t_coverage_still_rejected": true,
+      "source_sha256": {
+        "backend/services/selection_center/canonical_pit_runtime.py": "435c953d095eeecf02cdec49927a37c487bc07dd69196d8127931742a6f3d0b5",
+        "backend/services/selection_center/runtime_profile.py": "756fc9a4d1207521fb3dc2073b63dc33a71a863b7d17e40f7fd295f15c3a9518",
+        "backend/services/selection_center/risk_policy.py": "5d1987e7a549eecca897cd4b243c6ee2461cb305eeffea29d75636aefaefd0d1",
+        "backend/services/simulation_signal/strategy_package_selection.py": "2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca"
+      },
+      "new_fit": 0,
+      "new_model_prediction": 0,
+      "db_writes": 0,
+      "backend_restart": false
+    },
+    {
+      "schema": "aistock_bug_direct_regression_receipt_v1",
+      "result": "PASS",
+      "tests": 200,
+      "failures": 0,
+      "errors": 0,
+      "command": "pytest direct canonical/runtime-profile/risk/selection/forward-clock/forward-publication/paper/input-readiness 9-file matrix",
+      "artifact_sha256": "ff057765199964d2bcf6f79534fa5c598eaec44fe7738d612a378c397eb6a6ae",
+      "artifact_ref": "tmp\\issue_workflow\\BUG-2266\\direct-regression.xml",
+      "fresh_process": true
+    },
+    {
+      "schema": "aistock_bug_static_validation_receipt_v1",
+      "result": "PASS",
+      "commands": [
+        "rtk ruff check (8 changed Python files)",
+        "Python AST parse (8 changed Python files)",
+        "git diff --check",
+        "python -m nox -s l0 -- (9 exact task files)"
+      ],
+      "l0_blockers": 0,
+      "source_sha256": {
+        "backend/services/simulation_signal/strategy_package_selection.py": "2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca",
+        "backend/services/selection_center/canonical_pit_runtime.py": "435c953d095eeecf02cdec49927a37c487bc07dd69196d8127931742a6f3d0b5",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py": "85dff8daee4f2afb76c0cb41b66d5432c5900e67232fe17c246b7ac5bb8fbd97",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py": "2f5892e36fb324305123a84ffeca5e417ce9e00ed180be2ac9d356cedfdabe7d",
+        "backend/services/selection_center/runtime_profile.py": "756fc9a4d1207521fb3dc2073b63dc33a71a863b7d17e40f7fd295f15c3a9518",
+        "backend/services/selection_center/risk_policy.py": "5d1987e7a549eecca897cd4b243c6ee2461cb305eeffea29d75636aefaefd0d1",
+        "backend/tests/selection_center/test_risk_policy.py": "0f752b18f1d5e0f3beeee48701cbb07d3fef11b445d3fa976b324ebcdafb8fa6",
+        "backend/tests/advisory_model_first/test_forward_publication.py": "6c70ae40c133c43cc409b6ab2c3a915230a40f6266b2e0334c7c9e2153d194af"
+      }
+    }
+  ]
 }

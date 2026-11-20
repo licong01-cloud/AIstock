@@ -230,6 +230,95 @@ class DriftingPitAuthorityResolver(StaticPitAuthorityResolver):
         return _pit_binding(4 if self.calls == 1 else 5)
 
 
+def _advisory_pit_clock_case():
+    from backend.services.selection_center.risk_policy import StPitRiskDecisionProvider, StockRiskPolicyService
+    d, t = date(2026, 11, 20), date(2026, 11, 23)
+    rows = [{"symbol": "000001.SZ", "score": .9, "rank": 1, "reference_price": 10.},
+            {"symbol": "000002.SZ", "score": .8, "rank": 2, "reference_price": 11.}]
+    packages, artifacts, manifest, runtime = _package_with_artifact(rows)
+    class Resolver(StaticPitAuthorityResolver):
+        binding = replace(_pit_binding(4), coverage_end=d)
+        def resolve_live_binding(self):
+            self.calls += 1
+            return self.binding
+    resolver = Resolver()
+    program = SimpleNamespace(package_mode="single_package", package_ids=[manifest.package_id],
+                              target_count=1, review_policy={"rank_exit_threshold": 1})
+    config = _runtime_config(top_k=1)
+    config["runtime_profile"]["risk_policy"] = {"enabled": True, "providers": ["st_pit"]}
+    config["selection_artifact_config"] = {"auto_generate": False}
+    config = AdvisoryProgramService._with_advisory_date_context(config, target_trade_date=t, selection_as_of_trade_date=d)
+    config = AdvisoryProgramService._review_runtime_config(program, config)
+    _seed_artifact(artifacts, manifest, rows, trade_date=t, runtime_config=config)
+    reads = []
+    def spans(symbols, day, key, *, rule_version):
+        reads.append(day)
+        assert day == d
+        return [(s, date(2018, 8, 1), d, "ipo_252td", "generation_end", rule_version, {}) for s in symbols]
+    risk = StockRiskPolicyService(providers={"st_pit": StPitRiskDecisionProvider(span_loader=spans,
+        target_event_loader=lambda symbols, day, target, lease: [(symbols[0], "st_negative", target, day, False, {})])})
+    repository = InMemorySimulationRuntimeRepository()
+    service = _selection_service(packages, runtime, repository, pit_authority_resolver=resolver)
+    service.risk_policy_service = risk
+    return SimpleNamespace(service=service, packages=packages, artifacts=artifacts, manifest=manifest, runtime=runtime,
+        resolver=resolver, repository=repository, config=config, program=program, reads=reads, d=d, t=t,
+        kwargs=dict(package_ids=[manifest.package_id], mode=SelectionMode.SINGLE_PACKAGE, trade_date=t,
+                    data_source="DB_HISTORICAL", runtime_config=config))
+
+
+def test_advisory_weekend_uses_d_pit_through_risk_and_t_evidence():
+    case = _advisory_pit_clock_case()
+    result = case.service.run_selection(**case.kwargs)
+    assert [item.symbol for item in result.aggregate_results] == ["000002.SZ"]
+    assert case.reads == [case.d]
+    lease = result.runtime_config[CANONICAL_PIT_RUNTIME_LEASE_KEY]
+    assert lease["coverage_end"] == "2026-11-20" and lease["activation_generation"] == 4
+    evidence = result.evidence_by_package[case.manifest.package_id]
+    assert evidence.target_trade_date == case.t and evidence.cutoff_date == case.d
+    assert evidence.evidence_payload_json[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease
+    assert result.runtime_config["advisory_date_context"]["target_trade_date"] == "2026-11-23"
+    assert case.resolver.calls == 2  # Admission and the unchanged final drift guard.
+
+
+def test_same_target_without_advisory_context_still_requires_t_coverage():
+    case = _advisory_pit_clock_case()
+    case.config.pop("advisory_date_context")
+    with pytest.raises(CanonicalPitRuntimeError, match="coverage does not include"):
+        case.service.run_selection(**case.kwargs)
+    assert not case.reads
+
+
+def test_advisory_d_not_covered_is_rejected_before_risk_or_evidence():
+    case = _advisory_pit_clock_case()
+    case.resolver.binding = replace(case.resolver.binding, coverage_end=date(2026, 11, 19))
+    with pytest.raises(CanonicalPitRuntimeError, match="coverage does not include"):
+        case.service.run_selection(**case.kwargs)
+    assert not case.reads
+
+
+def test_advisory_package_cannot_override_shared_observation_date():
+    case = _advisory_pit_clock_case()
+    override = deepcopy(case.config["advisory_date_context"])
+    override["selection_as_of_trade_date"] = "2026-11-19"
+    case.config[case.manifest.package_id] = {"advisory_date_context": override}
+    with pytest.raises(CanonicalPitRuntimeError, match="fixed D/T"):
+        case.service.run_selection(**case.kwargs)
+    assert not case.reads
+
+
+def test_advisory_pointer_drift_still_prevents_evidence(monkeypatch):
+    case = _advisory_pit_clock_case()
+    compute = case.service.selection_computation.compute
+    def drift(**kwargs):
+        result = compute(**kwargs)
+        case.resolver.binding = replace(case.resolver.binding, activation_generation=5)
+        return result
+    monkeypatch.setattr(case.service.selection_computation, "compute", drift)
+    monkeypatch.setattr(case.service, "_build_operational_evidence_by_package", lambda **_: pytest.fail("drift must block evidence"))
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        case.service.run_selection(**case.kwargs)
+
+
 class RollingPitAuthorityResolver(StaticPitAuthorityResolver):
     def __init__(self, *, verified=True):
         super().__init__()

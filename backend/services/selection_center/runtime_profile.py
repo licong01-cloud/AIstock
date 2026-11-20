@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
@@ -19,6 +20,7 @@ from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
     CANONICAL_PIT_RUNTIME_PROFILE_KEY,
     SelectionPitRuntimeLease,
+    canonical_pit_observation_date,
     validate_canonical_pit_runtime_profile,
 )
 from backend.services.trading_core.errors import (
@@ -152,6 +154,7 @@ class RuntimeRiskPolicyProfile(BaseModel):
     strict_data_ready: bool = True
     score_overlay: RuntimeRiskScoreOverlayProfile = Field(default_factory=RuntimeRiskScoreOverlayProfile)
     canonical_pit_runtime_lease: dict[str, Any] | None = Field(default=None, exclude=True, repr=False)
+    canonical_pit_observation_date: date | None = Field(default=None, exclude=True, repr=False)
 
     @field_validator("policy_version", "event_signal_profile_id")
     @classmethod
@@ -283,13 +286,20 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
         merged = dict(config["risk_policy"])
         merged.update(risk_policy_payload)
         risk_policy_payload = merged
-    if "canonical_pit_runtime_lease" in risk_policy_payload:
+    if {"canonical_pit_runtime_lease", "canonical_pit_observation_date"}.intersection(risk_policy_payload):
         raise RuntimeConfigInvalidError(
             "canonical PIT runtime lease must be attached by the Selection admission boundary"
         )
     raw_lease = config.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
     if raw_lease is not None:
         risk_policy_payload["canonical_pit_runtime_lease"] = SelectionPitRuntimeLease.from_mapping(raw_lease).as_dict()
+        advisory = config.get("advisory_date_context")
+        if isinstance(advisory, dict) and advisory.get("selection_as_of_trade_date") is not None:
+            try:
+                target = date.fromisoformat(advisory["target_trade_date"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeConfigInvalidError("Advisory PIT target date must be an ISO date") from exc
+            risk_policy_payload["canonical_pit_observation_date"] = canonical_pit_observation_date(config, trade_date=target)
     payload["risk_policy"] = risk_policy_payload
 
     try:

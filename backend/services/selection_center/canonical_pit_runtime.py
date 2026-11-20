@@ -289,6 +289,37 @@ def migrate_runtime_config_to_canonical_pointer(runtime_config: Mapping[str, Any
     return migrated
 
 
+def canonical_pit_observation_date(runtime_config: Mapping[str, Any], *, trade_date: date) -> date:
+    """Advisory's fixed D observes PIT; its T remains the recommendation date.
+
+    Ordinary trading/release admissions continue to require T coverage. An
+    Advisory date cannot be inferred from an arbitrary artifact cutoff alone.
+    """
+    context = runtime_config.get("advisory_date_context")
+    if context is None:
+        return trade_date
+    if not isinstance(context, Mapping):
+        raise CanonicalPitRuntimeError("advisory_date_context must be an object")
+    raw = context.get("selection_as_of_trade_date")
+    if raw is None:
+        return trade_date
+    try:
+        observed = date.fromisoformat(raw) if isinstance(raw, str) else None
+    except ValueError as exc:
+        raise CanonicalPitRuntimeError("Advisory PIT observation date must be an ISO date") from exc
+    artifact = runtime_config.get("selection_artifact_config", runtime_config.get("selection_artifact"))
+    if (observed is None or observed >= trade_date
+            or context.get("target_trade_date") != trade_date.isoformat()
+            or runtime_config.get("selection_price_mode") != "DAILY_DB_ONLY"
+            or not isinstance(artifact, Mapping) or artifact.get("cutoff_date") != raw
+            or artifact.get("fixed_cutoff") is not True or artifact.get("cutoff_policy") != "FIXED_CUTOFF"):
+        raise CanonicalPitRuntimeError(
+            "Advisory PIT observation date conflicts with its fixed D/T context",
+            context={"target_trade_date": trade_date.isoformat(), "selection_as_of_trade_date": raw},
+        )
+    return observed
+
+
 def freeze_canonical_pit_runtime_binding(
     runtime_config: Mapping[str, Any],
     *,
@@ -318,12 +349,18 @@ def freeze_canonical_pit_runtime_binding(
             context={"profile_mode": profile_mode},
         )
     try:
-        binding = require_canonical_new_task_binding(
-            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding(),
-            consumer="selection", trade_date=trade_date,
-        )
+        binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
     except Exception as exc:
         raise CanonicalPitRuntimeError("canonical PIT authority pointer cannot be resolved") from exc
+    try:
+        require_canonical_new_task_binding(binding, consumer="selection", trade_date=trade_date)
+    except ValueError as exc:
+        raise CanonicalPitRuntimeError(
+            f"canonical PIT admission rejected: {exc}",
+            context={"requested_trade_date": trade_date.isoformat(),
+                     "coverage_start": binding.coverage_start.isoformat() if binding.coverage_start else None,
+                     "coverage_end": binding.coverage_end.isoformat() if binding.coverage_end else None},
+        ) from exc
     lease = SelectionPitRuntimeLease.from_binding(binding).require_trade_date(trade_date)
     config[CANONICAL_PIT_RUNTIME_LEASE_KEY] = lease.as_dict()
     return config, lease
