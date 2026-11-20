@@ -28,6 +28,10 @@ def put(path, value):
 
 @pytest.fixture
 def period_fixture(continuation, monkeypatch):
+    return build_period_input(continuation, monkeypatch)
+
+
+def build_period_input(continuation, monkeypatch):
     root = continuation["root"] / "account_adapter"
     h = deepcopy(continuation["handoff"])
     for e in h["prior_endpoints"]:

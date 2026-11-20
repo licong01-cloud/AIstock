@@ -27,8 +27,12 @@ def put(path, value):
 
 @pytest.fixture
 def continuation(tmp_path, monkeypatch):
-    _, preflight_ref, templates_ref, _ = price_campaign_fixture(tmp_path, monkeypatch, two_days=True)
-    root = tmp_path / "period_fixture"
+    return build_continuation_input(tmp_path, monkeypatch)
+
+
+def build_continuation_input(output_root, monkeypatch):
+    _, preflight_ref, templates_ref, _ = price_campaign_fixture(output_root, monkeypatch, two_days=True)
+    root = output_root / "period_fixture"
     preflight = read_json(Path(preflight_ref.path))
     old_inventory = read_json(Path(preflight["selection_inventory"]["path"]))
     profile = {"hmm": {"enabled": False}, "selection": {"top_k": 2}}

@@ -208,6 +208,7 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
 
 def _pytest_file_shards(
     roots: tuple[str, ...], workers: int = 4, *, cost_multipliers: dict[str, int] | None = None,
+    cost_overrides: dict[str, int] | None = None,
 ) -> list[list[str]]:
     """Assign every pytest file once, keeping module fixtures in one process."""
     files = {path for root in roots for pattern in ("test_*.py", "*_test.py")
@@ -217,14 +218,19 @@ def _pytest_file_shards(
     if workers < 1:
         raise ValueError("offline regression requires at least one worker")
     multipliers = {ROOT / path: value for path, value in (cost_multipliers or {}).items()}
-    if not multipliers.keys() <= files:
+    overrides = {ROOT / path: value for path, value in (cost_overrides or {}).items()}
+    if not (multipliers.keys() | overrides.keys()) <= files:
         raise RuntimeError("weighted regression file is absent from the complete test roster")
     if any(type(value) is not int or value < 1 for value in multipliers.values()):
         raise ValueError("regression cost multiplier must be a positive integer")
+    if any(type(value) is not int or value < 1 for value in overrides.values()):
+        raise ValueError("regression cost override must be a positive integer")
     count = min(workers, len(files))
     groups: list[list[str]] = [[] for _ in range(count)]
     loads = [0] * len(groups)
     def cost(path: Path) -> int:
+        if path in overrides:
+            return overrides[path]
         return max(1, path.stat().st_size) * multipliers.get(path, 1)
     for path in sorted(files, key=lambda p: (-cost(p), p.as_posix())):
         index = min(range(len(groups)), key=lambda i: (loads[i], i))
@@ -259,7 +265,27 @@ def _run_nightly_pytest_shards(
         # The first two-worker replay timed out in test_service.py after its
         # peer finished in 178s. Keep the long service module on its own worker.
         multipliers = {"backend/tests/research_assistant/test_service.py": 3}
-    groups = _pytest_file_shards(roots, workers=workers, cost_multipliers=multipliers)
+    # 2026-11-20 Nightly JUnit timings show large files with fast tests and
+    # small files with expensive LocalSIM replays. Use measured costs in the
+    # same approximate units as byte-based estimates for unmeasured files.
+    overrides = {
+        f"backend/tests/{path}.py": seconds * 8_000
+        for path, seconds in (
+            ("simulation_runtime/test_lifecycle_scheduler", 7),
+            ("simulation_runtime/test_miniqmt_quote_activation", 6),
+            ("simulation_execution/test_localsim_replay_performance", 62),
+            ("simulation_execution/test_localsim_period_research", 141),
+            ("simulation_execution/test_localsim_dual_mode_comparison", 64),
+            ("simulation_execution/test_localsim_adverse_wait_research", 16),
+            ("simulation_execution/test_localsim_wait_budget_research", 85),
+            # Isolated fixture timings and the replay watermark show that the
+            # continuation module dominates the remaining shard wall time.
+            ("simulation_execution/test_localsim_period_continuation", 440),
+        )
+    } if plan == "simulation_core_l2" else {}
+    groups = _pytest_file_shards(
+        roots, workers=workers, cost_multipliers=multipliers, cost_overrides=overrides,
+    )
     # The complete Advisory matrix also exercises producers whose existing
     # output contract requires X. Synthetic scratch must satisfy that contract.
     scratch_parent = _offline_fixture_parent(plan)
