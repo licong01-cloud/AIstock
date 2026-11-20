@@ -9,7 +9,7 @@ import pytest
 from backend.services.advisory_forward.feishu_sheets import DetailSheetDelivery
 from backend.services.advisory_forward.notification_details import DetailDeliveryError, fingerprint, workbook_tables
 from backend.services.advisory_forward.notification_presentation import (
-    CARD_BUDGET, MOBILE_TOP_N, PRESENTATION_VERSION, mobile_card, overview_table,
+    CARD_BUDGET, PRESENTATION_VERSION, card_json_bytes, mobile_card, mobile_rows, overview_table,
 )
 from backend.services.advisory_forward.notification_transport import (
     AdvisoryNotificationTransport, ExternalNotificationDeliveryError,
@@ -35,35 +35,39 @@ def text(card):
     return '\n'.join(e.get('text', {}).get('content', '') for e in card['elements'])
 
 
-@pytest.mark.parametrize('top_n', [3, 5])
-def test_mobile_summary_keeps_original_rank_and_full_desktop_rows(top_n):
-    data = payload(7)
+def test_mobile_table_contains_all_stocks_after_first_page_and_keeps_original_rank():
+    data = payload(27)
     rows = data['detail_snapshot']['programs'][0]['cells'][1:]
     for i, row in enumerate(rows):
-        row[2], row[3], row[5], row[6] = '在荐', 7 - i, f'股票{i}', '持续推荐'
+        row[2], row[3], row[5], row[6] = '在荐', 27 - i, f'股票{i}', '持续推荐'
     sealed(data)
     before = copy.deepcopy(data)
-    card = mobile_card(data, URL, top_n=top_n)
+    card = mobile_card(data, URL)
     body = text(card)
-    assert f'最多 {top_n} 只' in body and '在荐 7' in body
-    assert body.index('1. 股票6') < body.index('2. 股票5')
-    assert f'{top_n + 1}. 股票' not in body
-    assert len(workbook_tables(data['detail_snapshot'])[-1][1]) == 8
+    assert '全量股票' in body and '在荐 27' in body
+    table = next(e for e in card['elements'] if e['tag'] == 'table')
+    assert table['page_size'] == 10 and len(table['rows']) == 27
+    assert table['rows'][0]['s'].startswith('1. 股票26')
+    assert table['rows'][-1]['s'].startswith('27. 股票0')
+    assert {r['s'].split('\n')[-1] for r in table['rows']} == {r[4] for r in rows}
+    assert len(workbook_tables(data['detail_snapshot'])[-1][1]) == 28
     assert card['elements'][-2]['actions'][0]['url'] == URL
     assert card['config']['wide_screen_mode'] is False
     assert data == before
 
 
-def test_summary_excludes_observation_and_explains_unknown_without_fake_zero():
+def test_table_keeps_unknown_without_fake_zero_and_pending_is_not_an_executed_exit():
     data = payload(3)
     row = data['detail_snapshot']['programs'][0]['cells'][2]
     row[6:10] = ['待核验', 'UNKNOWN', 'UNKNOWN', 'UNKNOWN']
     sealed(data)
-    body = text(mobile_card(data, URL))
-    assert '另有 1 项推荐状态待核验' in body
-    assert '连续天数待核验' in body and '开盘基准待形成' in body
-    assert '000000.SZ' not in body and '000002.SZ' not in body  # outside groups
-    assert '连续0日' not in body and '累计0.00%' not in body
+    card = mobile_card(data, URL)
+    table = next(e for e in card['elements'] if e['tag'] == 'table')
+    assert len(table['rows']) == 3  # One active and both pending-review rows.
+    assert table['rows'][0]['t'] == '待核验·天数待核验'
+    assert table['rows'][0]['v'] == '待开盘'
+    assert [r['t'] for r in table['rows'][1:]] == ['已移出·待复核'] * 2
+    assert '已退出' not in json.dumps(card, ensure_ascii=False)
     overview = overview_table(data['detail_snapshot'])
     assert overview[1][2] == 1 and overview[1][6] == 1 and overview[1][8] == 2
 
@@ -82,17 +86,40 @@ def test_desktop_overview_is_first_complete_and_not_a_return_ranking():
     assert tables[-1][1] == before
 
 
-def test_many_packages_still_have_one_bounded_card_and_all_desktop_details():
+def test_too_many_packages_fail_instead_of_omitting_any_package():
     data = payload(7)
     p = data['detail_snapshot']['programs'][0]
     data['detail_snapshot']['programs'] = [dict(copy.deepcopy(p), program_id=f'p{i}',
         program_name='策略包中文名称' * 20 + str(i)) for i in range(100)]
     sealed(data)
-    card = mobile_card(data, URL, top_n=5)
-    assert len(json.dumps(card, ensure_ascii=True).encode()) <= CARD_BUDGET
-    assert '/100 个策略包' in text(card) and '其余策略及全部股票' in text(card)
+    with pytest.raises(DetailDeliveryError, match='FULL_TABLE_COUNT_LIMIT'):
+        mobile_card(data, URL)
     assert len(overview_table(data['detail_snapshot'])) == 101
     assert len(workbook_tables(data['detail_snapshot'])) == 102
+
+
+def test_oversized_full_card_fails_without_top_n_fallback():
+    data = payload(400)
+    with pytest.raises(DetailDeliveryError, match='FULL_CARD_TOO_LARGE'):
+        mobile_card(data, URL)
+
+
+def test_removed_observation_exit_suggestion_pending_and_ordinary_watch_are_distinct():
+    data = payload(5)
+    rows = data['detail_snapshot']['programs'][0]['cells'][1:]
+    rows[0][2], rows[0][6] = '观察', '已移出'
+    rows[1][2], rows[1][6] = '待退出', '已移出'
+    rows[2][2], rows[2][6] = '待复核', '待核验'
+    rows[3][2], rows[3][6] = '在荐', '持续推荐'
+    rows[4][2], rows[4][6] = '观察', '待核验'
+    sealed(data)
+    selected, counts = mobile_rows(data['detail_snapshot']['programs'][0])
+    assert counts == dict(active=1, exits=2, pending=1)
+    assert len(selected) == 4 and selected[0]['s'].endswith('000003.SZ')
+    assert selected[1]['t'] == '已移出·观察'
+    assert selected[2]['t'] == '退出建议·已移出'
+    assert selected[3]['t'] == '待复核'
+    assert all('000004.SZ' not in r['s'] for r in selected)
 
 
 @pytest.mark.parametrize('url', ['http://localhost:3000/x', 'https://evil.example/sheets/doc1', URL + '?extra=1'])
@@ -171,9 +198,26 @@ def test_card_size_and_disabled_details_never_send(monkeypatch, transport):
     assert transport.send_detail_card(mobile_card(payload(), URL)) is False
 
 
-def test_preview_is_explicitly_labeled_and_default_top_n_is_finite():
+def test_table_test_is_explicitly_labeled_and_within_actual_utf8_budget():
     data = payload()
-    data['subject'] = '【测试】AIstock 手机摘要'
+    data['subject'] = '【测试】AIstock 手机全量表格'
     card = mobile_card(data, URL)
     assert '非新的荐股通知' in text(card)
-    assert MOBILE_TOP_N in (3, 5)
+    assert len(card_json_bytes(card)) <= CARD_BUDGET
+
+
+def test_card_guard_matches_actual_compact_utf8_wire_and_keeps_legacy_json_path(monkeypatch, transport):
+    import requests
+    calls = []
+    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: calls.append(kwargs) or SimpleNamespace(
+        status_code=200, json=lambda: {'code': 0}))
+    card = mobile_card(payload(60), URL)
+    assert transport.send_detail_card(card)
+    wire = calls[0]['data']
+    assert isinstance(wire, bytes) and len(wire) <= 20 * 1024
+    parsed = json.loads(wire)
+    assert wire == card_json_bytes(parsed) and parsed['card'] == card
+    assert '股票'.encode() in wire and b'\\u80a1' not in wire
+    assert calls[0]['headers']['Content-Type'] == 'application/json; charset=utf-8'
+    transport._post_webhook({'msg_type': 'text', 'content': {'text': 'legacy'}})
+    assert 'json' in calls[1] and 'data' not in calls[1]

@@ -61,7 +61,7 @@ def main():
             receipt['mobile_preview_prepared'] = True
             for key in ('message_started', 'message_accepted', 'message_payload_sha256'):
                 state.pop(key, None)
-            payload['subject'] = f"【测试】AIstock 手机摘要｜{payload['detail_snapshot']['target_date']}"
+            payload['subject'] = f"【测试】AIstock 手机全量表格｜{payload['detail_snapshot']['target_date']}"
             persist(receipt)
         if receipt.get('status') == 'FAILED':
             receipt.setdefault('resolved_failures', []).append({k: receipt[k] for k in (

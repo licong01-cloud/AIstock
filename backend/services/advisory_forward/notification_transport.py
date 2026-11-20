@@ -101,7 +101,12 @@ class AdvisoryNotificationTransport(NotificationService):
             key = (timestamp+'\n'+secret).encode('utf-8')
             signature = base64.b64encode(hmac.new(key, digestmod=hashlib.sha256).digest()).decode('ascii')
             data.update(timestamp=timestamp, sign=signature)
-        if len(json.dumps(data, allow_nan=False).encode('utf-8')) > 20 * 1024:
+        if data.get('msg_type') == 'interactive':
+            from .notification_presentation import card_json_bytes
+            encoded = card_json_bytes(data)
+        else:
+            encoded = json.dumps(data, allow_nan=False).encode('utf-8')
+        if len(encoded) > 20 * 1024:
             raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_TOO_LARGE')
         return data
 
@@ -124,6 +129,13 @@ class AdvisoryNotificationTransport(NotificationService):
     def _post_webhook(self, data: Dict):
         """Bounded strict HTTP transport; legacy transports remain inherited."""
         import requests
+        if (data.get('msg_type') == 'interactive' and self.config.get('advisory_feishu_details')
+                and self.config.get('advisory_feishu_completion_only')):
+            from .notification_presentation import card_json_bytes
+            return requests.post(
+                self.config['webhook_url'], data=card_json_bytes(data),
+                headers={'Content-Type': 'application/json; charset=utf-8'}, timeout=10,
+            )
         return requests.post(
             self.config['webhook_url'], json=data,
             headers={'Content-Type': 'application/json'}, timeout=10

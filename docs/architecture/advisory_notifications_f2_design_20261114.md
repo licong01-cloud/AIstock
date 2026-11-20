@@ -41,10 +41,11 @@
 - F-014：远端文档状态持久化、租约校验、重试复用已建文档；不确定创建/发送不盲目重复。
 - F-015：来源/权限/平台错误明确失败；有界读取与发布性能，不影响页面加载。
 - F-016：真实平台及人类打开验证、直接/既有DEV检查、多轮审核和源码/运行分态。
-- F-017：手机群消息为简洁卡片，按策略显示在荐/变更统计和原排名前N只预览，明确预览范围，可直接打开完整表格。
+- F-017：手机群消息按策略显示全量在荐、已移出、退出建议及待复核股票的分页表格，不再TopN预览或省略策略包，仍可打开电脑完整表格。
 - F-018：电脑表格默认进入策略总览，保留各包完整分组、19列详情、数据时点和解释；总览显示名单状态与数据完整度。
-- F-019：卡片和表格从同一冻结快照产生，原排名、未知与不适用语义不变；展示有界，不产生新的行情查询或收益口径。
+- F-019：卡片和表格从同一冻结快照产生，原排名、未知与不适用语义不变；分页只影响可见行数，完整数据保留，不能用摘要或截断替代，且不产生新行情查询或收益口径。
 - F-020：复用原专用发送器、签名、大小上限和队列租约/每日唯一键；发卡前完成本地构造校验，明确失败不伪造已发送，兼容其他通知。
+- F-021：专用卡片以真实紧凑UTF-8字节发送和计量20KB限制；全量无法容纳时明确报错，不静默删行、删包或拆成多条通知；实际群原始JSON和手机分页另验证。
 
 ## 2026-11-16 飞书完成通知增量合同
 
@@ -90,10 +91,11 @@
 | F-014 | backend/services/advisory_forward/notification_repository.py; backend/services/advisory_forward/feishu_sheets.py | backend/tests/advisory_model_first/test_advisory_notifications_pg.py; backend/tests/advisory_model_first/test_advisory_feishu_sheets.py | source_dev_passed | none |
 | F-015 | backend/services/advisory_forward/notification_details.py; backend/services/advisory_forward/feishu_sheets.py | backend/tests/advisory_model_first/test_advisory_feishu_sheets.py | source_passed | none |
 | F-016 | backend/tests/advisory_model_first/test_advisory_feishu_sheets.py; scripts/advisory_feishu_details.py | artifact: X:/AIstock_temp/ADVISORY/feishu-detail-sheet-20261120/task.json; artifact: X:/AIstock_temp/ADVISORY/feishu-detail-sheet-20261120/daily_detail_test_receipt.json | source_dev_provider_passed | none |
-| F-017 | backend/services/advisory_forward/notification_presentation.py | backend/tests/advisory_model_first/test_advisory_notification_presentation.py; artifact: X:/AIstock_temp/ADVISORY/feishu-dual-view-20261120/provider_test_receipt.json | source_provider_passed | none |
+| F-017 | backend/services/advisory_forward/notification_presentation.py | backend/tests/advisory_model_first/test_advisory_notification_presentation.py; artifact: X:/AIstock_temp/ADVISORY/feishu-mobile-tables-20261120/provider_test_receipt.json | source_provider_passed | none |
 | F-018 | backend/services/advisory_forward/notification_details.py | backend/tests/advisory_model_first/test_advisory_notification_presentation.py; artifact: X:/AIstock_temp/ADVISORY/feishu-dual-view-20261120/provider_test_receipt.json | source_provider_passed | none |
-| F-019 | backend/services/advisory_forward/notification_presentation.py | backend/tests/advisory_model_first/test_advisory_notification_presentation.py; artifact: X:/AIstock_temp/ADVISORY/feishu-dual-view-20261120/provider_test_receipt.json | source_provider_passed | none |
+| F-019 | backend/services/advisory_forward/notification_presentation.py | backend/tests/advisory_model_first/test_advisory_notification_presentation.py; artifact: X:/AIstock_temp/ADVISORY/feishu-mobile-tables-20261120/provider_test_receipt.json | source_provider_passed | none |
 | F-020 | backend/services/advisory_forward/notification_transport.py; backend/services/advisory_forward/feishu_sheets.py | backend/tests/advisory_model_first/test_advisory_feishu_sheets.py; backend/tests/advisory_model_first/test_advisory_notification_presentation.py; backend/tests/advisory_model_first/test_advisory_notifications.py | source_passed | none |
+| F-021 | backend/services/advisory_forward/notification_presentation.py; backend/services/advisory_forward/notification_transport.py | backend/tests/advisory_model_first/test_advisory_notification_presentation.py; artifact: X:/AIstock_temp/ADVISORY/feishu-mobile-tables-20261120/provider_test_receipt.json | source_provider_passed | none |
 
 ## 风险
 
@@ -147,3 +149,13 @@
 验收覆盖：摘要TopN与全量表格一致、原排名/分组/未知/数量与边界、超长/多包消息预算、URL和快照校验、旧断点恢复、发卡前失败不留下不确定发送标记、签名/真实拒绝/超时/旧通知兼容；随后进行标注测试的手机卡片、桌面总览及人类点击验收。实际群历史证明送达，手机显示不能由API返回的旧客户端兼容文案推导。多轮当前Agent审核及直接合同检查后，经精确HEAD CI交付源码；用户负责后端重启，自然任务通知另验收。
 
 双层展示源码/平台证据：101项直接与既有通知兼容测试通过，9个精确文件scope、Ruff、ownership、guardrail通过。真实平台发送一条标注测试的手机摘要卡片（3759字节），在配置群历史中核对唯一消息；卡片内容摘要与已保存发送状态一致，按钮指向原生工作簿。原工作簿新增策略总览置于index 0，全部6张工作表逐格读回、244行明细及原冻结hash保留、目标群view权限读回通过，无新增行情读取或正式队列写入。手机实际显示/按钮的人类反馈、源码CI/合入、后端用户重启及自然卡片发送均在本轮任务记录分态，不将API成功冒充手机或自然事件验收。
+
+## 2026-11-20 手机全量表格合同（替代TopN摘要）
+
+用户已要求手机显示每个包全部推荐股票和退出清单，本条替代此前F-017的Top3/Top5与超长时减少展示包数的方案。每个策略一个原生表格，三列为“股票”“状态”“累计涨跌”，股票列保留原排名、名称与证券代码。表格先放全部在荐股票，再放已移出/退出建议，最后放其他范围外待复核；手机每页10行，完整rows随同一卡持久化，翻页不会触发行情请求。普通观察候选仍在电脑明细中，已移出的观察股票则进入手机退出相关范围。标题和每行状态区分已移出、退出建议、待复核，不将名单变化当成交完成。
+
+按平台原生表格组件预算最多5个策略表，保留每日一条；当前4个运行包的已验收样本为87只在荐、71只已移出和16只其他待复核，共174行，不漏包、不截断。专用卡片改用紧凑UTF-8实际请求体计算并发送，沿用20KB发送上限并留18KB内容预算；若未来完整内容超过单卡能力，返回固定错误码，不退回摘要、不遗漏数据、不自动扩展多条通知授权。原有文本、邮件及其他模块发送路径保持。
+
+精确写范围：本文、`notification_presentation.py`、`notification_transport.py`、`test_advisory_notification_presentation.py`和`scripts/advisory_feishu_details.py`。任务回执为`X:/AIstock_temp/ADVISORY/feishu-mobile-tables-20261120/task.json`。先完成全量覆盖/状态/排序/分页/Unicode字节与实际wire一致/旧通道兼容的直接检查和多轮审核，再用同一历史冻结快照发送一条明确标注测试的全量表格卡片；读群历史时请求原始卡片JSON，逐包逐行核对。人类手机分页显示、源码CI/合入、用户重启和自然发送分别验收。无新的数据读取、训练、数据库更改、服务控制、审批或开关。
+
+本轮源码/平台验收：103项直接与旧通道兼容测试、Ruff、5文件scope、ownership、guardrail和quality L0通过。群内唯一全量测试卡片的原始JSON已读回，四表分别44/44/41/45行，174行的内容、顺序、列和page_size=10与发送内容逐项一致；原冻结hash与电脑完整明细保持。真实卡片为14891个UTF-8字节，ASCII转义会膨胀到22140字节，因此对专用卡片执行实际紧凑UTF-8发送，字节门禁和wire测试一致，原文本和其他通道不改。手机实际分页反馈、源码CI/合入和重启后自然事件证据仍按任务记录各自更新，不用API成功替代人类或运行验收。

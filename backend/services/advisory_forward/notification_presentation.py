@@ -7,10 +7,14 @@ from urllib.parse import urlsplit
 
 from .notification_details import CHANGES, GROUPS, HEADERS, DetailDeliveryError, cell, validate_snapshot
 
-PRESENTATION_VERSION = 'advisory_feishu_dual_view_v1'
-MOBILE_TOP_N = 3
-MAX_MOBILE_PROGRAMS = 8
+PRESENTATION_VERSION = 'advisory_feishu_mobile_full_tables_v2'
+MAX_MOBILE_TABLES = 5
 CARD_BUDGET = 18 * 1024  # Leave room under the existing 20KB sender limit for signing.
+
+
+def card_json_bytes(value):
+    """Exactly the compact UTF-8 representation used on the dedicated card wire."""
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
 
 
 def display(value, limit=80):
@@ -53,65 +57,79 @@ def overview_table(snapshot):
     return cells
 
 
-def _stock_lines(rows, top_n):
+def mobile_rows(program):
+    """All current recommendations and exit-related rows; never dedupe or slice."""
+    rows = program_rows(program)
+    active = [r for r in rows if r['分组'] == GROUPS['IN_SCOPE']]
+    exits = [r for r in rows if r['分组'] != GROUPS['IN_SCOPE'] and (
+        r['推荐状态'] == CHANGES['REMOVED'] or r['分组'] == GROUPS['OUTSIDE_EXIT'])]
+    pending = [r for r in rows if r['分组'] == GROUPS['OUTSIDE_PENDING']
+               and r['推荐状态'] != CHANGES['REMOVED']]
+
     def rank(row):
         value = row['排名']
         return value if type(value) in (int, float) and value > 0 else float('inf')
-    selected = sorted(rows, key=rank)[:top_n]  # Stable ties preserve saved-list order.
-    lines = []
+
+    # Stable ties/unknown ranks retain the saved-list ordering, not invented ranks.
+    selected = sorted(active, key=rank) + exits + pending
+    table_rows = []
     for row in selected:
-        label = str(row['排名']) if rank(row) != float('inf') else '排名待核验'
-        name = display(row['股票名称'], 20)
+        name = display(row['股票名称'], 30)
         if name == 'UNKNOWN':
             name = '名称待核验'
-        days = row['连续推荐(交易日)']
-        day_label = f'连续{days}日' if type(days) in (int, float) else '连续天数待核验'
+        if row['分组'] == GROUPS['IN_SCOPE']:
+            if rank(row) != float('inf'):
+                name = str(row['排名']) + '. ' + name
+            days = row['连续推荐(交易日)']
+            day_label = str(days) + '日' if type(days) in (int, float) else '天数待核验'
+            status = display(row['推荐状态']) + '·' + day_label
+        elif row['分组'] == GROUPS['OUTSIDE_EXIT']:
+            status = '退出建议' + ('·已移出' if row['推荐状态'] == CHANGES['REMOVED'] else '')
+        elif row['推荐状态'] == CHANGES['REMOVED']:
+            status = '已移出·' + display(row['分组'])
+        else:
+            status = '待复核'
         value = display(row['荐股期间累计涨跌'])
         if value == 'UNKNOWN':
-            value = '开盘基准待形成' if '开盘基准尚未形成' in row['缺失原因'] else '累计涨跌待核验'
-        else:
-            value = '累计' + value
-        lines.extend([f"{label}. {name} · {display(row['股票代码'], 16)}",
-                      f"{display(row['推荐状态'], 12)} · {day_label} · {value}"])
-    return lines
+            value = '待开盘' if '开盘基准尚未形成' in row['缺失原因'] else '待核验'
+        elif value.startswith('不适用'):
+            value = '不适用'
+        table_rows.append(dict(s=name + '\n' + display(row['股票代码'], 16), t=status, v=value))
+    return table_rows, dict(active=len(active), exits=len(exits), pending=len(pending))
 
 
-def mobile_card(payload, url, *, top_n=MOBILE_TOP_N):
+def mobile_card(payload, url):
     from .feishu_sheets import document_url
     snapshot = validate_snapshot(payload['detail_snapshot'])
     document_url(url, urlsplit(url).path.rsplit('/', 1)[-1])
-    if top_n not in {3, 5} or not snapshot.get('programs'):
-        raise DetailDeliveryError('DETAIL_MOBILE_PREVIEW_INVALID')
     programs = snapshot['programs']
-    preview = programs[:MAX_MOBILE_PROGRAMS]
-    while preview:
-        elements = [dict(tag='div', text=dict(tag='plain_text', content=(
-            ('【测试】历史名单样例，非新的荐股通知。\n' if payload['subject'].startswith('【测试】') else '') +
-            f"决策日 {snapshot['decision_date']} · 目标日 {snapshot['target_date']}\n"
-            f"{len(programs)} 个策略包已发布；各包按原排名预览最多 {top_n} 只在荐股票。")))]
-        for p in preview:
-            s = statistics(p)
-            lines = [display(p['program_name'], 60),
-                     f"在荐 {len(s['active'])} · 新入选 {s['changes'][CHANGES['NEW']]} · "
-                     f"持续 {s['changes'][CHANGES['CONTINUING']]} · 移出 {s['changes'][CHANGES['REMOVED']]}"]
-            if s['changes'][CHANGES['UNKNOWN']]:
-                lines.append(f"另有 {s['changes'][CHANGES['UNKNOWN']]} 项推荐状态待核验。")
-            lines.extend(_stock_lines(s['active'], top_n) or ['本包没有在荐股票，其他分组见完整表格。'])
-            elements.extend([dict(tag='hr'), dict(tag='div', text=dict(tag='plain_text', content='\n'.join(lines)))])
-        if len(preview) < len(programs):
-            elements.append(dict(tag='div', text=dict(tag='plain_text', content=(
-                f'此卡展示 {len(preview)}/{len(programs)} 个策略包，其余策略及全部股票请打开完整表格。'))))
-        elements.extend([
-            dict(tag='action', actions=[dict(tag='button', text=dict(tag='plain_text', content='打开完整荐股表格'),
-                                            type='primary', url=url)]),
-            dict(tag='note', elements=[dict(tag='plain_text', content=(
-                f"快照 {snapshot['captured_at']}；累计涨跌按连续荐股期间计算。\n"
-                '行情为冻结快照，各股日期及缺失原因见表格。'))]),
-        ])
-        card = dict(config={'wide_screen_mode': False},
-                    header=dict(title=dict(tag='plain_text', content=display(payload['subject'], 80)), template='blue'),
-                    elements=elements)
-        if len(json.dumps(card, ensure_ascii=True, allow_nan=False).encode()) <= CARD_BUDGET:
-            return card
-        preview = preview[:-1]
-    raise DetailDeliveryError('FEISHU_MOBILE_CARD_TOO_LARGE')
+    if not programs or len(programs) > MAX_MOBILE_TABLES:
+        raise DetailDeliveryError('FEISHU_MOBILE_FULL_TABLE_COUNT_LIMIT')
+    elements = [dict(tag='div', text=dict(tag='plain_text', content=(
+        ('【测试】历史名单样例，非新的荐股通知。\n' if payload['subject'].startswith('【测试】') else '') +
+        f"决策日 {snapshot['decision_date']} · 目标日 {snapshot['target_date']}\n"
+        f"全部 {len(programs)} 个策略包；表内含全量股票，每页10行可翻页。")))]
+    for p in programs:
+        rows, counts = mobile_rows(p)
+        heading = (display(p['program_name'], 80) + '\n' +
+                   f"在荐 {counts['active']} · 移出/退出建议 {counts['exits']} · 其他待复核 {counts['pending']}")
+        elements.extend([dict(tag='hr'), dict(tag='div', text=dict(tag='plain_text', content=heading))])
+        if rows:
+            elements.append(dict(tag='table', page_size=10, row_height='middle',
+                columns=[dict(name=k, display_name=v, data_type='text', width='auto')
+                         for k, v in [('s', '股票'), ('t', '状态'), ('v', '累计涨跌')]], rows=rows))
+        else:
+            elements.append(dict(tag='div', text=dict(tag='plain_text', content='本包暂无在荐或退出相关股票。')))
+    elements.extend([
+        dict(tag='action', actions=[dict(tag='button', text=dict(tag='plain_text', content='打开完整荐股表格'),
+                                        type='primary', url=url)]),
+        dict(tag='note', elements=[dict(tag='plain_text', content=(
+            f"快照 {snapshot['captured_at']}；累计涨跌按连续荐股期间计算。\n"
+            '移出指不在本次推荐范围；退出建议、待复核分别标注，成交结算另看详情。'))]),
+    ])
+    card = dict(config={'wide_screen_mode': False},
+                header=dict(title=dict(tag='plain_text', content=display(payload['subject'], 80)), template='blue'),
+                elements=elements)
+    if len(card_json_bytes(card)) > CARD_BUDGET:
+        raise DetailDeliveryError('FEISHU_MOBILE_FULL_CARD_TOO_LARGE')
+    return card
