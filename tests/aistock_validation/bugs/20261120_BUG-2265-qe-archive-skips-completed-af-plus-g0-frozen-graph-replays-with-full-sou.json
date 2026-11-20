@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2265",
-  "closed_at": null,
+  "closed_at": "2026-11-20T16:07:43.726727Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -127,11 +127,33 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_note": "Verify backend-main loaded the merge and that source-status recognizes experiments 986acc94, 8461c089 and e44a9978 with their original valid run IDs. Existing SKIP ingest history is retained.",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2265/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2265",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+      "expected_identity": "d53261e9135e80f7ad6206f923898ba259aa3767",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-20T16:05:04.021808Z",
+      "mode": "read_only",
+      "observed_identity": "66144a30e17d005173161bce4d3112b8df456d1a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c2307e16c0de388f72c56650c3f1fb84aaeb6abb9ab7a5a2e8b1117239240a01",
+      "receipt_sha256": "3e3f10ca72a8e96bc417945f8af0f7969fad4a5f79ea63f5bfe31a3f20140e34",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b6a7d30650979e58667d32d52ee8f0a98d34f62e3612470f865ed5bc6d369012",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -163,7 +185,7 @@
     ],
     "validation_evidence_digest": "c0385488e957be48fddac7552455aaca58c141c28c7e02bf6127367a428fbb0b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -174,7 +196,8 @@
   },
   "validation_evidence": [
     "python -m nox -s l0 -> passed",
-    "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py -> passed (39 tests)"
+    "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py -> passed (39 tests)",
+    "8001 original three AF_PLUS_G0 payloads dry run: AUTO and qe_lifecycle_valid_unique_c for all three; zero skips, failures or writes. See tmp/handoff/qe-af-g0-20261120/bug2265_live_g0_post_restart.json."
   ],
   "verification_budget": {
     "budget": "light",
