@@ -109,8 +109,8 @@
   },
   "first_seen_at": "2026-11-18T02:50:30.188554Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "834de40eafa300bcc65a9b1c435733cf77076a2a",
+  "fixed_at": "2026-11-18T03:10:02Z",
   "github_issue_number": 7316,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7316",
   "last_seen_at": "2026-11-18T02:50:30.188554Z",
@@ -118,6 +118,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7317",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -145,6 +146,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -156,7 +158,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2243",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6ebd2e9e65a19330",
+    "recorded_at": "2026-11-18T03:11:01.663511Z",
+    "runtime_contract_digest": "f37c7ee565791bb5812afe803ff4fcbe76076b457edaa64d41892d378388cd7a",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ab0d6bdf20a71c89a27073751ea6a5142eeea40b",
+    "source_merge_commit": "834de40eafa300bcc65a9b1c435733cf77076a2a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7317",
+    "validation_evidence": [
+      "validation-receipt: id=f6d5a36140c84949 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/multi_alpha_live.py backend/tests/test_multi_alpha_frozen_calendar.py tests/aistock_validation/bugs/20261118_BUG-2243-issue.json` result=`passed`",
+      "validation-receipt: id=0d81d807aec5c0e3 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/test_multi_alpha_frozen_calendar.py --disable-warnings` result=`11 passed; actual three native receipt fresh-process proof preserved in BUG runtime contract`",
+      "validation-receipt: id=c74a1b6f983aed51 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/strategy_package/multi_alpha_live.py backend/tests/test_multi_alpha_frozen_calendar.py` result=`passed`",
+      "validation-receipt: id=92db31af017c2112 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "db881cd8b6158b95fbcfe159fae17d0aa312162effb0d2b2cc01820666440cec"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -165,6 +191,12 @@
     "fingerprint": "6b0b82cbb256fee1eeef5faf",
     "source_event_id": "FE-20261118-6b0b82cbb256"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f6d5a36140c84949 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/multi_alpha_live.py backend/tests/test_multi_alpha_frozen_calendar.py tests/aistock_validation/bugs/20261118_BUG-2243-issue.json` result=`passed`",
+    "validation-receipt: id=0d81d807aec5c0e3 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/test_multi_alpha_frozen_calendar.py --disable-warnings` result=`11 passed; actual three native receipt fresh-process proof preserved in BUG runtime contract`",
+    "validation-receipt: id=c74a1b6f983aed51 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/strategy_package/multi_alpha_live.py backend/tests/test_multi_alpha_frozen_calendar.py` result=`passed`",
+    "validation-receipt: id=92db31af017c2112 commit=ab0d6bdf20a71c89a27073751ea6a5142eeea40b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "validation_notes": [
     "Correctness author review PASS: source transport and dataset_id are separate in InferenceEngine. Recompute expected canonical hash with dataset_files.day_calendar only for explicit FROZEN_DATASET_FILES; require complete lowercase SHA256 binding equal to calendar_version. Do not rewrite receipts or accept legacy wrong hash.",
     "Completeness/regression author review PASS: preserve strict window/universe/date comparisons, all per-seed/leg receipts and frozen binding through nested aggregation. DB path unchanged; missing/tampered/mixed identities fail closed. No model, seed roster, IC weight, formula, execution, dataset, original assets or service changes.",
