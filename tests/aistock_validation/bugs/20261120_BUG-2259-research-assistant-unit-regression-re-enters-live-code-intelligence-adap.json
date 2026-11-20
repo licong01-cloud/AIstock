@@ -1,7 +1,8 @@
 {
   "actual": "Nightly 44594962096 timed out at 302.781s. Offline exact node passed; scoped profile isolates repeated graph subprocess work.",
   "allowed_write_scope": [
-    "backend/tests/research_assistant/test_service.py",
+    "noxfile.py",
+    "backend/tests/research_assistant/conftest.py",
     "tests/aistock_validation/bugs/20261120_BUG-2259-research-assistant-unit-regression-re-enters-live-code-intelligence-adap.json"
   ],
   "assigned_agent": null,
@@ -10,7 +11,8 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Successful natural Nightly on a post-merge main revision with research_assistant_backend selected and the full session receipt passing under its existing budget."
   ],
   "created_at": "2026-11-20T06:12:05.614414Z",
   "description": "Nightly 44594962096 timed out at 302.781s. Offline exact node passed; scoped profile isolates repeated graph subprocess work.",
@@ -27,23 +29,43 @@
   ],
   "expected": "Complete the same Research Assistant test roster within the existing 300s budget and preserve graph contract coverage.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/research_assistant/conftest.py"
+    ],
     "changed_files": [
-      "backend/tests/research_assistant/test_service.py"
+      "noxfile.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
-        "backend/tests/research_assistant/test_service.py"
+        "noxfile.py",
+        "backend/tests/research_assistant/conftest.py"
       ],
       "impacted_modules": [
-        "research_assistant",
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
+        "validation.module_quality",
         "tests.backend",
-        "validation.runner"
+        "tests.frontend",
+        "research_assistant"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/research_assistant/test_service.py",
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "backend/tests/research_assistant/conftest.py",
           "impact_modules": [
             "tests.backend",
             "validation.runner"
@@ -57,16 +79,19 @@
         "high"
       ],
       "suggested_scope": [
-        "backend/tests/research_assistant/test_service.py"
+        "noxfile.py",
+        "backend/tests/research_assistant/conftest.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/research_assistant/test_service.py"
+      "noxfile.py",
+      "backend/tests/research_assistant/conftest.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/research_assistant/test_service.py"
+      "noxfile.py",
+      "backend/tests/research_assistant/conftest.py"
     ]
   },
   "first_seen_at": "2026-11-20T06:12:05.614414Z",
@@ -75,6 +100,7 @@
   "fixed_at": null,
   "github_issue_number": 7364,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7364",
+  "implementation_and_review": "Keep all 446 cases. Chat, route and memory contract tests isolate their graph query dependency. Dedicated code-context injection and cache tests keep the real contract. Nightly uses two deterministic file shards and separate scratch prompt caches. Catalog budget 300s and normal CI/local test entry are unchanged.",
   "last_seen_at": "2026-11-20T06:12:05.614414Z",
   "module": "research_assistant",
   "non_goals": [
@@ -102,7 +128,9 @@
     "target_id": null,
     "target_ids": []
   },
+  "scheduled_acceptance": "pending_post_merge_nightly",
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_evidence": "The offline fixture removes repeated query subprocesses without affecting graph tests. At about 300s the serial full suite was still near 80 percent, so complete Nightly RA must use two file shards with separate temporary prompt caches. Keep normal CI/local route and 300s unchanged.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
