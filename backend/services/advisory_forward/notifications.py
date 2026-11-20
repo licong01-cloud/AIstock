@@ -200,11 +200,13 @@ class AdvisoryNotificationService:
                 break
             try:
                 if row['channel'] == 'webhook' and row['payload'].get('delivery_route') == FEISHU_DETAIL_ROUTE:
+                    from .notification_presentation import mobile_card
                     accepted = self.transport.detail_delivery().deliver(
                         row['payload'],
                         lambda state: self.repository.checkpoint_detail(
                             row, state, self.now_provider().astimezone(CN)),
-                        lambda subject, message: self.transport.send_external_message('webhook', subject, message),
+                        lambda subject, card: self.transport.send_detail_card(card),
+                        prepare_message=mobile_card,
                     ) is True
                 else:
                     accepted = self.transport.send_external_message(

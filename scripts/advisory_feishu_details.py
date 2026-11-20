@@ -21,16 +21,21 @@ def main():
     parser.add_argument('--send-test', action='store_true', required=True)
     parser.add_argument('--refresh-test-table', action='store_true',
                         help='Repair an already sent labeled test table at the same URL; no new message.')
+    parser.add_argument('--send-mobile-preview', action='store_true',
+                        help='Send one labeled mobile preview using the existing frozen test table; resumable without resend.')
     args = parser.parse_args()
     from dotenv import load_dotenv
     load_dotenv(args.env_file, override=False)
     from backend.services.advisory_forward.feishu_sheets import DetailSheetDelivery, FeishuSheetsClient
     from backend.services.advisory_forward.notification_details import DetailSnapshotBuilder
+    from backend.services.advisory_forward.notification_presentation import mobile_card
     from backend.services.advisory_forward.notification_repository import AdvisoryNotificationRepository
     from backend.services.advisory_forward.notification_transport import AdvisoryNotificationTransport
     from backend.services.advisory_forward.notifications import completion_events_for_day
     cn = ZoneInfo('Asia/Shanghai')
     now = datetime.now(cn)
+    if args.refresh_test_table and args.send_mobile_preview:
+        parser.error('Choose table repair or a mobile preview, not both in one invocation.')
     if args.decision_date >= now.date():
         parser.error('Use a completed prior decision day for the labeled historical test.')
     if not args.receipt.parent.is_dir():
@@ -47,6 +52,17 @@ def main():
         if receipt.get('decision_date') != str(args.decision_date):
             parser.error('Receipt identity does not match the requested decision day.')
         payload = receipt['payload']
+        if args.send_mobile_preview and not receipt.get('mobile_preview_prepared'):
+            state = payload.get('sheet_delivery_state') or {}
+            if not (payload['subject'].startswith('【测试】') and state.get('document_token') and state.get('message_accepted')):
+                parser.error('Mobile preview requires an already accepted labeled test document.')
+            from backend.services.advisory_forward.notification_details import fingerprint
+            receipt['prior_test_delivery_state_sha256'] = fingerprint(state)
+            receipt['mobile_preview_prepared'] = True
+            for key in ('message_started', 'message_accepted', 'message_payload_sha256'):
+                state.pop(key, None)
+            payload['subject'] = f"【测试】AIstock 手机摘要｜{payload['detail_snapshot']['target_date']}"
+            persist(receipt)
         if receipt.get('status') == 'FAILED':
             receipt.setdefault('resolved_failures', []).append({k: receipt[k] for k in (
                 'reason_code', 'error_type', 'error_frames') if k in receipt})
@@ -70,7 +86,7 @@ def main():
                 payload['sheet_delivery_state'].pop(key, None)
             persist(receipt)
     else:
-        if args.refresh_test_table:
+        if args.refresh_test_table or args.send_mobile_preview:
             parser.error('Test refresh requires the exact existing receipt and document.')
         target, rows = AdvisoryNotificationRepository().snapshot(args.decision_date)
         events = completion_events_for_day(datetime.combine(args.decision_date, time(23, 59, 59), cn),
@@ -97,8 +113,8 @@ def main():
     transport.config = dict(transport.config, advisory_feishu_details=True)
     try:
         DetailSheetDelivery(client).deliver(payload, checkpoint, lambda subject, message:
-            transport.send_external_message('webhook', subject, '【测试：历史已发布名单，非新的荐股通知】\n' + message),
-            update_test_table=args.refresh_test_table)
+            transport.send_detail_card(message),
+            update_test_table=args.refresh_test_table, prepare_message=mobile_card)
     except Exception as exc:
         import traceback
         from backend.services.advisory_forward.notification_details import DetailDeliveryError
@@ -111,6 +127,8 @@ def main():
         return 1
     receipt.update(status='UPDATED_TEST_TABLE_NO_MESSAGE' if args.refresh_test_table else 'SENT_TEST_ONLY',
                    finished_at=datetime.now(cn).isoformat())
+    if args.send_mobile_preview:
+        receipt['status'] = 'MOBILE_PREVIEW_SENT_TEST_ONLY'
     receipt.pop('pending_test_refresh', None)
     persist(receipt)
     print(json.dumps({'status': receipt['status'], 'url': payload['sheet_delivery_state']['document_url'],

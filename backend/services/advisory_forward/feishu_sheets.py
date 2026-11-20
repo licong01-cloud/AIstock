@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .notification_details import DetailDeliveryError, workbook_tables
+from .notification_details import DetailDeliveryError, fingerprint, workbook_tables
 
 BASE = 'https://open.feishu.cn/open-apis'
 RESOURCE = re.compile(r'^[a-zA-Z0-9_-]+$')
@@ -139,7 +139,7 @@ class DetailSheetDelivery:
     def __init__(self, client, *, timer=monotonic):
         self.client, self.timer = client, timer
 
-    def deliver(self, payload, checkpoint, send, *, update_test_table=False):
+    def deliver(self, payload, checkpoint, send, *, update_test_table=False, prepare_message=None):
         """No database transaction spans a remote operation. Checkpoint renews the lease."""
         tables = workbook_tables(payload['detail_snapshot'])
         state = copy.deepcopy(payload.get('sheet_delivery_state') or {})
@@ -165,6 +165,8 @@ class DetailSheetDelivery:
         save(destination_hash=destination)
         if state.get('message_accepted') and not update_test_table:
             return True
+        if state.get('message_started') and not update_test_table:
+            raise DetailDeliveryError('FEISHU_MESSAGE_OUTCOME_UNKNOWN_NO_RESEND')
         if not state.get('document_token'):
             if state.get('create_started'):
                 raise DetailDeliveryError('FEISHU_CREATE_OUTCOME_UNKNOWN_NO_RECREATE')
@@ -178,6 +180,11 @@ class DetailSheetDelivery:
             save(document_token=token, document_url=url)
         token = resource(state['document_token'])
         url = document_url(state['document_url'], token)
+        from .notification_presentation import PRESENTATION_VERSION
+        if state.get('presentation_version') != PRESENTATION_VERSION:
+            # Old unsent documents may have the five original tabs. Preserve their
+            # verified rows and add the overview; never rewrite a sent notification.
+            state['table_verified'] = False
         if not state.get('table_verified'):
             done = set(state.get('completed_tables') or [])
             for title, cells in tables:
@@ -190,10 +197,13 @@ class DetailSheetDelivery:
                 if not matched:
                     # Reuse the initial empty sheet for the explanatory tab. Other tabs
                     # have deterministic names; after a lost add response query before add.
-                    if title == '使用说明' and len(sheets) == 1 and not done:
+                    if title == tables[0][0] and len(sheets) == 1 and not done:
                         operation = {'updateSheet': {'properties': {'sheetId': sheets[0]['sheet_id'], 'title': title}}}
                     else:
-                        operation = {'addSheet': {'properties': {'title': title}}}
+                        properties = {'title': title}
+                        if title == '策略总览':
+                            properties['index'] = 0
+                        operation = {'addSheet': {'properties': properties}}
                     call(self.client.properties, token, [operation])
                     matched = [s for s in call(self.client.sheets, token) if s['title'] == title]
                 if len(matched) != 1:
@@ -206,7 +216,7 @@ class DetailSheetDelivery:
                 call(self.client.values, token, sid, cells)
                 done.add(title)
                 save(completed_tables=sorted(done))
-            save(table_verified=True)
+            save(table_verified=True, presentation_version=PRESENTATION_VERSION)
         # Verify ACL on each attempt; a prior successful write does not prove access.
         if not call(self.client.chat_permissions, token):
             call(self.client.share, token)
@@ -217,11 +227,15 @@ class DetailSheetDelivery:
             # Explicit operator-only repair of a labeled test. Production callers
             # never select this path and still require actual message acceptance.
             return True
-        if state.get('message_started'):
-            raise DetailDeliveryError('FEISHU_MESSAGE_OUTCOME_UNKNOWN_NO_RESEND')
-        save(message_started=True)
         message = (f"{payload['detail_snapshot']['decision_date']} 荐股任务已完成。\n"
                    f"目标日 {payload['detail_snapshot']['target_date']}，点击查看全部策略包详情：\n{url}")
+        if prepare_message is not None:
+            message = prepare_message(payload, url)
+        message_sha = fingerprint(message)
+        if state.get('message_payload_sha256', message_sha) != message_sha:
+            raise DetailDeliveryError('FEISHU_MESSAGE_PAYLOAD_CHANGED')
+        # Prepare and validate locally before recording an uncertain remote send.
+        save(message_started=True, message_payload_sha256=message_sha)
         # Exceptions preserve message_started; never blindly repeat an uncertain send.
         accepted = send(payload['subject'], message) is True
         if not accepted:
