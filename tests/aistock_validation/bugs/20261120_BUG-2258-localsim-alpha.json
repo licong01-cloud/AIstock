@@ -106,7 +106,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh-process exact LocalSIM product creation against existing DEV with read-only production PIT, trading calendar and target readiness. UPDATED3 and OLD5 each created an independent 5,000,000 CNY ledger and a 2026-01-05 through 2026-11-19 native replay. Both exact retries returned the original job ID and rollback removed the DEV jobs. DEV receipt SHA256 48f70e8cbf8f1f2f1c5bb328e24b702d112e5f38e7a42d00023e13906939378a. No production writes."
+    ],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
