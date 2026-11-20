@@ -1063,17 +1063,20 @@ rules:
     impact_modules: [paper_v2]
     layer: backend_test
     risk_level: critical
-    ownership_reason: Dedicated MiniQMT broker tests are owned by the retired runtime's local manual plan.
+    ownership_reason: Dedicated MiniQMT broker tests are archived under the retired runtime owner.
   - rule_id: miniqmt_diagnostic_scripts
     priority: 96
     include:
       - scripts/miniqmt_current_three_inventory.py
       - scripts/miniqmt_b0_quote_v2_pilot.py
+      - scripts/miniqmt_b0_quote_v2_route_migration.py
+      - scripts/export_miniqmt_execution_tca_evidence.py
+      - scripts/rebuild_miniqmt_execution_tca.py
     primary_module: miniqmt_execution_runtime
     impact_modules: []
     layer: script
     risk_level: critical
-    ownership_reason: MiniQMT shadow inventory and B0 pilot scripts use the broker-specific manual plan.
+    ownership_reason: MiniQMT shadow inventory and B0 pilot scripts belong to the retired broker runtime.
   - rule_id: miniqmt_broker_runtime_seams
     priority: 97
     include:
@@ -1082,6 +1085,18 @@ rules:
       - backend/services/simulation_runtime/miniqmt_quote_activation.py
       - backend/services/simulation_runtime/miniqmt_quote_context.py
       - backend/services/simulation_runtime/miniqmt_route_migration.py
+      - backend/services/simulation_runtime/tca_capture.py
+      - backend/services/simulation_runtime/tca_eod_observation.py
+      - backend/services/simulation_runtime/tca_observation_metrics.py
+      - backend/services/simulation_runtime/tca_read_api.py
+      - backend/services/qmt_strategy_ledger/tca_*.py
+      - backend/services/trading_core/miniqmt_*.py
+      - backend/execution_algos/vnpy_style/**
+      - backend/services/paper_trading_v2/broker/minqmtsim.py
+      - backend/services/paper_trading_v2/execution/minqmt_*.py
+      - backend/data_service/miniqmt_adapter.py
+      - backend/miniqmt_quote_contract_config.py
+      - backend/miniqmt_quote_contract_env.py
     primary_module: miniqmt_execution_runtime
     impact_modules: [simulation_runtime]
     layer: trading_runtime
@@ -1090,7 +1105,9 @@ rules:
   - rule_id: miniqmt_execution_kernel_migrations
     priority: 96
     include:
-      - backend/migrations/miniqmt_execution_kernel_*.sql
+      - backend/migrations/miniqmt_*.sql
+      - backend/migrations/paper_v2_miniqmt_*.sql
+      - backend/migrations/paper_v2_minqmt_*.sql
     primary_module: miniqmt_execution_runtime
     impact_modules: [paper_v2]
     layer: database
@@ -1149,7 +1166,6 @@ rules:
       - backend/tests/advisory_phase1/test_stage_trace.py
       - backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py
       - backend/tests/qmt_strategy_ledger/test_router_summary.py
-      - backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py
       - backend/tests/scripts/test_strategy_package_binding_refreeze.py
       - backend/tests/simulation_architecture/**
       - backend/tests/simulation_data/**
@@ -1251,8 +1267,6 @@ rules:
     include:
       - backend/execution_algos/**
       - configs/execution_algos/**
-      - backend/tests/trading_core/test_vnpy_style_execution_assets.py
-      - backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py
     primary_module: paper_v2
     impact_modules: [miniqmt_execution_runtime, simulation_runtime, qe.core, strategy_package]
     layer: execution_algo

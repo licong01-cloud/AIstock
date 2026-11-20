@@ -465,26 +465,6 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
     return sessions
 
 
-def _manual_backend_sessions(plan_keys: list[str], plans: dict[str, dict[str, Any]]) -> list[str]:
-    sessions: list[str] = []
-    for key in plan_keys:
-        plan = plans.get(key) or {}
-        policy = plan.get("runtime_policy") or {}
-        session = str(plan.get("nox_session") or "").strip()
-        if (
-            plan.get("ci_lane") == "backend"
-            and plan.get("enabled", True)
-            and plan.get("ci_enabled") is False
-            and policy.get("default_trigger") == "manual"
-            and policy.get("allow_github_actions") is False
-            and policy.get("allow_local_manual") is True
-            and session
-            and session not in sessions
-        ):
-            sessions.append(session)
-    return sessions
-
-
 def _apply_plan_subsumption(
     plan_keys: list[str], plans: dict[str, dict[str, Any]]
 ) -> tuple[list[str], dict[str, str]]:
@@ -719,27 +699,22 @@ def _changed_test_plan_coverage(
     *,
     repo_root: Path,
     file_backend_sessions: dict[str, list[str]],
-    file_manual_sessions: dict[str, list[str]],
     frontend_test_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     test_files = [path for path in paths if _is_python_test_file(path, repo_root=repo_root)]
-    selected_sessions = list(dict.fromkeys(
-        session for path in test_files
-        for session in file_backend_sessions.get(path, []) + file_manual_sessions.get(path, [])
-    ))
+    selected_sessions = list(
+        dict.fromkeys(session for path in test_files for session in file_backend_sessions.get(path, []))
+    )
     targets_by_session, resolution_error = _selected_nox_test_targets(
         repo_root=repo_root,
         sessions=selected_sessions,
     )
     coverage: dict[str, list[str]] = {}
-    manual_coverage: dict[str, list[str]] = {}
+    deferred_test_files: list[str] = []
     for path in test_files:
         sessions = file_backend_sessions.get(path, [])
         if not sessions:
-            manual_coverage[path] = [
-                session for session in file_manual_sessions.get(path, [])
-                if any(_test_target_covers_path(target, path) for target in targets_by_session.get(session, set()))
-            ]
+            deferred_test_files.append(path)
             continue
         coverage[path] = [
             session
@@ -754,18 +729,13 @@ def _changed_test_plan_coverage(
             f"frontend:{target}" for target in frontend_test_targets or []
             if _test_target_covers_path(f"frontend/{target}", path)
         ]
-    unexecuted = [
-        path for path in test_files + frontend_tests
-        if (path in coverage or file_manual_sessions.get(path))
-        and not coverage.get(path) and not manual_coverage.get(path)
-    ]
+    unexecuted = [path for path, covering_sessions in coverage.items() if not covering_sessions]
     return {
         "changed_test_files": test_files + frontend_tests,
-        "backend_changed_test_files": [path for path in test_files if not manual_coverage.get(path)],
+        "backend_changed_test_files": test_files,
         "frontend_changed_test_files": frontend_tests,
         "coverage": coverage,
-        "manual_coverage": {path: sessions for path, sessions in manual_coverage.items() if sessions},
-        "deferred_test_files": [path for path in test_files if path not in coverage and path not in unexecuted],
+        "deferred_test_files": deferred_test_files,
         "resolution_error": resolution_error,
         "unexecuted_test_files": unexecuted,
     }
@@ -802,6 +772,10 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
     catalog = flow.validation_catalog_snapshot()
     plans = catalog.plans
     selection = flow.select_validation(paths, _catalog=catalog)
+    retired_files = {
+        rule["file"] for rule in (selection.get("ownership") or {}).get("matched_rules", [])
+        if (catalog.modules.get(rule["primary_module"]) or {}).get("validation_retired") is True
+    }
     budget_ownership = flow.match_changed_files(
         budget_scope_paths, _modules=catalog.modules, _rules=catalog.rules,
     ) if budget_scope_paths else {}
@@ -811,8 +785,10 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
     mapped_files: list[str] = []
     unmapped_files: list[str] = []
     file_backend_sessions: dict[str, list[str]] = {}
-    file_manual_sessions: dict[str, list[str]] = {}
     for path in paths:
+        if path in retired_files:
+            mapped_files.append(path)
+            continue
         path_selection = flow.select_validation([path], _catalog=catalog)
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
         if _is_frontend_path(path):
@@ -838,7 +814,6 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
         has_related_deferred_plan = any(
             plan_key not in SHARED_PLAN_KEYS
             and bool((plans.get(plan_key) or {}).get("enabled", True))
-            and (plans.get(plan_key) or {}).get("ci_enabled") is not False
             and (
                 bool((plans.get(plan_key) or {}).get("runner_enabled", True))
                 or _plan_requires_dev_db(plans.get(plan_key) or {})
@@ -846,10 +821,8 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
             for plan_key in required_plans
         )
         path_sessions = _backend_sessions_from_selection({"required_plans": required_plans}, plans)
-        manual_sessions = _manual_backend_sessions(required_plans, plans)
         file_backend_sessions[path] = path_sessions
-        file_manual_sessions[path] = manual_sessions
-        if path_sessions or manual_sessions or has_related_deferred_plan:
+        if path_sessions or has_related_deferred_plan:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
@@ -873,9 +846,9 @@ def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str
         "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
         "mapped_files": mapped_files,
+        "retired_files": sorted(retired_files),
         "unmapped_code_files": unmapped_files,
         "file_backend_sessions": file_backend_sessions,
-        "file_manual_sessions": file_manual_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
         "required_plans": selected_plan_keys,
         "workflow_budget_required": any(
@@ -1117,11 +1090,11 @@ def classify_changed_files(
         blocking.append(
             "unmapped executable code must declare a direct CI test mapping: " + ", ".join(unmapped_code_files)
         )
+    retired_validation_files = catalog_selection["retired_files"]
     changed_test_plan_coverage = _changed_test_plan_coverage(
-        business_files,
+        [path for path in business_files if path not in retired_validation_files],
         repo_root=repo_root,
         file_backend_sessions=catalog_selection["file_backend_sessions"],
-        file_manual_sessions=catalog_selection["file_manual_sessions"],
         frontend_test_targets=frontend_test_targets,
     )
     unexecuted_test_files = changed_test_plan_coverage["unexecuted_test_files"]
@@ -1158,12 +1131,10 @@ def classify_changed_files(
         )
     if prompt_evaluation_files:
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
-    plans = flow._plans_by_key()
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
-    manual_sessions = _manual_backend_sessions(selected_plan_keys, plans)
-    if manual_sessions:
-        reasons.append("catalog reserves backend sessions for local manual validation: " + ", ".join(manual_sessions))
+    if retired_validation_files:
+        reasons.append("catalog ownership excludes retired modules from active validation")
     if suppressed_plan_keys:
         reasons.append(
             "redundant validation plans were subsumed: "
@@ -1209,6 +1180,7 @@ def classify_changed_files(
         classification = "go_ci_required"
     elif backend_required or frontend_required or go_required:
         classification = "targeted_ci_required"
+    plans = flow._plans_by_key()
     plan_routing = [_plan_routing(plan_key, plans.get(plan_key) or {}) for plan_key in selected_plan_keys]
     runner_kind = (
         "windows_ai_stock_ci"
@@ -1258,6 +1230,7 @@ def classify_changed_files(
         "suppressed_plan_keys": suppressed_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
+        "retired_validation_files": retired_validation_files,
         "frontend_required": frontend_required,
         "frontend_test_targets": frontend_test_targets,
         "frontend_files": frontend_files,

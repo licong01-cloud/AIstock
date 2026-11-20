@@ -1371,7 +1371,6 @@ def paper_v2_backend(session: nox.Session) -> None:
         "backend/tests/trading_core/test_minute_execution.py",
         "backend/tests/trading_core/test_v25_1_small_cap_contract.py",
         "backend/tests/trading_core/test_v25_execution_contract.py",
-        "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
     ]
     if _hosted_ci():
         # Hosted Linux runners have an ephemeral DB, not the pre-seeded local
@@ -1684,7 +1683,6 @@ def simulation_core_l2(session: nox.Session) -> None:
         "backend/tests/advisory_phase1/test_stage_trace.py",
         "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
         "backend/tests/qmt_strategy_ledger/test_router_summary.py",
-        "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
         "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
         "backend/tests/qmt_strategy_ledger/test_repository.py",
         "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
@@ -1712,50 +1710,12 @@ def localsim_successor_core_dev_db(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
-def miniqmt_execution_runtime_l2(session: nox.Session) -> None:
-    """Manually run retired MiniQMT broker execution and compatibility tests."""
-    session.run(
-        "python",
-        "-m",
-        "compileall",
-        "backend/infra/realtime_quote_subscriber.py",
-        "backend/services/miniqmt_execution_runtime",
-        "backend/services/qmt_strategy_ledger/order_service.py",
-        "backend/services/qmt_strategy_ledger/repository.py",
-        external=True,
-    )
-    _run_pytest(
-        session,
-        "backend/tests/miniqmt_execution_runtime",
-        "backend/tests/qmt_strategy_ledger",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
-
-
-@nox.session(venv_backend="none")
 def localsim_unattended_l3(session: nox.Session) -> None:
     """Run current LocalSim scheduler/restart regression slice."""
     _run_pytest(
         session,
         "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
         "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
-
-
-@nox.session(venv_backend="none")
-def miniqmt_sim_stub_l3(session: nox.Session) -> None:
-    """Manually run fake MiniQMT SIM order, sync and reconciliation tests."""
-    _run_pytest(
-        session,
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
-        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
-        "backend/tests/qmt_strategy_ledger/test_sync_service.py",
-        "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1807,40 +1767,6 @@ def simulation_runtime_ops_ui(session: nox.Session) -> None:
         )
     finally:
         os.chdir(old_cwd)
-
-
-@nox.session(venv_backend="none")
-def simulation_dual_backend_l4(session: nox.Session) -> None:
-    """Run dual-backend backend oracle coverage; UI/soak remains a separate gate."""
-    session.run(
-        "python",
-        "-m",
-        "compileall",
-        "backend/services/simulation_runtime",
-        "backend/routers/qmt_strategy_ledger.py",
-        "backend/db/init_trading_core_v2_schema.py",
-        external=True,
-    )
-    _run_pytest(
-        session,
-        "backend/tests/simulation_runtime",
-        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
-        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
-        "backend/tests/qmt_strategy_ledger/test_sync_service.py",
-        "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
-
-
-@nox.session(venv_backend="none")
-def miniqmt_sim_trading_hours_l5(session: nox.Session) -> None:
-    """Manual controlled MiniQMT SIM trading-hours gate."""
-    session.skip(
-        "MiniQMT SIM L5 is a manual trading-hours gate and must use a separately approved runbook with real "
-        "MiniQMT SIM evidence; this nox entry is catalog-only and never fabricates success."
-    )
 
 
 @nox.session(venv_backend="none")

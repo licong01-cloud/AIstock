@@ -58,7 +58,7 @@ def test_enabled_validation_plans_have_unambiguous_execution_modes() -> None:
         counts[effective_mode] += 1
 
     assert sum(counts.values()) == enabled_plan_count
-    assert set(counts) == {"controlled_runner", "delegated", "ci", "operator"}
+    assert {"controlled_runner", "delegated", "ci"} <= set(counts)
 
 
 def _write_pass_repo(repo_root: Path) -> None:

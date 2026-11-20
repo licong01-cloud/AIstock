@@ -655,10 +655,10 @@ def test_unified_monthly_worker_selects_its_direct_qlib_data_test(tmp_path: Path
     )
 
 
-def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
+def test_qmt_strategy_ledger_keeps_shared_contracts_when_retired_assets_change(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
-            "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+            "backend/execution_algos/vnpy_style/__init__.py",
             "backend/services/qmt_strategy_ledger/order_service.py",
             "backend/services/qmt_strategy_ledger/repository.py",
             "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
@@ -669,20 +669,22 @@ def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_se
 
     _assert_fields(payload,
         classification='targeted_ci_required', backend_required=True,
-        backend_sessions=['paper_v2_backend', 'simulation_core_l2'], unmapped_code_files=[],
+        backend_sessions=['simulation_core_l2'], unmapped_code_files=[],
     )
 
 
 @pytest.mark.parametrize("path", [
     "backend/services/miniqmt_execution_runtime/runtime.py",
     "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/tca_eod_observation.py",
     "backend/infra/realtime_quote_subscriber.py",
     "scripts/miniqmt_b0_quote_v2_pilot.py",
+    "backend/execution_algos/vnpy_style/__init__.py",
     "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
     "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
     "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
 ])
-def test_retired_miniqmt_paths_are_mapped_without_automatic_backend_validation(path: str) -> None:
+def test_retired_miniqmt_paths_are_mapped_outside_validation(path: str) -> None:
     result = classifier.classify_changed_files([path])
 
     _assert_fields(
@@ -690,26 +692,8 @@ def test_retired_miniqmt_paths_are_mapped_without_automatic_backend_validation(p
         backend_required=False, backend_sessions=[], unmapped_code_files=[],
         unexecuted_test_files=[], backend_changed_test_files=[],
     )
-    assert "miniqmt_execution_runtime_l2" in result["selected_plan_keys"]
-    if path.startswith("backend/tests/"):
-        coverage = result["changed_test_plan_coverage"]
-        assert coverage["deferred_test_files"] == [path]
-        assert coverage["manual_coverage"] == {path: ["miniqmt_execution_runtime_l2"]}
-
-
-def test_manual_plan_requires_a_matching_nox_target(tmp_path: Path) -> None:
-    path = "backend/tests/miniqmt_execution_runtime/test_new_contract.py"
-    _write_test_file(tmp_path, path)
-    (tmp_path / "noxfile.py").write_text(
-        "def miniqmt_execution_runtime_l2(session):\n"
-        "    _run_pytest(session, 'backend/tests/miniqmt_execution_runtime/test_other.py')\n",
-        encoding="utf-8",
-    )
-
-    result = classifier.classify_changed_files([path], repo_root=tmp_path)
-
-    _assert_fields(result, workflow_gate="blocked", unexecuted_test_files=[path])
-    assert result["changed_test_plan_coverage"]["manual_coverage"] == {}
+    assert result["retired_validation_files"] == [path]
+    assert result["selected_plan_keys"] == []
 
 
 def test_advisory_and_localsim_pr_keeps_automatic_contract_coverage() -> None:
@@ -740,7 +724,7 @@ def test_advisory_and_localsim_pr_keeps_automatic_contract_coverage() -> None:
     assert set(coverage["coverage"]) == set(paths[4:-1])
     assert all(coverage["coverage"].values())
     assert result["backend_changed_test_files"] == paths[4:-1]
-    assert coverage["manual_coverage"] == {paths[-1]: ["miniqmt_execution_runtime_l2"]}
+    assert result["retired_validation_files"] == paths[-1:]
 
 
 def test_qmt_client_selects_its_direct_contract_instead_of_unrelated_matrix(tmp_path: Path) -> None:
@@ -907,7 +891,7 @@ def test_advisory_workbench_new_tests_have_executable_direct_plans(monkeypatch) 
 def test_changed_frontend_tests_require_executed_target(tmp_path, path, targets, unexecuted):
     _write_test_file(tmp_path, path)
     report = classifier._changed_test_plan_coverage(
-        [path], repo_root=tmp_path, file_backend_sessions={}, file_manual_sessions={}, frontend_test_targets=targets)
+        [path], repo_root=tmp_path, file_backend_sessions={}, frontend_test_targets=targets)
     assert report['unexecuted_test_files'] == unexecuted
     assert report['deferred_test_files'] == []
 
@@ -930,8 +914,7 @@ def test_validation_center_ui_catalog_covers_changed_ui_without_business_plans()
     assert 'tests/validation-center/validation-center.spec.ts' in selected['frontend_test_targets']
     assert not selected['unmapped_code_files']
     assert classifier._changed_test_plan_coverage(paths, repo_root=Path(__file__).resolve().parents[3],
-        file_backend_sessions={}, file_manual_sessions={},
-        frontend_test_targets=selected['frontend_test_targets'])['unexecuted_test_files'] == []
+        file_backend_sessions={}, frontend_test_targets=selected['frontend_test_targets'])['unexecuted_test_files'] == []
 
 
 def test_deleted_frontend_test_needs_no_execution(tmp_path):

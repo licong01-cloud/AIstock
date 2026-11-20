@@ -169,26 +169,25 @@ def test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regre
     assert len(direct) == 2
 
 
-def test_default_pr_nox_targets_do_not_collect_retired_broker_tests():
+def test_retired_broker_has_no_nox_or_validation_catalog_entry():
+    from backend.services.validation.catalog_integrity import CatalogIntegrityChecker
+    from backend.tests.conftest import collect_ignore
     from scripts import ci_change_classifier as classifier
+    from scripts.nightly_adaptive_scheduler import RETIRED_SIMULATION_PLANS
 
     plans = classifier.flow.validation_catalog_snapshot().plans
-    sessions = classifier._backend_sessions_from_selection({"required_plans": list(plans)}, plans)
-    assert "miniqmt_execution_runtime_l2" not in sessions
+    sessions = CatalogIntegrityChecker(repo_root=classifier.ROOT)._collect_nox_sessions()
+    retired = RETIRED_SIMULATION_PLANS - {"paper_v2_live"}
+    assert set(plans).isdisjoint(retired)
+    assert sessions.isdisjoint(retired)
+    assert "miniqmt_execution_runtime" in collect_ignore
     targets, error = classifier._selected_nox_test_targets(
-        repo_root=classifier.ROOT, sessions=[*sessions, "miniqmt_execution_runtime_l2"],
+        repo_root=classifier.ROOT, sessions=sorted(sessions),
     )
     assert error is None
-    retired_root = classifier.ROOT / "backend/tests/miniqmt_execution_runtime"
-    retired = [path.relative_to(classifier.ROOT).as_posix() for path in retired_root.rglob("test_*.py")]
-    assert retired
     assert all(
-        not classifier._test_target_covers_path(target, path)
-        for session in sessions for target in targets[session] for path in retired
-    )
-    assert all(
-        any(classifier._test_target_covers_path(target, path) for target in targets["miniqmt_execution_runtime_l2"])
-        for path in retired
+        not target.startswith("backend/tests/miniqmt_execution_runtime")
+        for session_targets in targets.values() for target in session_targets
     )
 
 

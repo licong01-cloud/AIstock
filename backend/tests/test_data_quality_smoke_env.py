@@ -91,21 +91,6 @@ def test_use_dev_db_refuses_non_dev_target(monkeypatch):
         smoke._apply_dev_db_env()
 
 
-def test_paper_v2_run_traceability_accepts_minqmt_success_events():
-    runner = _smoke_without_db(portfolio_ids=["paper_minqmt"])
-    cur = _FakeCursor(rows=[(3, 0, 0)])
-
-    runner._check_paper_v2_runs(cur)
-
-    sql, params = cur.calls[0]
-    success_events = params[-1]
-    assert "ev.event_type = ANY(%s)" in sql
-    assert success_events == list(smoke.PAPER_V2_SUCCESS_RUN_EVENTS)
-    assert "MINIQMT_RUN_RECONCILED" in success_events
-    assert "MINIQMT_NATIVE_RUN_RECONCILED" in success_events
-    assert runner.results[0].status == "PASS"
-
-
 def test_paper_v2_ledger_consistency_uses_broker_authority_invariants():
     runner = _smoke_without_db(portfolio_ids=["paper_minqmt"])
     cur = _FakeCursor(rows=[(0,), (0,), (0,), (0,)])

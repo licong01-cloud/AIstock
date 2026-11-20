@@ -17,11 +17,6 @@ from backend.services.simulation_data.contracts import (
 from backend.services.trading_core.errors import BrokerMarketSourceMismatchError
 
 
-def test_miniqmt_realtime_enum_value_exists() -> None:
-    assert MinuteDataSource.MINIQMT_REALTIME.value == "MINIQMT_REALTIME"
-    assert MinuteDataSource("MINIQMT_REALTIME") is MinuteDataSource.MINIQMT_REALTIME
-
-
 def test_allowed_market_sources_matches_design_3_6_4() -> None:
     assert ALLOWED_MARKET_SOURCES == {
         "local_sim": {MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES},

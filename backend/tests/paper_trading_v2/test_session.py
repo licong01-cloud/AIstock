@@ -515,7 +515,7 @@ def test_session_mutation_guard_does_not_query_weekday_fallback_calendar() -> No
     assert session.status == PaperSessionStatus.CREATED
 
 
-def test_session_mutation_guard_allows_minqmt_and_future_live_intraday_actions() -> None:
+def test_session_mutation_guard_allows_future_live_intraday_actions() -> None:
     service = PaperTradingSessionService(
         repository=InMemoryPaperTradingV2Repository(),
         calendar_provider=ExplodingTradingCalendar(),
@@ -523,8 +523,6 @@ def test_session_mutation_guard_allows_minqmt_and_future_live_intraday_actions()
     )
 
     for action in [
-        "create_minqmt_sim_portfolio",
-        "resume_minqmt_sim_session",
         "create_live_approval_candidate",
         "resume_future_live_session",
     ]:

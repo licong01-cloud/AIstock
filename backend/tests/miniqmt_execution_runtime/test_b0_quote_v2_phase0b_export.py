@@ -15,7 +15,7 @@ from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import (
     _runtime_controller,
 )
 from backend.tests.miniqmt_execution_runtime.test_quote_evidence import _evidence
-from backend.tests.simulation_runtime.test_tca_read_api import _ExportRepository, _config, _parent
+from backend.tests.miniqmt_execution_runtime.test_tca_read_api import _ExportRepository, _config, _parent
 
 
 class _QuoteControlTcaRepository(_ExportRepository):
