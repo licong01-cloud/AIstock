@@ -231,12 +231,18 @@ class LocalSimProductAuthority:
         asset = dict(admission.get("asset_eligibility") or {})
         checks = []
         for check in asset.get("checks") or []:
+            name = check.get("name")
+            context = dict(check.get("context") or {})
+            # Multi-alpha diagnostics identify which backend was checked.
+            # The release must not carry a broker binding under that key.
+            if str(name or "").startswith("multi_alpha_") and context.get("broker_backend") == "local_sim":
+                context["checked_broker_backend"] = context.pop("broker_backend")
             checks.append(
                 {
-                    "name": check.get("name"),
+                    "name": name,
                     "status": check.get("status"),
                     "severity": check.get("severity"),
-                    "context": check.get("context") or {},
+                    "context": context,
                 }
             )
         payload = {
