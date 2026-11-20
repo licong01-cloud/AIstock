@@ -63,6 +63,7 @@ class AdjFactorSnapshot:
 class SymbolScope:
     symbol: str
     expected_start: dt.date
+    delist_date: dt.date | None = None
 
 
 class AdjFactorHistoryRepository(Protocol):
@@ -338,24 +339,27 @@ def _first_difference(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> 
     return changed[0], changed[-1]
 
 
-def _retain_bounded_nontrading_rows(
+def _retain_nontrading_rows(
     local: AdjFactorSnapshot,
     provider: AdjFactorSnapshot,
     *,
     traded_price_dates: frozenset[dt.date],
-) -> tuple[AdjFactorSnapshot, tuple[AdjFactorRow, ...]]:
-    """Retain a source-omitted suspension row only when both neighbours prove it.
+    delist_date: dt.date | None,
+) -> tuple[AdjFactorSnapshot, tuple[AdjFactorRow, ...], tuple[AdjFactorRow, ...]]:
+    """Preserve bounded omissions and legacy rows outside a closed listing.
 
     Tushare occasionally omits an adj-factor row for a suspended open-market
     date even though an earlier daily pull persisted that row.  Such a row is
     safe to retain only when it has no traded price and its value is identical
-    to the nearest current-provider values on both sides.  A traded date,
-    unbounded date, or factor transition remains fail-closed.
+    to the nearest current-provider values on both sides.  A confirmed
+    post-delisting omission is outside that check. Preserve its local bytes
+    in the materialized history so reconciliation cannot delete or rebase it.
     """
 
     provider_values = {row.trade_date: row.value for row in provider.rows}
     provider_dates = tuple(sorted(provider_values))
     retained: list[AdjFactorRow] = []
+    post_delist: list[AdjFactorRow] = []
     for row in local.rows:
         if row.trade_date in provider_values:
             continue
@@ -363,6 +367,9 @@ def _retain_bounded_nontrading_rows(
             raise AdjFactorHistoryReconcileError(
                 f"{local.symbol}: provider history omits a traded local date {row.trade_date}"
             )
+        if delist_date is not None and row.trade_date > delist_date:
+            post_delist.append(row)
+            continue
         before = next((day for day in reversed(provider_dates) if day < row.trade_date), None)
         after = next((day for day in provider_dates if day > row.trade_date), None)
         if (
@@ -375,15 +382,16 @@ def _retain_bounded_nontrading_rows(
                 f"{local.symbol}: provider history omits an unbounded or changed nontrading date {row.trade_date}"
             )
         retained.append(row)
-    if not retained:
-        return provider, ()
+    if not retained and not post_delist:
+        return provider, (), ()
     return (
         _snapshot(
             local.symbol,
-            (*provider.rows, *retained),
+            (*provider.rows, *retained, *post_delist),
             provider_call_count=provider.provider_call_count,
         ),
         tuple(retained),
+        tuple(post_delist),
     )
 
 
@@ -520,7 +528,7 @@ class PostgresAdjFactorHistoryRepository:
             params.append(list(requested))
         predicate = ""
         if requested:
-            predicate = "WHERE ts_code = ANY(%s)"
+            predicate = "WHERE scoped.ts_code = ANY(%s)"
             params.append(list(requested))
         with self.conn.cursor() as cur:
             cur.execute(
@@ -557,14 +565,18 @@ class PostgresAdjFactorHistoryRepository:
                         )
                     GROUP BY ts_code
                 )
-                SELECT ts_code, expected_start
+                SELECT scoped.ts_code, scoped.expected_start, stock.delist_date
                 FROM scoped
+                LEFT JOIN market.stock_basic stock
+                    ON stock.ts_code = scoped.ts_code AND stock.list_status = 'D'
+                    AND stock.delist_date >= scoped.expected_start
                 {predicate}
-                ORDER BY ts_code
+                ORDER BY scoped.ts_code
                 """,
                 params,
             )
-            scopes = [SymbolScope(str(code), first_date) for code, first_date in cur.fetchall()]
+            scopes = [SymbolScope(str(code), first_date, delist_date)
+                      for code, first_date, delist_date in cur.fetchall()]
         if requested:
             found = {scope.symbol for scope in scopes}
             missing = sorted(set(requested) - found)
@@ -879,6 +891,11 @@ class AdjFactorHistoryReconciler:
                 "verified_histories": identities,
                 "verified_snapshot_sha256": sha256_hex(canonical_json_bytes(identities)),
                 "retained_nontrading_row_count": sum(r["retained_nontrading_row_count"] for r in receipts),
+                "retained_post_delist_row_count": sum(r["retained_post_delist_row_count"] for r in receipts),
+                "retained_post_delist_rows": sorted(
+                    (row for r in receipts for row in r["retained_post_delist_rows"]),
+                    key=lambda row: (row["symbol"], row["trade_date"]),
+                ),
                 "basis_normalization_count": sum(r["basis_normalization_count"] for r in receipts),
                 "basis_normalizations": [p for r in receipts for p in r["basis_normalizations"]],
                 "retained_predecessor_row_count": sum(r["retained_predecessor_row_count"] for r in receipts),
@@ -905,6 +922,7 @@ class AdjFactorHistoryReconciler:
         provider_identities: list[dict[str, Any]] = []
         pre_authority_price_exclusions: list[dict[str, Any]] = []
         retained_nontrading_rows: list[dict[str, str]] = []
+        retained_post_delist_rows: list[dict[str, str]] = []
         verified_histories: dict[str, str] = {}
         basis_normalizations: list[dict[str, Any]] = []
         retained_predecessor_count = 0
@@ -954,10 +972,17 @@ class AdjFactorHistoryReconciler:
                         local, source_provider,
                     )
                     retained_predecessor_count += predecessor_count
-                    provider, retained = _retain_bounded_nontrading_rows(
+                    delist_date = scope.delist_date
+                    if delist_date is not None and (
+                        delist_date < source_provider.first_date
+                        or any(day > delist_date for day in all_traded_price_dates)
+                    ):
+                        delist_date = None  # Conflicting trade evidence disables the lifecycle exemption.
+                    provider, retained, post_delist = _retain_nontrading_rows(
                         normalized_local,
                         combined,
                         traded_price_dates=traded_price_dates,
+                        delist_date=delist_date,
                     )
                     provider_dates = {row.trade_date for row in provider.rows}
                     missing_prices = sorted(traded_price_dates - provider_dates)
@@ -977,6 +1002,11 @@ class AdjFactorHistoryReconciler:
                             "adj_factor": _decimal_text(row.value),
                         }
                         for row in retained
+                    )
+                    retained_post_delist_rows.extend(
+                        {"symbol": row.symbol, "trade_date": row.trade_date.isoformat(),
+                         "delist_date": delist_date.isoformat()}
+                        for row in post_delist
                     )
                     provider_identities.append(
                         {
@@ -1033,6 +1063,7 @@ class AdjFactorHistoryReconciler:
         provider_identities.sort(key=lambda item: item["symbol"])
         pre_authority_price_exclusions.sort(key=lambda item: item["symbol"])
         retained_nontrading_rows.sort(key=lambda item: (item["symbol"], item["trade_date"]))
+        retained_post_delist_rows.sort(key=lambda item: (item["symbol"], item["trade_date"]))
         changed_symbols = [item["symbol"] for item in changes]
         replaced_symbols = [item["symbol"] for item in changes if item["write_mode"] == "full_replace"]
         qfq_changed_symbols = [item["symbol"] for item in changes
@@ -1072,6 +1103,8 @@ class AdjFactorHistoryReconciler:
             "pre_authority_price_exclusions": pre_authority_price_exclusions,
             "retained_nontrading_row_count": len(retained_nontrading_rows),
             "retained_nontrading_rows": retained_nontrading_rows,
+            "retained_post_delist_row_count": len(retained_post_delist_rows),
+            "retained_post_delist_rows": retained_post_delist_rows,
             "database_write_performed": bool(changed_symbols and not dry_run),
             "written_row_count": written,
             "downstream_invalidation": {

@@ -522,8 +522,14 @@ def _frozen_score_sources(provenance: Mapping[str, Any]) -> bool:
     if "gat_sources" in provenance:
         sources = provenance["gat_sources"]
         weights = (provenance.get("af_share"), provenance.get("gat_share"))
+        # Some frozen producers recorded the research arm and its graph relation
+        # separately. Recognize that pair without rewriting the archived identity.
+        arm = provenance.get("arm")
+        graph_blend = arm == "blend" or (
+            arm == "AF_PLUS_G0" and provenance.get("relation") == "industry_embedding_only"
+        )
         if not (
-            provenance.get("arm") == "blend"
+            graph_blend
             and _nonempty_text(provenance.get("af_source_run"))
             and _sha256_text(provenance.get("af_source_score_sha256"))
             and all(_finite_metric(weight) and 0 < weight < 1 for weight in weights)

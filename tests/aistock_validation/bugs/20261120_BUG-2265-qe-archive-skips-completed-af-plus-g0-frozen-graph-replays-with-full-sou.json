@@ -1,0 +1,308 @@
+{
+  "actual": "All three qualified source records skipped before warehouse processing.",
+  "allowed_write_scope": [
+    "backend/services/qe_archive/asset_lifecycle.py",
+    "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+    "tests/aistock_validation/bugs/20261120_BUG-2265-qe-archive-skips-completed-af-plus-g0-frozen-graph-replays-with-full-sou.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2265",
+  "closed_at": "2026-11-20T16:07:43.726727Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-20T15:49:28.927456Z",
+  "description": "All three qualified source records skipped before warehouse processing.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261120-13141e427366",
+      "timestamp": "2026-11-20T15:49:28.927440Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-af-g0-20261120/dispatch_review.json"
+  ],
+  "expected": "Recognize the evidenced G0 graph-blend contract and permit idempotent selected-ID recovery with no replay or identity mutation.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/asset_lifecycle.py",
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2265-qe-archive-skips-completed-af-plus-g0-frozen-graph-replays-with-full-sou.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/qe_archive/asset_lifecycle.py",
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2265-qe-archive-skips-completed-af-plus-g0-frozen-graph-replays-with-full-sou.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/qe_archive/asset_lifecycle.py",
+        "backend/tests/qe_archive/test_qe_asset_lifecycle.py"
+      ],
+      "impacted_modules": [
+        "qe.archive",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "qe.archive_handlers",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/qe_archive/asset_lifecycle.py",
+          "impact_modules": [
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.archive",
+          "risk_level": "high",
+          "rule_id": "qe_archive_services"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/qe_archive/asset_lifecycle.py",
+        "backend/tests/qe_archive/test_qe_asset_lifecycle.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/qe_archive/asset_lifecycle.py",
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/qe_archive/asset_lifecycle.py",
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py"
+    ]
+  },
+  "first_seen_at": "2026-11-20T15:49:28.927456Z",
+  "fix_branch": null,
+  "fix_commit": "d53261e9135e80f7ad6206f923898ba259aa3767",
+  "fixed_at": "2026-11-20T15:58:37Z",
+  "github_issue_number": 7395,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7395",
+  "last_seen_at": "2026-11-20T15:49:28.927456Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7397",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_archive_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh-process official source assembly and selected-ID DEV backfill using the original three PROD payloads. All three valid warehouse rows verified and DEV transaction rolled back. Repeat in PROD dry-run with zero writes. Receipts: tmp/handoff/qe-af-g0-20261120/bug2265_dev.json and bug2265_preview.json.",
+      "pytest backend/tests/qe_archive/test_qe_asset_lifecycle.py: old implementation reproduced the exact failure; fixed suite passed 39 tests. Origins, original manifests and score identity preserved."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_note": "Verify backend-main loaded the merge and that source-status recognizes experiments 986acc94, 8461c089 and e44a9978 with their original valid run IDs. Existing SKIP ingest history is retained.",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2265/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2265",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+      "expected_identity": "d53261e9135e80f7ad6206f923898ba259aa3767",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-20T16:05:04.021808Z",
+      "mode": "read_only",
+      "observed_identity": "66144a30e17d005173161bce4d3112b8df456d1a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c2307e16c0de388f72c56650c3f1fb84aaeb6abb9ab7a5a2e8b1117239240a01",
+      "receipt_sha256": "3e3f10ca72a8e96bc417945f8af0f7969fad4a5f79ea63f5bfe31a3f20140e34",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b6a7d30650979e58667d32d52ee8f0a98d34f62e3612470f865ed5bc6d369012",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2265",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "26c78a7299f553e4",
+    "recorded_at": "2026-11-20T15:59:49.248025Z",
+    "runtime_contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8278b0835fda7dc39467c0025804b97f60ea84d7",
+    "source_merge_commit": "d53261e9135e80f7ad6206f923898ba259aa3767",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7397",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py -> passed (39 tests)"
+    ],
+    "validation_evidence_digest": "c0385488e957be48fddac7552455aaca58c141c28c7e02bf6127367a428fbb0b"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "QE Archive skips completed AF plus G0 frozen graph replays with full source provenance",
+  "trigger_condition": {
+    "fingerprint": "13141e42736690468c230d02",
+    "source_event_id": "FE-20261120-13141e427366"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py -> passed (39 tests)",
+    "8001 original three AF_PLUS_G0 payloads dry run: AUTO and qe_lifecycle_valid_unique_c for all three; zero skips, failures or writes. See tmp/handoff/qe-af-g0-20261120/bug2265_live_g0_post_restart.json."
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe_archive"
+      ],
+      "plans": [
+        "qe_archive_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe_archive"
+        ],
+        "plans": [
+          "qe_archive_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
