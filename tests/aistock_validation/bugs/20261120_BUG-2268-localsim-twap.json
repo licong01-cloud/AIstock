@@ -30,13 +30,20 @@
   ],
   "expected": "LocalSIM 原生计划在同一冻结逐日范围内选择 TWAP、分钟日终估值和选股数据源，拒绝缺失或不匹配的计划、交易日或文件身份。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2268-localsim-twap.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/localsim_native_context.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_native_context.py"
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2268-localsim-twap.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_native_context.py",
@@ -125,23 +132,27 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
     "fresh_process_evidence": [
       "Existing production release, manifests and dataset pin read with a read-only connection. Fresh candidate process constructed the real native broker for each account. On 2026-10-30 the broker loaded the valid 15:00 file minute close as DATASET_FILES. On 2026-11-02 it selected DB_HISTORICAL. The effective account state was shadowed only in memory for the isolated probe. No production economic facts were written. Receipt SHA256 9cb60fd13016492e31683a24b1c922d463f95e2ade157ce9c2232aea8bdad0bd.",
       "The first-day file route failed RED inside the native broker with DB_HISTORICAL, then passed the same test after preserving the published source plan, held day scope and exact file binding. Existing DEV account-context PostgreSQL test independently passed using its explicit DEV connection keys."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
