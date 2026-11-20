@@ -223,8 +223,8 @@
   },
   "first_seen_at": "2026-11-20T06:12:58.025313Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1849c39050deb570c6f5a9fbb84acace7385069a",
+  "fixed_at": "2026-11-20T06:34:46Z",
   "github_issue_number": 7380,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7380",
   "last_seen_at": "2026-11-20T06:12:58.025313Z",
@@ -232,6 +232,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7382",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -263,6 +264,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -274,7 +276,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2260",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "97ff6b47c7839953",
+    "recorded_at": "2026-11-20T06:35:32.295787Z",
+    "runtime_contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "260713da0c6b0c54cc6fffb9bfca2707d1217b09",
+    "source_merge_commit": "1849c39050deb570c6f5a9fbb84acace7385069a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7382",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py backend/tests/advisory_model_first/test_forward_publication.py backend/tests/advisory_model_first/test_forward_postgres.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_recovery_devdb.py backend/tests/test_daily_data_integrity_inputs.py backend/tests/selection_center/test_canonical_pit_runtime.py -q -> passed: 150 tests, including 20 rollback-only DEV DB tests"
+    ],
+    "validation_evidence_digest": "16255a1cb52ff6d7453b3a462c7e8a2f08520e3519e73aabe55f808a6212904f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory.model_first"
   ],
@@ -283,6 +307,10 @@
     "fingerprint": "2eab8dbedc9266efccf062ce",
     "source_event_id": "FE-20261120-2eab8dbedc92"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m pytest backend/tests/advisory_model_first/test_forward_input_compatibility_devdb.py backend/tests/advisory_model_first/test_forward_publication.py backend/tests/advisory_model_first/test_forward_postgres.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_recovery_devdb.py backend/tests/test_daily_data_integrity_inputs.py backend/tests/selection_center/test_canonical_pit_runtime.py -q -> passed: 150 tests, including 20 rollback-only DEV DB tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
