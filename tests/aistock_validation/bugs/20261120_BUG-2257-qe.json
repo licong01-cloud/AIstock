@@ -39,25 +39,25 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json",
       "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/services/strategy_package/asset_eligibility.py",
       "backend/services/strategy_package/multi_alpha_promotion.py",
       "backend/services/strategy_package/original_context_bridge.py",
       "backend/services/strategy_package/validators.py",
       "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
-      "backend/tests/strategy_package/test_governance_eligibility.py"
+      "backend/tests/strategy_package/test_governance_eligibility.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json",
       "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/services/strategy_package/asset_eligibility.py",
       "backend/services/strategy_package/multi_alpha_promotion.py",
       "backend/services/strategy_package/original_context_bridge.py",
       "backend/services/strategy_package/validators.py",
       "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
-      "backend/tests/strategy_package/test_governance_eligibility.py"
+      "backend/tests/strategy_package/test_governance_eligibility.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -304,8 +304,8 @@
   },
   "first_seen_at": "2026-11-20T03:41:30.146350Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e36031ed7438525d70897991aaf511034c82e061",
+  "fixed_at": "2026-11-20T04:41:30Z",
   "github_issue_number": 7369,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7369",
   "last_seen_at": "2026-11-20T03:41:30.146350Z",
@@ -313,6 +313,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7370",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -344,6 +345,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -355,7 +357,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2257",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "78600a06b7880aaf",
+    "recorded_at": "2026-11-20T04:42:24.110622Z",
+    "runtime_contract_digest": "cfb895d2fdfdb3e089faf40906cb7c56623876e2d2e7ae3c406398a3fa2d872d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d00fb01c026b9da9dad3ee6937ac207442517d41",
+    "source_merge_commit": "e36031ed7438525d70897991aaf511034c82e061",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7370",
+    "validation_evidence": [
+      "validation-receipt: id=180605feae009786 commit=d00fb01c026b9da9dad3ee6937ac207442517d41 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed, 0 blocking`"
+    ],
+    "validation_evidence_digest": "bf048e7be0f07bddc67873f90b263f5d438f6ee88a2cc87ffb42ed0bfe4caa03"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -364,6 +387,9 @@
     "fingerprint": "56f376c83a0cd69644378e96",
     "source_event_id": "FE-20261120-56f376c83a0c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=180605feae009786 commit=d00fb01c026b9da9dad3ee6937ac207442517d41 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed, 0 blocking`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
