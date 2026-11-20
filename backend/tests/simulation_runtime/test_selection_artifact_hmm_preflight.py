@@ -25,7 +25,7 @@ from backend.tests.simulation_runtime.test_lifecycle_scheduler import (
     FakeSelectionService,
     _candidate_rows,
     _position_context,
-    _release_and_bindings,
+    _two_localsim_bindings,
 )
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -53,17 +53,16 @@ class _FailingSelectionService:
         )
 
 
-def test_scheduler_reuses_daily_selection_once_for_local_and_miniqmt_bindings() -> None:
-    release, local_binding, qmt_binding, repo = _release_and_bindings()
-    assert local_binding is not None
+def test_scheduler_prepares_selection_independently_for_two_localsim_bindings() -> None:
+    release, first_binding, second_binding, repo = _two_localsim_bindings()
     fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=fake_selection,
         context_provider=StaticSimulationRunContextProvider(
             by_binding_id={
-                local_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
-                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
+                first_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
+                second_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
             }
         ),
     )
@@ -72,23 +71,22 @@ def test_scheduler_reuses_daily_selection_once_for_local_and_miniqmt_bindings() 
 
     assert result.total_bindings == 2
     assert result.planned_count == 2
-    assert len(fake_selection.calls) == 1
+    assert len(fake_selection.calls) == 2
     plans = [item.execution_plan for item in result.results if item.execution_plan is not None]
     assert {plan.selection_evidence_id for plan in plans} == {plans[0].selection_evidence_id}
     assert {plan.selection_evidence_hash for plan in plans} == {plans[0].selection_evidence_hash}
 
 
-def test_scheduler_reuses_failed_selection_preflight_without_repeating_hmm_sql_work() -> None:
-    release, local_binding, qmt_binding, repo = _release_and_bindings()
-    assert local_binding is not None
+def test_scheduler_reports_selection_preflight_failure_for_each_localsim_binding() -> None:
+    release, first_binding, second_binding, repo = _two_localsim_bindings()
     failing_selection = _FailingSelectionService(release)
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=failing_selection,
         context_provider=StaticSimulationRunContextProvider(
             by_binding_id={
-                local_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
-                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
+                first_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
+                second_binding.binding_id: _position_context(portfolio_id="portfolio_shared"),
             }
         ),
     )
@@ -97,7 +95,7 @@ def test_scheduler_reuses_failed_selection_preflight_without_repeating_hmm_sql_w
 
     assert result.total_bindings == 2
     assert result.failed_count == 2
-    assert len(failing_selection.calls) == 1
+    assert len(failing_selection.calls) == 2
     assert {item.error["context"]["package_id"] for item in result.results} == {release.package_id}
 
 

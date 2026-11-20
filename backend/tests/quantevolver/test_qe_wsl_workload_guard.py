@@ -107,6 +107,42 @@ def profile(guard, kind="gpu"):
     }
 
 
+@pytest.mark.parametrize("ram,swap,accepted", [(2, 1, True), (4, 4, True), (2, 4, False), (4, 1, False), (8, 8, False)])
+def test_control_limits_during_migration(guard, tmp_path, ram, swap, accepted):
+    for key, value in [("memory.high", "max"), ("memory.max", ram * guard.GIB), ("memory.swap.max", swap * guard.GIB)]:
+        (tmp_path / key).write_text(str(value))
+    if accepted:
+        guard.validate_control_limits(tmp_path)
+    else:
+        with pytest.raises(RuntimeError, match="limits_not_activated"):
+            guard.validate_control_limits(tmp_path)
+
+
+def test_control_upgrade_checks_both_files_and_resumes_partial_update(tmp_path, monkeypatch):
+    m = module("qe_wsl_resource_isolation")
+    monkeypatch.setattr(m.sys, "platform", "linux")
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0, raising=False)
+    old = m.control_units((2, 1))
+    paths = [tmp_path / name.lstrip("/") for name in old]
+    for path, content in zip(paths, old.values()):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content.encode())
+    original = [p.read_bytes() for p in paths]
+    paths[1].write_bytes(b"site-owned configuration")
+    with pytest.raises(RuntimeError, match="unknown_control_unit"):
+        m.upgrade_control_profile(root=tmp_path)
+    assert paths[0].read_bytes() == original[0]
+    paths[1].write_bytes(original[1])
+    for partial in (False, True):
+        paths[1].write_bytes(original[1])
+        if not partial:
+            paths[0].write_bytes(original[0])
+        result = m.upgrade_control_profile(root=tmp_path)
+        assert result["service_control"] is False
+        assert [p.read_bytes() for p in paths] == [m.UNITS[k].encode() for k in old]
+        assert m.upgrade_control_profile(root=tmp_path) == result
+
+
 def snapshot(guard, **changes):
     return {
         "available": 24 * guard.GIB,

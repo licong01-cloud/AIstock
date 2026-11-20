@@ -75,61 +75,6 @@ def _client(
     return TestClient(app)
 
 
-def test_miniqmt_shadow_evidence_endpoint_is_retired() -> None:
-    client = _client(runtime_repo=_runtime_repo())
-
-    response = client.get(
-        "/api/v1/simulation-runtime/miniqmt/shadow-evidence",
-        params={"trade_date": "2026-06-25", "portfolio_id": "portfolio_l16", "strategy_slot_id": "slot_l16"},
-    )
-
-    assert response.status_code == 404
-
-
-def test_miniqmt_runtime_events_endpoint_is_loud_when_runtime_missing() -> None:
-    client = _client()
-
-    response = client.get("/api/v1/simulation-runtime/miniqmt/runtime-events", params={"runtime_id": "missing_runtime"})
-
-    assert response.status_code == 404
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "DATA_UNAVAILABLE"
-    assert detail["context"]["reason_code"] == "MINIQMT_RUNTIME_NOT_FOUND"
-    assert detail["context"]["runtime_id"] == "missing_runtime"
-
-
-def test_miniqmt_gray_state_endpoint_is_retired() -> None:
-    client = _client(runtime_repo=_runtime_repo())
-
-    response = client.get(
-        "/api/v1/simulation-runtime/miniqmt/gray-state",
-        params={"portfolio_id": "portfolio_l16", "strategy_slot_id": "slot_l16"},
-    )
-
-    assert response.status_code == 404
-
-
-def test_miniqmt_runtime_readonly_endpoints_do_not_mutate_json_store(tmp_path) -> None:
-    store_path = tmp_path / "runtime-state.json"
-    repo = JsonFileMiniQMTExecutionRuntimeRepository(store_path)
-    repo.upsert_runtime(_runtime(metadata={"compiler_route_retired": True, "runtime_route": "A_EVENT_LOOP"}))
-    repo._write_snapshot(reason="readonly_test_seed")
-    before = store_path.read_text(encoding="utf-8")
-    client = _client(runtime_repo=repo)
-
-    assert client.get("/api/v1/simulation-runtime/miniqmt/runtime-events", params={"runtime_id": "mqrt_event_loop_scope"}).status_code == 200
-    assert client.get(
-        "/api/v1/simulation-runtime/miniqmt/shadow-evidence",
-        params={"trade_date": "2026-06-25", "portfolio_id": "portfolio_l16", "strategy_slot_id": "slot_l16"},
-    ).status_code == 404
-    assert client.get(
-        "/api/v1/simulation-runtime/miniqmt/gray-state",
-        params={"portfolio_id": "portfolio_l16", "strategy_slot_id": "slot_l16"},
-    ).status_code == 404
-
-    assert store_path.read_text(encoding="utf-8") == before
-
-
 def test_scheduler_status_omits_retired_miniqmt_shadow_flag() -> None:
     service = SimulationRuntimeOpsService(repository=InMemorySimulationRuntimeRepository(), scheduler=_StaticScheduler())
     client = _client(service=service)

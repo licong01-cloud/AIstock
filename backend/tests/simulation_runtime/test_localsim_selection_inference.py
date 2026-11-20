@@ -37,7 +37,8 @@ DAY = date(2026, 1, 5)
 
 
 @pytest.mark.parametrize("requested_date_matches", [True, False])
-def test_frozen_seed_ensemble_distinguishes_decision_date_from_cutoff(monkeypatch, requested_date_matches):
+@pytest.mark.parametrize("batch_enabled", [True, False])
+def test_frozen_seed_ensemble_distinguishes_decision_date_from_cutoff(monkeypatch, requested_date_matches, batch_enabled):
     from backend.services.strategy_package import multi_alpha_live
     from backend.services.strategy_package.live_inference import LiveInferenceResult
     from backend.tests.strategy_package.test_multi_alpha_live_selection import _calendar_context
@@ -51,21 +52,38 @@ def test_frozen_seed_ensemble_distinguishes_decision_date_from_cutoff(monkeypatc
         SimpleNamespace(seed_run_ids=(seed,)) for seed in seeds
     ])
 
-    def infer(**kwargs):
-        seed = kwargs["leg_slice"].seed_run_ids[0]
-        result = LiveInferenceResult(scores=[], metadata={}, universe_count=4910, input_context={
+    def live_result(seed):
+        return LiveInferenceResult(scores=[{"symbol": "000001.SZ", "score": float(seeds.index(seed) * 2 + 1)}],
+            metadata={}, universe_count=4910, input_context={
             "requested_trade_date": str(decision if requested_date_matches else cutoff),
             "effective_trade_date": str(cutoff), "score_trade_date": str(cutoff),
             "pit_mode": "canonical_v2_rolling_runtime", "universe_input_hash": "a" * 64,
             **_calendar_context(trade_date=cutoff, window_start_date="2025-01-02", required_window=120),
         })
+
+    def merge_seed_result(*, result, leg_slice, **_):
+        seed = leg_slice.seed_run_ids[0]
         frame = multi_alpha_live.pd.DataFrame({"trade_date": [str(cutoff)], "instrument": ["000001.SZ"],
-                                              "score": [1.0 if seed == seeds[0] else 3.0]})
+                                              "score": [result.scores[0]["score"]]})
         return multi_alpha_live.ParentLegLiveInferenceResult(
             seed_frames={seed: frame}, live_result=result, source=None, prepared=None,
         )
 
-    provider = SimpleNamespace(_run_single_seed_live_inference=infer)
+    def serial(**kwargs):
+        assert not batch_enabled
+        return merge_seed_result(result=live_result(kwargs["leg_slice"].seed_run_ids[0]), **kwargs)
+
+    def batch(*, workspaces, trade_date, cutoff_date):
+        assert batch_enabled and workspaces == {seed: seed for seed in seeds}
+        assert trade_date == decision and cutoff_date == cutoff
+        return {seed: live_result(seed) for seed in seeds}
+
+    provider = SimpleNamespace(
+        live_inference_provider=SimpleNamespace(can_batch_seeds=batch_enabled, run_seed_batch=batch),
+        _prepare_seed_live_inference=lambda **kwargs: (None, kwargs["leg_slice"].seed_run_ids[0]),
+        _seed_live_inference_result=merge_seed_result,
+        _run_single_seed_live_inference=serial,
+    )
     request = dict(manifest=SimpleNamespace(alpha_combination_policy=SimpleNamespace(method="frozen_weighted")),
                    leg_slice=leg, trade_date=decision, cutoff_date=cutoff, runtime_config={}, inference_backend="wsl")
     ensemble = multi_alpha_live.MultiAlphaLivePredictionProvider._run_parent_leg_live_inference
@@ -409,6 +427,68 @@ def test_shared_cli_receives_owned_scope_day_and_readonly_boundary(tmp_path, mon
     assert "--historical-read-only" in commands[0] and "default_transaction_read_only=on" in commands[0]
     assert scope.source_universes[0]["members"] == ["000001.SZ", "600000.SH"]
     assert scope.completed_prefix[0]["stage"] == "shared_raw_inference"
+
+
+@pytest.mark.parametrize("corruption", [None, "receipt_order", "workspace"])
+def test_historical_seed_batch_uses_one_node_and_requires_ordered_seed_receipts(tmp_path, monkeypatch, corruption):
+    from backend.services.simulation_runtime import localsim_selection_inference as inference
+    from backend.services.simulation_runtime import localsim_input_source_plan
+
+    scope, _, provider = _provider(tmp_path, monkeypatch)
+    scope.source_plan = {"run_id": "frozen-plan", "plan_hash": "a" * 64}
+    seeds = ("seed-1", "seed-2")
+    workspaces = {}
+    for seed in seeds:
+        path = scope.root / "workspaces" / seed
+        workspaces[seed] = SimpleNamespace(workspace_path=path, manifest_path=path / "manifest.json",
+            factor_order=["a"], model_params_path=path / "model.bin", dataset_processor_path=path / "processor.pkl")
+        _atomic_json(path / "manifest.json", {"canonical_pit_runtime_lease": {}, "pit_identity": {}})
+
+    calls = []
+
+    def run(arguments, **_):
+        calls.append(arguments)
+        node = next((scope.root / "node").iterdir())
+        requests = json.loads((node / "plan.json").read_text(encoding="utf-8"))
+        assert requests == [{**scope.clocks.to_dict(), "request_id": seed,
+            "runtime_workspace": win_to_wsl_path(str(workspaces[seed].workspace_path))} for seed in seeds]
+        results = []
+        for i, seed in enumerate(seeds, start=1):
+            output = node / "batch_dates" / str(DAY) / hashlib.sha256(seed.encode()).hexdigest() / "scores.json"
+            workspace = workspaces[seeds[1] if corruption == "workspace" and i == 1 else seed]
+            _atomic_json(output, {"ok": True, "scores": [{"symbol": "000001.SZ", "score": i}], "universe_count": 1,
+                "input_context": {"universe_input_hash": "c" * 64}, "source_read_receipts": [],
+                "metadata": {"consumer_scope": "LOCALSIM", "run_id": "frozen-plan", "binding": "b" * 64,
+                             "clocks": scope.clocks.to_dict(), "request_id": seed,
+                             "runtime_workspace": win_to_wsl_path(str(workspace.workspace_path))}})
+            results.append({"output_path": win_to_wsl_path(str(output)), "request_id": seed,
+                            "sha256": hashlib.sha256(output.read_bytes()).hexdigest()})
+        _atomic_json(node / "batch.json", {"consumer_scope": "LOCALSIM", "run_id": "frozen-plan", "binding": "b" * 64,
+            "status": "COMPLETE", "ok": True, "results": results[::-1] if corruption == "receipt_order" else results})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(inference, "probe_localsim_wsl_witness", lambda **_: None)
+    monkeypatch.setattr(inference.subprocess, "run", run)
+    monkeypatch.setattr(inference, "_require_native_pit_receipt", lambda *_, **__: None)
+    monkeypatch.setattr(localsim_input_source_plan, "validate_payload", lambda _plan, _clocks, payload:
+                        {"request_id": payload["metadata"]["request_id"]})
+    token = LOCALSIM_INFERENCE_SCOPE.set(scope)
+    try:
+        assert provider.can_batch_seeds
+        assert not LocalSimSharedInferenceProvider(performance_reference=True, repo_root=tmp_path).can_batch_seeds
+        if corruption:
+            error = "path/content identity mismatch" if corruption == "receipt_order" else "different seed workspace"
+            with pytest.raises(ValueError, match=error):
+                provider.run_seed_batch(workspaces=workspaces, trade_date=DAY, cutoff_date=scope.clocks.data_cutoff)
+            assert scope.source_plan_inputs == []
+        else:
+            results = provider.run_seed_batch(workspaces=workspaces, trade_date=DAY, cutoff_date=scope.clocks.data_cutoff)
+            assert [results[seed].scores[0]["score"] for seed in seeds] == [1, 2]
+            assert [row["request_id"] for row in scope.completed_prefix] == list(seeds)
+            assert [row["source_plan_receipt"]["request_id"] for row in scope.source_plan_inputs] == list(seeds)
+        assert len(calls) == 1
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
 
 
 def _canonical_node_payload(payload, scope, lease, file_binding_hash=None):

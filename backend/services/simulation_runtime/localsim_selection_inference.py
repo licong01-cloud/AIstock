@@ -330,7 +330,7 @@ def _require_native_pit_receipt(payload, lease_payload, clocks, *, file_binding_
 
 
 class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
-    """One explicit day per native workspace; no Advisory container or cache."""
+    """One owned node process per historical seed group, with independent workspaces."""
 
     def __init__(self, *, performance_reference: bool = False, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -339,6 +339,11 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
     def require_frozen_file_input_identity(self):
         from .localsim_file_inputs import current_file_dataset
         return current_file_dataset(required=True).identity
+
+    @property
+    def can_batch_seeds(self) -> bool:
+        scope = LOCALSIM_INFERENCE_SCOPE.get()
+        return scope is not None and scope.source_plan is not None and not self.performance_reference
 
     def _build_env_exports(self, *, historical_read_only: bool = False) -> str:
         # The production factory supplies no optional safe_artifact_roots.
@@ -351,9 +356,20 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         return f"{native} AISTOCK_STRATEGY_PACKAGE_RUNTIME_ROOTS={self._quote(translated)}"
 
     def run(self, *, workspace, trade_date: date, cutoff_date: date | None = None, historical_read_only=False):
+        return self._run_workspaces({None: workspace}, trade_date=trade_date, cutoff_date=cutoff_date)[None]
+
+    def run_seed_batch(self, *, workspaces: dict[str, PreparedInferenceWorkspace], trade_date: date,
+                       cutoff_date: date | None = None) -> dict[str, LiveInferenceResult]:
+        if not self.can_batch_seeds or len(workspaces) < 2 or any(not seed.strip() for seed in workspaces):
+            raise ValueError("LocalSIM seed batching requires an owned historical plan and distinct seed IDs")
+        return self._run_workspaces(workspaces, trade_date=trade_date, cutoff_date=cutoff_date)
+
+    def _run_workspaces(self, workspaces, *, trade_date: date, cutoff_date: date | None):
         scope = own_scope()
-        if not Path(workspace.workspace_path).resolve().is_relative_to(scope.root.resolve()):
+        if any(not Path(workspace.workspace_path).resolve().is_relative_to(scope.root.resolve())
+               for workspace in workspaces.values()):
             raise ValueError("LocalSIM workspace must belong to its own run")
+        first = next(iter(workspaces.values()))
         scope.stage = "shared_raw_inference"
         clocks = SelectionSignalDayV1(trade_date, cutoff_date or trade_date, scope.clocks.target_trade_date)
         if clocks.decision_date != scope.clocks.decision_date or (scope.clocks_bound and clocks != scope.clocks):
@@ -364,12 +380,16 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         root = scope.root / "node" / uuid4().hex
         root.mkdir(parents=True)
         plan, output = root / "plan.json", root / "batch.json"
-        _atomic_json(plan, [clocks.to_dict()])
+        _atomic_json(plan, [
+            {**clocks.to_dict(), **({"request_id": seed, "runtime_workspace": win_to_wsl_path(str(workspace.workspace_path))}
+                                   if seed is not None else {})}
+            for seed, workspace in workspaces.items()
+        ])
         # Actual bidirectional path verification, rather than assuming /mnt/x.
         witness = root / "path-witness.txt"
         witness.write_text(scope.run_id, encoding="utf-8")
         probe_localsim_wsl_witness(distro=self.distro, witness=witness, run_id=scope.run_id)
-        arguments = ["scripts/strategy_package_live_inference.py", "--runtime-workspace", win_to_wsl_path(str(workspace.workspace_path)),
+        arguments = ["scripts/strategy_package_live_inference.py", "--runtime-workspace", win_to_wsl_path(str(first.workspace_path)),
                      "--historical-plan", win_to_wsl_path(str(plan)), "--historical-read-only", "--consumer-scope", "LOCALSIM",
                      "--run-id", scope.run_id, "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]
         from .localsim_file_inputs import current_file_dataset
@@ -421,13 +441,25 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         index = json.loads(output.read_text(encoding="utf-8"))
         if (index.get("consumer_scope") != "LOCALSIM" or index.get("run_id") != node_run_id
                 or index.get("status") != "COMPLETE" or index.get("ok") is not True or completed.returncode != 0
-                or len(index.get("results", [])) != 1):
+                or len(index.get("results", [])) != len(workspaces)):
             raise DataUnavailableError("LocalSIM node computation failed", context={
                 "reason_code": index.get("reason_code", "LOCALSIM_NODE_FAILED"), "failed_stage": index.get("failed_stage"),
-                "failed_clocks": index.get("failed_clocks"), "completed_prefix": index.get("results", []), "run_id": scope.run_id})
-        path = root / "batch_dates" / trade_date.isoformat() / "scores.json"
-        item = index["results"][0]
-        if item.get("output_path") != win_to_wsl_path(str(path)) or item.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+                "failed_clocks": index.get("failed_clocks"), "failed_request_id": index.get("failed_request_id"),
+                "completed_prefix": index.get("results", []), "run_id": scope.run_id})
+        wall_seconds = time.perf_counter() - started
+        return {
+            seed: self._read_node_result(scope=scope, index=index, item=item, output=output, node_run_id=node_run_id,
+                seed=seed, workspace=workspace, clocks=clocks, dataset=dataset, wall_seconds=wall_seconds)
+            for (seed, workspace), item in zip(workspaces.items(), index["results"], strict=True)
+        }
+
+    def _read_node_result(self, *, scope, index, item, output, node_run_id, seed, workspace, clocks, dataset, wall_seconds):
+        directory = output.parent / "batch_dates" / clocks.decision_date.isoformat()
+        if seed is not None:
+            directory /= hashlib.sha256(seed.encode("utf-8")).hexdigest()
+        path = directory / "scores.json"
+        if (item.get("request_id") != seed or item.get("output_path") != win_to_wsl_path(str(path))
+                or item.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest()):
             raise ValueError("LocalSIM node output path/content identity mismatch")
         payload = json.loads(path.read_text(encoding="utf-8"))
         if dataset is not None and payload.get("input_context", {}).get("frozen_file_binding_hash") != dataset.identity:
@@ -435,8 +467,10 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         metadata = payload.get("metadata", {})
         if (payload.get("ok") is not True or metadata.get("consumer_scope") != "LOCALSIM"
                 or metadata.get("run_id") != node_run_id or metadata.get("clocks") != clocks.to_dict()
-                or metadata.get("binding") != index.get("binding")):
+                or metadata.get("binding") != index.get("binding") or metadata.get("request_id") != seed):
             raise ValueError("LocalSIM node consumer/run/clock binding mismatch")
+        if seed is not None and metadata.get("runtime_workspace") != win_to_wsl_path(str(workspace.workspace_path)):
+            raise ValueError("LocalSIM node output belongs to a different seed workspace")
         native_manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
         if scope.source_plan is not None:
             from .localsim_input_source_plan import validate_payload
@@ -459,10 +493,12 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         elif native_manifest.get("canonical_pit_runtime_lease") is not None:
             _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks,
                                         file_binding_hash=dataset.identity if dataset is not None else None)
-        metadata.update(inference_backend="wsl", inference_wall_seconds=time.perf_counter() - started,
+        duration = {"inference_wall_seconds": wall_seconds} if seed is None else {"inference_batch_wall_seconds": wall_seconds}
+        metadata.update(inference_backend="wsl", **duration,
                         inference_batch_index=str(output), wsl_distro=self.distro, wsl_conda_env=self.conda_env)
         scope.source_universes.append({"members": metadata.get("universe_members"), "count": payload["universe_count"],
                                        "input_hash": payload["input_context"].get("universe_input_hash")})
-        scope.completed_prefix.append({"stage": "shared_raw_inference", "clocks": clocks.to_dict(), "output_sha256": item["sha256"]})
+        scope.completed_prefix.append({"stage": "shared_raw_inference", "clocks": clocks.to_dict(), "output_sha256": item["sha256"],
+                                       **({"request_id": seed} if seed is not None else {})})
         return LiveInferenceResult(scores=payload["scores"], metadata=metadata, universe_count=payload["universe_count"],
                                    source_read_receipts=payload["source_read_receipts"], input_context=payload["input_context"])

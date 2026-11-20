@@ -90,22 +90,6 @@ def test_realtime_portfolio_runtime_defaults_auto_generate_selection_artifact() 
     assert config["paper_v2_session"]["signal_data_source"] == MinuteDataSource.DB_HISTORICAL.value
 
 
-def test_minqmt_runtime_defaults_use_db_historical_signal_source() -> None:
-    _package_repo, paper_repo, portfolio = make_portfolio(
-        data_source=MinuteDataSource.MINIQMT_REALTIME,
-        broker_backend="minqmt_sim",
-    )
-    config = PaperTradingV2PortfolioService(repository=paper_repo).resolve_runtime_config_for_date(
-        portfolio=portfolio,
-        trade_date=date(2024, 1, 2),
-        runtime_config={},
-    )
-
-    assert config["selection_artifact_config"]["auto_generate"] is True
-    assert config["selection_artifact_config"]["signal_data_source"] == MinuteDataSource.DB_HISTORICAL.value
-    assert config["paper_v2_session"]["signal_data_source"] == MinuteDataSource.DB_HISTORICAL.value
-
-
 class FakeReplayService:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -531,7 +515,7 @@ def test_session_mutation_guard_does_not_query_weekday_fallback_calendar() -> No
     assert session.status == PaperSessionStatus.CREATED
 
 
-def test_session_mutation_guard_allows_minqmt_and_future_live_intraday_actions() -> None:
+def test_session_mutation_guard_allows_future_live_intraday_actions() -> None:
     service = PaperTradingSessionService(
         repository=InMemoryPaperTradingV2Repository(),
         calendar_provider=ExplodingTradingCalendar(),
@@ -539,8 +523,6 @@ def test_session_mutation_guard_allows_minqmt_and_future_live_intraday_actions()
     )
 
     for action in [
-        "create_minqmt_sim_portfolio",
-        "resume_minqmt_sim_session",
         "create_live_approval_candidate",
         "resume_future_live_session",
     ]:
@@ -550,30 +532,6 @@ def test_session_mutation_guard_allows_minqmt_and_future_live_intraday_actions()
             session_id="psess_intraday_recovery",
             as_of_time=datetime(2024, 1, 2, 13, 5),
         )
-
-
-def test_minqmt_sim_live_session_creation_is_not_time_window_blocked() -> None:
-    _package_repo, paper_repo, portfolio = make_portfolio(
-        data_source=MinuteDataSource.MINIQMT_REALTIME,
-        broker_backend="minqmt_sim",
-    )
-    service = PaperTradingSessionService(
-        repository=paper_repo,
-        calendar_provider=ExplodingTradingCalendar(),
-        enforce_non_trading_window=True,
-    )
-
-    session = service.create_session(
-        portfolio_id=portfolio.portfolio_id,
-        mode=PaperSessionMode.LIVE_ONLY,
-        start_date=date(2024, 1, 2),
-        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
-        as_of_time=datetime(2024, 1, 2, 13, 5),
-    )
-
-    assert session.live_data_source == MinuteDataSource.MINIQMT_REALTIME
-    assert session.status == PaperSessionStatus.CREATED
 
 
 def test_local_sim_live_session_rejects_minqmt_source() -> None:
@@ -695,20 +653,6 @@ def test_session_capabilities_expose_only_real_startable_modes() -> None:
     assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is True
     assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
     assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["can_start"] is True
-
-
-def test_session_capabilities_expose_minqmt_live_source() -> None:
-    _package_repo, paper_repo, portfolio = make_portfolio(
-        data_source=MinuteDataSource.MINIQMT_REALTIME,
-        broker_backend="minqmt_sim",
-    )
-
-    capabilities = PaperTradingSessionService(repository=paper_repo).session_capabilities(portfolio.portfolio_id)
-
-    assert capabilities["broker_backend"] == "minqmt_sim"
-    assert capabilities["portfolio_data_source"] == "MINIQMT_REALTIME"
-    assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
-    assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is False
 
 
 def test_v2_scheduler_ticks_created_sessions_without_fake_success() -> None:

@@ -16,6 +16,8 @@ import time
 GIB = 1024**3
 SLICE = "qe-training.slice"
 API_GROUP = "/qe.slice/qe-control.slice/rdagent-qe-api.service"
+CONTROL_PROFILE_GIB = (4, 4)
+LEGACY_CONTROL_PROFILE_GIB = (2, 1)
 LIVE_STATES = {"active", "activating", "deactivating", "reloading"}
 SCHEMA = "qe_wsl_workload_envelope_v2"
 MEMORY_BYTES = 56 * GIB
@@ -87,6 +89,14 @@ def admits(records, requested, budget):
 def host_admits(records, requested, available, training_current):
     unfilled_reservations = max(0, sum(row["peak_bytes"] for row in records.values()) - training_current)
     return available - unfilled_reservations - requested >= 4 * GIB
+
+
+def validate_control_limits(group):
+    limits = tuple((group / key).read_text().strip() for key in ("memory.high", "memory.max", "memory.swap.max"))
+    for ram, swap in (CONTROL_PROFILE_GIB, LEGACY_CONTROL_PROFILE_GIB):
+        if limits == ("max", str(ram * GIB), str(swap * GIB)):
+            return
+    raise RuntimeError("qe_wsl_control_api_limits_not_activated")
 
 
 def validate_policy(policy):
@@ -252,9 +262,7 @@ def main():
     if not api_found:
         raise RuntimeError("qe_wsl_control_api_not_isolated")
     api_cgroup = Path("/sys/fs/cgroup") / API_GROUP.lstrip("/")
-    limits = {k: (api_cgroup / k).read_text().strip() for k in ["memory.high", "memory.max", "memory.swap.max"]}
-    if limits != {"memory.high": "max", "memory.max": str(2 * GIB), "memory.swap.max": str(GIB)}:
-        raise RuntimeError("qe_wsl_control_api_limits_not_activated")
+    validate_control_limits(api_cgroup)
     validate_slice(show_unit(SLICE, env))
     state_dir = runtime / "aistock-qe-memory"
     state_dir.mkdir(mode=0o700, exist_ok=True)

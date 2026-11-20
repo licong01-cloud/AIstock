@@ -735,6 +735,7 @@ class ProductionSimulationRunContextProvider:
                     release=runtime_release,
                     repository=successor_repository,
                     manifest_loader=self._package_manifest_loader,
+                    trade_date=trade_date,
                 )
                 portfolio_id = portfolio.ledger_scope_id
             else:

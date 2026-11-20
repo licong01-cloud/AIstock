@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
@@ -10,7 +9,7 @@ from backend.services.simulation_data.daily_context_provider import (
     DailyTradingContextProvider,
     PreTradeTradabilityProvider,
 )
-from backend.services.simulation_runtime.decision import ExecutionPlanCompiler, TradingRuleService
+from backend.services.simulation_runtime.decision import TradingRuleService
 from backend.services.simulation_runtime.miniqmt_daily_limit_authority import (
     MINIQMT_NO_DAILY_LIMIT_RULE_VERSION,
     MiniQMTDailyLimitAuthorityProvider,
@@ -26,7 +25,7 @@ from backend.services.simulation_data.daily_context import (
 from backend.services.simulation_runtime.scheduler import (
     ProductionSimulationRunContextProvider,
 )
-from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import DataUnavailableError
 
 
 TRADE_DATE = date(2026, 8, 26)
@@ -302,54 +301,6 @@ def test_scheduler_miniqmt_daily_context_never_calls_v1_stk_limit_loader() -> No
     assert {status["daily_trading_context"]["limit_authority"] for status in statuses.values()} == {
         "MINIQMT_INSTRUMENT_DETAIL_V1"
     }
-
-
-def test_execution_plan_and_recovery_read_back_exact_v2_context() -> None:
-    provider, _calls = _provider({symbol: _instrument_row(symbol) for symbol in SYMBOLS})
-    context = _load(provider)
-    statuses = provider.to_pre_trade_statuses(context)
-    decisions = [
-        SimpleNamespace(
-            decision_id=f"decision_{symbol}",
-            symbol=symbol,
-            price_limit_rule={"pre_trade_tradability": status},
-        )
-        for symbol, status in statuses.items()
-    ]
-    binding = SimpleNamespace(
-        binding_id="binding_miniqmt",
-        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-    )
-
-    carrier = ExecutionPlanCompiler._daily_trading_context_carrier(
-        binding=binding,
-        target_trade_date=TRADE_DATE,
-        trading_rule_decisions=decisions,
-    )
-    assert carrier == context.carrier_payload()
-    plan = SimpleNamespace(
-        plan_id="plan_miniqmt",
-        trading_rule_decisions=decisions,
-        plan_payload_json={"daily_trading_context": carrier},
-    )
-    recovered = ProductionSimulationRunContextProvider._frozen_pre_trade_tradability(plan)
-    assert set(recovered) == set(SYMBOLS)
-
-    corrupted = deepcopy(statuses[SYMBOLS[0]])
-    corrupted["daily_trading_context"]["source_evidence_hash"] = "f" * 64
-    bad_decisions = [
-        SimpleNamespace(
-            decision_id="decision_bad",
-            symbol=SYMBOLS[0],
-            price_limit_rule={"pre_trade_tradability": corrupted},
-        )
-    ]
-    with pytest.raises(RuntimeConfigInvalidError):
-        ExecutionPlanCompiler._daily_trading_context_carrier(
-            binding=binding,
-            target_trade_date=TRADE_DATE,
-            trading_rule_decisions=bad_decisions,
-        )
 
 
 @pytest.mark.parametrize(

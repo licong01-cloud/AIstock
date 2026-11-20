@@ -1,0 +1,1431 @@
+{
+  "actual": "分类器从目录计划选择 miniqmt_execution_runtime_l2，simulation_core_l2 与 paper_v2_backend 的目录收集仍引入专属测试。",
+  "allowed_write_scope": [
+    "scripts/ci_change_classifier.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/paper_trading_v2/test_auto_run.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+    "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+    "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+    "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+    "backend/tests/simulation_runtime/test_miniqmt_signal_contract.py",
+    "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+    "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+    "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+    "backend/tests/scripts/test_miniqmt_current_three_inventory.py",
+    "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_minqmt_execution_report.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+    "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+    "backend/tests/infra/test_qmt_client_contract.py",
+    "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+    "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+    "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+    "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+    "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+    "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+    "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+    "tests/aistock_validation/bugs/20261120_BUG-2270-pr-miniqmt.json",
+    "backend/services/validation/plan_catalog.py",
+    "backend/tests/conftest.py",
+    "backend/tests/paper_trading_v2/test_live_dashboard.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "backend/tests/simulation_runtime/test_router_summary.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "backend/tests/simulation_runtime/test_tca_capture.py",
+    "backend/tests/simulation_runtime/test_tca_eod_observation.py",
+    "backend/tests/simulation_runtime/test_tca_eod_scheduler_seam.py",
+    "backend/tests/simulation_runtime/test_tca_manual_rebuild_cli.py",
+    "backend/tests/simulation_runtime/test_tca_observation_metrics.py",
+    "backend/tests/simulation_runtime/test_tca_observation_runbook.py",
+    "backend/tests/simulation_runtime/test_tca_read_api.py",
+    "backend/tests/qmt_strategy_ledger/test_account_group_slots.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "backend/tests/qmt_strategy_ledger/test_reconstruct_poc.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
+    "backend/tests/qmt_strategy_ledger/test_tca_phase0a3_calculator.py",
+    "backend/tests/qmt_strategy_ledger/test_tca_phase0a3_rebuild.py",
+    "backend/tests/qmt_strategy_ledger/test_tca_phase0a4_read_config.py",
+    "backend/tests/qmt_strategy_ledger/test_tca_phase0a4_read_repository.py",
+    "backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py",
+    "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_capture.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_eod_observation.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_eod_scheduler_seam.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_manual_rebuild_cli.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_observation_metrics.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_observation_runbook.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_read_api.py",
+    "backend/tests/miniqmt_execution_runtime/test_account_group_slots.py",
+    "backend/tests/miniqmt_execution_runtime/test_order_service_submit_fake_qmt.py",
+    "backend/tests/miniqmt_execution_runtime/test_reconciliation.py",
+    "backend/tests/miniqmt_execution_runtime/test_reconstruct_poc.py",
+    "backend/tests/miniqmt_execution_runtime/test_sync_service.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_phase0a2.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_calculator.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_rebuild.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_config.py",
+    "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_repository.py",
+    "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_shared_adapter.py",
+    "backend/tests/miniqmt_execution_runtime/test_vnpy_style_execution_assets.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_observability.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_policy_router.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_phase0b_export.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+    "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+    "backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py",
+    "backend/tests/paper_trading_v2/test_market_data_broker_match.py",
+    "backend/tests/test_data_quality_smoke_env.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_frozen_context.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_shared_scheduler_paths.py",
+    "backend/tests/test_validation_catalog_integrity.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2270",
+  "closed_at": "2026-11-20T19:10:34Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-20T17:33:15.606119Z",
+  "description": "分类器从目录计划选择 miniqmt_execution_runtime_l2，simulation_core_l2 与 paper_v2_backend 的目录收集仍引入专属测试。 用户补充退役要求，MiniQMT 专属测试退出所有受支持的验证入口，专属用例归档；保留荐股、LocalSIM 与仍用共享边界。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261120-92b37fd1b468",
+      "timestamp": "2026-11-20T17:33:15.606102Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/pull/7403"
+  ],
+  "expected": "MiniQMT 专属模块和用例退出默认、Nightly 和手动验证范围；荐股、LocalSIM 及共享服务契约继续执行。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/conftest.py",
+      "backend/tests/infra/test_qmt_client_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_account_group_slots.py",
+      "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_phase0b_export.py",
+      "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_frozen_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_observability.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_shared_scheduler_paths.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_policy_router.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+      "backend/tests/miniqmt_execution_runtime/test_order_service_submit_fake_qmt.py",
+      "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+      "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconciliation.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconstruct_poc.py",
+      "backend/tests/miniqmt_execution_runtime/test_sync_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_capture.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_observation.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_metrics.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_runbook.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a2.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_calculator.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_rebuild.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_config.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_repository.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_read_api.py",
+      "backend/tests/miniqmt_execution_runtime/test_vnpy_style_execution_assets.py",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+      "backend/tests/paper_trading_v2/test_live_dashboard.py",
+      "backend/tests/paper_trading_v2/test_live_session.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "backend/tests/paper_trading_v2/test_market_data_broker_match.py",
+      "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+      "backend/tests/paper_trading_v2/test_session.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "backend/tests/simulation_runtime/test_router_summary.py",
+      "backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py",
+      "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+      "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+      "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+      "backend/tests/test_data_quality_smoke_env.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "backend/tests/test_validation_catalog_integrity.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2270-pr-miniqmt.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "added_files": [
+      "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+      "backend/tests/infra/test_qmt_client_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+      "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_capture.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_observation.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_metrics.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_runbook.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_read_api.py",
+      "backend/tests/miniqmt_execution_runtime/test_account_group_slots.py",
+      "backend/tests/miniqmt_execution_runtime/test_order_service_submit_fake_qmt.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconciliation.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconstruct_poc.py",
+      "backend/tests/miniqmt_execution_runtime/test_sync_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a2.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_calculator.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_rebuild.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_config.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_repository.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_vnpy_style_execution_assets.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_observability.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_policy_router.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_frozen_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_shared_scheduler_paths.py"
+    ],
+    "changed_files": [
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/conftest.py",
+      "backend/tests/infra/test_qmt_client_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_account_group_slots.py",
+      "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_phase0b_export.py",
+      "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_frozen_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_observability.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_shared_scheduler_paths.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_policy_router.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+      "backend/tests/miniqmt_execution_runtime/test_order_service_submit_fake_qmt.py",
+      "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+      "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconciliation.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconstruct_poc.py",
+      "backend/tests/miniqmt_execution_runtime/test_sync_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_capture.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_observation.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_metrics.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_runbook.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a2.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_calculator.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_rebuild.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_config.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_repository.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_read_api.py",
+      "backend/tests/miniqmt_execution_runtime/test_vnpy_style_execution_assets.py",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+      "backend/tests/paper_trading_v2/test_live_dashboard.py",
+      "backend/tests/paper_trading_v2/test_live_session.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "backend/tests/paper_trading_v2/test_market_data_broker_match.py",
+      "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+      "backend/tests/paper_trading_v2/test_session.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "backend/tests/simulation_runtime/test_router_summary.py",
+      "backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py",
+      "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+      "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+      "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+      "backend/tests/test_data_quality_smoke_env.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "backend/tests/test_validation_catalog_integrity.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2270-pr-miniqmt.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/ci_change_classifier.py",
+        "scripts/nightly_adaptive_scheduler.py",
+        "noxfile.py",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/test_noxfile_validation_env.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/paper_trading_v2/test_auto_run.py",
+        "backend/tests/paper_trading_v2/test_live_session.py",
+        "backend/tests/paper_trading_v2/test_market_data.py",
+        "backend/tests/paper_trading_v2/test_day_runner.py",
+        "backend/tests/paper_trading_v2/test_session.py",
+        "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+        "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+        "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+        "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+        "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+        "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+        "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+        "backend/tests/simulation_runtime/test_miniqmt_signal_contract.py",
+        "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+        "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+        "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+        "backend/tests/scripts/test_miniqmt_current_three_inventory.py",
+        "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+        "backend/tests/paper_trading_v2/test_minqmt_execution_report.py",
+        "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+        "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+        "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+        "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+        "backend/tests/infra/test_qmt_client_contract.py",
+        "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+        "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+        "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "validation.workflow_automation",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "tests.validation_history",
+        "validation.coverage",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "selection_center",
+        "strategy_package",
+        "simulation.layer_foundation",
+        "qmt",
+        "platform.scheduler",
+        "platform.monitoring"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "scripts/nightly_adaptive_scheduler.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/module_registry.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/test_plans.yaml",
+          "impact_modules": [
+            "validation.center",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_test_plans"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "validation.workflow_automation",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "ci_change_classifier_test_owner"
+        },
+        {
+          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        },
+        {
+          "file": "backend/tests/test_noxfile_validation_env.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality",
+            "validation.workflow_automation"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_auto_run.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_live_session.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_market_data.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_day_runner.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_session.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_signal_contract.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "backend/tests/scripts/test_miniqmt_current_three_inventory.py",
+          "impact_modules": [],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_current_three_shadow_inventory_cli"
+        },
+        {
+          "file": "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+          "impact_modules": [
+            "paper_v2",
+            "qmt"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_phase_one_quote_ingress"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_minqmt_execution_report.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/infra/test_qmt_client_contract.py",
+          "impact_modules": [
+            "platform.scheduler",
+            "platform.monitoring"
+          ],
+          "primary_module": "platform.config",
+          "risk_level": "high",
+          "rule_id": "platform_remaining_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "critical"
+      ],
+      "suggested_scope": [
+        "scripts/ci_change_classifier.py",
+        "scripts/nightly_adaptive_scheduler.py",
+        "noxfile.py",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/test_noxfile_validation_env.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/paper_trading_v2/test_auto_run.py",
+        "backend/tests/paper_trading_v2/test_live_session.py",
+        "backend/tests/paper_trading_v2/test_market_data.py",
+        "backend/tests/paper_trading_v2/test_day_runner.py",
+        "backend/tests/paper_trading_v2/test_session.py",
+        "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+        "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+        "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+        "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+        "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+        "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+        "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+        "backend/tests/simulation_runtime/test_miniqmt_signal_contract.py",
+        "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+        "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+        "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+        "backend/tests/scripts/test_miniqmt_current_three_inventory.py",
+        "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+        "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+        "backend/tests/paper_trading_v2/test_minqmt_execution_report.py",
+        "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+        "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+        "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+        "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+        "backend/tests/infra/test_qmt_client_contract.py",
+        "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+        "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+        "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+        "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/ci_change_classifier.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_live_session.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_session.py",
+      "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+      "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+      "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/simulation_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+      "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/scripts/test_miniqmt_current_three_inventory.py",
+      "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+      "backend/tests/paper_trading_v2/test_minqmt_execution_report.py",
+      "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+      "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+      "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+      "backend/tests/infra/test_qmt_client_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+      "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/conftest.py",
+      "backend/tests/paper_trading_v2/test_live_dashboard.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "backend/tests/simulation_runtime/test_router_summary.py",
+      "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+      "backend/tests/simulation_runtime/test_tca_capture.py",
+      "backend/tests/simulation_runtime/test_tca_eod_observation.py",
+      "backend/tests/simulation_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/simulation_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/simulation_runtime/test_tca_observation_metrics.py",
+      "backend/tests/simulation_runtime/test_tca_observation_runbook.py",
+      "backend/tests/simulation_runtime/test_tca_read_api.py",
+      "backend/tests/qmt_strategy_ledger/test_account_group_slots.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+      "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+      "backend/tests/qmt_strategy_ledger/test_reconstruct_poc.py",
+      "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a3_calculator.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a3_rebuild.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a4_read_config.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a4_read_repository.py",
+      "backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_capture.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_observation.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_metrics.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_runbook.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_read_api.py",
+      "backend/tests/miniqmt_execution_runtime/test_account_group_slots.py",
+      "backend/tests/miniqmt_execution_runtime/test_order_service_submit_fake_qmt.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconciliation.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconstruct_poc.py",
+      "backend/tests/miniqmt_execution_runtime/test_sync_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a2.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_calculator.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_rebuild.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_config.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_repository.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_vnpy_style_execution_assets.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_observability.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_policy_router.py",
+      "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_phase0b_export.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+      "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+      "backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py",
+      "backend/tests/paper_trading_v2/test_market_data_broker_match.py",
+      "backend/tests/test_data_quality_smoke_env.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_frozen_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_shared_scheduler_paths.py",
+      "backend/tests/test_validation_catalog_integrity.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ci_change_classifier.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_live_session.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_session.py",
+      "backend/tests/paper_trading_v2/test_execution_policy_router.py",
+      "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+      "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/simulation_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/simulation_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/simulation_runtime/test_instrument_limit_authority.py",
+      "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/scripts/test_miniqmt_current_three_inventory.py",
+      "backend/tests/infra/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+      "backend/tests/paper_trading_v2/test_minqmt_execution_report.py",
+      "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+      "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+      "backend/tests/simulation_signal/test_alpha_signal_book_contract.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_recovery.py",
+      "backend/tests/infra/test_qmt_client_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_paper_v2_miniqmt_contracts.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_scheduler.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_path_uniqueness.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_quote_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_rejects_v25_broker_execution.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_route_migration.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_signal_contract.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_multi_strategy_unified.py",
+      "backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_b0_quote_v2_pilot.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_current_three_inventory.py",
+      "backend/tests/miniqmt_execution_runtime/test_realtime_quote_subscriber_leases.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmtsim_backend.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_execution_report.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_execution_adapter.py",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/conftest.py",
+      "backend/tests/paper_trading_v2/test_live_dashboard.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "backend/tests/simulation_runtime/test_router_summary.py",
+      "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+      "backend/tests/simulation_runtime/test_tca_capture.py",
+      "backend/tests/simulation_runtime/test_tca_eod_observation.py",
+      "backend/tests/simulation_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/simulation_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/simulation_runtime/test_tca_observation_metrics.py",
+      "backend/tests/simulation_runtime/test_tca_observation_runbook.py",
+      "backend/tests/simulation_runtime/test_tca_read_api.py",
+      "backend/tests/qmt_strategy_ledger/test_account_group_slots.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+      "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+      "backend/tests/qmt_strategy_ledger/test_reconstruct_poc.py",
+      "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a3_calculator.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a3_rebuild.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a4_read_config.py",
+      "backend/tests/qmt_strategy_ledger/test_tca_phase0a4_read_repository.py",
+      "backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_capture.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_observation.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_eod_scheduler_seam.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_manual_rebuild_cli.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_metrics.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_observation_runbook.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_read_api.py",
+      "backend/tests/miniqmt_execution_runtime/test_account_group_slots.py",
+      "backend/tests/miniqmt_execution_runtime/test_order_service_submit_fake_qmt.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconciliation.py",
+      "backend/tests/miniqmt_execution_runtime/test_reconstruct_poc.py",
+      "backend/tests/miniqmt_execution_runtime/test_sync_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a2.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_calculator.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a3_rebuild.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_config.py",
+      "backend/tests/miniqmt_execution_runtime/test_tca_phase0a4_read_repository.py",
+      "backend/tests/miniqmt_execution_runtime/test_minqmt_vnpy_shared_adapter.py",
+      "backend/tests/miniqmt_execution_runtime/test_vnpy_style_execution_assets.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_observability.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_policy_router.py",
+      "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_phase0b_export.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+      "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+      "backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py",
+      "backend/tests/paper_trading_v2/test_market_data_broker_match.py",
+      "backend/tests/test_data_quality_smoke_env.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_frozen_context.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_shared_scheduler_paths.py",
+      "backend/tests/test_validation_catalog_integrity.py"
+    ]
+  },
+  "first_seen_at": "2026-11-20T17:33:15.606119Z",
+  "fix_branch": null,
+  "fix_commit": "6b01ef6f96f4236218d400dffe25a05076b019bb",
+  "fixed_at": "2026-11-20T19:10:34Z",
+  "github_issue_number": 7406,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7406",
+  "last_seen_at": "2026-11-20T17:33:15.606119Z",
+  "module": "validation.workflow_automation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7409",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_workflow_automation",
+    "validation_catalog_integrity",
+    "validation_center_backend",
+    "simulation_core_l2",
+    "paper_v2_backend",
+    "miniqmt_execution_runtime_l2"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2270",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e060333fd39f0291",
+    "recorded_at": "2026-11-20T19:11:21.501349Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4331c0185c4a8d889a557f373b55f841557a644c",
+    "source_merge_commit": "6b01ef6f96f4236218d400dffe25a05076b019bb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7409",
+    "validation_evidence": [
+      "validation-receipt: id=c6d648e7478ff647 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=1e671000127bef77 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=69abd708354db5e0 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=c455ea8c10e34017 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`rtk pytest -q -p no:cacheprovider backend/tests/scripts/test_ci_change_classifier.py backend/tests/test_noxfile_validation_env.py backend/tests/scripts/test_nightly_adaptive_scheduler.py backend/tests/scripts/test_aistock_validation_budget.py --tb=short` result=`passed (352)`",
+      "validation-receipt: id=ff29eceec43295d1 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`rtk pytest -q -p no:cacheprovider backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_runs_draft_sim_bindings_without_approval_gate backend/tests/paper_trading_v2/test_execution_policy_router.py backend/tests/simulation_runtime/test_broker_limit_authority.py --tb=short` result=`passed (26)`",
+      "validation-receipt: id=c227d05473ce0930 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/ci_change_classifier.py --changed-file scripts/nightly_adaptive_scheduler.py --changed-file noxfile.py --changed-file tests/aistock_validation/catalog/test_plans.yaml --module validation` result=`passed`",
+      "validation-receipt: id=3b435d9bd5f2df60 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=ruff plan=direct status=passed command=`ruff check --force-exclude <changed-python-files> --output-format concise` result=`passed`",
+      "validation-receipt: id=7024b9aacbb85804 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+      "validation-receipt: id=8deb6e46da850acb commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`python -m pytest -q -p no:cacheprovider -p scripts.ci_plan_coverage backend/tests/test_data_quality_smoke_env.py` result=`passed (5, collection receipt accepted)`",
+      "validation-receipt: id=225dc9d5811ece87 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`rtk pytest -q -p no:cacheprovider backend/tests/scripts/test_ci_change_classifier.py::test_advisory_and_localsim_pr_keeps_automatic_contract_coverage backend/tests/test_noxfile_validation_env.py::test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regression backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator --tb=short` result=`passed (3)`"
+    ],
+    "validation_evidence_digest": "73f56989881866c2e06952cbe334dd483017cea07418e696e1cc145629c7a853"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation.workflow_automation"
+  ],
+  "title": "默认 PR 门禁仍执行已退役 MiniQMT 专属测试",
+  "trigger_condition": {
+    "fingerprint": "92b37fd1b468917c4100caeb",
+    "source_event_id": "FE-20261120-92b37fd1b468"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=c6d648e7478ff647 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=1e671000127bef77 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=69abd708354db5e0 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=c455ea8c10e34017 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`rtk pytest -q -p no:cacheprovider backend/tests/scripts/test_ci_change_classifier.py backend/tests/test_noxfile_validation_env.py backend/tests/scripts/test_nightly_adaptive_scheduler.py backend/tests/scripts/test_aistock_validation_budget.py --tb=short` result=`passed (352)`",
+    "validation-receipt: id=ff29eceec43295d1 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`rtk pytest -q -p no:cacheprovider backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_runs_draft_sim_bindings_without_approval_gate backend/tests/paper_trading_v2/test_execution_policy_router.py backend/tests/simulation_runtime/test_broker_limit_authority.py --tb=short` result=`passed (26)`",
+    "validation-receipt: id=c227d05473ce0930 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/ci_change_classifier.py --changed-file scripts/nightly_adaptive_scheduler.py --changed-file noxfile.py --changed-file tests/aistock_validation/catalog/test_plans.yaml --module validation` result=`passed`",
+    "validation-receipt: id=3b435d9bd5f2df60 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=ruff plan=direct status=passed command=`ruff check --force-exclude <changed-python-files> --output-format concise` result=`passed`",
+    "validation-receipt: id=7024b9aacbb85804 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "validation-receipt: id=8deb6e46da850acb commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`python -m pytest -q -p no:cacheprovider -p scripts.ci_plan_coverage backend/tests/test_data_quality_smoke_env.py` result=`passed (5, collection receipt accepted)`",
+    "validation-receipt: id=225dc9d5811ece87 commit=4331c0185c4a8d889a557f373b55f841557a644c kind=pytest plan=direct status=passed command=`rtk pytest -q -p no:cacheprovider backend/tests/scripts/test_ci_change_classifier.py::test_advisory_and_localsim_pr_keeps_automatic_contract_coverage backend/tests/test_noxfile_validation_env.py::test_simulation_full_matrix_shards_only_primary_roots_and_retains_tail_regression backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator --tb=short` result=`passed (3)`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation.workflow_automation",
+        "validation_workflow_automation",
+        "validation_center",
+        "simulation_core",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [
+        "validation_workflow_automation",
+        "validation_center_backend",
+        "simulation_core_l2",
+        "paper_v2_backend",
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation.workflow_automation",
+          "validation_workflow_automation",
+          "validation_center",
+          "simulation_core",
+          "paper_v2",
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [
+          "validation_workflow_automation",
+          "validation_center_backend",
+          "simulation_core_l2",
+          "paper_v2_backend",
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

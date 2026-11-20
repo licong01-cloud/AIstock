@@ -857,13 +857,46 @@ class MultiAlphaLivePredictionProvider:
         inference_backend: str,
         historical_read_only: bool = False,
     ) -> ParentLegLiveInferenceResult:
-        executions: dict[str, ParentLegLiveInferenceResult] = {}
-        for seed_slice in _seed_leg_slices(leg_slice):
-            executions[seed_slice.seed_run_ids[0]] = self._run_single_seed_live_inference(
-                manifest=manifest, leg_slice=seed_slice, trade_date=trade_date, cutoff_date=cutoff_date,
-                runtime_config=runtime_config, inference_backend=inference_backend,
-                historical_read_only=historical_read_only,
-            )
+        slices = _seed_leg_slices(leg_slice)
+        provider = getattr(self, "live_inference_provider", None)
+        if len(slices) > 1 and getattr(provider, "can_batch_seeds", False) is True:
+            prepared = {
+                seed.seed_run_ids[0]: self._prepare_seed_live_inference(
+                    manifest=manifest, leg_slice=seed, trade_date=trade_date, runtime_config=runtime_config,
+                    inference_backend=inference_backend, historical_read_only=historical_read_only,
+                ) for seed in slices
+            }
+            try:
+                results = provider.run_seed_batch(
+                    workspaces={seed_id: workspace for seed_id, (_, workspace) in prepared.items()},
+                    trade_date=trade_date, cutoff_date=cutoff_date,
+                )
+            except TradingCoreError as exc:
+                exc.context.setdefault("package_id", leg_slice.parent_package_id)
+                exc.context.setdefault("leg_id", leg_slice.leg_id)
+                exc.context.setdefault("model_id", leg_slice.model_asset.model_id)
+                exc.context.setdefault("runtime_source", "parent_package_asset")
+                raise
+            if results.keys() != prepared.keys():
+                _raise("multi-alpha batch result does not match the frozen seed roster", REASON_SEED_PREDICTION_MISSING,
+                       package_id=leg_slice.parent_package_id, leg_id=leg_slice.leg_id,
+                       expected_seed_run_ids=list(prepared), observed_seed_run_ids=list(results))
+            executions = {}
+            for seed in slices:
+                seed_id = seed.seed_run_ids[0]
+                source, workspace = prepared[seed_id]
+                executions[seed_id] = self._seed_live_inference_result(
+                    manifest=manifest, leg_slice=seed, trade_date=trade_date, cutoff_date=cutoff_date,
+                    result=results[seed_id], source=source, prepared=workspace,
+                )
+        else:
+            executions = {
+                seed.seed_run_ids[0]: self._run_single_seed_live_inference(
+                    manifest=manifest, leg_slice=seed, trade_date=trade_date, cutoff_date=cutoff_date,
+                    runtime_config=runtime_config, inference_backend=inference_backend,
+                    historical_read_only=historical_read_only,
+                ) for seed in slices
+            }
         first = next(iter(executions.values()))
         if len(executions) == 1:
             return first
@@ -898,6 +931,28 @@ class MultiAlphaLivePredictionProvider:
         inference_backend: str,
         historical_read_only: bool = False,
     ) -> ParentLegLiveInferenceResult:
+        source, prepared = self._prepare_seed_live_inference(
+            manifest=manifest, leg_slice=leg_slice, trade_date=trade_date, runtime_config=runtime_config,
+            inference_backend=inference_backend, historical_read_only=historical_read_only,
+        )
+        inference_kwargs: dict[str, Any] = {"workspace": prepared, "trade_date": trade_date, "cutoff_date": cutoff_date}
+        if historical_read_only:
+            inference_kwargs["historical_read_only"] = True
+        try:
+            result = self.live_inference_provider.run(**inference_kwargs)
+        except TradingCoreError as exc:
+            exc.context.setdefault("package_id", leg_slice.parent_package_id)
+            exc.context.setdefault("leg_id", leg_slice.leg_id)
+            exc.context.setdefault("model_id", leg_slice.model_asset.model_id)
+            exc.context.setdefault("runtime_source", "parent_package_asset")
+            raise
+        return self._seed_live_inference_result(manifest=manifest, leg_slice=leg_slice, trade_date=trade_date,
+            cutoff_date=cutoff_date, result=result, source=source, prepared=prepared)
+
+    def _prepare_seed_live_inference(
+        self, *, manifest: StrategyPackageManifest, leg_slice: ParentLegRuntimeSlice, trade_date: date,
+        runtime_config: Mapping[str, Any], inference_backend: str, historical_read_only: bool,
+    ) -> tuple[Any, Any]:
         if not leg_slice.seed_run_ids:
             _raise(
                 "MULTI_ALPHA leg has no seed_run_ids",
@@ -952,20 +1007,19 @@ class MultiAlphaLivePredictionProvider:
                 cache_namespace=workspace_cache_namespace,
                 verify_model_code_contract=False,
             )
-            inference_kwargs: dict[str, Any] = {
-                "workspace": prepared,
-                "trade_date": trade_date,
-                "cutoff_date": cutoff_date,
-            }
-            if historical_read_only:
-                inference_kwargs["historical_read_only"] = True
-            result = self.live_inference_provider.run(**inference_kwargs)
         except TradingCoreError as exc:
             exc.context.setdefault("package_id", leg_slice.parent_package_id)
             exc.context.setdefault("leg_id", leg_slice.leg_id)
             exc.context.setdefault("model_id", leg_slice.model_asset.model_id)
             exc.context.setdefault("runtime_source", "parent_package_asset")
             raise
+        return source, prepared
+
+    @staticmethod
+    def _seed_live_inference_result(*, manifest: StrategyPackageManifest, leg_slice: ParentLegRuntimeSlice,
+                                    trade_date: date, cutoff_date: date | None, result: Any, source: Any,
+                                    prepared: Any) -> ParentLegLiveInferenceResult:
+        representative_seed = leg_slice.seed_run_ids[0]
         if result.scores is None or not isinstance(result.scores, list):
             _raise(
                 "MULTI_ALPHA parent leg live inference did not return a score payload",

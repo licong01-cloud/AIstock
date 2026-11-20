@@ -210,6 +210,53 @@ def test_native_broker_consumes_frozen_fee_policy_and_historical_source():
     assert context.local_broker._ledger.fee_model.open_cost == 0.002
 
 
+def test_native_twap_and_marks_use_the_active_replay_day_route(tmp_path):
+    from backend.services.advisory_historical_range.input_source_plan import build_source_plan
+    from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
+    from backend.services.simulation_runtime.localsim_file_inputs import current_file_dataset
+    from backend.services.simulation_runtime.localsim_input_source_plan import PLAN_KEY, localsim_plan_inputs, native_policy
+    from backend.tests.advisory_historical_range.test_input_source_plan import CALENDAR, _snapshot
+
+    repo, manifest, _, _, _, release, binding = _bundle(_canonical_profile(), pit_authority_resolver=_canonical_resolver())
+    payload = deepcopy(release.release_config_json)
+    cfg = payload["metadata"]["selection_runtime_config"]
+    policy = native_policy(cfg)
+    plan = build_source_plan(mode="FILE_THEN_DATABASE", consumer_scope="LOCALSIM", run_id="native-twap-route",
+        days=[{"decision_date": d, "data_cutoff": CALENDAR[i], "target_trade_date": d, "history_start": CALENDAR[0]}
+              for i, d in enumerate(CALENDAR[1:])], trading_calendar=CALENDAR, native_policy=policy,
+        file_source=_snapshot(tmp_path, policy=policy),
+        runtime_pit_identity={"mode": "canonical_v2_rolling_runtime", **cfg["canonical_pit_authority"]})
+    payload["metadata"][PLAN_KEY] = plan
+    release = release.model_copy(update={"release_config_json": payload})
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=InMemoryPaperTradingV2Repository,
+        localsim_repository_factory=lambda: repo,
+        package_manifest_loader=lambda _id: manifest,
+    )
+
+    def load(trade_date):
+        return provider.load_context_for_phase(runtime_release=release, binding=binding, trade_date=trade_date,
+            as_of_time=datetime.combine(trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Shanghai")),
+            require_localsim_realtime_quote=False)
+
+    last_file, first_db = (date.fromisoformat(d) for d in CALENDAR[2:])
+    with localsim_plan_inputs(plan, trade_date=last_file):
+        context = load(last_file)
+        assert context.market_data_source == "DATASET_FILES"
+        assert context.local_broker.market_data_channel().source is MinuteDataSource.DATASET_FILES
+        assert isinstance(context.local_broker._market_data_provider, FileMinuteMarketDataProvider)
+        assert context.local_broker._market_data_provider.dataset is current_file_dataset()
+        with pytest.raises(RuntimeConfigInvalidError, match="replay day scope"):
+            load(first_db)
+    with localsim_plan_inputs(plan, trade_date=first_db):
+        context = load(first_db)
+        assert context.market_data_source == "DB_HISTORICAL"
+        assert context.local_broker.market_data_channel().source is MinuteDataSource.DB_HISTORICAL
+        assert current_file_dataset() is None
+    with pytest.raises(RuntimeConfigInvalidError, match="replay day scope"):
+        load(last_file)
+
+
 @pytest.mark.parametrize("wall_utc,trade_date,expected", [
     (datetime(2026, 1, 5, 15, 59, tzinfo=UTC), date(2026, 1, 5), MinuteDataSource.TDX_REALTIME),
     (datetime(2026, 1, 5, 16, 1, tzinfo=UTC), date(2026, 1, 6), MinuteDataSource.TDX_REALTIME),
