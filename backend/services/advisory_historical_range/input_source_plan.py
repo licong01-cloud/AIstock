@@ -200,7 +200,7 @@ def _routes(body: dict) -> list[dict]:
 
 def build_source_plan(*, mode: str, consumer_scope: str, run_id: str, days: list[dict],
                       trading_calendar: list[str], native_policy: dict,
-                      profile_path=None, file_source=None) -> dict:
+                      profile_path=None, file_source=None, runtime_pit_identity=None) -> dict:
     """Task-creation API. Supply native history bounds; never infer model types."""
     if mode not in MODES or consumer_scope not in {"ADVISORY", "LOCALSIM"} or not run_id:
         raise SourcePlanError("SOURCE_PLAN_SCOPE_INVALID")
@@ -223,7 +223,8 @@ def build_source_plan(*, mode: str, consumer_scope: str, run_id: str, days: list
     body["routes"] = _routes(body)
     body["first_database_day"] = next((v["decision_date"] for v in body["routes"] if v["source"] == "DATABASE"), None)
     if _policy_fields(native_policy) is not None and body["first_database_day"] is not None:
-        body["runtime_pit_identity"] = freeze_runtime_pit_identity()
+        body["runtime_pit_identity"] = (freeze_runtime_pit_identity() if runtime_pit_identity is None
+                                        else deepcopy(runtime_pit_identity))
         _validate_runtime_identity(body)
     return {**body, "plan_hash": digest(body)}
 

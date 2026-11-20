@@ -31,12 +31,14 @@ _QUERY_VERSION = "v1"
 
 def program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
     """Resolve the frozen mark-state universe without reading an active pointer."""
+    from .task_input_sources import uses_global_pit_source_plan, validate_program_source_plan
+
+    if uses_global_pit_source_plan(program):
+        return validate_program_source_plan(program=program)["native_policy"]["universe_key"]
     binding = program.admitted_package_projection.canonical_pit_binding
     if binding is not None:
         return binding.frozen_universe_key
     if program.selection_input_source_plan is not None:
-        from .task_input_sources import validate_program_source_plan
-
         plan = validate_program_source_plan(program=program)
         universe_key = plan["native_policy"]["universe_key"]
         if not isinstance(universe_key, str) or not universe_key.strip():
@@ -46,8 +48,10 @@ def program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
 
 
 def _query_contract_hash(frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...]) -> str:
+    from .task_input_sources import uses_global_pit_source_plan
+
     canonical_flags = {
-        program.admitted_package_projection.canonical_pit_binding is not None
+        uses_global_pit_source_plan(program) or program.admitted_package_projection.canonical_pit_binding is not None
         for program in frozen_programs
     }
     if len(canonical_flags) != 1:
@@ -70,7 +74,7 @@ class HistoricalRangeSourceRequirementPlanner:
         code_release_hash: str,
         code_release_manifest: Mapping[str, Any] | None = None,
     ) -> HistoricalRangeSourceRequirementPlanV1:
-        from .task_input_sources import validate_program_source_plan
+        from .task_input_sources import uses_global_pit_source_plan, validate_program_source_plan
 
         planned = request.selection_input_source_mode is not None
         for program in frozen_programs:
@@ -195,7 +199,8 @@ class HistoricalRangeSourceRequirementPlanner:
                     missing_reason_code="ADVISORY_HR_DECISION_MARK_STATE_UNAVAILABLE",
                     package_id=(
                         program.package_id
-                        if program.admitted_package_projection.canonical_pit_binding is not None
+                        if (program.admitted_package_projection.canonical_pit_binding is not None
+                            or uses_global_pit_source_plan(program))
                         else None
                     ),
                     decision_trade_date=trade_date,

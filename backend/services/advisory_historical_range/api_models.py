@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from .models import (
     HistoricalRangeArtifactRefV1,
@@ -50,7 +50,14 @@ class HistoricalRangeCreateRequest(R5StrictModel):
     program_specs: list[HistoricalRangeProgramInput] = Field(min_length=1)
     start_trade_date: date
     end_trade_date: date
-    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] = "DATABASE_ONLY"
+
+    @field_validator("selection_input_source_mode", mode="before")
+    @classmethod
+    def _default_global_database_source(cls, value: Any) -> Any:
+        # Only new HTTP requests get this default. Stored request models keep
+        # their original None/legacy identity for exact restore and replay.
+        return "DATABASE_ONLY" if value is None else value
 
     @model_validator(mode="after")
     def validate_dates(self) -> "HistoricalRangeCreateRequest":
