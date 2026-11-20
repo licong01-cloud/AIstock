@@ -29,13 +29,20 @@
   ],
   "expected": "Complete the same Research Assistant test roster within the existing 300s budget and preserve graph contract coverage.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/research_assistant/conftest.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2259-research-assistant-unit-regression-re-enters-live-code-intelligence-adap.json"
+    ],
     "added_files": [
       "backend/tests/research_assistant/conftest.py"
     ],
     "changed_files": [
-      "noxfile.py"
+      "backend/tests/research_assistant/conftest.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2259-research-assistant-unit-regression-re-enters-live-code-intelligence-adap.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "noxfile.py",
@@ -119,10 +126,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
