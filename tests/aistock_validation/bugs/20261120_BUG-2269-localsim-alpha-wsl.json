@@ -135,7 +135,9 @@
       "Fresh read-only WSL process on the existing frozen 2026-01-05 LocalSIM file route. Actual completed prefix of two OLD5 LSTM seeds matched every legacy score and source receipt content hash. The second seed hit 33 feature cache entries and one physical materialization. The full account benchmarks run in separate owned scopes with no economic writes. Prefix receipt SHA256 4077756d6cb5ba76a2f248077da23778ff52cdcefdd80b9f7717d10aa0e3651f.",
       "Focused LocalSIM and Advisory regression matrix passed 100 cases. Revised batch identity cases passed 7 cases, covering control path, clocks, seed order and workspace identity."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
