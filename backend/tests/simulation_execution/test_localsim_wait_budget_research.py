@@ -18,22 +18,36 @@ from backend.services.simulation_execution.localsim import wait_budget_research 
 from backend.services.simulation_execution.localsim.research_performance import ResearchPerformanceOptions
 from backend.services.simulation_execution.localsim.timing_research import ref
 from backend.services.simulation_execution.localsim.timing_store import publish
-from backend.tests.simulation_execution.test_localsim_period_research import period_fixture as inherited_period_fixture
-from backend.tests.simulation_execution.test_localsim_period_continuation import continuation as inherited_continuation
+from backend.tests.simulation_execution.test_localsim_period_continuation import build_continuation_input
+from backend.tests.simulation_execution.test_localsim_period_research import build_period_input
 
-period_fixture = inherited_period_fixture
-continuation = inherited_continuation
+
+@pytest.fixture(scope="module")
+def wait_budget_parent_plan(tmp_path_factory):
+    # The parent is digest-bound input. Each test freezes its own child accounts
+    # and can corrupt or retry those outputs without touching another test's work.
+    root = tmp_path_factory.mktemp("wait-budget-parent")
+    with pytest.MonkeyPatch.context() as parent_patches:
+        continuation = build_continuation_input(root, parent_patches)
+        request, _, _ = build_period_input(continuation, parent_patches)
+        parent = period.run_period(request, performance=ResearchPerformanceOptions(optimized=True))
+        plan = prepare_plan(
+            FileRef.model_validate(parent["analysis_spec"]),
+            "7" * 40,
+            root / "timing",
+            input_kind="FUNCTIONAL_FIXTURE",
+        )
+        yield FileRef.model_validate(plan["plan"])
 
 
 @pytest.fixture
-def wait_fixture(period_fixture, monkeypatch, tmp_path):
-    request, _, _ = period_fixture
-    parent = period.run_period(request, performance=ResearchPerformanceOptions(optimized=True))
-    plan = prepare_plan(FileRef.model_validate(parent["analysis_spec"]), "7"*40, tmp_path / "timing",
-                        input_kind="FUNCTIONAL_FIXTURE")
+def wait_fixture(wait_budget_parent_plan, monkeypatch, tmp_path):
     monkeypatch.setattr(study, "CandidateReader", period.CandidateReader)
-    frozen = study.freeze_wait_budget(research_plan=FileRef.model_validate(plan["plan"]),
-        output_root=tmp_path.with_name(tmp_path.name + "-w15-output"), producer_commit="8"*40)
+    frozen = study.freeze_wait_budget(
+        research_plan=wait_budget_parent_plan,
+        output_root=tmp_path.with_name(tmp_path.name + "-w15-output"),
+        producer_commit="8" * 40,
+    )
     return FileRef.model_validate(frozen["request"])
 
 

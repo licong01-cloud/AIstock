@@ -13,7 +13,8 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Successful natural Nightly on a post-merge main revision with simulation_core_l2 selected and the full session receipt passing under its existing budget."
   ],
   "created_at": "2026-11-20T06:14:37.135585Z",
   "description": "Nightly 44594962096 and 44377071505 both time out on shard 2 despite the 600s budget.",
@@ -145,6 +146,7 @@
   "fixed_at": null,
   "github_issue_number": 7121,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7121",
+  "implementation_and_review": "Use a digest-bound synthetic parent input once per Wait Budget test module. Each child still freezes its own accounts and writes to an isolated path. Keep real resume, immutable artifact retry, the complete test roster and four workers. Balance known large replay files using observed timings. Catalog budget remains 600s.",
   "last_seen_at": "2026-11-20T06:14:37.135585Z",
   "module": "paper_v2_selection_center",
   "non_goals": [
@@ -173,6 +175,7 @@
     "target_id": null,
     "target_ids": []
   },
+  "scheduled_acceptance": "pending_post_merge_nightly",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
