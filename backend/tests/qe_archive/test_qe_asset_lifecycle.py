@@ -122,16 +122,25 @@ def test_frozen_replay_requires_matching_registration_and_account_output() -> No
     assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
 
 
-def test_frozen_graph_blend_requires_sources_and_keeps_exact_score_identity() -> None:
+@pytest.mark.parametrize("arm,relation", [("blend", None), ("AF_PLUS_G0", "industry_embedding_only")])
+def test_frozen_graph_blend_requires_sources_and_keeps_exact_score_identity(arm, relation) -> None:
     p = _frozen_replay_payload()
     prov = p["config"]["runtime_flags"]["frozen_run_provenance"]
-    prov.update(arm="blend", af_source_run="original-af", af_source_score_sha256="c" * 64,
-                af_share=.75, gat_share=.25, gat_sources=[{"task_id": "g1", "loop_index": i, "sha256": "5" * 64}
+    prov.update(arm=arm, af_source_run="original-af", af_source_score_sha256="c" * 64,
+                af_share=.75, gat_share=.25, gat_sources=[{"task_id": "graph-task", "loop_index": i, "sha256": "5" * 64}
                                                         for i in (2, 4, 6)])
+    if relation is not None:
+        prov["relation"] = relation
     assert classify_qe_result(p).archive_eligible
     other = deepcopy(p)
     other["config"]["runtime_flags"]["frozen_run_provenance"]["score_sha256"] = "7" * 64
     assert classify_qe_result(p).business_identity_sha256 != classify_qe_result(other).business_identity_sha256
+    if arm == "AF_PLUS_G0":
+        for inconsistent in ({"relation": None}, {"relation": "industry_bias"}, {"arm": "unregistered_arm"},
+                             {"gat_share": 0.5}, {"af_source_score_sha256": "not-a-hash"}, {"gat_sources": []}):
+            other = deepcopy(p)
+            other["config"]["runtime_flags"]["frozen_run_provenance"].update(inconsistent)
+            assert classify_qe_result(other).reason_code == "qe_lifecycle_identity_incomplete"
     prov["gat_sources"][0]["loop_index"] = 4
     assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
 
