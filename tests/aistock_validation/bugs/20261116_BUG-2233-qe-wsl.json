@@ -158,9 +158,9 @@
   },
   "first_seen_at": "2026-11-16T16:31:51.406079Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "d54fc6825feaba8974bff0004ef2e00981c3779c",
   "fix_summary": "先cd --进入规范工作目录再启用严格shell选项，原交易core保持；仅匹配明确无模型目标消费合同及完整CLI标识时使用原纯回放资源包络，非法标识、模型消费和旧模型复用仍保留保守分类。",
-  "fixed_at": null,
+  "fixed_at": "2026-11-16T17:52:00Z",
   "github_issue_number": 7287,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7287",
   "last_seen_at": "2026-11-16T16:31:51.406079Z",
@@ -168,6 +168,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7289",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -196,6 +197,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -207,7 +209,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2233",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e8eff4c4e22c3cca",
+    "recorded_at": "2026-11-16T17:53:02.898319Z",
+    "runtime_contract_digest": "ee979dd83752fd8fb119526f5220f5371a226ee5aca88337018f7b8e06e06677",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f652f91b723a65e4107f9a2cd0a74609eba0b9ed",
+    "source_merge_commit": "d54fc6825feaba8974bff0004ef2e00981c3779c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7289",
+    "validation_evidence": [
+      "python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/quantevolver/test_qe_absolute_target_consumer.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q -> passed"
+    ],
+    "validation_evidence_digest": "99a0e072e00bf4830f55a03f26f02c4bff75fcbf9c8133e64e20c4adcc783c0f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe"
   ],
@@ -216,6 +239,9 @@
     "fingerprint": "56a1cf2d8488e6a521914f1b",
     "source_event_id": "FE-20261116-56a1cf2d8488"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_qe_wsl_workload_isolation.py backend/tests/quantevolver/test_qe_absolute_target_consumer.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
