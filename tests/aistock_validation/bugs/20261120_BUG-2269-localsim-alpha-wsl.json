@@ -24,7 +24,9 @@
       "timestamp": "2026-11-20T17:33:15.688127Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/multi-alpha-20261120/bug-2269-fresh-wsl-prefix-20261120T175300Z.json"
+  ],
   "expected": "显式 LocalSIM 历史计划按日按 Alpha 合并 WSL 请求，沿用现有共享缓存、冻结资产和数值聚合，逐种子严格校验输出、保持原来的账本输入合同。荐股和普通单模型路径行为保持。",
   "file_scope_contract": {
     "added_files": [],
@@ -128,7 +130,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
+    "fresh_process_evidence": [
+      "Fresh read-only WSL process on the existing frozen 2026-01-05 LocalSIM file route. Actual completed prefix of two OLD5 LSTM seeds matched every legacy score and source receipt content hash. The second seed hit 33 feature cache entries and one physical materialization. The full account benchmarks run in separate owned scopes with no economic writes. Prefix receipt SHA256 4077756d6cb5ba76a2f248077da23778ff52cdcefdd80b9f7717d10aa0e3651f.",
+      "Focused LocalSIM and Advisory regression matrix passed 100 cases. Revised batch identity cases passed 7 cases, covering control path, clocks, seed order and workspace identity."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
