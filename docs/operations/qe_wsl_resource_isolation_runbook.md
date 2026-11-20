@@ -6,7 +6,7 @@ BUG-2208：原9000 API及其训练子进程共用`qe-execution.slice`的软限�
 源码通过统一QE提交协调器对WSL新增作业包裹运行环境，远端CPU提交保持原样。
 原科学命令逐字节保存并校验SHA，因子、模型、预测、窗口、策略和费用不变。
 每项新作业进入用户systemd的独立scope，v2合计56GiB内存、32GiB交换；API在系统
-`qe-control.slice`独立使用2GiB内存、1GiB交换。两组软限为infinity。
+`qe-control.slice`及其中的9000服务各配置4 GiB内存上限和4 GiB交换上限，两层共享同一份额度。两组软限为infinity。
 不是取消WSL全部内存保护，也不修改Docker、数据库、数据集或旧冻结资产。
 
 ## 内存准入与并行
@@ -45,7 +45,7 @@ memory或I/O的full avg10分别达到10%/20%时暂缓新准入，不终止已运
    唯一训练unit并返回readback；不改9000 API/control unit，不启动或停止服务。
 3. 操作者在lc999用户manager执行`systemctl --user daemon-reload`，再执行
    `systemctl --user set-property --runtime qe-training.slice MemoryHigh=infinity MemoryMax=56G MemorySwapMax=32G`。
-   读取实际cgroup三项值，确认API仍为独立2GiB/1GiB；原40GiB/8GiB不可冒称v2已激活。
+   读取实际cgroup三项值，同时单独核对9000控制组及服务的生效限额。
 4. 用户重启本机8001加载新封套生成代码；本次增量升级不需要重启WSL9000或WSL。
    在此之前不提交会被旧常驻代码包装的新实验。源码合入、unit文件、实时限额与API加载分开报告。
 5. fresh-process Composer检查v2、原科学命令SHA及GPU2/回放4容量；沿下一批既有授权的
@@ -54,6 +54,14 @@ memory或I/O的full avg10分别达到10%/20%时暂缓新准入，不终止已运
 
 该profile不修改`.wslconfig`、全局swap、swappiness、Docker或数据库容器。swap仅承接
 冷页及有限峰值，持续换页导致吞吐下降时应排查数据加载/阶段峰值，不无限增加swap限额。
+
+## 已隔离的9000在线升级
+
+BUG-2271 的故障记录显示，控制组用满 2 GiB 内存及 1 GiB 交换后被内核 OOM 杀进程；独立训练仍产生了完整预测。控制组的新上限为 4 GiB 内存及 4 GiB 交换。
+
+1. 同步源码后，提交方会在包装下一项 WSL 作业时从磁盘读取新版 guard。它识别完整的旧版 2/1 或新版 4/4 配置。核对已冻结且尚等候启动的旧版封套；如存在，先让它按原合同进入训练 scope。已在训练 scope 中的作业及远端回放可继续。
+2. 在 WSL 以 root 用系统 Python 执行已审核源码 `qe_wsl_resource_isolation.py --upgrade-control-profile --apply`。它先核对两个既有 unit 的完整内容，再逐一原子更新，可在两次写入之间中断后重入。记录返回的文件 SHA。
+3. 执行 `systemctl daemon-reload`。分别读取 `qe-control.slice` 与 `rdagent-qe-api.service` 的 ControlGroup，并在两者实际 cgroup 核对 `memory.high=max`、`memory.max=4294967296`、`memory.swap.max=4294967296`。若有其他 drop-in 覆盖，以实际读回值报告并查明来源。核对 API 原 MainPID、9000 健康响应、原任务状态及训练组 56/32。后续沿既有实验观察控制组的 `memory.events`、峰值和内存压力。
 
 ## 首次部署API隔离
 
