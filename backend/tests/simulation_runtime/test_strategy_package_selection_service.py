@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.services.advisory_program import AdvisoryProgramService, InMemoryAdvisoryProgramRepository
 from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
     CANONICAL_PIT_RULE_VERSION,
@@ -17,6 +18,7 @@ from backend.services.canonical_equity_pit import (
 )
 from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
     CanonicalPitGenerationDriftError,
     CanonicalPitRuntimeError,
     SelectionPitRuntimeLease,
@@ -316,6 +318,18 @@ def test_release_pit_drift_during_computation_still_blocks_evidence_write(monkey
         case.service.run_selection(**case.kwargs)
 
 
+@pytest.mark.parametrize("field", [CANONICAL_PIT_RUNTIME_PROFILE_KEY, CANONICAL_PIT_RUNTIME_LEASE_KEY])
+def test_package_config_cannot_replace_shared_pit_binding(field):
+    case = _frozen_pit_release_case()
+    package_id = case.kwargs["package_ids"][0]
+    case.kwargs["runtime_config"] = {package_id: {field: None}}
+
+    with pytest.raises(RuntimeConfigInvalidError, match="selection run's PIT binding"):
+        case.service.run_selection(**case.kwargs)
+
+    assert not case.computation.calls
+
+
 def test_unbound_new_selection_does_not_inherit_an_old_lease():
     case = _frozen_pit_release_case()
     case.kwargs.update(runtime_release=None, runtime_config=case.config)
@@ -324,7 +338,8 @@ def test_unbound_new_selection_does_not_inherit_an_old_lease():
     assert not case.computation.calls
 
 
-def test_strategy_package_selection_freezes_canonical_pit_generation_once() -> None:
+@pytest.mark.parametrize("explicit_pointer_profile", [True, False])
+def test_strategy_package_selection_freezes_canonical_pit_generation_once(explicit_pointer_profile) -> None:
     rows = [
         {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
         {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
@@ -333,7 +348,11 @@ def test_strategy_package_selection_freezes_canonical_pit_generation_once() -> N
     runtime_repo = InMemorySimulationRuntimeRepository()
     resolver = StaticPitAuthorityResolver()
     recording = RecordingSelectionComputation()
-    config = migrate_runtime_config_to_canonical_pointer(_runtime_config(top_k=2))
+    config = _runtime_config(top_k=2)
+    if explicit_pointer_profile:
+        config = migrate_runtime_config_to_canonical_pointer(config)
+    else:
+        config["st_pit_authoritative"] = True
     _seed_artifact(artifact_repo, manifest, rows, runtime_config=config)
 
     result = _selection_service(
@@ -670,6 +689,45 @@ def test_selection_center_uses_shared_selection_evidence_service() -> None:
     assert runtime_repo.get_daily_selection_evidence(evidence_id).package_id == manifest.package_id
     assert evidence_refs["artifact_hash_by_package"][manifest.package_id]
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_advisory_and_simulation_share_package_and_global_pit():
+    rows = [{"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0}]
+    packages, artifacts, manifest, runtime = _package_with_artifact(rows)
+    repository = InMemorySimulationRuntimeRepository()
+    authority = StaticPitAuthorityResolver()
+    selection = _selection_service(packages, runtime, repository, pit_authority_resolver=authority)
+    center = SelectionCenterService(
+        repository=InMemorySelectionCenterRepository(),
+        package_repository=packages,
+        strategy_selection_service=selection,
+    )
+    advisory = AdvisoryProgramService(repository=InMemoryAdvisoryProgramRepository(), selection_service=center)
+    program = SimpleNamespace(
+        package_mode="single_package", package_ids=[manifest.package_id],
+        target_count=1, review_policy={"rank_exit_threshold": 1},
+    )
+    trade_date = date(2024, 1, 2)
+    config = _runtime_config(top_k=1)
+    config["selection_artifact_config"] = {"auto_generate": False, "pit_mode": "NONE", "inference_backend": "wsl"}
+    _seed_artifact(artifacts, manifest, rows, runtime_config=config)
+
+    advisory_run = advisory._selection_run_for_review(
+        program=program, trade_date=trade_date, selection_run_id=None, data_source="DB_HISTORICAL", runtime_config=config,
+    )
+    lease = advisory_run.runtime_config[CANONICAL_PIT_RUNTIME_LEASE_KEY]
+    simulation_config = migrate_runtime_config_to_canonical_pointer(config)
+    simulation_config[CANONICAL_PIT_RUNTIME_LEASE_KEY] = lease
+    release = _release_for(manifest, simulation_config, repository,
+        release_metadata={"selection_runtime_config": simulation_config})
+    simulation_run = selection.run_selection(
+        package_ids=[manifest.package_id], mode=SelectionMode.SINGLE_PACKAGE, trade_date=trade_date,
+        data_source="DB_HISTORICAL", runtime_release=release,
+    )
+    assert simulation_run.runtime_config[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease
+    assert simulation_run.manifest_sha256_by_package == advisory_run.manifest_sha256_by_package
+    assert [row.symbol for row in advisory_run.aggregate_results] == [row.symbol for row in simulation_run.aggregate_results]
+    assert authority.calls == 4
 
 
 def test_strategy_package_selection_refreshes_default_binding_after_pit_finalization() -> None:

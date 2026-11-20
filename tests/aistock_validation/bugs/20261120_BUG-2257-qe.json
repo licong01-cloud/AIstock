@@ -1,0 +1,487 @@
+{
+  "actual": "消除组合打包逐seed与最终父包重复载入、重复清单哈希和同身份二次准入；复用共享发布与全局PIT合同，已封存历史输入不重绑，保留错误资产、错误PIT及账户执行安全拒绝。",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/multi_alpha_promotion.py",
+    "backend/services/strategy_package/frozen_runtime_self_check.py",
+    "backend/services/strategy_package/asset_eligibility.py",
+    "backend/services/strategy_package/validators.py",
+    "backend/services/strategy_package/canonical_pit_compatibility.py",
+    "backend/services/strategy_package/advisory_input_projection.py",
+    "backend/services/strategy_package/original_context_bridge.py",
+    "backend/services/simulation_signal/strategy_package_selection.py",
+    "backend/services/selection_center/canonical_pit_runtime.py",
+    "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+    "backend/tests/strategy_package/test_governance_eligibility.py",
+    "backend/tests/strategy_package/test_advisory_input_projection.py",
+    "backend/tests/strategy_package/test_original_context_bridge.py",
+    "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+    "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2257",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-20T03:41:30.146350Z",
+  "description": "消除组合打包逐seed与最终父包重复载入、重复清单哈希和同身份二次准入；复用共享发布与全局PIT合同，已封存历史输入不重绑，保留错误资产、错误PIT及账户执行安全拒绝。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261120-56f376c83a0c",
+      "timestamp": "2026-11-20T03:41:30.146335Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/strategy_package/asset_eligibility.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/original_context_bridge.py",
+      "backend/services/strategy_package/validators.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+      "backend/tests/strategy_package/test_governance_eligibility.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261120_BUG-2257-qe.json",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/strategy_package/asset_eligibility.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/original_context_bridge.py",
+      "backend/services/strategy_package/validators.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+      "backend/tests/strategy_package/test_governance_eligibility.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/multi_alpha_promotion.py",
+        "backend/services/strategy_package/frozen_runtime_self_check.py",
+        "backend/services/strategy_package/asset_eligibility.py",
+        "backend/services/strategy_package/validators.py",
+        "backend/services/strategy_package/canonical_pit_compatibility.py",
+        "backend/services/strategy_package/advisory_input_projection.py",
+        "backend/services/strategy_package/original_context_bridge.py",
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+        "backend/tests/strategy_package/test_governance_eligibility.py",
+        "backend/tests/strategy_package/test_advisory_input_projection.py",
+        "backend/tests/strategy_package/test_original_context_bridge.py",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment",
+        "platform.api",
+        "platform.db",
+        "hmm",
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "simulation_runtime",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/multi_alpha_promotion.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/frozen_runtime_self_check.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/asset_eligibility.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/validators.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/canonical_pit_compatibility.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/advisory_input_projection.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/original_context_bridge.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/simulation_signal/strategy_package_selection.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/selection_center/canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_governance_eligibility.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_advisory_input_projection.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_original_context_bridge.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/multi_alpha_promotion.py",
+        "backend/services/strategy_package/frozen_runtime_self_check.py",
+        "backend/services/strategy_package/asset_eligibility.py",
+        "backend/services/strategy_package/validators.py",
+        "backend/services/strategy_package/canonical_pit_compatibility.py",
+        "backend/services/strategy_package/advisory_input_projection.py",
+        "backend/services/strategy_package/original_context_bridge.py",
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+        "backend/tests/strategy_package/test_governance_eligibility.py",
+        "backend/tests/strategy_package/test_advisory_input_projection.py",
+        "backend/tests/strategy_package/test_original_context_bridge.py",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/asset_eligibility.py",
+      "backend/services/strategy_package/validators.py",
+      "backend/services/strategy_package/canonical_pit_compatibility.py",
+      "backend/services/strategy_package/advisory_input_projection.py",
+      "backend/services/strategy_package/original_context_bridge.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+      "backend/tests/strategy_package/test_governance_eligibility.py",
+      "backend/tests/strategy_package/test_advisory_input_projection.py",
+      "backend/tests/strategy_package/test_original_context_bridge.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/asset_eligibility.py",
+      "backend/services/strategy_package/validators.py",
+      "backend/services/strategy_package/canonical_pit_compatibility.py",
+      "backend/services/strategy_package/advisory_input_projection.py",
+      "backend/services/strategy_package/original_context_bridge.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+      "backend/tests/strategy_package/test_governance_eligibility.py",
+      "backend/tests/strategy_package/test_advisory_input_projection.py",
+      "backend/tests/strategy_package/test_original_context_bridge.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+    ]
+  },
+  "first_seen_at": "2026-11-20T03:41:30.146350Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7369,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7369",
+  "last_seen_at": "2026-11-20T03:41:30.146350Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "platform_api_backend",
+    "qe_read_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_contract_id": "strategy_package_selection_artifact_readback",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_ma_8ec5e389fa2c5e484a1ac7e9/selection-artifacts",
+    "fresh_process_evidence": [
+      "Isolated pytest loaded worktree source and passed 87 targeted tests, including same manifest, immutable PIT lease and selection result via Advisory and release-backed shared selection, LocalSIM PIT boundary, Paper drift before order write, corrupt assets and manifest. Read-only archived UPDATED3 manifest and embedded QE binding were verified.",
+      "Isolated pytest loaded worktree source. Regression matrix: 87 passed. Final package-only admission test: passed. Advisory and release-backed simulation shared manifest, lease and candidates. LocalSIM PIT checks and Paper drift before order write passed. Read-only archived UPDATED3 manifest and submitted QE binding verified.",
+      "Isolated pytest loaded worktree source: 87 targeted regressions passed and the moved final-package-only admission test passed. Advisory and release-backed simulation shared the exact manifest, lease and candidates. LocalSIM historical PIT and Paper drift before orders passed. Archived UPDATED3 manifest and embedded QE binding verified read-only."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "策略包在QE、荐股和模拟盘之间重复验收且历史包发布身份没有统一引用",
+  "trigger_condition": {
+    "fingerprint": "56f376c83a0cd69644378e96",
+    "source_event_id": "FE-20261120-56f376c83a0c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2",
+        "platform_api",
+        "qe_read",
+        "simulation_core"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "platform_api_backend",
+        "qe_read_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2",
+          "platform_api",
+          "qe_read",
+          "simulation_core"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "platform_api_backend",
+          "qe_read_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

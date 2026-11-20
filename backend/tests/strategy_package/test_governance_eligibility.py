@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
+import pytest
 
-from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package import asset_eligibility, validators
+from backend.services.strategy_package.manifest import compute_manifest_sha256, freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
@@ -17,6 +20,7 @@ from backend.services.strategy_package.validation_run import (
     PackageValidationStatus,
     PackageValidationType,
 )
+from backend.tests.strategy_package import test_multi_alpha_promotion
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -129,6 +133,49 @@ def _seed_paper_ready_package(service: StrategyPackageService, package_id: str) 
     _record_runtime_candidate(service, package_id)
     _record_original_fixed_weight_retest(service, package_id, completed_at=completed_at)
     _record_stable_seed_runs(service, package_id, completed_at=completed_at)
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_asset_eligibility_computes_manifest_identity_once(monkeypatch, tampered):
+    manifest = freeze_manifest(make_manifest())
+    if tampered:
+        manifest = manifest.model_copy(update={"package_name": "Tampered package"})
+    record = SimpleNamespace(
+        package_id=manifest.package_id,
+        package_status=manifest.package_status,
+        manifest_sha256=manifest.manifest_sha256,
+        current_manifest=lambda: manifest,
+    )
+    calls = []
+
+    def count_hash(value):
+        calls.append(value)
+        return compute_manifest_sha256(value)
+
+    monkeypatch.setattr(asset_eligibility, "compute_manifest_sha256", count_hash)
+    monkeypatch.setattr(validators, "compute_manifest_sha256", count_hash)
+    result = asset_eligibility.StrategyPackageAssetEligibilityService().summarize(record)
+
+    assert calls == [manifest]
+    assert ("manifest_hash_compute" in result.blockers) is tampered
+    assert "manifest_asset_checks" not in result.blockers
+
+
+def test_multi_alpha_promotion_admits_only_the_final_package(monkeypatch):
+    combine_repo, package_repo, first_child, second_child = test_multi_alpha_promotion._seed_repos()
+    service = test_multi_alpha_promotion._service(combine_repo, package_repo)
+    checked_manifests = []
+    check = service.frozen_runtime_self_check.assert_manifest_self_contained
+
+    def record_checked_manifest(manifest):
+        checked_manifests.append(manifest)
+        return check(manifest)
+
+    monkeypatch.setattr(service.frozen_runtime_self_check, "assert_manifest_self_contained", record_checked_manifest)
+    package = test_multi_alpha_promotion._promote(service, first_child, second_child).package
+
+    assert [manifest.package_id for manifest in checked_manifests] == [package.package_id]
+    assert checked_manifests[0].alpha_mode.value == "multi_alpha"
 
 
 def test_governance_eligibility_returns_read_only_summary_with_all_gates_ready() -> None:
