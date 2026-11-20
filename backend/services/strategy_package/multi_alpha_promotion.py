@@ -377,7 +377,6 @@ class MultiAlphaPackagePromotionService:
                 from .original_input_projection import project_original_inputs
 
                 seed_manifest = project_original_inputs(seed_manifest)
-            self.frozen_runtime_self_check.assert_manifest_self_contained(seed_manifest)
             models = seed_manifest.model_asset if isinstance(seed_manifest.model_asset, list) else [seed_manifest.model_asset]
             if len(models) != 1:
                 _fail_manifest_incomplete("each seed requires exactly one fitted model", leg_id=leg_id, seed_ref=seed_ref)
@@ -1304,13 +1303,11 @@ def _with_signal_admission_evidence(
     multi_alpha.pop("paper_admission", None)
     multi_alpha["signal_admission"] = signal_evidence
     source_evidence["multi_alpha"] = multi_alpha
-    return freeze_manifest(
-        manifest.model_copy(
-            update={
-                "source_evidence": source_evidence,
-                "manifest_sha256": None,
-            }
-        )
+    return manifest.model_copy(
+        update={
+            "source_evidence": source_evidence,
+            "manifest_sha256": None,
+        }
     )
 
 

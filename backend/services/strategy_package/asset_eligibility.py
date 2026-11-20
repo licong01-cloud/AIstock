@@ -192,7 +192,7 @@ class StrategyPackageAssetEligibilityService:
             )
 
         try:
-            self.validator.validate_manifest(manifest)
+            self.validator.validate_asset_checks(manifest)
         except StrategyPackageValidationError as exc:
             checks.append(
                 _check(
@@ -209,7 +209,7 @@ class StrategyPackageAssetEligibilityService:
                     "manifest_asset_checks",
                     "PASS",
                     "hard",
-                    "manifest hash and asset checks passed",
+                    "manifest asset checks passed",
                     {"package_id": package_id},
                 )
             )

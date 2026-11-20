@@ -25,13 +25,16 @@ from .models import StrategyPackageManifest
 class StrategyPackageValidator:
     """Validate package structure and runtime readiness without side effects."""
 
-    def validate_manifest(self, manifest: StrategyPackageManifest) -> None:
+    def validate_asset_checks(self, manifest: StrategyPackageManifest) -> None:
         failed = [check for check in manifest.asset_checks if not check.passed]
         if failed:
             raise PackageAssetInvalidError(
                 "strategy package has failed asset checks",
                 context={"failed_checks": [check.model_dump() for check in failed]},
             )
+
+    def validate_manifest(self, manifest: StrategyPackageManifest) -> None:
+        self.validate_asset_checks(manifest)
         if manifest.manifest_sha256:
             actual = compute_manifest_sha256(manifest)
             if manifest.manifest_sha256 != actual:

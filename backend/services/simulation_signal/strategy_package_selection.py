@@ -29,6 +29,7 @@ from backend.services.selection_center.canonical_pit_runtime import (
     freeze_canonical_pit_runtime_binding,
     has_canonical_pit_runtime_profile,
     inherit_canonical_pit_runtime_binding,
+    migrate_runtime_config_to_canonical_pointer,
     require_canonical_pit_generation_current,
     require_canonical_pit_runtime_binding,
 )
@@ -53,6 +54,7 @@ from backend.services.selection_center.runtime_profile import (
     normalize_selection_runtime_config,
     parse_selection_runtime_profile,
     refresh_generated_runtime_profile_binding,
+    runtime_config_has_version_binding,
     runtime_profile_config_sha256,
     validate_runtime_profile_binding,
 )
@@ -315,6 +317,12 @@ class StrategyPackageSelectionService:
                 reason="selection center non-trading preview",
             )
         else:
+            if (
+                self._st_pit_authoritative(raw_config)
+                and not has_canonical_pit_runtime_profile(raw_config)
+                and not runtime_config_has_version_binding(raw_config)
+            ):
+                raw_config = migrate_runtime_config_to_canonical_pointer(raw_config)
             raw_config = attach_default_runtime_profile_binding(raw_config)
         if has_canonical_pit_runtime_profile(raw_config):
             raw_config, _pit_runtime_lease = self.resolve_pit_runtime_config(
@@ -329,13 +337,14 @@ class StrategyPackageSelectionService:
             context=behavior_context,
             require_trade_enabled=not is_non_trading_runtime_config(config),
         )
-        config = self._apply_point_in_time_selection_config(config, trade_date=trade_date)
-        config = refresh_generated_runtime_profile_binding(config)
-        validate_runtime_profile_binding(
-            config,
-            context={**behavior_context, "phase": "post_pit_selection_config"},
-            require_trade_enabled=not is_non_trading_runtime_config(config),
-        )
+        point_in_time_config = self._apply_point_in_time_selection_config(config, trade_date=trade_date)
+        if point_in_time_config is not config:
+            config = refresh_generated_runtime_profile_binding(point_in_time_config)
+            validate_runtime_profile_binding(
+                config,
+                context={**behavior_context, "phase": "post_pit_selection_config"},
+                require_trade_enabled=not is_non_trading_runtime_config(config),
+            )
         self._validate_request_shape(package_ids=package_ids, mode=mode)
         weights = (
             package_weights_from_runtime_config(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
@@ -799,6 +808,16 @@ class StrategyPackageSelectionService:
             variant = self._resolve_runtime_variant(record, raw_package_config)
             raw_package_config = apply_runtime_variant_config(raw_package_config, variant)
             raw_package_config.pop("runtime_variant_id", None)
+            for key in (CANONICAL_PIT_RUNTIME_PROFILE_KEY, CANONICAL_PIT_RUNTIME_LEASE_KEY):
+                if (key in raw_package_config, raw_package_config.get(key)) != (key in config, config.get(key)):
+                    raise RuntimeConfigInvalidError(
+                        "package configuration conflicts with the selection run's PIT binding",
+                        context={
+                            "reason_code": "SELECTION_PACKAGE_PIT_BINDING_CONFLICT",
+                            "package_id": package_id,
+                            "field": key,
+                        },
+                    )
             package_config = self._normalize_package_runtime_config(
                 manifest=manifest,
                 runtime_config=raw_package_config,
