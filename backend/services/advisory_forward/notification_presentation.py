@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from .notification_details import CHANGES, GROUPS, HEADERS, DetailDeliveryError, cell, validate_snapshot
 
-PRESENTATION_VERSION = 'advisory_feishu_mobile_full_tables_v2'
+PRESENTATION_VERSION = 'advisory_feishu_mobile_full_tables_v3'
 MAX_MOBILE_TABLES = 5
 CARD_BUDGET = 18 * 1024  # Leave room under the existing 20KB sender limit for signing.
 
@@ -109,21 +109,28 @@ def mobile_card(payload, url):
         ('【测试】历史名单样例，非新的荐股通知。\n' if payload['subject'].startswith('【测试】') else '') +
         f"决策日 {snapshot['decision_date']} · 目标日 {snapshot['target_date']}\n"
         f"全部 {len(programs)} 个策略包；表内含全量股票，每页10行可翻页。")))]
-    table_count = 0
-    for p in programs:
-        rows, counts = mobile_rows(p)
-        heading = (display(p['program_name'], 80) + '\n' +
+    prepared = [(p, *mobile_rows(p)) for p in programs]
+    combined = sum(bool(rows) for _, rows, _ in prepared) > MAX_MOBILE_TABLES
+    combined_rows = []
+    for number, (p, rows, counts) in enumerate(prepared, 1):
+        heading = (('策略包 ' + str(number) + ' · ' if combined else '') +
+                   display(p['program_name'], 80) + '\n' +
                    f"在荐 {counts['active']} · 移出/退出建议 {counts['exits']} · 其他待复核 {counts['pending']}")
         elements.extend([dict(tag='hr'), dict(tag='div', text=dict(tag='plain_text', content=heading))])
         if rows:
-            table_count += 1
-            if table_count > MAX_MOBILE_TABLES:
-                raise DetailDeliveryError('FEISHU_MOBILE_FULL_TABLE_COUNT_LIMIT')
-            elements.append(dict(tag='table', page_size=10, row_height='middle',
-                columns=[dict(name=k, display_name=v, data_type='text', width='auto')
-                         for k, v in [('s', '股票'), ('t', '状态'), ('v', '累计涨跌')]], rows=rows))
+            if combined:
+                # Compact, unambiguous legend IDs keep full rows within the same card budget.
+                combined_rows.extend(dict(p=str(number), **row) for row in rows)
+            else:
+                elements.append(_mobile_table(rows))
         else:
             elements.append(dict(tag='div', text=dict(tag='plain_text', content='本包暂无在荐或退出相关股票。')))
+    if combined:
+        elements.extend([
+            dict(tag='hr'),
+            dict(tag='div', text=dict(tag='plain_text', content='全量荐股总表 · 策略包列对应上方编号，按包依次列出。')),
+            _mobile_table(combined_rows, combined=True),
+        ])
     elements.extend([
         dict(tag='action', actions=[dict(tag='button', text=dict(tag='plain_text', content='打开完整荐股表格'),
                                         type='primary', url=url)]),
@@ -137,3 +144,10 @@ def mobile_card(payload, url):
     if len(card_json_bytes(card)) > CARD_BUDGET:
         raise DetailDeliveryError('FEISHU_MOBILE_FULL_CARD_TOO_LARGE')
     return card
+
+
+def _mobile_table(rows, *, combined=False):
+    columns = ([('p', '策略包')] if combined else []) + [('s', '股票'), ('t', '状态'), ('v', '累计涨跌')]
+    return dict(tag='table', page_size=10, row_height='middle',
+                columns=[dict(name=k, display_name=v, data_type='text', width='auto') for k, v in columns],
+                rows=rows)

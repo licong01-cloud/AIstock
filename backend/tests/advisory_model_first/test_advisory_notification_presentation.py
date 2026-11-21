@@ -86,16 +86,64 @@ def test_desktop_overview_is_first_complete_and_not_a_return_ranking():
     assert tables[-1][1] == before
 
 
-def test_too_many_packages_fail_instead_of_omitting_any_package():
+def test_oversized_many_package_card_fails_instead_of_omitting_any_package():
     data = payload(7)
     p = data['detail_snapshot']['programs'][0]
     data['detail_snapshot']['programs'] = [dict(copy.deepcopy(p), program_id=f'p{i}',
         program_name='策略包中文名称' * 20 + str(i)) for i in range(100)]
     sealed(data)
-    with pytest.raises(DetailDeliveryError, match='FULL_TABLE_COUNT_LIMIT'):
+    with pytest.raises(DetailDeliveryError, match='FULL_CARD_TOO_LARGE'):
         mobile_card(data, URL)
     assert len(overview_table(data['detail_snapshot'])) == 101
     assert len(workbook_tables(data['detail_snapshot'])) == 102
+
+
+@pytest.mark.parametrize('count', [5, 6])
+def test_mobile_package_capacity_keeps_all_rows_and_package_identity(count):
+    data = payload(27)
+    source = data['detail_snapshot']['programs'][0]
+    programs = [dict(copy.deepcopy(source), program_id=f'p{i}',
+                     program_name=f'完整策略名称 {i}') for i in range(count)]
+    data['detail_snapshot']['programs'] = programs
+    sealed(data)
+    before = copy.deepcopy(data)
+    card = mobile_card(data, URL)
+    tables = [e for e in card['elements'] if e['tag'] == 'table']
+    assert len(tables) == (5 if count == 5 else 1)
+    assert sum(len(t['rows']) for t in tables) == count * 27
+    assert all(t['page_size'] == 10 for t in tables)
+    for i, program in enumerate(programs, 1):
+        expected, _ = mobile_rows(program)
+        assert program['program_name'] in text(card)
+        if count == 5:
+            assert tables[i - 1]['rows'] == expected
+        else:
+            rows = [r for r in tables[0]['rows'] if r['p'] == str(i)]
+            assert [{k: r[k] for k in ('s', 't', 'v')} for r in rows] == expected
+            assert f"策略包 {i} · {program['program_name']}" in text(card)
+    assert len(workbook_tables(data['detail_snapshot'])) == count + 2
+    assert data == before
+    assert len(card_json_bytes(card)) <= CARD_BUDGET
+
+
+def test_six_package_delivery_reuses_one_document_and_sends_exactly_once():
+    data, remote = payload(23), Remote()
+    source = data['detail_snapshot']['programs'][0]
+    data['detail_snapshot']['programs'] = [dict(copy.deepcopy(source), program_id=f'p{i}',
+        program_name=f'策略包{i}') for i in range(6)]
+    sealed(data)
+    sent = []
+    def checkpoint(state):
+        data['sheet_delivery_state'] = copy.deepcopy(state)
+    delivery = DetailSheetDelivery(remote)
+    assert delivery.deliver(data, checkpoint, lambda *args: sent.append(args) or True,
+                            prepare_message=mobile_card)
+    assert remote.created == 1 and len(remote.writes) == 8 and len(sent) == 1
+    card = sent[0][1]
+    assert sum(len(e['rows']) for e in card['elements'] if e['tag'] == 'table') == 138
+    assert delivery.deliver(data, checkpoint, lambda *_: pytest.fail('duplicate send'),
+                            prepare_message=mobile_card)
+    assert remote.created == 1 and len(remote.writes) == 8 and len(sent) == 1
 
 
 def test_oversized_full_card_fails_without_top_n_fallback():
