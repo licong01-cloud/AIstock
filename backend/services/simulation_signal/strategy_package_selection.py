@@ -24,6 +24,7 @@ from backend.services.advisory_phase1.stage_trace import (
 )
 from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.selection_center.canonical_pit_runtime import (
+    canonical_pit_observation_date,
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
     CANONICAL_PIT_RUNTIME_PROFILE_KEY,
     freeze_canonical_pit_runtime_binding,
@@ -706,6 +707,7 @@ class StrategyPackageSelectionService:
         date scope. The public generation contract verifies the old prefix;
         requests cannot replace either part of the release's PIT binding.
         """
+        observation_date = canonical_pit_observation_date(runtime_config, trade_date=trade_date)
         if runtime_release is not None:
             frozen = StrategyPackageSelectionService.release_selection_runtime_config(runtime_release)
             if has_canonical_pit_runtime_profile(frozen):
@@ -716,11 +718,11 @@ class StrategyPackageSelectionService:
                             context={"reason_code": "SELECTION_FROZEN_PIT_BINDING_CONFLICT",
                                      "release_id": runtime_release.release_id},
                         )
-                config, lease = inherit_canonical_pit_runtime_binding(runtime_config, trade_date=trade_date)
+                config, lease = inherit_canonical_pit_runtime_binding(runtime_config, trade_date=observation_date)
                 require_canonical_pit_generation_current(config, authority_resolver=authority_resolver)
                 return config, lease
         return freeze_canonical_pit_runtime_binding(
-            runtime_config, trade_date=trade_date, authority_resolver=authority_resolver,
+            runtime_config, trade_date=observation_date, authority_resolver=authority_resolver,
         )
 
     @staticmethod
@@ -808,6 +810,11 @@ class StrategyPackageSelectionService:
             variant = self._resolve_runtime_variant(record, raw_package_config)
             raw_package_config = apply_runtime_variant_config(raw_package_config, variant)
             raw_package_config.pop("runtime_variant_id", None)
+            if has_canonical_pit_runtime_profile(config) and (
+                canonical_pit_observation_date(raw_package_config, trade_date=trade_date)
+                != canonical_pit_observation_date(config, trade_date=trade_date)
+            ):
+                raise RuntimeConfigInvalidError("package configuration conflicts with the selection run's PIT observation date")
             for key in (CANONICAL_PIT_RUNTIME_PROFILE_KEY, CANONICAL_PIT_RUNTIME_LEASE_KEY):
                 if (key in raw_package_config, raw_package_config.get(key)) != (key in config, config.get(key)):
                     raise RuntimeConfigInvalidError(
@@ -1418,7 +1425,7 @@ class StrategyPackageSelectionService:
         if CANONICAL_PIT_RUNTIME_LEASE_KEY in runtime_config:
             payload[CANONICAL_PIT_RUNTIME_LEASE_KEY] = require_canonical_pit_runtime_binding(
                 runtime_config,
-                trade_date=trade_date,
+                trade_date=canonical_pit_observation_date(runtime_config, trade_date=trade_date),
             ).as_dict()
         assert_selection_only_payload_boundary(payload, context={"package_id": package_id})
         artifact_hash = canonical_json_sha256(payload)

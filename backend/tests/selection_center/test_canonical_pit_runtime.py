@@ -17,6 +17,7 @@ from backend.services.canonical_equity_pit import (
     legacy_rule_parameters_digest,
 )
 from backend.services.selection_center.canonical_pit_runtime import (
+    canonical_pit_observation_date,
     CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
     CANONICAL_PIT_RUNTIME_PROFILE_KEY,
@@ -39,6 +40,62 @@ from backend.services.selection_center.runtime_profile import (
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+
+
+def _advisory_clock():
+    return {
+        "advisory_date_context": {"target_trade_date": "2026-11-23", "selection_as_of_trade_date": "2026-11-20"},
+        "selection_price_mode": "DAILY_DB_ONLY",
+        "selection_artifact_config": {"cutoff_date": "2026-11-20", "cutoff_policy": "FIXED_CUTOFF", "fixed_cutoff": True},
+    }
+
+
+def test_advisory_observation_date_is_explicit_and_does_not_change_trading_coverage():
+    assert canonical_pit_observation_date(_advisory_clock(), trade_date=date(2026, 11, 23)) == date(2026, 11, 20)
+    assert canonical_pit_observation_date({"selection_artifact_config": {"cutoff_date": "2026-11-20"}},
+                                        trade_date=date(2026, 11, 23)) == date(2026, 11, 23)
+
+
+@pytest.mark.parametrize("damage", ["target", "cutoff", "fixed", "price", "future", "type"])
+def test_advisory_observation_date_rejects_inconsistent_clocks(damage):
+    config = _advisory_clock()
+    if damage == "target":
+        config["advisory_date_context"]["target_trade_date"] = "2026-11-24"
+    elif damage == "cutoff":
+        config["selection_artifact_config"]["cutoff_date"] = "2026-11-19"
+    elif damage == "fixed":
+        config["selection_artifact_config"]["fixed_cutoff"] = False
+    elif damage == "price":
+        config["selection_price_mode"] = "REALTIME"
+    elif damage == "future":
+        config["advisory_date_context"]["selection_as_of_trade_date"] = "2026-11-23"
+    else:
+        config["advisory_date_context"]["selection_as_of_trade_date"] = 20261120
+    with pytest.raises(CanonicalPitRuntimeError, match="fixed D/T"):
+        canonical_pit_observation_date(config, trade_date=date(2026, 11, 23))
+
+
+def test_coverage_failure_retains_admission_cause_and_pointer_failure_is_distinct():
+    config = migrate_runtime_config_to_canonical_pointer(_legacy_config())
+    resolver = _Resolver(replace(_binding(generation=1, active=True), coverage_end=date(2026, 11, 20)))
+    with pytest.raises(CanonicalPitRuntimeError, match="coverage does not include") as error:
+        freeze_canonical_pit_runtime_binding(config, trade_date=date(2026, 11, 23), authority_resolver=resolver)
+    assert error.value.context["requested_trade_date"] == "2026-11-23"
+    assert error.value.context["coverage_end"] == "2026-11-20"
+    class Broken:
+        def resolve_live_binding(self):
+            raise OSError("unavailable")
+    with pytest.raises(CanonicalPitRuntimeError, match="pointer cannot be resolved"):
+        freeze_canonical_pit_runtime_binding(config, trade_date=date(2026, 11, 20), authority_resolver=Broken())
+
+
+@pytest.mark.parametrize("field", ["canonical_pit_runtime_lease", "canonical_pit_observation_date"])
+def test_canonical_risk_internal_clock_cannot_be_supplied_as_a_policy_override(field):
+    from backend.services.trading_core.errors import RuntimeConfigInvalidError
+    config = migrate_runtime_config_to_canonical_pointer(_legacy_config())
+    config["runtime_profile"]["risk_policy"][field] = "2026-11-20"
+    with pytest.raises(RuntimeConfigInvalidError, match="attached by the Selection admission"):
+        parse_selection_runtime_profile(config)
 
 
 def _binding(*, generation: int = 0, active: bool = False) -> PitConsumerBinding:

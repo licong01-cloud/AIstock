@@ -1,0 +1,418 @@
+{
+  "actual": "Four AFTER_CLOSE_PUBLISH results fail CANONICAL_PIT_RUNTIME_INVALID with outer pointer cannot be resolved; chained cause canonical runtime coverage does not include requested trade_date.",
+  "allowed_write_scope": [
+    "backend/services/simulation_signal/strategy_package_selection.py",
+    "backend/services/selection_center/canonical_pit_runtime.py",
+    "backend/tests/selection_center/test_canonical_pit_runtime.py",
+    "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+    "tests/aistock_validation/bugs/20261120_BUG-2266-pit.json",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/risk_policy.py",
+    "backend/tests/selection_center/test_risk_policy.py",
+    "backend/tests/advisory_model_first/test_forward_publication.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2266",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-20T15:51:55.433225Z",
+  "description": "Four AFTER_CLOSE_PUBLISH results fail CANONICAL_PIT_RUNTIME_INVALID with outer pointer cannot be resolved; chained cause canonical runtime coverage does not include requested trade_date.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261120-ae1afe9c7f26",
+      "timestamp": "2026-11-20T15:51:55.433209Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/logs/errors.log:2026-11-20 23:46:09-23:46:10; GET stock-universe/st-pit/status; read-only CanonicalPitAuthorityResolver result at 23:48:32 +08:00"
+  ],
+  "expected": "After-close advisory uses validated D-time inputs for a T-effective recommendation and preserves global PIT identity, future-effective known exclusions, immutable leases and strict fail-closed behavior. Genuine pointer/coverage/generation failures remain precise.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/services/selection_center/risk_policy.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/selection_center/test_risk_policy.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2266-pit.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/services/selection_center/risk_policy.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/selection_center/test_risk_policy.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+      "tests/aistock_validation/bugs/20261120_BUG-2266-pit.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "selection_center",
+        "paper_v2",
+        "strategy_package",
+        "hmm",
+        "simulation_runtime",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_signal/strategy_package_selection.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/selection_center/canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_signal/strategy_package_selection.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+    ]
+  },
+  "first_seen_at": "2026-11-20T15:51:55.433225Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7396,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7396",
+  "implementation_plan": [
+    "Validate existing Advisory D/T/fixed-cutoff/DAILY_DB_ONLY context at the shared coverage-date boundary; non-Advisory checks retain T.",
+    "Use the same D for initial frozen lease, internal canonical risk lookup and final evidence; keep selection target, ranking, HMM/artifact clock and identity unchanged.",
+    "Consume only canonical-authority future events already published as of D for known target-day risk removals; no source fetch, universe rebuild, synthetic future spans, or new candidates.",
+    "Split authority resolution failure from coverage/admission failure and preserve exact context.",
+    "Exercise actual forward Selection path, real risk provider and evidence emission with boundary, spoof, drift and compatibility tests.",
+    "Complete current-agent correctness and regression reviews; authorized source delivery continues, runtime activation awaits user restart."
+  ],
+  "last_seen_at": "2026-11-20T15:51:55.433225Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "paper_v2_backend",
+    "simulation_core_l2"
+  ],
+  "review_notes": [
+    {
+      "finding": "The first coverage guard is not the only affected site: canonical risk lookup and daily evidence also validate T. Current authority contains ST negative and restore events effective 2026-11-23 and announced 2026-11-20. Retain those published facts; do not invent future market data. Scope expanded before editing.",
+      "round": 0,
+      "status": "PRE_IMPLEMENTATION_REVIEW"
+    },
+    {
+      "candidate_selection_sha256": "2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca",
+      "finding": "The formal forward-entry regression fails with the old Selection source restored in this isolated worktree: canonical coverage does not include target T. Candidate bytes restored exactly. Same new entry regression already passed on candidate. Known-target events preserve canonical source/rule, known_date<=D, terminal permanence and no D-universe additions. Ordinary target-day trading coverage unchanged.",
+      "round": 1,
+      "status": "CORRECTNESS_REVIEW_AND_RED_CONFIRMED"
+    },
+    {
+      "design_compliance_001": {
+        "business_semantics": "D-time native candidate pool and T-effective list kept; only already-published canonical actions consumed; no future coverage/IPO candidates fabricated.",
+        "complete_delivery": "All affected binding/risk/evidence sites and precise error cause implemented; runtime acceptance remains pending user restart.",
+        "no_silent_error": "Unknown visibility and lookup failures raise typed DataUnavailable; coverage errors preserve cause and dates.",
+        "no_unapproved_gate": "No new human/RBAC/gates or source rebuild requirements; existing fail-closed semantics retained."
+      },
+      "finding": "200 related regressions passed once after stabilization. Real forward _publish -> real AdvisoryProgram prepare -> real SelectionCenter -> risk/evidence path covered with DI fixtures; old caller red proof retained. No branch of this fix emits fabricated successful data, broadens live trading coverage, adds approval/RBAC, changes fees/rank/holding period, or activates a package. Existing PIT generation/fingerprint and per-package identity guards retained. Normal non-Advisory source-event payload remains unchanged.",
+      "round": 2,
+      "static_gates": "Ruff all changed Python files passed; AST parse passed; git diff --check passed; native nox -s l0 explicit nine-file scope passed with zero blockers.",
+      "status": "FINAL_CORRECTNESS_AND_COMPLETENESS_PASS"
+    }
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "object_liveness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "fresh_process_evidence": [
+      "{\"activation_generation\": 1, \"authority_unchanged\": true, \"backend_restart\": false, \"coverage_end\": \"2026-11-20\", \"d_eligible_negative_actions_blocked\": 0, \"db_writes\": 0, \"decision_date\": \"2026-11-20\", \"new_fit\": 0, \"new_model_prediction\": 0, \"no_d_ineligible_additions\": true, \"observed_at\": \"2026-11-20T16:13:08.050238+00:00\", \"ordinary_t_coverage_still_rejected\": true, \"physical_future_events\": 2, \"readonly_transactions_enforced\": true, \"sample_symbols\": 3, \"schema\": \"advisory_pit_d_t_readonly_source_validation_v1\", \"source_sha256\": {\"backend/services/selection_center/canonical_pit_runtime.py\": \"435c953d095eeecf02cdec49927a37c487bc07dd69196d8127931742a6f3d0b5\", \"backend/services/selection_center/risk_policy.py\": \"5d1987e7a549eecca897cd4b243c6ee2461cb305eeffea29d75636aefaefd0d1\", \"backend/services/selection_center/runtime_profile.py\": \"756fc9a4d1207521fb3dc2073b63dc33a71a863b7d17e40f7fd295f15c3a9518\", \"backend/services/simulation_signal/strategy_package_selection.py\": \"2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca\"}, \"status\": \"PASS\", \"target_date\": \"2026-11-23\"}",
+      "Fresh isolated 200-test related regression matrix passed, including real formal forward entry and ordinary Paper canonical coverage. JUnit SHA256=ff057765199964d2bcf6f79534fa5c598eaec44fe7738d612a378c397eb6a6ae. Ruff and exact-source compile/scope/diff validation retained. No user backend restart, DB writes, inference or training.",
+      "Fresh isolated pytest formal forward entry and 200 regressions PASS; readonly DB fresh process proved D=2026-11-20 / T=2026-11-23 using unchanged canonical generation1 and two published target events, with ordinary T coverage still rejected and no DB/runtime/model writes. Exact source SHA and compact receipts in BUG JSON."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "荐股收盘发布混用目标日与PIT信息日导致四包被错误拒绝",
+  "trigger_condition": {
+    "fingerprint": "ae1afe9c7f263309bbae4025",
+    "source_event_id": "FE-20261120-ae1afe9c7f26"
+  },
+  "validation_receipts": [
+    {
+      "activation_generation": 1,
+      "authority_unchanged": true,
+      "backend_restart": false,
+      "coverage_end": "2026-11-20",
+      "d_eligible_negative_actions_blocked": 0,
+      "db_writes": 0,
+      "decision_date": "2026-11-20",
+      "new_fit": 0,
+      "new_model_prediction": 0,
+      "no_d_ineligible_additions": true,
+      "observed_at": "2026-11-20T16:13:08.050238+00:00",
+      "ordinary_t_coverage_still_rejected": true,
+      "physical_future_events": 2,
+      "readonly_transactions_enforced": true,
+      "sample_symbols": 3,
+      "schema": "advisory_pit_d_t_readonly_source_validation_v1",
+      "source_sha256": {
+        "backend/services/selection_center/canonical_pit_runtime.py": "435c953d095eeecf02cdec49927a37c487bc07dd69196d8127931742a6f3d0b5",
+        "backend/services/selection_center/risk_policy.py": "5d1987e7a549eecca897cd4b243c6ee2461cb305eeffea29d75636aefaefd0d1",
+        "backend/services/selection_center/runtime_profile.py": "756fc9a4d1207521fb3dc2073b63dc33a71a863b7d17e40f7fd295f15c3a9518",
+        "backend/services/simulation_signal/strategy_package_selection.py": "2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca"
+      },
+      "status": "PASS",
+      "target_date": "2026-11-23"
+    },
+    {
+      "artifact_ref": "tmp\\issue_workflow\\BUG-2266\\direct-regression.xml",
+      "artifact_sha256": "ff057765199964d2bcf6f79534fa5c598eaec44fe7738d612a378c397eb6a6ae",
+      "command": "pytest direct canonical/runtime-profile/risk/selection/forward-clock/forward-publication/paper/input-readiness 9-file matrix",
+      "errors": 0,
+      "failures": 0,
+      "fresh_process": true,
+      "result": "PASS",
+      "schema": "aistock_bug_direct_regression_receipt_v1",
+      "tests": 200
+    },
+    {
+      "commands": [
+        "rtk ruff check (8 changed Python files)",
+        "Python AST parse (8 changed Python files)",
+        "git diff --check",
+        "python -m nox -s l0 -- (9 exact task files)"
+      ],
+      "l0_blockers": 0,
+      "result": "PASS",
+      "schema": "aistock_bug_static_validation_receipt_v1",
+      "source_sha256": {
+        "backend/services/selection_center/canonical_pit_runtime.py": "435c953d095eeecf02cdec49927a37c487bc07dd69196d8127931742a6f3d0b5",
+        "backend/services/selection_center/risk_policy.py": "5d1987e7a549eecca897cd4b243c6ee2461cb305eeffea29d75636aefaefd0d1",
+        "backend/services/selection_center/runtime_profile.py": "756fc9a4d1207521fb3dc2073b63dc33a71a863b7d17e40f7fd295f15c3a9518",
+        "backend/services/simulation_signal/strategy_package_selection.py": "2ca01ee7b635006c0e6f69d81ce3d310a37119f7cea5390dd182b35a3c7267ca",
+        "backend/tests/advisory_model_first/test_forward_publication.py": "6c70ae40c133c43cc409b6ab2c3a915230a40f6266b2e0334c7c9e2153d194af",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py": "85dff8daee4f2afb76c0cb41b66d5432c5900e67232fe17c246b7ac5bb8fbd97",
+        "backend/tests/selection_center/test_risk_policy.py": "0f752b18f1d5e0f3beeee48701cbb07d3fef11b445d3fa976b324ebcdafb8fa6",
+        "backend/tests/simulation_runtime/test_strategy_package_selection_service.py": "2f5892e36fb324305123a84ffeca5e417ce9e00ed180be2ac9d356cedfdabe7d"
+      }
+    }
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "platform_api",
+        "paper_v2",
+        "simulation_core"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "paper_v2_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "platform_api",
+          "paper_v2",
+          "simulation_core"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "paper_v2_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

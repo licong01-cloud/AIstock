@@ -20,6 +20,7 @@ from backend.services.selection_center.risk_policy import (
     StockRiskPolicyService,
 )
 from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
+from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.stock_universe_pit_service import StockUniversePitError
 from backend.services.trading_core.models import PositionLot
 
@@ -32,6 +33,55 @@ def _candidate(symbol: str, rank: int, score: float = 1.0) -> SelectionCandidate
         target_weight=0.03,
         reference_price=10.0,
     )
+
+
+def _advisory_risk_profile():
+    from backend.tests.simulation_runtime.test_strategy_package_selection_service import _pit_binding
+    from dataclasses import replace
+    lease = SelectionPitRuntimeLease.from_binding(replace(_pit_binding(1), coverage_end=date(2026, 11, 20)))
+    return RuntimeRiskPolicyProfile(enabled=True, canonical_pit_runtime_lease=lease.as_dict(),
+                                    canonical_pit_observation_date=date(2026, 11, 20))
+
+
+def test_advisory_st_risk_keeps_d_universe_and_applies_only_d_known_target_events():
+    seen = []
+    def spans(symbols, day, key, *, rule_version):
+        seen.append((day, key, rule_version))
+        return [(s, date(2018, 8, 1), day, "ipo_252td", "generation_end", rule_version, {}) for s in symbols[:2]]
+    def events(symbols, d, t, lease):
+        return [
+            (symbols[0], "st_negative", t, d, False, {}),
+            (symbols[1], "st_negative", t, t, False, {}),  # Learned after D: never leak it.
+            (symbols[2], "st_restore", t, d, False, {}),   # Never add a D-ineligible stock.
+        ]
+    decisions = StPitRiskDecisionProvider(span_loader=spans, target_event_loader=events).evaluate(
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ"], trade_date=date(2026, 11, 23), profile=_advisory_risk_profile())
+    assert seen == [(date(2026, 11, 20), CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION)]
+    assert [decisions[s].can_buy for s in decisions] == [False, True, False]
+    assert decisions["000001.SZ"].source_events[0]["known_target_events"][0]["action_date"] == "2026-11-23"
+    assert decisions["000002.SZ"].source_events[0]["visible_trade_date"] == "2026-11-20"
+
+
+@pytest.mark.parametrize("terminal,restored", [(False, True), (True, False)])
+def test_advisory_known_target_restore_never_overrides_terminal_event(terminal, restored):
+    profile = _advisory_risk_profile()
+    def spans(symbols, day, key, *, rule_version):
+        return [(symbols[0], date(2018, 8, 1), day, "ipo_252td", "generation_end", rule_version, {})]
+    def events(symbols, d, t, lease):
+        return [(symbols[0], "delisting_confirmed" if terminal else "st_negative", t, d, terminal, {}),
+                (symbols[0], "st_restore", t, d, False, {})]
+    result = StPitRiskDecisionProvider(span_loader=spans, target_event_loader=events).evaluate(
+        symbols=["000001.SZ"], trade_date=date(2026, 11, 23), profile=profile)
+    assert result["000001.SZ"].can_buy is restored
+
+
+def test_advisory_unknown_target_event_visibility_fails_closed():
+    def spans(symbols, day, key, *, rule_version):
+        return []
+    provider = StPitRiskDecisionProvider(span_loader=spans,
+        target_event_loader=lambda symbols, d, t, lease: [(symbols[0], "st_negative", t, None, False, {})])
+    with pytest.raises(DataUnavailableError, match="known-target"):
+        provider.evaluate(symbols=["000001.SZ"], trade_date=date(2026, 11, 23), profile=_advisory_risk_profile())
 
 
 def _position(symbol: str) -> PositionLot:

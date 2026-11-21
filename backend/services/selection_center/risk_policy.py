@@ -96,10 +96,12 @@ class StPitRiskDecisionProvider:
 
     source_name = "market.stock_universe_pit_spans"
 
-    def __init__(self, conn_factory: Any | None = None, *, require_ready_state: bool = True, span_loader=None) -> None:
+    def __init__(self, conn_factory: Any | None = None, *, require_ready_state: bool = True,
+                 span_loader=None, target_event_loader=None) -> None:
         self._conn_factory = conn_factory or get_conn
         self._require_ready_state = bool(require_ready_state)
         self._span_loader = span_loader
+        self._target_event_loader = target_event_loader
 
     def evaluate(
         self,
@@ -117,15 +119,18 @@ class StPitRiskDecisionProvider:
             if profile.canonical_pit_runtime_lease is not None
             else None
         )
+        observation_date = profile.canonical_pit_observation_date or trade_date
+        if observation_date > trade_date or (observation_date != trade_date and authority_lease is None):
+            raise RuntimeConfigInvalidError("ST PIT observation date requires a canonical Advisory binding")
         if authority_lease is not None:
-            authority_lease.require_trade_date(trade_date)
+            authority_lease.require_trade_date(observation_date)
             universe_key = authority_lease.universe_key
         else:
             universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
         if self._span_loader is None and authority_lease is None and profile.strict_data_ready and self._require_ready_state:
             self._require_ready_pit_state(universe_key=universe_key, trade_date=trade_date)
         if self._span_loader is not None:
-            rows = self._span_loader(normalized, trade_date, universe_key,
+            rows = self._span_loader(normalized, observation_date, universe_key,
                                      rule_version=authority_lease.rule_version if authority_lease else None)
         else:
             try:
@@ -140,7 +145,7 @@ class StPitRiskDecisionProvider:
                                AND eligible_start <= %s
                                AND eligible_end >= %s
                         """
-                        params: tuple[Any, ...] = (universe_key, normalized, trade_date, trade_date)
+                        params: tuple[Any, ...] = (universe_key, normalized, observation_date, observation_date)
                         if authority_lease is not None:
                             sql += " AND rule_version = %s"
                             params = (*params, authority_lease.rule_version)
@@ -156,6 +161,12 @@ class StPitRiskDecisionProvider:
                     },
                 ) from exc
         eligible = {str(row[0]) for row in rows}
+        target_events: dict[str, list[dict[str, Any]]] = {}
+        if observation_date < trade_date:
+            eligible, target_events = self._apply_known_target_events(
+                symbols=normalized, eligible=eligible, observation_date=observation_date,
+                target_date=trade_date, authority_lease=authority_lease,
+            )
         span_context = {
             str(row[0]): {
                 "source_table": self.source_name,
@@ -164,7 +175,10 @@ class StPitRiskDecisionProvider:
                 "activation_generation": (
                     authority_lease.activation_generation if authority_lease is not None else None
                 ),
-                "visible_trade_date": trade_date.isoformat(),
+                "visible_trade_date": observation_date.isoformat(),
+                **({"target_trade_date": trade_date.isoformat(),
+                    "known_target_events": target_events.get(str(row[0]), [])}
+                   if observation_date < trade_date else {}),
                 "eligible_start": row[1].isoformat() if row[1] else None,
                 "eligible_end": row[2].isoformat() if row[2] else None,
                 "entry_reason": row[3],
@@ -200,7 +214,10 @@ class StPitRiskDecisionProvider:
                         "activation_generation": (
                             authority_lease.activation_generation if authority_lease is not None else None
                         ),
-                        "visible_trade_date": trade_date.isoformat(),
+                        "visible_trade_date": observation_date.isoformat(),
+                        **({"target_trade_date": trade_date.isoformat(),
+                            "known_target_events": target_events.get(symbol, [])}
+                           if observation_date < trade_date else {}),
                         "event_type": "st_pit_not_eligible",
                         "risk_level": "P0_BLOCK",
                         "action": sorted(hard_actions),
@@ -211,6 +228,66 @@ class StPitRiskDecisionProvider:
                 ],
             )
         return decisions
+
+    def _apply_known_target_events(self, *, symbols, eligible, observation_date, target_date, authority_lease):
+        """Apply already-published canonical actions; never construct future spans.
+
+        The score universe and IPO eligibility remain D based. Future restores
+        can cancel a nonterminal block on a D-eligible candidate, but cannot add
+        an unscored or D-ineligible stock. Terminal exclusions are irreversible.
+        """
+        try:
+            if self._target_event_loader is not None:
+                rows = self._target_event_loader(symbols, observation_date, target_date, authority_lease)
+            else:
+                with self._conn_factory() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT ts_code, event_kind, action_date, source_pub_date, terminal, metadata
+                              FROM market.stock_universe_pit_events
+                             WHERE universe_key=%s AND rule_version=%s AND ts_code=ANY(%s)
+                               AND action_date>%s AND action_date<=%s
+                        """, (authority_lease.universe_key, authority_lease.rule_version,
+                              symbols, observation_date, target_date))
+                        rows = cur.fetchall()
+            events = []
+            for symbol, kind, action_date, published, terminal, metadata in rows:
+                known = published
+                if known is None and isinstance(metadata, dict) and metadata.get("known_date"):
+                    known = date.fromisoformat(metadata["known_date"])
+                if type(known) is not date:
+                    raise ValueError("canonical target event has no provable knowledge date")
+                if known > observation_date:
+                    continue
+                if (symbol not in symbols or type(action_date) is not date
+                        or not observation_date < action_date <= target_date or type(terminal) is not bool
+                        or kind not in {"st_negative", "delist_event", "delisted", "paused_listing",
+                                        "delisting_confirmed", "st_restore"}):
+                    raise ValueError("canonical target event identity/action is invalid")
+                events.append((symbol, kind, action_date, known, terminal))
+            # Same action precedence as the canonical span producer: terminal,
+            # negative, then restore. Nothing reclassifies raw announcements.
+            events.sort(key=lambda e: (e[2], 0 if e[4] else 2 if e[1] == "st_restore" else 1))
+            blocked, terminal_symbols, evidence = set(), set(), {}
+            for symbol, kind, action_date, known, terminal in events:
+                evidence.setdefault(symbol, []).append({
+                    "source_table": "market.stock_universe_pit_events", "event_kind": kind,
+                    "action_date": action_date.isoformat(), "known_date": known.isoformat(),
+                    "universe_key": authority_lease.universe_key, "rule_version": authority_lease.rule_version,
+                })
+                if terminal:
+                    terminal_symbols.add(symbol)
+                elif kind == "st_restore":
+                    blocked.discard(symbol)
+                else:
+                    blocked.add(symbol)
+            return eligible.difference(blocked, terminal_symbols), evidence
+        except Exception as exc:
+            raise DataUnavailableError(
+                "canonical PIT known-target risk events are unavailable",
+                context={"observation_date": observation_date.isoformat(), "target_trade_date": target_date.isoformat(),
+                         "universe_key": authority_lease.universe_key},
+            ) from exc
 
     def _require_ready_pit_state(self, *, universe_key: str, trade_date: date) -> None:
         """Paper/Selection are consumers; data management owns PIT rebuilds."""

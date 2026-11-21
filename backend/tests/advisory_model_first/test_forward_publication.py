@@ -11,6 +11,52 @@ from backend.services.advisory_forward.service import (
 from backend.services.advisory_program import ACTION_HOLD, ACTION_WAITING, AdvisoryCandidate, AdvisoryProgram
 
 
+def test_formal_forward_entry_uses_real_selection_risk_and_evidence_with_d_coverage(monkeypatch):
+    from dataclasses import replace
+    from backend.services.advisory_program import (
+        AdvisoryProgramService, AdvisoryStrategyBindingVersion, InMemoryAdvisoryProgramRepository,
+    )
+    from backend.services.selection_center.service import SelectionCenterService
+    from backend.services.selection_center.repository import InMemorySelectionCenterRepository
+    from backend.tests.advisory_model_first.test_forward_boundaries import _Ready, _Repository, _program
+    from backend.tests.simulation_runtime.test_strategy_package_selection_service import (
+        _advisory_pit_clock_case, _seed_artifact,
+    )
+    case = _advisory_pit_clock_case()
+    program = replace(_program("advp_pit_clock"), package_ids=[case.manifest.package_id],
+        package_weights={case.manifest.package_id: 1.}, target_count=1)
+    binding = AdvisoryStrategyBindingVersion(binding_version_id="advb-pit-clock", program_id=program.program_id,
+        program_version=program.version, package_mode=program.package_mode, package_ids=program.package_ids,
+        package_weights=program.package_weights, fusion_method=None, package_set_hash=program.package_set_hash,
+        fusion_policy_sha256=None, runtime_config_json=case.config, effective_from_trade_date=case.d)
+    programs = InMemoryAdvisoryProgramRepository()
+    programs.create_program_with_binding(program, binding)
+    center = SelectionCenterService(repository=InMemorySelectionCenterRepository(), package_repository=case.packages,
+        strategy_selection_service=case.service,
+        result_enrichment_service=SimpleNamespace(enrich_candidates=lambda candidates, **_: candidates))
+    run_packages = center.run_packages
+    def seeded_run(**kwargs):
+        _seed_artifact(case.artifacts, case.manifest,
+            [{"symbol": "000001.SZ", "score": .9, "rank": 1, "reference_price": 10.},
+             {"symbol": "000002.SZ", "score": .8, "rank": 2, "reference_price": 11.}],
+            trade_date=case.t, runtime_config=kwargs["runtime_config"])
+        return run_packages(**kwargs)
+    monkeypatch.setattr(center, "run_packages", seeded_run)
+    advisory = AdvisoryProgramService(repository=programs, selection_service=center)
+    monkeypatch.setattr(advisory, "apply_universe_admission",
+        lambda candidates, **kwargs: (candidates, kwargs["runtime_config"]))
+    repository = _Repository()
+    service = AdvisoryForwardService(repository=repository, program_service=advisory, input_readiness=_Ready(),
+        model_service=SimpleNamespace(model_root=lambda: None), calendar=_DailyCalendar())
+    result = service._publish(program.program_id, decision_date=case.d, target_date=case.t)
+    assert result["status"] == "PUBLISHED"
+    assert repository.run["publication_status"] == "PUBLISHED"
+    assert repository.run["decision_as_of_trade_date"] == case.d
+    assert repository.run["target_trade_date"] == case.t
+    assert case.reads == [case.d]
+    assert case.resolver.calls == 2
+
+
 def test_inference_failure_still_diagnoses_changed_inputs():
     import pytest
     from backend.services.data_integrity.inputs import InputReadinessError
