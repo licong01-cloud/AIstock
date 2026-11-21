@@ -752,6 +752,7 @@ def _local_sim_context_with_real_broker(
     paper_repository: InMemoryPaperTradingV2Repository | None = None,
     execution_policy: dict[str, Any] | None = None,
     market_data_provider: Any | None = None,
+    minute_source: MinuteDataSource = MinuteDataSource.DB_HISTORICAL,
 ) -> SimulationRunContext:
     manifest = _score_weighted_manifest(release)
     current_positions = dict(positions or {})
@@ -760,7 +761,7 @@ def _local_sim_context_with_real_broker(
         portfolio_id=portfolio_id,
         initial_cash=cash,
         initial_available_cash=cash,
-        data_source=MinuteDataSource.DB_HISTORICAL,
+        data_source=minute_source,
         manifest=manifest,
         package_id=release.package_id,
         market_data_provider=market_data_provider or FakeLocalSimMarketDataProvider(),
@@ -776,7 +777,7 @@ def _local_sim_context_with_real_broker(
         local_broker=broker,
         paper_repository=paper_repository,
         cash=cash,
-        market_data_source=MinuteDataSource.DB_HISTORICAL.value,
+        market_data_source=minute_source.value,
     )
 
 
@@ -17359,31 +17360,75 @@ def test_native_replay_binding_isolation(job_status, explicit, allowed, monkeypa
     ) is allowed
 
 
-def test_closed_native_historical_executor_runs_real_broker_and_preserves_residual(monkeypatch):
+@pytest.mark.parametrize("case", ["database", "legacy_file", "planned_file", "unscoped_file"])
+def test_closed_native_historical_executor_runs_real_broker_and_preserves_residual(monkeypatch, tmp_path, case):
+    from contextlib import nullcontext
+    from backend.services.advisory_historical_range.input_source_plan import build_source_plan
+    from backend.services.simulation_runtime.localsim_file_inputs import FILE_BINDING_KEY, FILE_SOURCE_ID, localsim_file_inputs
+    from backend.services.simulation_runtime.localsim_input_source_plan import PLAN_KEY, SOURCE_PLAN_ID, native_policy
     from backend.services.simulation_runtime.localsim_replay_runtime import LocalSimHistoricalReplayDayExecutor
     from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+    from backend.tests.advisory_historical_range import test_input_source_plan as source_fixture
+    from backend.tests.simulation_runtime import test_localsim_native_context as native_fixture
     from backend.tests.simulation_runtime.test_localsim_replay_close_valuation import ClosingHistoricalProvider
 
-    release, binding, _, repo = _release_and_bindings()
+    frozen = None
+    replay_date = TRADE_DATE
+    metadata = {}
+    historical_source_id = "market.kline_minute_raw.v1"
+    historical_source_sha256 = None
+    if case == "planned_file":
+        *_, template, _ = native_fixture._bundle(
+            native_fixture._canonical_profile(), pit_authority_resolver=native_fixture._canonical_resolver(),
+        )
+        config = deepcopy(template.release_config_json["metadata"]["selection_runtime_config"])
+        # Selection is supplied by the test service. Exercise synchronous
+        # execution/close here rather than dispatching the inference worker.
+        config["selection_artifact_config"]["auto_generate"] = False
+        policy = native_policy(config)
+        snapshot = source_fixture._snapshot(tmp_path, policy=policy)
+        calendar = source_fixture.CALENDAR
+        replay_date = date.fromisoformat(calendar[2])
+        plan = build_source_plan(
+            mode="FILE_ONLY", consumer_scope="LOCALSIM", run_id="test-native-close",
+            days=[{"decision_date": calendar[2], "data_cutoff": calendar[1],
+                   "target_trade_date": calendar[2], "history_start": calendar[0]}],
+            trading_calendar=calendar, native_policy=policy, file_source=snapshot,
+        )
+        metadata = {PLAN_KEY: plan, "selection_runtime_config": config}
+        frozen = snapshot["binding"]
+        historical_source_id, historical_source_sha256 = SOURCE_PLAN_ID, plan["plan_hash"]
+    elif case != "database":
+        replay_date = date.fromisoformat(source_fixture.CALENDAR[2])
+        frozen = source_fixture._snapshot(tmp_path)["binding"]
+        metadata = {FILE_BINDING_KEY: frozen}
+        if case == "legacy_file":
+            historical_source_id, historical_source_sha256 = FILE_SOURCE_ID, frozen["binding_hash"]
+    if frozen is not None:
+        monkeypatch.setattr("backend.services.simulation_runtime.localsim_file_inputs.historical_suspension_provider",
+                            lambda dataset: SimpleNamespace(load_statuses=lambda **_: {}))
+    release, binding, _, repo = _release_and_bindings(release_metadata=metadata)
     native = binding.model_copy(update={
-        "broker_account_id": binding.strategy_id, "effective_from": TRADE_DATE, "effective_to": TRADE_DATE,
+        "broker_account_id": binding.strategy_id, "effective_from": replay_date, "effective_to": replay_date,
         "binding_config_json": {"metadata": {
             "localsim_account_id": binding.strategy_id, "account_schema_version": "simulation_account_v1",
         }},
     })
     repo.bindings[native.binding_id] = native
     paper_repo = InMemoryPaperTradingV2Repository()
-    context = _local_sim_context_with_real_broker(
-        portfolio_id="portfolio_replay_window_regression", release=release, paper_repository=paper_repo,
-        market_data_provider=ClosingHistoricalProvider(),
-        execution_policy={"policy_id": "replay_partial", "policy_sha256": "frozen",
-                          "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 6, "allow_partial_fill": True}}},
-    )
+    with localsim_file_inputs(frozen, run_id="test-closed-history") if frozen else nullcontext():
+        context = _local_sim_context_with_real_broker(
+            portfolio_id="portfolio_replay_window_regression", release=release, paper_repository=paper_repo,
+            market_data_provider=ClosingHistoricalProvider(),
+            minute_source=MinuteDataSource.DATASET_FILES if frozen else MinuteDataSource.DB_HISTORICAL,
+            execution_policy={"policy_id": "replay_partial", "policy_sha256": "frozen",
+                              "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 6, "allow_partial_fill": True}}},
+        )
     job = SimpleNamespace(
         replay_job_id="replay_window_regression", simulation_account_id=native.strategy_id,
-        historical_source_id="market.kline_minute_raw.v1",
-        binding_id=native.binding_id, release_id=release.release_id, start_trade_date=TRADE_DATE,
-        end_trade_date=TRADE_DATE, status=LocalSimReplayStatus.RUNNING_HISTORICAL, live_release_id=None,
+        historical_source_id=historical_source_id, historical_source_sha256=historical_source_sha256,
+        binding_id=native.binding_id, release_id=release.release_id, start_trade_date=replay_date,
+        end_trade_date=replay_date, status=LocalSimReplayStatus.RUNNING_HISTORICAL, live_release_id=None,
     )
     scheduler = SimulationLifecycleScheduler(
         repository=repo, selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
@@ -17394,9 +17439,19 @@ def test_closed_native_historical_executor_runs_real_broker_and_preserves_residu
         return datetime(2026, 5, 22, tzinfo=ZoneInfo("Asia/Shanghai"))
     monkeypatch.setattr("backend.services.simulation_runtime.lifecycle.scheduler_now", now)
     monkeypatch.setattr("backend.services.simulation_runtime.scheduler.scheduler_now", now)
-    LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=scheduler)(job, TRADE_DATE)
+    executor = LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=scheduler)
+    if case == "unscoped_file":
+        with pytest.raises(RuntimeConfigInvalidError, match="outside the configured execution window"):
+            executor(job, replay_date)
+        run = repo.get_simulation_daily_run_by_key(
+            strategy_id=native.strategy_id, binding_id=native.binding_id, trade_date=replay_date,
+        )
+        assert run.run_payload_json["submit_window_gate"]["broker_called_by_gate"] is False
+        assert not paper_repo.list_fills_for_run(run.run_id)
+        return
+    executor(job, replay_date)
     run = repo.get_simulation_daily_run_by_key(
-        strategy_id=native.strategy_id, binding_id=native.binding_id, trade_date=TRADE_DATE,
+        strategy_id=native.strategy_id, binding_id=native.binding_id, trade_date=replay_date,
     )
     assert run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
     assert paper_repo.list_fills_for_run(run.run_id)

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from backend.services.simulation_execution.broker import BrokerBackend
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.selection_center.models import SignalSnapshot, TargetPosition
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import (
     BrokerUnavailableError,
@@ -870,6 +871,7 @@ class SimulationLifecycleOrchestrator:
     ) -> None:
         local_as_of = scheduler_time(as_of_time)
         metadata = binding.binding_config_json.get("metadata") or {}
+        broker_source = getattr(getattr(local_broker, "data_source", None), "value", None)
         # Closed native historical execution consumes the full persisted session.
         # Its valuation cursor is after close; it never submits to a real broker.
         if (
@@ -881,9 +883,11 @@ class SimulationLifecycleOrchestrator:
             and binding.effective_from <= run.trade_date <= binding.effective_to < scheduler_now().date()
             and local_as_of.date() == run.trade_date
             and local_as_of.time() >= time(15, 0)
-            and getattr(getattr(local_broker, "data_source", None), "value", None) == "DB_HISTORICAL"
         ):
-            return
+            if broker_source == MinuteDataSource.DB_HISTORICAL.value:
+                return
+            if broker_source == MinuteDataSource.DATASET_FILES.value and self._owns_historical_file_input(run, binding):
+                return
         active_window, windows = active_submit_window(trade_date=run.trade_date, as_of_time=local_as_of)
         if active_window is not None:
             return
@@ -947,6 +951,27 @@ class SimulationLifecycleOrchestrator:
             },
         )
         raise exc
+
+    def _owns_historical_file_input(self, run: SimulationDailyRun, binding: SimulationReleaseBinding) -> bool:
+        from .localsim_file_inputs import current_file_dataset, frozen_file_binding
+        from .localsim_input_source_plan import current_source_plan
+        from .localsim_native_context import _native_market_data_source
+
+        dataset = current_file_dataset()
+        if dataset is None or run.binding_id != binding.binding_id or (
+            run.release_id, run.release_hash
+        ) != (binding.release_id, binding.release_hash):
+            return False
+        release = self.repository.get_strategy_runtime_release(binding.release_id)
+        if release.release_hash != binding.release_hash:
+            return False
+        if _native_market_data_source(release, run.trade_date) is not MinuteDataSource.DATASET_FILES:
+            return False
+        if current_source_plan() is not None:
+            return True  # The native route checked the plan, replay day and file pin.
+        frozen = frozen_file_binding(release)
+        dataset.require_day(run.trade_date)
+        return frozen is not None and dataset.identity == frozen["binding_hash"]
 
     @staticmethod
     def _annotate_event_loop_submit_failure(
