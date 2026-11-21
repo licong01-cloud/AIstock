@@ -31,17 +31,28 @@
   "evidence_uris": [],
   "expected": "Preserve the verified workspace Loop and separate actual account recorder from frozen training producer assets. Recover the exact 16 historical bindings only after DEV checks, preserving original run IDs and economics.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/quantevolver/qe_run_registry.py",
-      "backend/services/quantevolver/qe_prepared_workspace_batch.py",
-      "backend/services/qe_archive/source_assembler.py",
+    "actual_changed_files": [
       "backend/services/qe_archive/archive_service.py",
       "backend/services/qe_archive/payload_extractor.py",
+      "backend/services/qe_archive/source_assembler.py",
+      "backend/services/quantevolver/qe_prepared_workspace_batch.py",
+      "backend/services/quantevolver/qe_run_registry.py",
       "backend/tests/qe_archive/test_round3_fixes.py",
-      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py"
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2277-qe-prepared-multi-loop-archives-attach-another-loop-prediction-and-recor.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/qe_archive/archive_service.py",
+      "backend/services/qe_archive/payload_extractor.py",
+      "backend/services/qe_archive/source_assembler.py",
+      "backend/services/quantevolver/qe_prepared_workspace_batch.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2277-qe-prepared-multi-loop-archives-attach-another-loop-prediction-and-recor.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_run_registry.py",
@@ -178,8 +189,8 @@
   },
   "first_seen_at": "2026-11-21T16:09:37.613171Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f6160884d7f06a87cee74486b4b154ebdfe6ac72",
+  "fixed_at": "2026-11-21T16:29:56Z",
   "github_issue_number": 7431,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7431",
   "last_seen_at": "2026-11-21T16:09:37.613171Z",
@@ -187,6 +198,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7436",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -211,7 +223,9 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "After the user reloads backend-main, verify runtime identity and read back the exact 16 BUG-2277 records. Compare Archive IDs, task ID and Loop, replay and producer recorder identities, and Prediction Store SHA256 against the repair receipt. Preserve historical payloads and all economics. No execution node changes or compute replay.",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -221,7 +235,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2277",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "afdb1ae278b3ffc5",
+    "recorded_at": "2026-11-21T16:30:53.330654Z",
+    "runtime_contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "478a46dbd95283da689df47ce4f34d8de38fbe15",
+    "source_merge_commit": "f6160884d7f06a87cee74486b4b154ebdfe6ac72",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7436",
+    "validation_evidence": [
+      "validation-receipt: id=6bc5a6cfd6e2a23b commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed at 478a46d`",
+      "validation-receipt: id=6c9ff8072ef63b56 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_round3_fixes.py -k prepared_archive or source_assembler or history_projection` result=`passed (7 cases)`",
+      "validation-receipt: id=ca85f89421848fb8 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py` result=`passed (5 cases)`",
+      "validation-receipt: id=e3d49231a61c5ddd commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py backend/tests/qe_archive/test_manual_ingestion_selection.py` result=`passed (55 cases)`",
+      "validation-receipt: id=ef86ca7bd14c1004 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=ruff plan=direct status=passed command=`ruff check and git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "2fd5bf8f45c8f01cc981e3dfbe132b78e170ad8e246b5033b4c3c811b50b7b4f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -230,6 +269,13 @@
     "fingerprint": "f2d1bc2fa47e8742f5fea39f",
     "source_event_id": "FE-20261121-f2d1bc2fa47e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6bc5a6cfd6e2a23b commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed at 478a46d`",
+    "validation-receipt: id=6c9ff8072ef63b56 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_round3_fixes.py -k prepared_archive or source_assembler or history_projection` result=`passed (7 cases)`",
+    "validation-receipt: id=ca85f89421848fb8 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py` result=`passed (5 cases)`",
+    "validation-receipt: id=e3d49231a61c5ddd commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py backend/tests/qe_archive/test_manual_ingestion_selection.py` result=`passed (55 cases)`",
+    "validation-receipt: id=ef86ca7bd14c1004 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=ruff plan=direct status=passed command=`ruff check and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
