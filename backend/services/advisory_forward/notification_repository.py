@@ -52,6 +52,20 @@ class AdvisoryNotificationRepository:
                 raise ValueError("ADVISORY_NOTIFICATION_PROGRAM_LIMIT")
             return target, rows
 
+    def completion_days(self, day):
+        """Current and previous trading batches cover every unexpired next-session notice.
+
+        On holidays this includes the last session; on the target session the
+        preceding batch remains eligible until 09:30. Never scan run history.
+        """
+        with self.cursor() as cur:
+            cur.execute("SELECT is_trading FROM market.trading_calendar WHERE cal_date=%s", (day,))
+            if cur.fetchone() is None:
+                raise ValueError("ADVISORY_NOTIFICATION_CALENDAR_UNKNOWN")
+            cur.execute("SELECT cal_date FROM market.trading_calendar "
+                        "WHERE is_trading AND cal_date<=%s ORDER BY cal_date DESC LIMIT 2", (day,))
+            return [r['cal_date'] for r in cur.fetchall()]
+
     def enqueue(self, event, channel, now):
         with self.cursor() as cur:
             cur.execute("""INSERT INTO app.advisory_notification_delivery

@@ -83,15 +83,19 @@ def events_for_day(now, target, rows, base_url):
     return events
 
 
-def completion_events_for_day(now, target, rows):
+def completion_events_for_day(now, target, rows, *, decision_date=None):
     """One brief notice after every current daily program has really published."""
     if now.tzinfo is None:
         raise ValueError('notification clock must be timezone-aware')
     now = now.astimezone(CN)
+    day = decision_date or now.date()
     if target is None or not rows:
         return []
-    if target <= now.date():
+    if target <= day or day > now.date():
         raise ValueError('ADVISORY_NOTIFICATION_TARGET_ORDER')
+    expires = datetime.combine(target, time(9, 30), CN)
+    if now >= expires:
+        return []
     if any(row.get('publication_status') != 'PUBLISHED' for row in rows):
         return []
     roster = []
@@ -100,21 +104,21 @@ def completion_events_for_day(now, target, rows):
         if (not all(row.get(k) for k in ('program_id', 'binding_version_id', 'list_version_id'))
                 or not isinstance(published, datetime) or published.tzinfo is None
                 or row.get('target_trade_date') != target
-                or published.astimezone(CN).date() != now.date() or published > now):
+                or published.astimezone(CN).date() < day or published > now):
             raise ValueError('ADVISORY_NOTIFICATION_PUBLICATION_IDENTITY_INVALID')
         roster.append([row['program_id'], row['binding_version_id'], row['list_version_id']])
     if len({item[0] for item in roster}) != len(roster) or len(roster) > 100:
         raise ValueError('ADVISORY_NOTIFICATION_COMPLETION_ROSTER_INVALID')
-    key = hashlib.sha256(json.dumps([FEISHU_COMPLETION_ROUTE, str(now.date())]).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([FEISHU_COMPLETION_ROUTE, str(day)]).encode()).hexdigest()
     roster_sha = hashlib.sha256(json.dumps(sorted(roster), ensure_ascii=True).encode()).hexdigest()
     return [dict(
-        event_key=key, kind='SUMMARY', decision_date=now.date(),
-        expires_at=datetime.combine(target, time(9, 30), CN),
+        event_key=key, kind='SUMMARY', decision_date=day,
+        expires_at=expires,
         payload=dict(
             schema_version='advisory_notification_message_v1',
             delivery_route=FEISHU_COMPLETION_ROUTE,
             completion_roster_sha256=roster_sha,
-            subject='AIstock', message=f'{now.date()} 荐股任务已完成。',
+            subject='AIstock', message=f'{day} 荐股任务已完成。',
         ),
     )]
 
@@ -160,37 +164,23 @@ class AdvisoryNotificationService:
         if now.tzinfo is None:
             raise ValueError('notification clock must be timezone-aware')
         now = now.astimezone(CN)
-        target, rows = self.repository.snapshot(now.date())
         legacy_channels = [ch for ch in channels if ch != 'webhook' or not completion_only]
+        snapshots = {}
+        if legacy_channels:
+            snapshots[now.date()] = self.repository.snapshot(now.date())
+        target, rows = snapshots.get(now.date(), (None, []))
         events = events_for_day(now, target, rows,
             os.getenv('AISTOCK_ADVISORY_NOTIFICATION_BASE_URL', 'http://localhost:3000')) if legacy_channels else []
         queued = sum(self.repository.enqueue(e, ch, now) for e in events for ch in legacy_channels)
         if completion_only and 'webhook' in channels:
-            completed = completion_events_for_day(now, target, rows)
-            if details and completed:
-                from .notification_details import DetailDeliveryError, DetailSnapshotBuilder
-                event = completed[0]
-                # Preserve the existing daily key across both Feishu modes. A mode
-                # change cannot create a second daily row or rewrite its frozen payload.
-                event['payload']['delivery_route'] = route
-                if not self.repository.detail_event_exists(event['event_key'], now.date()):
-                    try:
-                        builder = self.detail_builder or DetailSnapshotBuilder()
-                        event['payload']['detail_snapshot'] = builder.build(now, target, rows)
-                        event['payload']['sheet_delivery_state'] = {}
-                        event['payload']['subject'] = f'AIstock 荐股详情｜{target}'
-                        queued += self.repository.enqueue(event, 'webhook', now)
-                    except Exception as exc:
-                        completion_status = {'status': 'DETAIL_SNAPSHOT_FAILED', 'reason_code': (
-                            exc.code if isinstance(exc, DetailDeliveryError) else 'DETAIL_SNAPSHOT_EXCEPTION'
-                        )}
-                else:
-                    completion_status = {'status': 'EVENT_ALREADY_RECORDED', 'event_key': event['event_key']}
-            else:
-                queued += sum(self.repository.enqueue(e, 'webhook', now) for e in completed)
-            if completed:
-                if not completion_status or completion_status['status'] == 'WAITING_COMPLETION':
-                    completion_status = {'status': 'EVENT_READY', 'event_key': completed[0]['event_key']}
+            for day in self.repository.completion_days(now.date()):
+                if day not in snapshots:
+                    snapshots[day] = self.repository.snapshot(day)
+                target, rows = snapshots[day]
+                count, status = self._queue_completion(now, day, target, rows, details, route)
+                queued += count
+                if status:
+                    completion_status = status
         results = []
         for _ in range(4):
             claim_time = self.now_provider().astimezone(CN)
@@ -227,3 +217,30 @@ class AdvisoryNotificationService:
             if details:
                 result['feishu_detail_sheet'] = completion_status
         return result
+
+    def _queue_completion(self, now, day, target, rows, details, route):
+        completed = completion_events_for_day(now, target, rows, decision_date=day)
+        if not completed:
+            return 0, None
+        event = completed[0]
+        if not details:
+            return self.repository.enqueue(event, 'webhook', now), {
+                'status': 'EVENT_READY', 'event_key': event['event_key'],
+            }
+        from .notification_details import DetailDeliveryError, DetailSnapshotBuilder
+        # Keep the original daily key across both Feishu modes and across midnight.
+        # An existing event's frozen payload is never rebuilt or rewritten.
+        event['payload']['delivery_route'] = route
+        if self.repository.detail_event_exists(event['event_key'], day):
+            return 0, {'status': 'EVENT_ALREADY_RECORDED', 'event_key': event['event_key']}
+        try:
+            builder = self.detail_builder or DetailSnapshotBuilder()
+            event['payload']['detail_snapshot'] = builder.build(now, target, rows, decision_date=day)
+            event['payload']['sheet_delivery_state'] = {}
+            event['payload']['subject'] = f'AIstock 荐股详情｜{target}'
+            queued = self.repository.enqueue(event, 'webhook', now)
+            return queued, {'status': 'EVENT_READY', 'event_key': event['event_key']}
+        except Exception as exc:
+            return 0, {'status': 'DETAIL_SNAPSHOT_FAILED', 'reason_code': (
+                exc.code if isinstance(exc, DetailDeliveryError) else 'DETAIL_SNAPSHOT_EXCEPTION'
+            )}

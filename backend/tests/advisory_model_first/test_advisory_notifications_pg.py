@@ -143,6 +143,15 @@ def test_real_source_snapshot_calendar_and_same_day_filter(dev):
     assert repo_on(conn).snapshot(date(2026, 11, 14)) == (None, [])
 
 
+def test_real_completion_days_include_weekend_and_previous_target_session(dev):
+    conn, _ = dev
+    repo = repo_on(conn)
+    assert repo.completion_days(date(2026, 11, 14)) == [date(2026, 11, 13), date(2026, 11, 12)]
+    assert repo.completion_days(date(2026, 11, 16)) == [date(2026, 11, 16), date(2026, 11, 13)]
+    with pytest.raises(ValueError, match='CALENDAR_UNKNOWN'):
+        repo.completion_days(date(1800, 1, 1))
+
+
 def test_real_completion_route_isolates_both_switch_directions_and_preserves_retry(dev):
     conn, _ = dev
     repo, now = repo_on(conn), datetime.now(timezone.utc)
